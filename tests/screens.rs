@@ -556,6 +556,22 @@ fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
     assert_eq!(tab_top(&harness), resting);
 }
 
+/// Meridian skipped, five cards set aside, then Federal Data Agency skipped with its suggested reason.
+const SKIP_OVER_LOG: [Key; 9] = [Key::L, Key::L, Key::N, Key::L, Key::L, Key::L, Key::L, Key::L, Key::Y];
+
+#[test]
+fn a_logged_offer_shows_once_above_the_log() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_offer_over_log"));
+    for key in SKIP_OVER_LOG {
+        press(&mut harness, key);
+    }
+    assert!(is_shown(&harness, "Last decision: Skipped, Federal Data Agency. Press U to undo."));
+    assert_eq!(harness.query_all_by_label("Federal Data Agency").count(), 1, "the offer is not drawn again in the log");
+    assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the older skip stays in the log");
+    assert!(is_shown(&harness, "Skipped"));
+    assert!(!is_shown(&harness, "Nothing yet."));
+}
+
 #[test]
 fn overdue_cards_show_in_todays_cell() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
@@ -605,6 +621,12 @@ fn intray_skip_suggestion_dark() {
 #[test]
 fn intray_undo_reasons_light() {
     tray_after(wgpu_tray(shell(Screen::InTray, "intray_undo_reasons_light"), Theme::Light), &[Key::L, Key::L, Key::N], "intray_undo_reasons_light");
+}
+
+/// A skip with its reason above a log row, so the row's foot is square. Canvas scene C.
+#[test]
+fn intray_undo_over_log_light() {
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_undo_over_log_light"), Theme::Light), &SKIP_OVER_LOG, "intray_undo_over_log_light");
 }
 
 #[test]

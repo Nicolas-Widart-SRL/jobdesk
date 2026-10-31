@@ -1,6 +1,6 @@
 use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
-use crate::intray::application::{Action, Body, Card, CardKind, Check, Cleared, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
+use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
     horizon_mark as strip_mark, horizon_return,
@@ -320,25 +320,21 @@ fn cleared(ui: &mut Ui, queue: &Queue, offer: Option<&UndoOffer>, pressed: &mut 
     slip(ui, |ui| {
         let count = (!queue.cleared.is_empty()).then(|| queue.cleared.len().to_string());
         panel_header(ui, "Cleared today", count.as_deref());
-        let skip = usize::from(offer.is_some_and(|offer| offer.logged));
-        let rows: &[Cleared] = queue.cleared.get(skip..).unwrap_or_default();
-        if let Some(offer) = offer {
-            let toggles: Vec<(&str, bool)> = if offer.asks_reason { SkipReason::ALL.iter().map(|&reason| (reason.label(), offer.reason == Some(reason))).collect() } else { Vec::new() };
-            let press = undo_row(ui, &offer.name, &offer.note, &offer.spoken, &toggles, rows.is_empty());
-            if press.undo {
-                *pressed = Some(Pressed::Undo);
-            } else if let Some(index) = press.toggle {
-                *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
-            }
-            if rows.is_empty() {
-                return;
-            }
+        let rows = queue.log_under(offer);
+        let last = rows.is_empty();
+        match offer {
+            Some(offer) => undo(ui, offer, last, pressed),
+            None if last => panel_body(ui, |ui| {
+                ui.set_width(ui.available_width());
+                muted(ui, "Nothing yet.");
+            }),
+            None => {}
+        }
+        if last {
+            return;
         }
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
-            if rows.is_empty() {
-                muted(ui, "Nothing yet.");
-            }
             for entry in rows {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new(entry.name.as_str()).truncate());
@@ -347,4 +343,16 @@ fn cleared(ui: &mut Ui, queue: &Queue, offer: Option<&UndoOffer>, pressed: &mut 
             }
         });
     });
+}
+
+/// The reasons show only on a skip. `last` rounds the row's foot when no log row follows it.
+fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed>) {
+    let reasons = SkipReason::ALL.map(|reason| (reason.label(), offer.reason == Some(reason)));
+    let toggles: &[(&str, bool)] = if offer.asks_reason { &reasons } else { &[] };
+    let press = undo_row(ui, &offer.name, &offer.note, &offer.spoken, toggles, last);
+    if press.undo {
+        *pressed = Some(Pressed::Undo);
+    } else if let Some(index) = press.toggle {
+        *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
+    }
 }

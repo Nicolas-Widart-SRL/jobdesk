@@ -8,7 +8,7 @@ use crate::ui_kit::marks::paint_key;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
-    SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_LEFT, TAB_TOP, Type,
+    SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -235,20 +235,6 @@ pub fn folder_tab(ui: &mut Ui, label: &str, count: Option<&str>, on: bool) -> Re
     ui.painter().rect_filled(rect, TAB_TOP, fill);
     TabText::layout(ui, label, count, on, ink, f32::INFINITY).paint(ui, rect.left() + NAV_TAB_PADDING, rect.center().y, ink);
     focus_ring(ui, &response, TAB_TOP);
-    response.widget_info(|| tab_info(label, count, on));
-    response
-}
-
-/// The same tab on the sidebar's edge. It runs to the panel edge, so the active tab joins the sheet.
-pub fn side_tab(ui: &mut Ui, label: &str, count: Option<&str>, on: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), NAV_TAB_HEIGHT), Sense::click());
-    let (fill, ink) = tab_look(ui, &response, on);
-    let mut tab = rect;
-    tab.set_right(ui.clip_rect().right());
-    ui.painter().rect_filled(tab, TAB_LEFT, fill);
-    let padding = SEGMENT_PADDING;
-    TabText::layout(ui, label, count, on, ink, tab.width() - padding * 2.0).paint(ui, rect.left() + padding, rect.center().y, ink);
-    focus_ring(ui, &response, TAB_LEFT);
     response.widget_info(|| tab_info(label, count, on));
     response
 }

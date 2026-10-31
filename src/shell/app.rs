@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use chrono::Local;
-use egui::{Frame, Margin, Panel, ThemePreference, Ui};
+use egui::{Align, Layout, Panel, ThemePreference, Ui, vec2};
 
+use crate::discovery::application::Lane;
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
@@ -17,14 +18,19 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
 use crate::shell::{Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
+use crate::ui_kit::tokens::{BRAND_GAP, BUTTON_HEIGHT, NAV_TAB_GAP, NAV_TOP, ROW_GAP, SHELL_GAP, STATUS_GAP};
 use crate::ui_kit::{
-    Ink, Type, alert, button, desk_frame, faint_mono, install_fonts, install_theme, muted, panel_body, primary_button, rich, sheet_frame, side_tab, slip, status_segmented, strong,
-    take_command_request,
+    Ink, Tone, Type, alert, brand_mark, button, folder_tab, install_fonts, install_theme, muted, page_body, panel_body, primary_button, rich, sheet_frame, shell_top_frame, shortcut_button, slip,
+    status_dot, status_frame, status_segmented, strong, tag, take_command_request,
 };
 use crate::workspace;
-use crate::workspace::application::{EnvironmentChecks, WorkspaceRoot, auth_mode};
+use crate::workspace::application::{AuthMode, EnvironmentChecks, WorkspaceRoot, auth_mode};
+use crate::workspace::ui::WorkspaceAction;
 
 const WORKSPACE_KEY: &str = "workspace";
+
+/// The bundled fonts have no command key glyph, so macOS spells it out.
+const ASK_KEYS: [&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "K"] } else { ["Ctrl", "K"] };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -54,16 +60,12 @@ impl Screen {
         }
     }
 
-    fn subtitle(self) -> &'static str {
+    /// The folder tab a screen lights: a dossier sits in the tracker, the launcher with the runs.
+    fn tab(self) -> Self {
         match self {
-            Self::InTray => "Claude prepares, you decide",
-            Self::Jobs => "Triage scores from posting text only. /apply re-evaluates with company research.",
-            Self::Tracker => "Status changes go through /outcome",
-            Self::Insights => "Search health and your latest skill gap report",
-            Self::Runs => "Every command Jobdesk ran in this workspace",
-            Self::Workspace => "Whether your checkout and tools are ready",
-            Self::Launcher => "Every action is the unchanged slash command. Forms only build its arguments.",
-            Self::Dossier => "Documents, evaluation, prep and outcome for one application",
+            Self::Dossier => Self::Tracker,
+            Self::Launcher => Self::Runs,
+            screen => screen,
         }
     }
 }
@@ -183,7 +185,9 @@ impl Shell {
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
                 let repaint = ctx.clone();
-                self.environment = Some(workspace::environment_checks(Arc::new(move || repaint.request_repaint())));
+                let mut environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+                environment.ensure_started();
+                self.environment = Some(environment);
                 self.workspace = Some(root);
                 self.folder_error = None;
             }
@@ -215,13 +219,8 @@ impl Shell {
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
-        Panel::left("sidebar")
-            .exact_size(216.0)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(desk_frame(ui).inner_margin(Margin::symmetric(12, 14)))
-            .show(ui, |ui| self.sidebar(ui, queue.cards.len()));
-        Panel::bottom("status_bar").show_separator_line(false).frame(desk_frame(ui).inner_margin(Margin::symmetric(24, 5))).show(ui, |ui| self.status_bar(ui));
+        Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame(ui)).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
+        Panel::bottom("status_bar").show_separator_line(false).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default().frame(sheet_frame(ui)).show(ui, |ui| {
             if self.workspace.is_some() {
                 self.content(ui, &queue);
@@ -266,7 +265,8 @@ impl Shell {
     }
 
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
-        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) && self.workspace.is_some() {
+        let typing = ctx.egui_wants_keyboard_input();
+        if self.workspace.is_some() && !typing && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
             self.screen = Screen::Launcher;
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
@@ -291,43 +291,92 @@ impl Shell {
         });
     }
 
-    fn sidebar(&mut self, ui: &mut Ui, pending: usize) {
-        ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
-        ui.add_space(10.0);
-        if self.workspace.is_some() && primary_button(ui, "Run command").on_hover_text("Cmd+K or Ctrl+K").clicked() {
-            self.screen = Screen::Launcher;
-        }
-        ui.add_space(10.0);
-        let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
-        for screen in Screen::NAV {
-            let on = self.screen == screen || (self.screen == Screen::Dossier && screen == Screen::Tracker);
-            let count = match screen {
-                Screen::Runs if waiting > 0 => Some(format!("{waiting} waiting")),
-                Screen::InTray if pending > 0 => Some(pending.to_string()),
-                _ => None,
-            };
-            if side_tab(ui, screen.title(), count.as_deref(), on).clicked() {
-                self.screen = screen;
-            }
-        }
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            if button(ui, "Change folder").clicked() {
-                let ctx = ui.ctx().clone();
-                self.choose_folder(&ctx);
-            }
-            if let Some(workspace) = &self.workspace {
-                faint_mono(ui, workspace.name());
+    /// The desk strip: brand and Ask or run, then the folder tabs. The active tab stands on the sheet.
+    fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let open = self.workspace.is_some();
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = BRAND_GAP;
+            brand_mark(ui);
+            ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
+            if open {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if shortcut_button(ui, "Ask or run", &ASK_KEYS).clicked() {
+                        self.screen = Screen::Launcher;
+                    }
+                });
             }
         });
+        if !open {
+            ui.add_space(SHELL_GAP.1);
+            return;
+        }
+        ui.add_space(SHELL_GAP.1 + NAV_TOP);
+        let snapshot = &self.snapshot;
+        let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
+        let lit = self.screen.tab();
+        let mut picked = None;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
+            for screen in Screen::NAV {
+                let count = match screen {
+                    Screen::InTray => pending,
+                    Screen::Jobs => snapshot.board.count(Lane::New),
+                    Screen::Tracker => snapshot.pipeline.open_count(),
+                    Screen::Runs => waiting,
+                    _ => 0,
+                };
+                let count = (count > 0).then(|| count.to_string());
+                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit).clicked() {
+                    picked = Some(screen);
+                }
+            }
+        });
+        if let Some(screen) = picked {
+            self.screen = screen;
+        }
+    }
+
+    /// What the status bar says about the screen on show.
+    fn screen_note(&self) -> String {
+        let pipeline = &self.snapshot.pipeline;
+        match self.screen {
+            Screen::Jobs => "Source: job_scraper/seen_jobs.json".to_owned(),
+            Screen::Tracker => {
+                let open = pipeline.open_count();
+                format!("{open} open, {} closed", pipeline.cards().count() - open)
+            }
+            Screen::Insights => "Drafted rows stay out of every statistic".to_owned(),
+            Screen::Dossier => "Source: tracker row and application archive".to_owned(),
+            Screen::Workspace => match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
+                AuthMode::ClaudeLogin => "Runs use your Claude CLI login. Jobdesk stores no credentials.".to_owned(),
+                AuthMode::ApiKey => "Runs use an API key or provider. Jobdesk stores no credentials.".to_owned(),
+                AuthMode::NoRunYet => "Sign-in is known after the first run. Jobdesk stores no credentials.".to_owned(),
+            },
+            _ => "Slash commands stay the only writers of your files.".to_owned(),
+        }
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = STATUS_GAP.0;
+            if let Some(version) = self.environment.as_ref().and_then(|environment| environment.version_of("claude")) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = ROW_GAP;
+                    status_dot(ui, Tone::Hired);
+                    ui.label(rich(ui, format!("Claude CLI {version}"), Type::NOTE, Ink::Muted));
+                });
+            }
+            let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
+            if waiting > 0 {
+                let text = if waiting == 1 { "1 run needs you".to_owned() } else { format!("{waiting} runs need you") };
+                tag(ui, text, Tone::Interview);
+            }
             let issues = self.snapshot.issues.len();
             if issues > 0 {
                 alert(ui, format!("{issues} source could not be read"));
             } else {
-                let line = rich(ui, "Slash commands stay the only writers of your files.", Type::NOTE, Ink::Muted);
+                let line = rich(ui, self.screen_note(), Type::NOTE, Ink::Muted);
                 ui.label(line);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -365,64 +414,64 @@ impl Shell {
     }
 
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
-        Frame::new().inner_margin(Margin::symmetric(24, 16)).show(ui, |ui| {
-            if self.screen != Screen::InTray {
-                ui.heading(self.screen.title());
-                muted(ui, self.screen.subtitle());
-                ui.add_space(12.0);
+        if !self.snapshot.issues.is_empty() {
+            page_body(ui, |ui| {
+                for issue in &self.snapshot.issues {
+                    alert(ui, issue.to_string());
+                }
+            });
+        }
+        let snapshot = &self.snapshot;
+        match self.screen {
+            Screen::InTray => {
+                let keys = !self.confirm_quit;
+                if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, tray, queue, keys)) {
+                    self.follow(ui.ctx(), request);
+                }
             }
-            for issue in &self.snapshot.issues {
-                alert(ui, issue.to_string());
+            Screen::Jobs => self.jobs.show(ui, &snapshot.board),
+            Screen::Tracker => {
+                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline) {
+                    self.show_dossier(folder);
+                }
             }
-            let snapshot = &self.snapshot;
-            match self.screen {
-                Screen::InTray => {
-                    let keys = !self.confirm_quit;
-                    if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, tray, queue, keys)) {
-                        self.follow(ui.ctx(), request);
-                    }
-                }
-                Screen::Jobs => self.jobs.show(ui, &snapshot.board),
-                Screen::Tracker => {
-                    if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline) {
-                        self.show_dossier(folder);
-                    }
-                }
-                Screen::Dossier => {
-                    let view = self.refreshed_dossier();
-                    match (view, &mut self.pages) {
-                        (Some(view), Some(pages)) => {
-                            if self.dossier_screen.show(ui, &view, pages) == Some(DossierAction::Back) {
-                                self.screen = Screen::Tracker;
-                            }
-                        }
-                        _ => {
-                            muted(ui, "This application is no longer in the tracker.");
+            Screen::Dossier => {
+                let view = self.refreshed_dossier();
+                match (view, &mut self.pages) {
+                    (Some(view), Some(pages)) => {
+                        if self.dossier_screen.show(ui, &view, pages) == Some(DossierAction::Back) {
+                            self.screen = Screen::Tracker;
                         }
                     }
-                }
-                Screen::Insights => insights::ui::show(ui, &snapshot.insights, snapshot.skill_gaps.as_ref()),
-                Screen::Runs => {
-                    if let Some(desk) = &mut self.desk {
-                        self.run_screen.show(ui, desk);
-                    }
-                }
-                Screen::Workspace => {
-                    let auth = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
-                    if let Some(environment) = &mut self.environment {
-                        workspace::ui::show(ui, &snapshot.workspace, environment, auth);
-                    }
-                }
-                Screen::Launcher => {
-                    if let Some(desk) = &mut self.desk {
-                        if let Some(id) = self.launcher.show(ui, desk) {
-                            self.run_screen.select(id);
-                            self.screen = Screen::Runs;
-                        }
+                    _ => {
+                        page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));
                     }
                 }
             }
-        });
+            Screen::Insights => insights::ui::show(ui, &snapshot.insights, snapshot.skill_gaps.as_ref()),
+            Screen::Runs => {
+                if let Some(desk) = &mut self.desk {
+                    self.run_screen.show(ui, desk);
+                }
+            }
+            Screen::Workspace => {
+                let auth = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
+                let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
+                let action = self.environment.as_mut().and_then(|environment| workspace::ui::show(ui, &name, &snapshot.workspace, environment, auth));
+                if action == Some(WorkspaceAction::ChangeFolder) {
+                    let ctx = ui.ctx().clone();
+                    self.choose_folder(&ctx);
+                }
+            }
+            Screen::Launcher => {
+                if let Some(desk) = &mut self.desk {
+                    if let Some(id) = self.launcher.show(ui, desk) {
+                        self.run_screen.select(id);
+                        self.screen = Screen::Runs;
+                    }
+                }
+            }
+        }
     }
 }
 

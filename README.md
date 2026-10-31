@@ -9,7 +9,7 @@ Native macOS and Windows view over an [ai-job-search](https://github.com/ai-job-
 
 In-tray is the home screen: one queue of decisions, one card at a time, with paused runs first, then deadlines, then the rest. Y follows the suggestion, L sets the card aside until tomorrow, N skips, U undoes. Y opens the slash command in the launcher, and nothing runs until you start it. Permission, question and guard cards have no Y action. Skip reasons stay in the app's data folder.
 
-In-tray, Jobs, Tracker and Insights update live as commands change your files. The Runs screen starts any slash command through your local `claude` CLI and shows its progress, permission requests, questions, cost and history.
+In-tray, Jobs, Tracker and Insights update live as commands change your files. The Runs screen starts any slash command through your local `claude` CLI and shows its progress, permission requests, questions, cost and history. Ask or run (Cmd+K, Ctrl+K on Windows) opens the command launcher.
 
 Workspace shows whether your profile, tools, portals, templates and sync are ready.
 

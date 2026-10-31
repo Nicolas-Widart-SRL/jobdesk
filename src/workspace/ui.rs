@@ -1,6 +1,6 @@
 use egui::{ScrollArea, Ui};
 
-use crate::ui_kit::{Tone, button, command_button, divider, faint_mono, list_row, muted, panel, panel_body, panel_header, tag};
+use crate::ui_kit::{Subtitle, Title, Tone, button, command_button, divider, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, tag};
 use crate::workspace::application::{AuthMode, EnvironmentChecks, ProfileState, ToolCheck, WorkspaceView};
 
 fn row(ui: &mut Ui, first: bool, add: impl FnOnce(&mut Ui)) {
@@ -11,24 +11,40 @@ fn right(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
 }
 
-pub fn show(ui: &mut Ui, view: &WorkspaceView, environment: &mut EnvironmentChecks, auth: AuthMode) {
+/// What the user asked the shell to do from this screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceAction {
+    ChangeFolder,
+}
+
+/// `name` is the checkout's folder name, never its full path.
+pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks, auth: AuthMode) -> Option<WorkspaceAction> {
     environment.ensure_started();
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.columns_const(|[left, right_side]| {
-            profile(left, view);
-            left.add_space(12.0);
-            portals(left, view);
-            tools(right_side, environment);
-            right_side.add_space(12.0);
-            authentication(right_side, auth);
-            right_side.add_space(12.0);
-            templates(right_side, view);
-            right_side.add_space(12.0);
-            sync(right_side, view);
-            right_side.add_space(12.0);
-            reset(right_side);
+    let mut action = None;
+    page_head(ui, Title::Slab("Workspace"), Some(Subtitle::Typed(name)), |ui| {
+        if button(ui, "Change folder").clicked() {
+            action = Some(WorkspaceAction::ChangeFolder);
+        }
+    });
+    page_body(ui, |ui| {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.columns_const(|[left, right_side]| {
+                profile(left, view);
+                left.add_space(12.0);
+                portals(left, view);
+                tools(right_side, environment);
+                right_side.add_space(12.0);
+                authentication(right_side, auth);
+                right_side.add_space(12.0);
+                templates(right_side, view);
+                right_side.add_space(12.0);
+                sync(right_side, view);
+                right_side.add_space(12.0);
+                reset(right_side);
+            });
         });
     });
+    action
 }
 
 fn profile(ui: &mut Ui, view: &WorkspaceView) {

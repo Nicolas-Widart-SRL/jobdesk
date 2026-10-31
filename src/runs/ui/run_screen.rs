@@ -4,7 +4,10 @@ use egui::{Frame, Margin, ScrollArea, TextEdit, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
-use crate::ui_kit::{Ink, Tone, Type, button, code_box, danger_button, divider, faint_mono, input_strip, list_column, muted, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich, side_column, slip, slip_bar, step_rail, strong, tag};
+use crate::ui_kit::{
+    Ink, Subtitle, Title, Tone, Type, button, code_box, danger_button, divider, faint_mono, input_strip, list_column, muted, page_body, page_head, panel, panel_body, panel_header, pick_row,
+    primary_button, prompt_box, rich, side_column, slip, slip_bar, step_rail, strong, tag,
+};
 
 const ACTIVITY_SHOWN: usize = 400;
 
@@ -43,12 +46,17 @@ impl RunScreen {
     }
 
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) {
+        page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+        page_body(ui, |ui| self.body(ui, desk));
+    }
+
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) {
         if desk.runs().is_empty() {
             panel(ui, |ui| {
                 panel_body(ui, |ui| {
                     ui.set_width(ui.available_width());
                     strong(ui, "No runs yet");
-                    muted(ui, "Press Run command to start one.");
+                    muted(ui, "Press Ask or run to start one.");
                 });
             });
             return;

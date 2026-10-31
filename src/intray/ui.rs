@@ -2,8 +2,8 @@ use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    Ink, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_day, horizon_mark as strip_mark,
-    key_button, muted, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
+    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_day, horizon_mark as strip_mark,
+    key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
 };
 
 const HORIZON_DAYS: u64 = 14;
@@ -73,26 +73,27 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
     }
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
 
-    ui.label(rich(ui, queue.headline(), Type::LEAD, Ink::Text));
-    muted(ui, "Paused runs come first, then deadlines, then the rest.");
-    ui.add_space(12.0);
-    if let Some(issue) = tray.issue() {
-        alert(ui, issue);
-    }
-    horizon(ui, queue, &mut pressed);
-    ui.add_space(12.0);
+    let headline = queue.headline();
+    page_head(ui, Title::Lead(&headline), Some(Subtitle::Text("Paused runs come first, then deadlines, then the rest.")), |_| {});
+    page_body(ui, |ui| {
+        if let Some(issue) = tray.issue() {
+            alert(ui, issue);
+        }
+        horizon(ui, queue, &mut pressed);
+        ui.add_space(12.0);
 
-    let offer = tray.undo_offer();
-    side_column("tray_side", 280.0).show(ui, |ui| cleared(ui, queue));
-    egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            match top {
-                Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
-                None => clear(ui, queue, &mut pressed),
-            }
-            if let Some(offer) = &offer {
-                undo_bar(ui, offer, &mut pressed);
-            }
+        let offer = tray.undo_offer();
+        side_column("tray_side", 280.0).show(ui, |ui| cleared(ui, queue));
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                match top {
+                    Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
+                    None => clear(ui, queue, &mut pressed),
+                }
+                if let Some(offer) = &offer {
+                    undo_bar(ui, offer, &mut pressed);
+                }
+            });
         });
     });
 

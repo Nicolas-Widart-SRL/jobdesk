@@ -5,7 +5,10 @@ use egui::{ColorImage, Frame, ScrollArea, TextureHandle, TextureOptions, Ui, Vec
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, OutcomeRecord, PageImage, PageState, PageStore, PdfDocument, StatusBucket};
-use crate::ui_kit::{Ink, Tone, Type, button, command_button, divider, faint_mono, list_row, muted, open_link, page_frame, panel, panel_body, panel_header, rich, segmented, side_column, slip, small_button, strong, tag};
+use crate::ui_kit::{
+    Ink, Subtitle, Title, Tone, Type, button, command_button, divider, faint_mono, list_row, muted, open_link, page_body, page_frame, page_head, panel, panel_body, panel_header, rich,
+    segmented, side_column, slip, small_button, strong, tag,
+};
 
 const PAGE_WIDTH: f32 = 270.0;
 
@@ -51,6 +54,12 @@ impl DossierScreen {
     }
 
     pub fn show(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) -> Option<DossierAction> {
+        let subtitle = Subtitle::Text("Documents, evaluation, prep and outcome for one application");
+        page_head(ui, Title::Slab("Application dossier"), Some(subtitle), |_| {});
+        page_body(ui, |ui| self.body(ui, dossier, pages))
+    }
+
+    fn body(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) -> Option<DossierAction> {
         let action = header(ui, dossier);
         ui.add_space(8.0);
         let sections = [

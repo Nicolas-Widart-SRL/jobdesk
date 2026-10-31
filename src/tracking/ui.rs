@@ -1,7 +1,10 @@
 use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
-use crate::ui_kit::{Ink, Tone, Type, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, panel, panel_body, primary_button, rich, side_column, slip, strong, tag};
+use crate::ui_kit::{
+    Ink, Subtitle, Title, Tone, Type, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body, primary_button, rich, side_column, slip,
+    strong, tag,
+};
 
 #[derive(Default)]
 pub struct TrackerScreen {
@@ -31,6 +34,12 @@ fn card_meta(card: &ApplicationCard) -> String {
 impl TrackerScreen {
     /// Returns the archive folder of a dossier the user asked to open.
     pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
+        let subtitle = Subtitle::Text("Read from job_search_tracker.csv. Status changes go through /outcome.");
+        page_head(ui, Title::Slab("Tracker"), Some(subtitle), |_| {});
+        page_body(ui, |ui| self.body(ui, pipeline))
+    }
+
+    fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
         let mut open = None;
         if pipeline.is_empty() {
             panel(ui, |ui| {

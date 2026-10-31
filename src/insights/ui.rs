@@ -1,23 +1,26 @@
 use egui::{ScrollArea, Ui};
 
 use crate::insights::application::{SearchInsights, SkillGapView};
-use crate::ui_kit::{Ink, Tone, command_button, doughnut, figure, measure, muted, note, panel, panel_body, panel_header, slip, strong, tag};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, command_button, doughnut, figure, measure, muted, note, page_body, page_head, panel, panel_body, panel_header, slip, strong, tag};
 
 pub fn show(ui: &mut Ui, report: &SearchInsights, gaps: Option<&SkillGapView>) {
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        stats(ui, report);
-        ui.add_space(12.0);
-        if report.can_calibrate() {
-            calibration(ui, report);
+    page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text("Search health and your latest skill gap report")), |_| {});
+    page_body(ui, |ui| {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            stats(ui, report);
             ui.add_space(12.0);
-        }
-        ui.columns(3, |columns| {
-            status_chart(&mut columns[0], report);
-            funnel(&mut columns[1], report);
-            breakdown(&mut columns[2], report);
+            if report.can_calibrate() {
+                calibration(ui, report);
+                ui.add_space(12.0);
+            }
+            ui.columns(3, |columns| {
+                status_chart(&mut columns[0], report);
+                funnel(&mut columns[1], report);
+                breakdown(&mut columns[2], report);
+            });
+            ui.add_space(12.0);
+            skill_gaps(ui, gaps);
         });
-        ui.add_space(12.0);
-        skill_gaps(ui, gaps);
     });
 }
 

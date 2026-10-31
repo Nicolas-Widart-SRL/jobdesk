@@ -31,6 +31,12 @@ impl EnvironmentChecks {
         self.results.as_deref()
     }
 
+    /// The first word a tool printed about itself, such as `2.1.3` from `2.1.3 (Claude Code)`.
+    pub fn version_of(&self, name: &str) -> Option<&str> {
+        let check = self.results()?.iter().find(|check| check.spec.name == name)?;
+        check.version.as_deref()?.split_whitespace().next()
+    }
+
     pub fn is_running(&self) -> bool {
         self.running
     }
@@ -53,5 +59,32 @@ impl EnvironmentChecks {
         if self.results.is_none() {
             self.recheck();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::domain::ToolSpec;
+
+    struct NoTools;
+
+    impl ToolProber for NoTools {
+        fn probe(&self, _: &ToolSpec) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn version_of_reads_the_first_word_of_a_found_tool() {
+        let mut checks = EnvironmentChecks::new(Arc::new(NoTools), Arc::new(|| {}));
+        assert_eq!(checks.version_of("claude"), None);
+        checks.results = Some(vec![
+            ToolCheck { spec: TOOLS[0], version: Some("2.1.308 (Claude Code)".to_owned()) },
+            ToolCheck { spec: TOOLS[1], version: None },
+        ]);
+        assert_eq!(checks.version_of("claude"), Some("2.1.308"));
+        assert_eq!(checks.version_of("python3"), None);
+        assert_eq!(checks.version_of("bun"), None);
     }
 }

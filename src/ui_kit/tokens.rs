@@ -150,7 +150,6 @@ pub const RADIUS_CARD: u8 = 2;
 pub const RADIUS_STAMP: u8 = 1;
 
 pub const TAB_TOP: CornerRadius = CornerRadius { nw: RADIUS_TAB, ne: RADIUS_TAB, sw: 0, se: 0 };
-pub const TAB_LEFT: CornerRadius = CornerRadius { nw: RADIUS_TAB, ne: 0, sw: RADIUS_TAB, se: 0 };
 pub const SEGMENT_TOP: CornerRadius = CornerRadius { nw: RADIUS_PANEL, ne: RADIUS_PANEL, sw: 0, se: 0 };
 pub const DEAL_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: RADIUS_PANEL, sw: RADIUS_PANEL, se: RADIUS_PANEL };
 pub const EDGE_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: 0, sw: RADIUS_BUTTON, se: RADIUS_BUTTON };

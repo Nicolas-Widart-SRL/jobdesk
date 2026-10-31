@@ -8,7 +8,7 @@ use jobdesk::ui_kit::{
     FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
     divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_day, horizon_mark, index_card, key_button, key_hint, lane, lane_title, list_row, measure,
     muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box, rich, score, segmented,
-    select_row, shortcut_button, side_tab, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally, tally_strip,
+    select_row, shortcut_button, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally, tally_strip,
     undo_bar, undo_button,
 };
 
@@ -162,20 +162,13 @@ fn tabs(ui: &mut Ui) {
         ui.horizontal(|ui| {
             folder_tab(ui, "In-tray", Some("3"), true);
             folder_tab(ui, "Jobs", None, false);
-            folder_tab(ui, "Runs", Some("1 waiting"), false);
+            folder_tab(ui, "Runs", Some("1"), false);
         });
     });
     ui.add_space(10.0);
-    ui.columns_const(|[left, right]| {
-        desk_frame(left).inner_margin(12).show(left, |ui| {
-            ui.set_clip_rect(ui.max_rect());
-            side_tab(ui, "Tracker", None, true);
-            side_tab(ui, "Insights", Some("2"), false);
-        });
-        segmented(right, 1, &[(0, "Documents".to_owned()), (1, "Evaluation".to_owned()), (2, "Posting".to_owned())]);
-        right.add_space(8.0);
-        status_segmented(right, 1, &[(0, "Dark".to_owned()), (1, "Light".to_owned()), (2, "System".to_owned())]);
-    });
+    segmented(ui, 1, &[(0, "Documents".to_owned()), (1, "Evaluation".to_owned()), (2, "Posting".to_owned())]);
+    ui.add_space(8.0);
+    status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
 }
 
 fn sections(ui: &mut Ui) {

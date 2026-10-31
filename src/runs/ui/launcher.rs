@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use egui::{ComboBox, ScrollArea, TextEdit, Ui};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
-use crate::ui_kit::{Ink, Tone, Type, alert, faint_mono, muted, panel, panel_body, panel_header, primary_button, rich, select_row, side_column, slip, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, faint_mono, muted, page_body, page_head, panel, panel_body, panel_header, primary_button, rich, select_row, side_column, slip, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -46,6 +46,12 @@ impl Launcher {
 
     /// Returns the id of a run the user just started.
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
+        let subtitle = Subtitle::Text("Every action is the unchanged slash command. Forms only build its arguments.");
+        page_head(ui, Title::Slab("Run a command"), Some(subtitle), |_| {});
+        page_body(ui, |ui| self.body(ui, desk))
+    }
+
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let mut started = None;
         side_column("command_form", 420.0).show(ui, |ui| {
             slip(ui, |ui| {

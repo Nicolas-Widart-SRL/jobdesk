@@ -2,7 +2,7 @@ use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::discovery::application::{FitLevel, Gate, JobBoard, JobView, Lane, Signal};
-use crate::ui_kit::{Ink, Tone, Type, command_button, divider, faint_mono, muted, open_link, panel, panel_body, rich, score, segmented, side_column, slip, strong, table_head, tag};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, command_button, divider, faint_mono, muted, open_link, page_body, page_head, panel, panel_body, rich, score, segmented, side_column, slip, strong, table_head, tag};
 
 /// What the user is looking at on this screen.
 pub struct JobsScreen {
@@ -60,6 +60,12 @@ fn fit_label(fit: FitLevel) -> &'static str {
 
 impl JobsScreen {
     pub fn show(&mut self, ui: &mut Ui, board: &JobBoard) {
+        let subtitle = Subtitle::Text("Triage scores from posting text only. /apply re-evaluates with company research.");
+        page_head(ui, Title::Slab("Jobs"), Some(subtitle), |_| {});
+        page_body(ui, |ui| self.body(ui, board));
+    }
+
+    fn body(&mut self, ui: &mut Ui, board: &JobBoard) {
         let options: Vec<_> = Lane::ALL.iter().map(|lane| (*lane, format!("{}  {}", lane_label(*lane), board.count(*lane)))).collect();
         if let Some(lane) = segmented(ui, self.lane, &options) {
             self.lane = lane;

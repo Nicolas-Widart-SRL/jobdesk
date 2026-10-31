@@ -196,11 +196,8 @@ impl Run {
                 self.activity.push(Activity { kind: ActivityKind::Claude(text), nested });
             }
             AgentEvent::ToolStarted { id, name, summary, nested } => self.tool_started(id, name, summary, nested),
-            AgentEvent::ToolFinished { id, error } => {
-                let state = match error {
-                    Some(reason) => ToolState::Failed(Some(reason).filter(|reason| !reason.is_empty())),
-                    None => ToolState::Done,
-                };
+            AgentEvent::ToolFinished { id, failed, reason } => {
+                let state = if failed { ToolState::Failed(reason) } else { ToolState::Done };
                 for activity in self.activity.iter_mut().rev() {
                     if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind && *known == id {
                         *current = state;
@@ -367,7 +364,7 @@ mod tests {
         let mut run = run("/apply x");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Write".into(), summary: "cv/main_a.tex".into(), nested: false });
         run.apply(AgentEvent::ToolStarted { id: "2".into(), name: "Agent".into(), summary: "application-reviewer: critique".into(), nested: false });
-        run.apply(AgentEvent::ToolFinished { id: "1".into(), error: Some(String::new()) });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), failed: true, reason: None });
         assert_eq!(run.steps.as_ref().unwrap().current, 3);
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
         assert_eq!(run.agents.len(), 1);
@@ -378,7 +375,7 @@ mod tests {
     fn failed_tool_keeps_its_reason() {
         let mut run = run("/rank");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), nested: false });
-        run.apply(AgentEvent::ToolFinished { id: "1".into(), error: Some("ls: invalid option -- 'Z'".into()) });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), failed: true, reason: Some("ls: invalid option -- 'Z'".into()) });
         assert_eq!(run.activity[1].kind, ActivityKind::Tool { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), state: ToolState::Failed(Some("ls: invalid option -- 'Z'".into())) });
     }
 

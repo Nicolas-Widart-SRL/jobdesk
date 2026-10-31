@@ -40,8 +40,8 @@ pub enum AgentEvent {
     TextDelta(String),
     AssistantText { text: String, nested: bool },
     ToolStarted { id: String, name: String, summary: String, nested: bool },
-    /// `error` is set when the tool failed. It holds the reason, empty when the output gave none.
-    ToolFinished { id: String, error: Option<String> },
+    /// `reason` is set only when the tool failed and its output said why.
+    ToolFinished { id: String, failed: bool, reason: Option<String> },
     PromptRaised(Prompt),
     PromptWithdrawn { request_id: String },
     UsageChanged(Usage),

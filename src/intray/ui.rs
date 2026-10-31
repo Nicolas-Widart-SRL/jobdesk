@@ -2,7 +2,8 @@ use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_day, horizon_mark as strip_mark,
+    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
+    horizon_mark as strip_mark, horizon_return,
     key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
 };
 
@@ -118,12 +119,40 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
 
 fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     let days: Vec<_> = (0..HORIZON_DAYS).map(|offset| queue.today + chrono::Days::new(offset)).collect();
-    horizon_strip(ui, &days, None, |ui, day, today| {
+    let note = queue.horizon_note();
+    let tomorrow = queue.today + chrono::Days::new(1);
+    horizon_strip(ui, &days, note.as_deref(), |ui, day, today| {
         horizon_day(ui, &day.format("%a %-d").to_string(), today);
         for mark in queue.marks.iter().filter(|mark| mark.on == *day) {
             horizon_mark(ui, mark, pressed);
         }
+        if today {
+            let kinds: Vec<(usize, String)> = queue.by_kind().into_iter().map(|(n, kind)| (n, kind.map_or("other".to_owned(), |kind| kind_tag(kind).0.to_lowercase()))).collect();
+            let kinds: Vec<(usize, &str)> = kinds.iter().map(|(n, kind)| (*n, kind.as_str())).collect();
+            horizon_count(ui, queue.cards.len(), queue.overdue(), &kinds);
+        } else if *day == tomorrow && !queue.set_aside.is_empty() {
+            return_chip(ui, queue, pressed);
+        }
     });
+}
+
+/// Names come from postings, so they show as plain labels only.
+fn return_chip(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
+    let n = queue.set_aside.len();
+    let names = queue.set_aside_distinct();
+    let pronoun = if n == 1 { "it" } else { "them" };
+    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", names.join(", "));
+    let chip = horizon_return(ui, &format!("{n} back"), &label, |ui| {
+        strong(ui, "Set aside with Later");
+        for name in &names {
+            ui.label(*name);
+        }
+        ui.add_space(4.0);
+        ui.label(rich(ui, format!("Back in the tray tomorrow. Click to bring {pronoun} back now."), Type::NOTE, Ink::Muted));
+    });
+    if chip.clicked() {
+        *pressed = Some(Pressed::BringAll);
+    }
 }
 
 fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {

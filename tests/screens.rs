@@ -35,10 +35,13 @@ fn copy_tree(from: &Path, to: &Path) {
 
 /// A stable folder keeps the name in the sidebar identical between runs.
 fn shell(screen: Screen, name: &str) -> Shell {
+    shell_on(screen, name, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+fn shell_on(screen: Screen, name: &str, today: NaiveDate) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
     let snapshot = Snapshot::load(&root, today);
     assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
     Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
@@ -430,6 +433,9 @@ fn skip_takes_a_reason_and_only_some_cards_allow_it() {
     press(&mut harness, Key::N);
     assert!(!is_shown(&harness, MERIDIAN));
 
+    // The taller horizon puts the reason row at the fold, so scroll to it first.
+    harness.get_by_label("Domain").scroll_to_me();
+    harness.run_steps(3);
     harness.get_by_label("Domain").click();
     harness.run_steps(3);
     assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
@@ -465,6 +471,44 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
     assert!(is_shown(&harness, "Kept: Halden Logistics"));
+}
+
+#[test]
+fn the_horizon_counts_what_is_left_today() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_count"));
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, &format!("{} to decide", TRAY_CARDS - 1)));
+}
+
+#[test]
+fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_return_chip"));
+    press(&mut harness, Key::L);
+
+    harness.get_by_label_contains("1 set aside, back tomorrow: Harbor Bank").click();
+    harness.run_steps(3);
+
+    // The card being read stays on top, so Harbor Bank comes back behind it.
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+    assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
+    assert!(!is_shown(&harness, "All commands"), "the chip opens no launcher");
+}
+
+#[test]
+fn overdue_cards_show_in_todays_cell() {
+    let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
+    assert!(harness.query_by_label_contains(" overdue").is_some());
+    assert!(is_shown(&harness, "No other deadlines in the next 14 days"));
+    assert!(!is_shown(&harness, "Harbor deadline"));
+}
+
+#[test]
+fn an_empty_tray_says_nothing_is_due() {
+    let harness = tray_harness(empty_shell("tray_empty"));
+    assert!(is_shown(&harness, "0 to decide"));
+    assert!(is_shown(&harness, "No deadlines in the next 14 days"));
 }
 
 fn tray_after(mut harness: Harness, keys: &[Key], name: &str) {
@@ -521,15 +565,34 @@ fn intray_set_aside_dark() {
     tray_after(wgpu_tray(shell(Screen::InTray, "intray_set_aside_dark"), Theme::Dark), &[Key::L; TRAY_CARDS], "intray_set_aside_dark");
 }
 
-#[test]
-fn intray_clear_dark() {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("intray_clear_dark").join("ai-job-search");
+/// A workspace with one command and no applications.
+fn empty_shell(name: &str) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join(".claude/commands")).unwrap();
     fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
     let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    let shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot);
-    tray_after(wgpu_tray(shell, Theme::Dark), &[], "intray_clear_dark");
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+#[test]
+fn intray_clear_dark() {
+    tray_after(wgpu_tray(empty_shell("intray_clear_dark"), Theme::Dark), &[], "intray_clear_dark");
+}
+
+/// Every sample deadline, Nov 3 to 6, has passed by then.
+fn overdue_day() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()
+}
+
+#[test]
+fn intray_overdue_light() {
+    tray_after(wgpu_tray(shell_on(Screen::InTray, "intray_overdue_light", overdue_day()), Theme::Light), &[Key::L], "intray_overdue_light");
+}
+
+#[test]
+fn intray_overdue_dark() {
+    tray_after(wgpu_tray(shell_on(Screen::InTray, "intray_overdue_dark", overdue_day()), Theme::Dark), &[Key::L], "intray_overdue_dark");
 }
 
 const FINDINGS: &str = "## Verification Checklist\n- [x] All claims match the profile\n- [x] CV is exactly 2 pages\n- [ ] Addressed to a named person\n\n| Keyword | Priority | Status | Note |\n|---|---|---|---|\n| event sourcing | required | covered | Skills |\n| Azure | preferred | missing (gap) | Named in letter |\n";

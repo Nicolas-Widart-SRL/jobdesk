@@ -1,6 +1,6 @@
 //! The in-tray's parts: one decision at a time, on top of a visible stack of what is left.
 
-use egui::{CornerRadius, Frame, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
+use egui::{CornerRadius, Frame, Label, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::paint_key;
@@ -59,20 +59,22 @@ pub fn horizon<T>(ui: &mut Ui, days: &[T], note: Option<&str>, mut cell: impl Fn
 /// Today's pending count, the overdue line and one line per kind, in the cell's own gap.
 pub fn horizon_count(ui: &mut Ui, count: usize, overdue: usize, kinds: &[(usize, &str)]) {
     let ink = if count == 0 { Ink::Muted } else { Ink::Text };
-    ui.label(rich(ui, format!("{count} to decide"), Type::TAG, ink));
+    ui.add(Label::new(rich(ui, format!("{count} to decide"), Type::TAG, ink)).truncate());
     if overdue > 0 {
-        ui.label(rich(ui, format!("{overdue} overdue"), Type::TAG, Tone::Interview));
+        ui.add(Label::new(rich(ui, format!("{overdue} overdue"), Type::TAG, Tone::Interview)).truncate());
     }
     for (n, kind) in kinds {
-        ui.label(rich(ui, format!("{n} {kind}"), Type::SMALL, Ink::Muted));
+        ui.add(Label::new(rich(ui, format!("{n} {kind}"), Type::SMALL, Ink::Muted)).truncate());
     }
 }
 
-/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover.
+/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover or focus.
+/// In a narrow column the chip keeps to the column and its text elides.
 pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, tip: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
-    let galley = line(ui, text, Type::TAG, p.text, f32::INFINITY);
-    let size = vec2(galley.size().x + HORIZON_CHIP_PADDING * 2.0, HORIZON_CHIP_HEIGHT);
+    let room = ui.available_width();
+    let galley = line(ui, text, Type::TAG, p.text, (room - HORIZON_CHIP_PADDING * 2.0).max(0.0));
+    let size = vec2((galley.size().x + HORIZON_CHIP_PADDING * 2.0).min(room), HORIZON_CHIP_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let edge = if response.hovered() { p.text } else { p.line };
     ui.painter().rect_filled(rect, RADIUS_CARD, p.sheet);
@@ -80,10 +82,15 @@ pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, tip: impl FnOnce(&mu
     let at = pos2(rect.left() + HORIZON_CHIP_PADDING, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(at, galley, p.text);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
-    response.on_hover_ui(|ui| {
+    let tip = |ui: &mut Ui| {
         ui.set_max_width(HORIZON_TIP_WIDTH);
         tip(ui)
-    })
+    };
+    if response.has_focus() {
+        response.show_tooltip_ui(tip);
+        return response;
+    }
+    response.on_hover_ui(tip)
 }
 
 pub fn horizon_day(ui: &mut Ui, text: &str, today: bool) -> Response {

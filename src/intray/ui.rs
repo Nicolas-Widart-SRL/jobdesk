@@ -1,13 +1,12 @@
 use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
-use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
+use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
     horizon_mark as strip_mark, horizon_return,
     key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
 };
 
-const HORIZON_DAYS: u64 = 14;
 const GATE_COLUMNS: usize = 3;
 const CODE_HEIGHT: f32 = 150.0;
 
@@ -91,8 +90,9 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
                     Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
                     None => clear(ui, queue, &mut pressed),
                 }
-                if let Some(offer) = &offer {
-                    undo_bar(ui, offer, &mut pressed);
+                match &offer {
+                    Some(offer) => undo_bar(ui, offer, &mut pressed),
+                    None => ui.ctx().data_mut(|data| data.remove::<Option<UndoOffer>>(undo_seen_id())),
                 }
             });
         });
@@ -118,7 +118,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
 }
 
 fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
-    let days: Vec<_> = (0..HORIZON_DAYS).map(|offset| queue.today + chrono::Days::new(offset)).collect();
+    let days: Vec<_> = (0..HORIZON_DAYS as u64).map(|offset| queue.today + chrono::Days::new(offset)).collect();
     let note = queue.horizon_note();
     let tomorrow = queue.today + chrono::Days::new(1);
     horizon_strip(ui, &days, note.as_deref(), |ui, day, today| {
@@ -141,7 +141,7 @@ fn return_chip(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     let n = queue.set_aside.len();
     let names = queue.set_aside_distinct();
     let pronoun = if n == 1 { "it" } else { "them" };
-    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", names.join(", "));
+    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", queue.set_aside_names());
     let chip = horizon_return(ui, &format!("{n} back"), &label, |ui| {
         strong(ui, "Set aside with Later");
         for name in &names {
@@ -319,8 +319,10 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
+/// An offer that asks for a reason scrolls into view once, so the reasons show right after N.
+/// Other offers leave the scroll alone, so the next card's head stays in view.
 fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
-    undo_strip(ui, |ui| {
+    let shown = ui.scope(|ui| undo_strip(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label(offer.text.as_str());
             if offer.asks_reason {
@@ -334,7 +336,15 @@ fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
                 *pressed = Some(Pressed::Undo);
             }
         });
-    });
+    }));
+    let seen = ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Option<UndoOffer>>(undo_seen_id()).replace(offer.clone()));
+    if offer.asks_reason && seen.as_ref() != Some(offer) {
+        shown.response.scroll_to_me(None);
+    }
+}
+
+fn undo_seen_id() -> egui::Id {
+    egui::Id::NULL.with("tray_undo_seen")
 }
 
 fn cleared(ui: &mut Ui, queue: &Queue) {

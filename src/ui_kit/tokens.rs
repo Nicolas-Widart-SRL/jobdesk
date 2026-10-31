@@ -126,7 +126,6 @@ pub const PAGE_GAP: f32 = 12.0;
 pub const MINI_PAGE_SIZE: (f32, f32) = (92.0, 130.0);
 pub const MINI_PAGE_PADDING: (f32, f32) = (7.0, 8.0);
 pub const HORIZON_CELL_MIN: f32 = 68.0;
-pub const HORIZON_DAYS: usize = 14;
 pub const GATE_PADDING: f32 = 7.0;
 pub const GATE_COLUMN_GAP: f32 = 20.0;
 pub const GATE_MIN: f32 = 210.0;

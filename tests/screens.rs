@@ -433,9 +433,6 @@ fn skip_takes_a_reason_and_only_some_cards_allow_it() {
     press(&mut harness, Key::N);
     assert!(!is_shown(&harness, MERIDIAN));
 
-    // The taller horizon puts the reason row at the fold, so scroll to it first.
-    harness.get_by_label("Domain").scroll_to_me();
-    harness.run_steps(3);
     harness.get_by_label("Domain").click();
     harness.run_steps(3);
     assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
@@ -484,7 +481,10 @@ fn the_horizon_counts_what_is_left_today() {
 
 #[test]
 fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
-    let mut harness = tray_harness(shell(Screen::InTray, "tray_return_chip"));
+    let mut shell = shell(Screen::InTray, "tray_return_chip");
+    let started = SharedSink::default();
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
     press(&mut harness, Key::L);
 
     harness.get_by_label_contains("1 set aside, back tomorrow: Harbor Bank").click();
@@ -494,6 +494,7 @@ fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
     assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
     assert!(!is_shown(&harness, "All commands"), "the chip opens no launcher");
+    assert!(started.lock().unwrap().is_none(), "the chip starts no run");
 }
 
 #[test]

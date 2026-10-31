@@ -455,9 +455,8 @@ impl Shell {
                 }
             }
             Screen::Workspace => {
-                let auth = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
-                let action = self.environment.as_mut().and_then(|environment| workspace::ui::show(ui, &name, &snapshot.workspace, environment, auth));
+                let action = self.environment.as_mut().and_then(|environment| workspace::ui::show(ui, &name, &snapshot.workspace, environment));
                 if action == Some(WorkspaceAction::ChangeFolder) {
                     let ctx = ui.ctx().clone();
                     self.choose_folder(&ctx);

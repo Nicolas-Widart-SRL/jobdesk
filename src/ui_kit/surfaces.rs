@@ -166,6 +166,13 @@ pub fn divider(ui: &mut Ui) {
     ui.painter().rect_filled(rect, 0.0, color);
 }
 
+/// The rule under a table's head row, in the text colour.
+pub fn table_rule(ui: &mut Ui) {
+    let color = Palette::of(ui).text;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HAIRLINE), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, color);
+}
+
 pub fn panel_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new()
         .inner_margin(Margin::symmetric(INSET, BODY_PADDING))

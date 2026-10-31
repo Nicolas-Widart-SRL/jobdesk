@@ -9,7 +9,7 @@ use crate::discovery::application::Lane;
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
-use crate::dossier::ui::{DossierAction, DossierScreen};
+use crate::dossier::ui::DossierScreen;
 use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
@@ -439,9 +439,7 @@ impl Shell {
                 let view = self.refreshed_dossier();
                 match (view, &mut self.pages) {
                     (Some(view), Some(pages)) => {
-                        if self.dossier_screen.show(ui, &view, pages) == Some(DossierAction::Back) {
-                            self.screen = Screen::Tracker;
-                        }
+                        self.dossier_screen.show(ui, &view, pages);
                     }
                     _ => {
                         page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));

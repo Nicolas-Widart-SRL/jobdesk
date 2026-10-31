@@ -176,12 +176,21 @@ pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
     ctx.data_mut(|data| data.remove_temp(command_request_id()))
 }
 
-pub fn open_link(ui: &mut Ui, label: &str, url: Option<&WebUrl>) {
+fn open_link_with(ui: &mut Ui, label: &str, url: Option<&WebUrl>, fit: Fit) {
     let Some(url) = url else { return };
-    let response = small_button(ui, label).on_hover_text(url.as_str());
+    let response = press(ui, label, Look::Plain, fit, None).on_hover_text(url.as_str());
     if response.clicked() {
         ui.ctx().open_url(egui::OpenUrl::new_tab(url.as_str()));
     }
+}
+
+pub fn open_link(ui: &mut Ui, label: &str, url: Option<&WebUrl>) {
+    open_link_with(ui, label, url, SMALL);
+}
+
+/// The same link at full button size, for a screen's head.
+pub fn open_link_button(ui: &mut Ui, label: &str, url: Option<&WebUrl>) {
+    open_link_with(ui, label, url, NORMAL);
 }
 
 /// The label of a tab, with its count in a quieter voice.

@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
 use crate::intray::application::compose::{Sources, derive_cards};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, rank};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, HORIZON_DAYS, rank};
 use crate::shared_kernel::WebUrl;
 
 /// What a card asks of the rest of the app.
@@ -45,15 +45,53 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// Two cards of one company are named once.
-    pub fn set_aside_names(&self) -> String {
+    /// Two cards of one company are named once, in the order they first appear.
+    pub fn set_aside_distinct(&self) -> Vec<&str> {
         let mut names: Vec<&str> = Vec::new();
         for name in &self.set_aside {
             if !names.contains(&name.as_str()) {
                 names.push(name);
             }
         }
-        names.join(", ")
+        names
+    }
+
+    pub fn set_aside_names(&self) -> String {
+        self.set_aside_distinct().join(", ")
+    }
+
+    /// Pending cards whose date has passed. A card due today is not overdue.
+    pub fn overdue(&self) -> usize {
+        self.cards.iter().filter(|card| card.due.as_ref().is_some_and(|due| due.on < self.today)).count()
+    }
+
+    /// The two biggest kinds, most first. With more than two kinds the second line folds the rest into `None`, meaning other.
+    pub fn by_kind(&self) -> Vec<(usize, Option<CardKind>)> {
+        let mut counts: Vec<(usize, CardKind)> = Vec::new();
+        for card in &self.cards {
+            match counts.iter_mut().find(|(_, kind)| *kind == card.kind) {
+                Some((count, _)) => *count += 1,
+                None => counts.push((1, card.kind)),
+            }
+        }
+        counts.sort_by_key(|&(count, kind)| (std::cmp::Reverse(count), kind));
+        if counts.len() > 2 {
+            let rest = counts[1..].iter().map(|(count, _)| count).sum();
+            counts.truncate(1);
+            let mut lines: Vec<(usize, Option<CardKind>)> = counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect();
+            lines.push((rest, None));
+            return lines;
+        }
+        counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect()
+    }
+
+    /// Says so when nothing, set aside or not, is dated inside the horizon.
+    pub fn horizon_note(&self) -> Option<String> {
+        if !self.marks.is_empty() {
+            return None;
+        }
+        let other = if self.overdue() > 0 { "other " } else { "" };
+        Some(format!("No {other}deadlines in the next {HORIZON_DAYS} days"))
     }
 
     pub fn headline(&self) -> String {
@@ -246,7 +284,7 @@ mod tests {
     use crate::intray::domain::{Body, Due};
     use crate::runs::application::{AgentEvent, Prompt, PromptKind, Run, RunRequest};
     use crate::shared_kernel::LoadError;
-    use crate::tracking::application::Pipeline;
+    use crate::tracking::application::{ApplicationCard, Pipeline, PipelineLane, ReachedStage, StatusBucket};
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()
@@ -519,5 +557,87 @@ mod tests {
         assert_eq!(aside.set_aside_names(), "A, B");
         assert_eq!(queue(vec![card(CardKind::Close)]).headline(), "1 decision, about 1 minute");
         assert_eq!(queue(vec![card(CardKind::Send), card(CardKind::Close)]).headline(), "2 decisions, about 4 minutes");
+    }
+
+    fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {
+        Card {
+            key: String::new(), kind, name: String::new(), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
+            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), trace: String::new(),
+        }
+    }
+
+    fn of_kinds(kinds: &[(usize, CardKind)]) -> Queue {
+        let cards = kinds.iter().flat_map(|&(count, kind)| (0..count).map(move |_| pending(kind, None))).collect();
+        Queue { cards, ..Default::default() }
+    }
+
+    #[test]
+    fn overdue_counts_pending_cards_past_their_date() {
+        let day = |offset: i64| Some(today() + chrono::Duration::days(offset));
+        let cards = vec![
+            pending(CardKind::Triage, day(-2)), pending(CardKind::Triage, day(-1)), pending(CardKind::Triage, day(0)),
+            pending(CardKind::Triage, day(3)), pending(CardKind::Triage, None),
+        ];
+        assert_eq!(Queue { cards, today: today(), ..Default::default() }.overdue(), 2);
+    }
+
+    #[test]
+    fn kinds_sort_by_count_then_kind_order() {
+        assert_eq!(of_kinds(&[(5, CardKind::Triage), (2, CardKind::Send)]).by_kind(), [(5, Some(CardKind::Triage)), (2, Some(CardKind::Send))]);
+        assert_eq!(of_kinds(&[(1, CardKind::Triage), (1, CardKind::Send)]).by_kind(), [(1, Some(CardKind::Send)), (1, Some(CardKind::Triage))]);
+        assert_eq!(of_kinds(&[(3, CardKind::Close)]).by_kind(), [(3, Some(CardKind::Close))]);
+        assert_eq!(of_kinds(&[]).by_kind(), []);
+    }
+
+    #[test]
+    fn more_than_two_kinds_fold_into_other() {
+        let queue = of_kinds(&[(4, CardKind::Triage), (2, CardKind::Send), (1, CardKind::FollowUp), (1, CardKind::Close)]);
+        assert_eq!(queue.by_kind(), [(4, Some(CardKind::Triage)), (4, None)]);
+    }
+
+    #[test]
+    fn set_aside_names_are_listed_once() {
+        let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
+        assert_eq!(aside.set_aside_distinct(), ["A", "B"]);
+    }
+
+    #[test]
+    fn the_note_shows_only_when_no_mark_is_in_the_window() {
+        let empty = Queue { today: today(), ..Default::default() };
+        assert_eq!(empty.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+
+        let late = Queue { cards: vec![pending(CardKind::Triage, Some(today() - chrono::Duration::days(1)))], today: today(), ..Default::default() };
+        assert_eq!(late.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
+
+        let mark = Mark { on: today(), label: "Acme closes".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
+        assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
+    }
+
+    #[test]
+    fn an_overdue_card_counts_until_it_is_set_aside() {
+        // An expired posting is never triaged, so the overdue card is an offer whose reply date has passed.
+        let offer = ApplicationCard {
+            company: "Juniper".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
+            status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: Some(today() - chrono::Days::new(2)), deadline_state: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None,
+            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
+            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
+            archive_folder: None, outcome: None,
+        };
+        let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
+        let dealt = |tray: &InTray| tray.queue(&Sources { board: &JobBoard::default(), pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
+        let mut tray = InTray::unsaved();
+
+        let before = dealt(&tray);
+        assert_eq!(before.overdue(), 1);
+        assert!(before.marks.is_empty());
+        assert_eq!(before.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
+
+        tray.later(&before.cards[0], today());
+
+        let after = dealt(&tray);
+        assert_eq!(after.overdue(), 0);
+        assert_eq!(after.set_aside, ["Juniper"]);
+        assert_eq!(after.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
     }
 }

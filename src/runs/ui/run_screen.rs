@@ -187,7 +187,7 @@ impl RunScreen {
                     let (text, tone) = match state {
                         ToolState::Running => ("Running", Tone::Active),
                         ToolState::Done => ("Done", Tone::Hired),
-                        ToolState::Failed => ("Failed", Tone::Closed),
+                        ToolState::Failed(_) => ("Failed", Tone::Closed),
                     };
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         tag(ui, text, tone);
@@ -196,6 +196,9 @@ impl RunScreen {
                         });
                     });
                 });
+                if let ToolState::Failed(Some(reason)) = state {
+                    failure_reason(ui, reason);
+                }
             }
         });
     }
@@ -432,6 +435,16 @@ fn background_note(count: usize) -> String {
         1 => "1 background agent is still working. Claude continues when it reports back.".to_owned(),
         _ => format!("{count} background agents are still working. Claude continues when they report back."),
     }
+}
+
+/// Under the summary, one plain label per line. Tool output can hold posting text, so it is never Markdown.
+fn failure_reason(ui: &mut Ui, reason: &str) {
+    let indent = EVENT_WHO_WIDTH + EVENT_GAP;
+    Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
+        for line in reason.lines() {
+            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).truncate()).on_hover_text(reason);
+        }
+    });
 }
 
 fn who(ui: &mut Ui, name: &str) {

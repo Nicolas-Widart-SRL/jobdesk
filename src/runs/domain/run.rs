@@ -28,11 +28,12 @@ impl RunStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolState {
     Running,
     Done,
-    Failed,
+    /// Holds the reason, when the tool's output gave one.
+    Failed(Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,7 +163,7 @@ impl Run {
     fn close_open_tools(&mut self) {
         for activity in &mut self.activity {
             if let ActivityKind::Tool { state: state @ ToolState::Running, .. } = &mut activity.kind {
-                *state = ToolState::Failed;
+                *state = ToolState::Failed(None);
             }
         }
     }
@@ -195,8 +196,11 @@ impl Run {
                 self.activity.push(Activity { kind: ActivityKind::Claude(text), nested });
             }
             AgentEvent::ToolStarted { id, name, summary, nested } => self.tool_started(id, name, summary, nested),
-            AgentEvent::ToolFinished { id, failed } => {
-                let state = if failed { ToolState::Failed } else { ToolState::Done };
+            AgentEvent::ToolFinished { id, error } => {
+                let state = match error {
+                    Some(reason) => ToolState::Failed(Some(reason).filter(|reason| !reason.is_empty())),
+                    None => ToolState::Done,
+                };
                 for activity in self.activity.iter_mut().rev() {
                     if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind && *known == id {
                         *current = state;
@@ -363,11 +367,19 @@ mod tests {
         let mut run = run("/apply x");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Write".into(), summary: "cv/main_a.tex".into(), nested: false });
         run.apply(AgentEvent::ToolStarted { id: "2".into(), name: "Agent".into(), summary: "application-reviewer: critique".into(), nested: false });
-        run.apply(AgentEvent::ToolFinished { id: "1".into(), failed: true });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), error: Some(String::new()) });
         assert_eq!(run.steps.as_ref().unwrap().current, 3);
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
         assert_eq!(run.agents.len(), 1);
-        assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed, .. }));
+        assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed(None), .. }));
+    }
+
+    #[test]
+    fn failed_tool_keeps_its_reason() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), nested: false });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), error: Some("ls: invalid option -- 'Z'".into()) });
+        assert_eq!(run.activity[1].kind, ActivityKind::Tool { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), state: ToolState::Failed(Some("ls: invalid option -- 'Z'".into())) });
     }
 
     #[test]
@@ -375,7 +387,7 @@ mod tests {
         let mut run = run("/rank");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "x".into(), nested: false });
         run.apply(AgentEvent::ProcessExited { failure: None });
-        assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed, .. }));
+        assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed(None), .. }));
     }
 
     #[test]

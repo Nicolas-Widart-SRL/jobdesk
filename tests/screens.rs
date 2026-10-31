@@ -71,7 +71,11 @@ fn tool(id: &str, name: &str, summary: &str, nested: bool) -> AgentEvent {
 }
 
 fn done(id: &str) -> AgentEvent {
-    AgentEvent::ToolFinished { id: id.into(), failed: false }
+    AgentEvent::ToolFinished { id: id.into(), error: None }
+}
+
+fn failed(id: &str, reason: &str) -> AgentEvent {
+    AgentEvent::ToolFinished { id: id.into(), error: Some(reason.into()) }
 }
 
 /// Start times show on screen, so scripted runs start at a fixed moment.
@@ -101,6 +105,8 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
         done("5"),
         tool("6", "Edit", "cv/main_kestrel_solution_architect.tex", false),
         done("6"),
+        tool("8", "Bash", "ls -Z \"$SCRATCHPAD\"", false),
+        failed("8", "ls: invalid option -- 'Z'\nTry 'ls --help' for more information."),
         tool("7", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
         final_event,
     ];

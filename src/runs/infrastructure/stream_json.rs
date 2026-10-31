@@ -4,6 +4,9 @@ use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, Question, Qu
 
 /// Longest tool input shown on a permission card. Longer input is cut with a clear marker.
 const MAX_DETAIL: usize = 20_000;
+/// How much of a failed tool's output is kept as the reason.
+const REASON_LINES: usize = 3;
+const REASON_CHARS: usize = 300;
 
 fn text_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -84,9 +87,26 @@ fn tool_results(event: &Value) -> Vec<AgentEvent> {
         .filter(|block| text_of(block, "type") == "tool_result")
         .map(|block| AgentEvent::ToolFinished {
             id: text_of(block, "tool_use_id").to_owned(),
-            failed: block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+            error: block.get("is_error").and_then(Value::as_bool).unwrap_or(false).then(|| failure_reason(block.get("content"))),
         })
         .collect()
+}
+
+/// The first lines of a failed tool's output, without blank lines or the exit code.
+/// The content is a string, or a list of text blocks.
+fn failure_reason(content: Option<&Value>) -> String {
+    let text = match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks.iter().map(|block| text_of(block, "text")).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    };
+    let exit_code = |line: &str| line.strip_prefix("Exit code ").is_some_and(|code| !code.is_empty() && code.chars().all(|c| c.is_ascii_digit()));
+    let reason = text.lines().map(str::trim).filter(|line| !line.is_empty() && !exit_code(line)).take(REASON_LINES).collect::<Vec<_>>().join("\n");
+    if reason.chars().count() <= REASON_CHARS {
+        return reason;
+    }
+    let cut: String = reason.chars().take(REASON_CHARS).collect();
+    format!("{}…", cut.trim_end())
 }
 
 fn usage(event: &Value) -> Usage {
@@ -261,6 +281,32 @@ mod tests {
         let [AgentEvent::TurnEnded { failed: true, message: Some(message), cost_usd, .. }] = &events[..] else { panic!() };
         assert!(message.contains("Budget"));
         assert_eq!(*cost_usd, 1.5);
+    }
+
+    #[test]
+    fn failed_tool_text_gives_the_reason() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"Exit code 1\nDISALLOWED for Claude-User\n\nfetch_page: refused\nGo to step 4\nMore"}]}}"#;
+        let reason = "DISALLOWED for Claude-User\nfetch_page: refused\nGo to step 4";
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), error: Some(reason.into()) }]);
+    }
+
+    #[test]
+    fn failed_tool_blocks_give_the_reason() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":[{"type":"text","text":"Exit code 2"},{"type":"text","text":"ls: invalid option -- 'Z'"}]}]}}"#;
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), error: Some("ls: invalid option -- 'Z'".into()) }]);
+    }
+
+    #[test]
+    fn long_reason_is_cut() {
+        let reason = failure_reason(Some(&json!("é".repeat(400))));
+        assert_eq!(reason.chars().count(), REASON_CHARS + 1);
+        assert!(reason.ends_with('…'));
+    }
+
+    #[test]
+    fn finished_tool_has_no_reason() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#;
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), error: None }]);
     }
 
     #[test]

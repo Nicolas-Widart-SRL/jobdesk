@@ -196,8 +196,11 @@ impl Run {
                 self.activity.push(Activity { kind: ActivityKind::Claude(text), nested });
             }
             AgentEvent::ToolStarted { id, name, summary, nested } => self.tool_started(id, name, summary, nested),
-            AgentEvent::ToolFinished { id, failed, reason } => {
-                let state = if failed { ToolState::Failed(reason) } else { ToolState::Done };
+            AgentEvent::ToolFinished { id, outcome } => {
+                let state = match outcome {
+                    Ok(()) => ToolState::Done,
+                    Err(reason) => ToolState::Failed(reason),
+                };
                 for activity in self.activity.iter_mut().rev() {
                     if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind && *known == id {
                         *current = state;
@@ -364,7 +367,7 @@ mod tests {
         let mut run = run("/apply x");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Write".into(), summary: "cv/main_a.tex".into(), nested: false });
         run.apply(AgentEvent::ToolStarted { id: "2".into(), name: "Agent".into(), summary: "application-reviewer: critique".into(), nested: false });
-        run.apply(AgentEvent::ToolFinished { id: "1".into(), failed: true, reason: None });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Err(None) });
         assert_eq!(run.steps.as_ref().unwrap().current, 3);
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
         assert_eq!(run.agents.len(), 1);
@@ -375,8 +378,16 @@ mod tests {
     fn failed_tool_keeps_its_reason() {
         let mut run = run("/rank");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), nested: false });
-        run.apply(AgentEvent::ToolFinished { id: "1".into(), failed: true, reason: Some("ls: invalid option -- 'Z'".into()) });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Err(Some("ls: invalid option -- 'Z'".into())) });
         assert_eq!(run.activity[1].kind, ActivityKind::Tool { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), state: ToolState::Failed(Some("ls: invalid option -- 'Z'".into())) });
+    }
+
+    #[test]
+    fn finished_tool_is_done() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "ls".into(), nested: false });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Ok(()) });
+        assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Done, .. }));
     }
 
     #[test]

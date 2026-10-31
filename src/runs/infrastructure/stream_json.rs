@@ -4,8 +4,8 @@ use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, Question, Qu
 
 /// Longest tool input shown on a permission card. Longer input is cut with a clear marker.
 const MAX_DETAIL: usize = 20_000;
-/// Longest reason kept from a failed tool's output, in bytes. A longer reason ends with `…`.
-const MAX_REASON: usize = 300;
+/// Longest line kept in a failed tool's reason, in bytes. A longer line ends with `…`.
+const MAX_REASON_LINE: usize = 160;
 
 fn text_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -86,8 +86,8 @@ fn tool_results(event: &Value) -> Vec<AgentEvent> {
         .filter(|block| text_of(block, "type") == "tool_result")
         .map(|block| {
             let failed = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-            let reason = if failed { failure_reason(block.get("content")) } else { None };
-            AgentEvent::ToolFinished { id: text_of(block, "tool_use_id").to_owned(), failed, reason }
+            let outcome = if failed { Err(failure_reason(block.get("content"))) } else { Ok(()) };
+            AgentEvent::ToolFinished { id: text_of(block, "tool_use_id").to_owned(), outcome }
         })
         .collect()
 }
@@ -95,34 +95,44 @@ fn tool_results(event: &Value) -> Vec<AgentEvent> {
 /// The reason a tool failed, from its output: a string, or a list of text blocks.
 fn failure_reason(content: Option<&Value>) -> Option<String> {
     match content {
-        Some(Value::String(text)) => reason_from(unwrap_tool_error(text).lines()),
-        Some(Value::Array(blocks)) => reason_from(blocks.iter().flat_map(|block| unwrap_tool_error(text_of(block, "text")).lines())),
+        Some(Value::String(text)) => reason_from([text.as_str()].into_iter()),
+        Some(Value::Array(blocks)) => reason_from(blocks.iter().map(|block| text_of(block, "text"))),
         _ => None,
     }
 }
 
 /// The first line and the last two lines, because a traceback or a compiler log ends with the real error.
-/// Blank lines and the CLI's leading exit code line are dropped, and the text is made safe to show.
-fn reason_from<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
-    let mut lines = lines.filter(|line| !visible_chars(line).all(char::is_whitespace)).peekable();
-    lines.next_if(|line| exit_code(line));
-    let first = lines.next()?;
-    let mut tail = (None, None);
-    for line in lines {
-        tail = (tail.1, Some(line));
+/// A `…` line stands for the lines between. Each line is made safe to show and capped on its own,
+/// so a long first line never pushes out the end. Blank lines and the CLI's leading exit code line are dropped.
+fn reason_from<'a>(texts: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut lines = Vec::new();
+    for text in texts {
+        // A lone carriage return ends a line too, so progress output does not merge into the error.
+        let clean = unwrap_tool_error(text).split(['\r', '\n']).map(|line| visible_chars(line).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>();
+        lines.extend(clean.into_iter().filter(|line| !line.is_empty()));
     }
-    let kept = [Some(first), tail.0, tail.1].into_iter().flatten();
-    let reason = kept.map(|line| visible_chars(line).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join("\n");
-    Some(match cut(&reason, MAX_REASON) {
-        Some(head) => format!("{}…", head.trim_end()),
-        None => reason,
-    })
+    let skip = usize::from(lines.first().is_some_and(|line| exit_code(line)));
+    let (first, rest) = lines[skip..].split_first()?;
+    let tail = &rest[rest.len().saturating_sub(2)..];
+    let mut kept = vec![shorten(first)];
+    if rest.len() > tail.len() {
+        kept.push("…".to_owned());
+    }
+    kept.extend(tail.iter().map(|line| shorten(line)));
+    Some(kept.join("\n"))
 }
 
-/// Claude Code wraps many tool errors as `<tool_use_error>File does not exist.</tool_use_error>`.
-fn unwrap_tool_error(text: &str) -> &str {
-    let Some(inner) = text.trim().strip_prefix("<tool_use_error>") else { return text };
-    inner.strip_suffix("</tool_use_error>").unwrap_or(inner)
+fn shorten(line: &str) -> String {
+    match cut(line, MAX_REASON_LINE) {
+        Some(head) => format!("{}…", head.trim_end()),
+        None => line.to_owned(),
+    }
+}
+
+/// Claude Code wraps many tool errors as `<tool_use_error>File does not exist.</tool_use_error>`,
+/// sometimes with more text after it, so both tags go wherever they are.
+fn unwrap_tool_error(text: &str) -> String {
+    text.replace("<tool_use_error>", "").replace("</tool_use_error>", "")
 }
 
 /// The `Exit code N` line the CLI puts before a failed command's output.
@@ -130,26 +140,33 @@ fn exit_code(line: &str) -> bool {
     line.trim().strip_prefix("Exit code ").is_some_and(|code| !code.is_empty() && code.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// The line without ANSI escape sequences, control characters other than tab, or bidi overrides
-/// and isolates, so untrusted output cannot restyle or reorder what the screen shows.
+/// The line without escape sequences, control characters other than tab, bidi marks, overrides and isolates,
+/// zero-width characters or tag characters, so untrusted output cannot restyle, reorder or hide what the screen shows.
 fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     let mut chars = line.chars();
     std::iter::from_fn(move || loop {
         let c = chars.next()?;
-        if c == '\u{1b}' {
-            skip_escape(&mut chars);
-        } else if !(c.is_control() && c != '\t' || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')) {
-            return Some(c);
+        match c {
+            '\u{1b}' => skip_escape(&mut chars),
+            // The 8-bit form of `ESC [`.
+            '\u{9b}' => skip_csi(&mut chars),
+            _ if c.is_control() && c != '\t' || hidden(c) => {}
+            _ => return Some(c),
         }
     })
 }
 
+fn hidden(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
+}
+
 /// Skips what follows an escape: a CSI sequence up to its final byte, an OSC sequence up to its terminator,
-/// or one character.
+/// an intermediate byte and its final byte, or one final byte.
 fn skip_escape(chars: &mut std::str::Chars) {
     match chars.next() {
-        Some('[') => {
-            chars.find(|c| ('\u{40}'..='\u{7e}').contains(c));
+        Some('[') => skip_csi(chars),
+        Some('\u{20}'..='\u{2f}') => {
+            chars.next();
         }
         Some(']') => {
             let mut escaped = false;
@@ -161,6 +178,11 @@ fn skip_escape(chars: &mut std::str::Chars) {
         }
         _ => {}
     }
+}
+
+/// Skips a CSI sequence's parameters up to and including its final byte.
+fn skip_csi(chars: &mut std::str::Chars) {
+    chars.find(|c| ('\u{40}'..='\u{7e}').contains(c));
 }
 
 /// The longest start of `text` within `max` bytes that ends on a char boundary, or `None` when `text` fits.
@@ -349,19 +371,19 @@ mod tests {
     fn failed_tool_text_gives_the_reason() {
         let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"Exit code 1\nDISALLOWED for Claude-User - do not retry, go to step 3\nfetch_page: refused - robots.txt does not permit this path"}]}}"#;
         let reason = "DISALLOWED for Claude-User - do not retry, go to step 3\nfetch_page: refused - robots.txt does not permit this path";
-        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), failed: true, reason: Some(reason.into()) }]);
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), outcome: Err(Some(reason.into())) }]);
     }
 
     #[test]
     fn failed_tool_blocks_give_the_reason() {
         let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":[{"type":"text","text":"Exit code 2"},{"type":"text","text":"ls: invalid option -- 'Z'"}]}]}}"#;
-        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), failed: true, reason: Some("ls: invalid option -- 'Z'".into()) }]);
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), outcome: Err(Some("ls: invalid option -- 'Z'".into())) }]);
     }
 
     #[test]
     fn reason_keeps_the_first_line_and_the_end() {
         let traceback = "Traceback (most recent call last):\n  File \"score.py\", line 4, in <module>\n    main()\n  File \"score.py\", line 2, in main\n    int(\"x\")\nValueError: invalid literal for int() with base 10: 'x'\n";
-        let reason = "Traceback (most recent call last):\n    int(\"x\")\nValueError: invalid literal for int() with base 10: 'x'";
+        let reason = "Traceback (most recent call last):\n…\n    int(\"x\")\nValueError: invalid literal for int() with base 10: 'x'";
         assert_eq!(failure_reason(Some(&json!(traceback))).as_deref(), Some(reason));
     }
 
@@ -392,19 +414,62 @@ mod tests {
     #[test]
     fn long_reason_is_cut() {
         let reason = failure_reason(Some(&json!("é".repeat(400)))).unwrap();
-        assert_eq!(reason, format!("{}…", "é".repeat(MAX_REASON / 2)));
+        assert_eq!(reason, format!("{}…", "é".repeat(MAX_REASON_LINE / 2)));
+    }
+
+    #[test]
+    fn long_first_line_leaves_the_end_in_view() {
+        let raw = format!("{}\nnote: see build.log\nerror: build failed", "x".repeat(500));
+        let reason = failure_reason(Some(&json!(raw))).unwrap();
+        assert_eq!(reason, format!("{}…\nnote: see build.log\nerror: build failed", "x".repeat(MAX_REASON_LINE)));
+    }
+
+    #[test]
+    fn reason_loses_hidden_characters() {
+        let raw = "a\u{200B}b\u{200C}c\u{200D}d\u{200E}e\u{200F}f\u{061C}g\u{2060}h\u{FEFF}i\u{E0001}j\u{E0041}\u{E007F}k";
+        assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("abcdefghijk"));
+    }
+
+    #[test]
+    fn lone_carriage_return_breaks_the_line() {
+        let raw = "Downloading 10%\rDownloading 50%\rDownloading 100%\rerror: failed\r\n";
+        assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("Downloading 10%\n…\nDownloading 100%\nerror: failed"));
+    }
+
+    #[test]
+    fn reason_loses_short_and_eight_bit_escapes() {
+        let raw = "\u{1b}(Bplain\u{1b}7 text\u{1b}8 \u{9b}1;31mred\u{9b}0m end";
+        assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("plain text red end"));
+    }
+
+    #[test]
+    fn exit_code_is_found_behind_escapes() {
+        let reason = failure_reason(Some(&json!("\u{1b}[1mExit code 1\u{1b}[0m\nls: invalid option -- 'Z'")));
+        assert_eq!(reason.as_deref(), Some("ls: invalid option -- 'Z'"));
+    }
+
+    #[test]
+    fn skipped_lines_show_as_an_ellipsis() {
+        assert_eq!(failure_reason(Some(&json!("one\ntwo\nthree\nfour"))).as_deref(), Some("one\n…\nthree\nfour"));
+        assert_eq!(failure_reason(Some(&json!("one\ntwo\nthree"))).as_deref(), Some("one\ntwo\nthree"));
+    }
+
+    #[test]
+    fn tool_use_error_tags_go_anywhere() {
+        let reason = failure_reason(Some(&json!("<tool_use_error>File does not exist.</tool_use_error>\nhint: check the path")));
+        assert_eq!(reason.as_deref(), Some("File does not exist.\nhint: check the path"));
     }
 
     #[test]
     fn empty_output_gives_no_reason() {
         let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"Exit code 1\n\n"}]}}"#;
-        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), failed: true, reason: None }]);
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), outcome: Err(None) }]);
     }
 
     #[test]
     fn finished_tool_has_no_reason() {
         let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}"#;
-        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), failed: false, reason: None }]);
+        assert_eq!(parse_line(line), [AgentEvent::ToolFinished { id: "t".into(), outcome: Ok(()) }]);
     }
 
     #[test]

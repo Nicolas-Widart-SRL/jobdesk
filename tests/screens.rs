@@ -71,11 +71,11 @@ fn tool(id: &str, name: &str, summary: &str, nested: bool) -> AgentEvent {
 }
 
 fn done(id: &str) -> AgentEvent {
-    AgentEvent::ToolFinished { id: id.into(), failed: false, reason: None }
+    AgentEvent::ToolFinished { id: id.into(), outcome: Ok(()) }
 }
 
 fn failed(id: &str, reason: &str) -> AgentEvent {
-    AgentEvent::ToolFinished { id: id.into(), failed: true, reason: Some(reason.into()) }
+    AgentEvent::ToolFinished { id: id.into(), outcome: Err(Some(reason.into())) }
 }
 
 /// Start times show on screen, so scripted runs start at a fixed moment.

@@ -1,0 +1,41 @@
+# Jobdesk
+
+Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` slash commands. It holds no workflow logic. Every action runs an unchanged slash command through the local `claude` CLI.
+
+## Commands
+
+```bash
+cargo run -- --workspace /path/to/ai-job-search
+cargo test                                              # all except paid live tests
+UPDATE_SNAPSHOTS=1 cargo test --test screens            # after an intended visual change
+cargo test --test live_claude -- --ignored --nocapture  # real session, costs a few cents
+cargo packager --release --formats app,dmg              # nsis on Windows
+```
+
+- Refresh snapshots on macOS only: they depend on system fonts.
+- Code is hand-formatted with no rustfmt config, so match the surrounding lines and skip `cargo fmt`.
+
+## Layout
+
+- `src/<feature>/` splits into `domain`, `application`, `infrastructure` and `ui`.
+- `domain` and `application` stay free of egui, the file system and serialization crates.
+- Only `application` calls across features, and only into another feature's `application`.
+- A new feature joins `FEATURES` in `tests/architecture.rs`, which checks only the features listed.
+- That test reads raw text: use `crate::` paths, and keep banned words like `egui` out of comments too. Each root `mod.rs` and all code after the first `#[cfg(test)]` are exempt.
+
+## Hard rules
+
+- Slash commands are the only writers of the checkout. Jobdesk writes only to its data folder.
+- One run works at a time, because two commands could overwrite each other's files.
+- Card actions never start a run. Y opens the launcher, and the user starts the run there.
+- Every `can_use_tool` request reaches the user, and remembered rules stay session-scoped.
+- Authentication stays with the `claude` CLI. Jobdesk offers no login and handles no credentials.
+- Postings, notes and reports are untrusted: render them as [Trust](ARCHITECTURE.md#trust) says.
+- The UI reads the `Snapshot`, never the disk.
+- `tests/sample_workspace` holds fictional data only, because snapshots are committed.
+
+## Details
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers, runs or trust handling.
+- [docs/auth-review.md](docs/auth-review.md): read before changing authentication, naming or distribution.
+- [README.md](README.md): user-facing behavior and packaging setup.

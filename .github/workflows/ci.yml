@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run. Runs on main never cancel each other.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # git-cliff builds CHANGELOG.md from these subjects, so a release depends on them.
+  commits:
+    name: Check Conventional Commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check commit subjects
+        env:
+          RANGE: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+        run: |
+          pattern='^(feat|fix|perf|refactor|revert|docs|build|ci|chore|style|test)(\([a-z0-9_,-]+\))?!?: .+'
+          bad=$(git log --no-merges --format=%s "$RANGE" | grep -Ev "$pattern" || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commit subjects must follow Conventional Commits (https://www.conventionalcommits.org):"
+            echo "$bad"
+            exit 1
+          fi
+
+  # Markdown-only changes skip the build and tests. A job skipped by `if:` still passes required checks.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
+  # Screen snapshots are macOS baselines, so the full suite runs on macOS only.
+  # The Installers workflow runs clippy and the platform-neutral tests on Windows before a release.
+  test:
+    name: Build and test (macOS)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      # Runs the tests with coverage instrumentation.
+      - run: cargo llvm-cov --locked --no-report
+      # A failing snapshot writes the new picture and its diff: keep them for review.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: snapshots
+          path: |
+            tests/snapshots/*.diff.png
+            tests/snapshots/*.new.png
+          if-no-files-found: ignore
+      - name: Write coverage summary
+        run: |
+          {
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - run: cargo llvm-cov report --html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: target/llvm-cov/html
+          if-no-files-found: error

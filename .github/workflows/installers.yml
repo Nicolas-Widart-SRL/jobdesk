@@ -1,0 +1,149 @@
+# Builds the macOS DMG and the Windows setup as the artifacts `dmg` and `setup`. It never publishes.
+# tag-release.yml calls it on the merge commit of a release PR, then tags and publishes.
+# Run it from the Actions tab to build the installers of a branch without a release.
+# A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
+# tag-release.yml has no `quick` input, so a release always tests.
+# The installers are not signed: see README.md.
+name: Installers
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to build.
+        type: string
+        required: true
+      tag:
+        description: The release tag, vX.Y.Z. It must match the Cargo.toml version and names the files.
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: Skip clippy and tests, for a fast untested build.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PACKAGER_VERSION: '0.11.8'
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            tests: ''
+          # Screen snapshots are macOS baselines, so Windows runs the platform-neutral tests only.
+          - os: windows-latest
+            tests: --lib --test architecture
+    # Under workflow_call inputs.quick is null, so a release always runs this job.
+    if: ${{ !inputs.quick }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      # A manual run has no `ref`, so it builds the commit the run started on.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked ${{ matrix.tests }}
+      # A failing snapshot writes the new picture and its diff: keep them for review.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: snapshots-${{ matrix.os }}
+          path: |
+            tests/snapshots/*.diff.png
+            tests/snapshots/*.new.png
+          if-no-files-found: ignore
+
+  version:
+    name: Read the app version
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.read.outputs.label }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Read the version and name the installers
+        id: read
+        env:
+          TAG: ${{ inputs.tag }}
+          QUICK: ${{ inputs.quick }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ -n "$TAG" ]; then
+            if [ "v$version" != "$TAG" ]; then
+              echo "::error::Tag $TAG does not match Cargo.toml version $version"
+              exit 1
+            fi
+            label="$TAG"
+          else
+            label="v$version-$(git rev-parse --short=7 HEAD)"
+          fi
+          if [ "$QUICK" = "true" ]; then
+            label="$label-untested"
+          fi
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Build ${{ matrix.artifact }}
+    needs: [version, test]
+    # Runs when a quick build skips test, never when a need failed.
+    if: ${{ !cancelled() && !failure() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            formats: app,dmg
+            artifact: dmg
+            built: '*.dmg'
+            suffix: macos-arm64.dmg
+          - os: windows-latest
+            formats: nsis
+            artifact: setup
+            built: '*-setup.exe'
+            suffix: windows-x64-setup.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - run: cargo packager --release --formats ${{ matrix.formats }}
+      - name: Name the installer
+        env:
+          BUILT: ${{ matrix.built }}
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
+        run: |
+          mapfile -t files < <(compgen -G "target/packages/$BUILT")
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::Expected one $BUILT in target/packages, found ${#files[@]}."
+            exit 1
+          fi
+          mkdir -p dist
+          mv "${files[0]}" "dist/$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error

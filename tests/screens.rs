@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::NaiveDate;
-use egui::Theme;
+use egui::{Key, Theme};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
@@ -170,10 +170,10 @@ macro_rules! screens {
     };
 }
 
-/// Overview button, launcher form, run, then the Runs screen.
+/// Insights button, launcher form, run, then the Runs screen.
 #[test]
 fn a_command_button_leads_to_a_started_run() {
-    let mut shell = shell(Screen::Overview, "click_through");
+    let mut shell = shell(Screen::Insights, "click_through");
     let gateway = ScriptedGateway(SharedSink::default());
     *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
     let mut harness = Harness::builder()
@@ -191,6 +191,202 @@ fn a_command_button_leads_to_a_started_run() {
 
     harness.get_by_label("Every command Jobdesk ran in this workspace");
     assert_eq!(harness.get_all_by_label("Starting").count(), 2, "run list and run header");
+}
+
+fn tray_harness(mut shell: Shell) -> Harness<'static> {
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_context_setup(|ctx| install_look(ctx))
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness
+}
+
+fn press(harness: &mut Harness, key: Key) {
+    harness.key_press(key);
+    harness.run_steps(3);
+}
+
+fn is_shown(harness: &Harness, label: &str) -> bool {
+    harness.query_by_label(label).is_some()
+}
+
+const TRAY_CARDS: usize = 10;
+const HARBOR: &str = "Harbor Bank, Lead Java Engineer";
+const MERIDIAN: &str = "Meridian Rail Systems, Tech Lead Java, Real-Time Traffic";
+
+/// Y on a card, launcher form, run, then the Runs screen.
+#[test]
+fn y_leads_from_a_card_to_a_started_run() {
+    let mut shell = shell(Screen::InTray, "tray_click_through");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, HARBOR));
+
+    press(&mut harness, Key::Y);
+    harness.get_by_label("Run a command");
+    harness.get_by_label("/outcome");
+
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    harness.get_by_label("Every command Jobdesk ran in this workspace");
+}
+
+#[test]
+fn later_deals_the_next_card_and_undo_brings_it_back() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_later"));
+
+    press(&mut harness, Key::L);
+    assert!(!is_shown(&harness, HARBOR));
+    assert!(is_shown(&harness, "Set aside: Harbor Bank"));
+    assert!(is_shown(&harness, "Nothing yet."), "setting aside clears nothing");
+
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, HARBOR));
+    assert!(!is_shown(&harness, "Set aside: Harbor Bank"));
+}
+
+#[test]
+fn a_timeline_mark_pulls_a_set_aside_card_back() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_mark"));
+    press(&mut harness, Key::L);
+    assert!(!is_shown(&harness, HARBOR));
+
+    harness.get_by_label("Harbor deadline").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, HARBOR));
+}
+
+#[test]
+fn bring_them_back_refills_the_tray() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_bring_back"));
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
+    assert!(!is_shown(&harness, "Nothing needs you"));
+
+    harness.get_by_label("Bring them back").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, HARBOR));
+}
+
+#[test]
+fn skip_takes_a_reason_and_only_some_cards_allow_it() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_skip"));
+
+    press(&mut harness, Key::N);
+    assert!(is_shown(&harness, HARBOR), "a send card has no skip");
+
+    for _ in 0..2 {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, MERIDIAN));
+    press(&mut harness, Key::N);
+    assert!(!is_shown(&harness, MERIDIAN));
+
+    harness.get_by_label("Domain").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
+}
+
+#[test]
+fn a_paused_run_comes_first_and_y_does_nothing() {
+    let mut shell = shell(Screen::InTray, "tray_permission");
+    *shell.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "/apply: allow Bash?"));
+
+    press(&mut harness, Key::Y);
+    press(&mut harness, Key::N);
+    assert!(is_shown(&harness, "/apply: allow Bash?"));
+
+    harness.get_by_label("Open run").click();
+    harness.run_steps(3);
+    harness.get_by_label("Every command Jobdesk ran in this workspace");
+}
+
+#[test]
+fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_guard"));
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+    }
+    let guarded = "Halden Logistics, Lead Developer Kafka";
+    assert!(is_shown(&harness, guarded));
+    press(&mut harness, Key::Y);
+    assert!(is_shown(&harness, guarded));
+
+    harness.get_by_label("Harmless, keep posting").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Kept: Halden Logistics"));
+}
+
+fn tray_after(mut harness: Harness, keys: &[Key], name: &str) {
+    for key in keys {
+        press(&mut harness, *key);
+    }
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+fn wgpu_tray(mut shell: Shell, theme: Theme) -> Harness<'static> {
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_pixels_per_point(1.5)
+        .with_theme(theme)
+        .with_context_setup(|ctx| install_look(ctx))
+        .wgpu()
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness
+}
+
+#[test]
+fn intray_triage_light() {
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_triage_light"), Theme::Light), &[Key::L, Key::L], "intray_triage_light");
+}
+
+#[test]
+fn intray_skip_suggestion_dark() {
+    let skips = [Key::L; 8];
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_skip_suggestion_dark"), Theme::Dark), &skips, "intray_skip_suggestion_dark");
+}
+
+#[test]
+fn intray_guard_dark() {
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_guard_dark"), Theme::Dark), &[Key::L; 4], "intray_guard_dark");
+}
+
+#[test]
+fn intray_permission_dark() {
+    let mut shell = shell(Screen::InTray, "intray_permission_dark");
+    *shell.desk_slot() = Some(apply_run(permission_prompt()));
+    tray_after(wgpu_tray(shell, Theme::Dark), &[], "intray_permission_dark");
+}
+
+#[test]
+fn intray_question_light() {
+    let mut shell = shell(Screen::InTray, "intray_question_light");
+    *shell.desk_slot() = Some(apply_run(question_prompt()));
+    tray_after(wgpu_tray(shell, Theme::Light), &[], "intray_question_light");
+}
+
+#[test]
+fn intray_set_aside_dark() {
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_set_aside_dark"), Theme::Dark), &[Key::L; TRAY_CARDS], "intray_set_aside_dark");
+}
+
+#[test]
+fn intray_clear_dark() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("intray_clear_dark").join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join(".claude/commands")).unwrap();
+    fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    let shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot);
+    tray_after(wgpu_tray(shell, Theme::Dark), &[], "intray_clear_dark");
 }
 
 const FINDINGS: &str = "## Verification Checklist\n- [x] All claims match the profile\n- [x] CV is exactly 2 pages\n- [ ] Addressed to a named person\n\n| Keyword | Priority | Status | Note |\n|---|---|---|---|\n| event sourcing | required | covered | Skills |\n| Azure | preferred | missing (gap) | Named in letter |\n";
@@ -319,8 +515,8 @@ fn launcher_dark() {
 }
 
 screens! {
-    overview_dark: Screen::Overview, Theme::Dark;
-    overview_light: Screen::Overview, Theme::Light;
+    intray_dark: Screen::InTray, Theme::Dark;
+    intray_light: Screen::InTray, Theme::Light;
     jobs_dark: Screen::Jobs, Theme::Dark;
     jobs_light: Screen::Jobs, Theme::Light;
     tracker_dark: Screen::Tracker, Theme::Dark;

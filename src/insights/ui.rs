@@ -7,6 +7,10 @@ pub fn show(ui: &mut Ui, report: &SearchInsights, gaps: Option<&SkillGapView>) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         stats(ui, report);
         ui.add_space(12.0);
+        if report.can_calibrate() {
+            calibration(ui, report);
+            ui.add_space(12.0);
+        }
         ui.columns(3, |columns| {
             status_chart(&mut columns[0], report);
             funnel(&mut columns[1], report);
@@ -14,6 +18,18 @@ pub fn show(ui: &mut Ui, report: &SearchInsights, gaps: Option<&SkillGapView>) {
         });
         ui.add_space(12.0);
         skill_gaps(ui, gaps);
+    });
+}
+
+fn calibration(ui: &mut Ui, report: &SearchInsights) {
+    panel(ui, |ui| {
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(format!("{} resolved outcomes can calibrate your fit scoring.", report.resolved));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| command_button(ui, "/setup"));
+            });
+        });
     });
 }
 

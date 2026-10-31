@@ -10,10 +10,10 @@ Each feature is a bounded context with its own language.
 
 | Feature | Language | Reads |
 | --- | --- | --- |
-| `discovery` | job, lane, assessment, gate, signal | `job_scraper/seen_jobs.json` |
+| `discovery` | job, lane, assessment, gate, signal, freelance terms | `job_scraper/seen_jobs.json`, the candidate profile and evaluation framework |
 | `tracking` | application, status, bucket, follow-up, outcome | `job_search_tracker.csv`, `documents/applications/*/outcome.md` |
 | `insights` | search report, funnel, skill gap, study order | tracking's application layer, `upskill/report-*.md` |
-| `overview` | workflow stage, attention item | discovery's and tracking's application layers |
+| `intray` | card, decision, skip reason, queue | discovery's, tracking's, dossier's and runs' application layers, its own decisions file |
 | `runs` | run, activity, prompt, decision, step rail, command catalog | the `claude` CLI stream, its own run logs |
 | `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |
 | `workspace` | workspace root, profile state, portal, tool check | the checkout folder, installed tools, file changes |
@@ -53,6 +53,14 @@ UI thread. The UI never reads from disk. A feature that fails to load reports an
 others keep working.
 
 Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout. A supervisor thread owns the child and a reader thread turns stdout lines into domain events. The UI thread applies them once per frame through `RunDesk::poll`. Dropping a session ends its process.
+
+The queue is derived, never stored. `intray` deals cards from the latest snapshot and the live runs on every frame, then hides what the user decided. Paused runs rank first, then dates within 14 days, then the rest. The card being read stays on top, so new work lands behind it. Decisions and skip reasons live in `decisions.json` in the app's data folder. A followed card returns the next day, so a command that never ran asks again.
+
+Later is not a decision on the card. It sets the card aside until the next day, which stands in for the morning pass until standing orders exist. A card set aside adds no log entry, keeps its timeline mark and leaves a paused run paused. Its mark pulls it back to the top. Card keys change when the underlying state moves on, so a decision never outlives what it decided.
+
+No card action runs anything by itself: Y opens the launcher on the slash command, and the user starts it there. Permission, question and guard cards have no Y action.
+
+`/rank` stores no contract, day rate or commute fields, so `discovery` reads them from what it does store: the title, location, strengths and gaps. A gate with nothing to read flags, because silence is not a pass. Failed freelance gates suggest a skip and never change a job's lane, because `/rank` owns the shortlist. The day-rate floor comes from `01-candidate-profile.md` and the commute tiers from `04-job-evaluation.md`. With neither, the gates flag instead of guessing.
 
 ## Trust
 

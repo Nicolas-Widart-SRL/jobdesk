@@ -6,7 +6,6 @@ use chrono::NaiveDate;
 use crate::discovery::application::JobBoard;
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, search_insights};
-use crate::overview::application::{Overview, compose};
 use crate::shared_kernel::LoadError;
 use crate::tracking::application::Pipeline;
 use crate::workspace::application::{WorkspaceView, workspace_view};
@@ -17,12 +16,12 @@ use crate::{discovery, dossier, insights, tracking, workspace};
 pub struct Snapshot {
     pub board: JobBoard,
     pub pipeline: Pipeline,
-    pub overview: Overview,
     pub insights: SearchInsights,
     pub skill_gaps: Option<SkillGapView>,
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
     pub issues: Vec<LoadError>,
+    pub today: NaiveDate,
 }
 
 impl Snapshot {
@@ -49,6 +48,6 @@ impl Snapshot {
                 Some((folder, dossier::load_archive(root, &reference, today)))
             })
             .collect();
-        Self { archives, workspace: workspace_view(&workspace::inspect(root), &board), overview: compose(&board, &pipeline), insights: search_insights(&pipeline), board, pipeline, skill_gaps, issues }
+        Self { archives, workspace: workspace_view(&workspace::inspect(root), &board), insights: search_insights(&pipeline), board, pipeline, skill_gaps, issues, today }
     }
 }

@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FEATURES: [&str; 7] = ["discovery", "dossier", "insights", "overview", "runs", "tracking", "workspace"];
+const FEATURES: [&str; 7] = ["discovery", "dossier", "insights", "intray", "runs", "tracking", "workspace"];
 const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {

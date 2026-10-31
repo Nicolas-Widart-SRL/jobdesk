@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::discovery::domain::{FetchFailure, FitLevel, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
+use crate::discovery::domain::{CommuteTier, FetchFailure, FitLevel, FreelanceTerms, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::shared_kernel::{LoadError, WebUrl};
 
 const SOURCE: &str = "job_scraper/seen_jobs.json";
+const CANDIDATE_PROFILE: &str = ".claude/skills/job-application-assistant/01-candidate-profile.md";
+const JOB_EVALUATION: &str = ".claude/skills/job-application-assistant/04-job-evaluation.md";
+const COMMUTE_LINE: &str = "Commute tiers";
 
 /// `seen_jobs.json`. Old checkouts store the map bare, without the `seen` wrapper.
 pub struct SeenJobsFile {
@@ -112,6 +115,40 @@ fn job_from(key: String, entry: Entry) -> Job {
     }
 }
 
+/// A missing profile only means the gates cannot judge, so it is not a load error.
+pub fn read_terms(root: &Path) -> FreelanceTerms {
+    let read = |file: &str| fs::read_to_string(root.join(file)).unwrap_or_default();
+    FreelanceTerms { day_rate_floor: floor_in(&read(CANDIDATE_PROFILE)), commute: commute_tiers_in(&read(JOB_EVALUATION)) }
+}
+
+/// Reads `day-rate floor EUR 700` from anywhere in the profile.
+fn floor_in(profile: &str) -> Option<u32> {
+    profile.lines().find_map(|line| {
+        let lowered = line.to_lowercase();
+        let (before, after) = lowered.split_once("floor")?;
+        let amount: String = after.chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+        before.contains("rate").then(|| amount.parse().ok()).flatten()
+    })
+}
+
+/// Reads the tiers line of the evaluation framework: `**name** Place, Place (note); ...`.
+fn commute_tiers_in(evaluation: &str) -> Vec<CommuteTier> {
+    let Some(line) = evaluation.lines().find(|line| line.trim_start().starts_with(COMMUTE_LINE)) else { return Vec::new() };
+    let tiers = line.split_once(':').map_or("", |(_, tiers)| tiers);
+    tiers.split(';').filter_map(commute_tier).collect()
+}
+
+fn commute_tier(segment: &str) -> Option<CommuteTier> {
+    let (_, rest) = segment.split_once("**")?;
+    let (name, rest) = rest.split_once("**")?;
+    let (places, note) = rest.split_once('(').unwrap_or((rest, ""));
+    Some(CommuteTier {
+        name: name.trim().to_lowercase(),
+        places: places.split(',').map(|place| place.trim().to_owned()).filter(|place| !place.is_empty()).collect(),
+        note: note.split(')').next().unwrap_or_default().trim().to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +176,29 @@ mod tests {
         assert_eq!(jobs[0].url, None);
         let assessment = jobs[0].assessment.as_ref().unwrap();
         assert_eq!((assessment.score, assessment.verdict), (72, Verdict::Good));
+    }
+
+    #[test]
+    fn reads_the_floor_from_the_profile_wording() {
+        assert_eq!(floor_in("- **Status:** Freelance only, day-rate floor EUR 700."), Some(700));
+        assert_eq!(floor_in("Day rate floor: €850 per day"), Some(850));
+        assert_eq!(floor_in("Salary floor EUR 60000\nThe floor of the office"), None);
+        assert_eq!(floor_in("Name: Sample"), None);
+    }
+
+    #[test]
+    fn reads_commute_tiers() {
+        let line = "Commute tiers from Denée (by car): **ideal** Namur, Dinant (<45 min); **borderline** Leuven (1h30-2h, only with hybrid); **too far** >2h unless fully remote.";
+        let tiers = commute_tiers_in(&format!("intro\n{line}\nafter"));
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0], CommuteTier { name: "ideal".into(), places: vec!["Namur".into(), "Dinant".into()], note: "<45 min".into() });
+        assert_eq!(tiers[1].note, "1h30-2h, only with hybrid");
+    }
+
+    #[test]
+    fn a_missing_profile_sets_no_terms() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_terms(dir.path()), FreelanceTerms::default());
     }
 
     #[test]

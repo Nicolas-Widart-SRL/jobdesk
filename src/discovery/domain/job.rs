@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::discovery::domain::{Gate, RankAssessment};
+use crate::discovery::domain::{FreelanceGates, FreelanceTerms, Gate, RankAssessment};
 use crate::shared_kernel::WebUrl;
 use crate::shared_kernel::dates::days_from;
 
@@ -81,6 +81,8 @@ pub enum Signal {
     LocationFail,
     LanguageFail,
     GuardFlag,
+    ContractFail,
+    RateBelowFloor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +132,18 @@ impl Job {
         self.guard.as_deref().is_some_and(|line| line.trim() != "clean")
     }
 
-    pub fn signals(&self, today: NaiveDate) -> Vec<Signal> {
+    /// Every line `/rank` kept from the posting. It stores no contract or rate field.
+    fn statements(&self) -> Vec<&str> {
+        let ranked = self.assessment.iter().flat_map(|a| a.strengths.iter().chain(&a.gaps)).map(String::as_str);
+        [self.title.as_str()].into_iter().chain(self.location.as_deref()).chain(ranked).collect()
+    }
+
+    pub fn freelance_gates(&self, terms: &FreelanceTerms) -> FreelanceGates {
+        let location_failed = self.assessment.as_ref().is_some_and(|a| a.location == Gate::Fail);
+        FreelanceGates::read(&self.statements(), self.location.as_deref(), location_failed, terms)
+    }
+
+    pub fn signals(&self, today: NaiveDate, terms: &FreelanceTerms) -> Vec<Signal> {
         let mut signals = Vec::new();
         if self.is_closing_soon(today) {
             signals.extend(self.days_to_deadline(today).map(|days| Signal::ClosingIn { days }));
@@ -154,6 +167,13 @@ impl Job {
         }
         if self.guard_flagged() {
             signals.push(Signal::GuardFlag);
+        }
+        let gates = self.freelance_gates(terms);
+        if gates.contract.gate == Gate::Fail {
+            signals.push(Signal::ContractFail);
+        }
+        if gates.day_rate.gate == Gate::Fail {
+            signals.push(Signal::RateBelowFloor);
         }
         signals
     }
@@ -239,9 +259,20 @@ mod tests {
     #[test]
     fn stale_flag_needs_a_posted_date() {
         let today = date(2026, 10, 31);
-        assert!(job(JobStatus::New).signals(today).is_empty());
+        assert!(job(JobStatus::New).signals(today, &FreelanceTerms::default()).is_empty());
         let old = Job { posted_on: Some(date(2026, 9, 1)), ..job(JobStatus::New) };
-        assert_eq!(old.signals(today), vec![Signal::PostedDaysAgo { days: 60 }]);
+        assert_eq!(old.signals(today, &FreelanceTerms::default()), vec![Signal::PostedDaysAgo { days: 60 }]);
+    }
+
+    #[test]
+    fn failed_freelance_gates_warn_but_never_veto() {
+        let terms = FreelanceTerms { day_rate_floor: Some(700), commute: vec![] };
+        let mut assessment = assessed(80, Gate::Pass, Gate::Pass);
+        assessment.gaps = vec!["Stated day rate EUR 640".into(), "Employee-only contract".into()];
+        let posting = Job { assessment: Some(assessment), ..job(JobStatus::Ranked) };
+
+        assert_eq!(posting.lane(), Lane::Shortlist);
+        assert_eq!(posting.signals(date(2026, 10, 31), &terms), [Signal::ContractFail, Signal::RateBelowFloor]);
     }
 
     #[test]

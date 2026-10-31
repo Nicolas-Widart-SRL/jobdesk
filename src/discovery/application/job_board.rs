@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use chrono::NaiveDate;
 
-use crate::discovery::domain::{FetchFailure, FitLevel, Gate, Job, JobRepository, Lane, Signal, Verdict};
+use crate::discovery::domain::{FetchFailure, FitLevel, FreelanceGates, FreelanceTerms, Gate, Job, JobRepository, Lane, Signal, Verdict};
 use crate::shared_kernel::{LoadError, WebUrl};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +21,7 @@ pub struct JobView {
     pub location_gate: Option<Gate>,
     pub language_gate: Option<Gate>,
     pub language_note: Option<String>,
+    pub freelance: FreelanceGates,
     pub guard: Option<String>,
     pub strengths: Vec<String>,
     pub gaps: Vec<String>,
@@ -66,7 +67,7 @@ impl<R: JobRepository> JobBoardService<R> {
         Self { jobs }
     }
 
-    pub fn board(&self, today: NaiveDate) -> Result<JobBoard, LoadError> {
+    pub fn board(&self, today: NaiveDate, terms: &FreelanceTerms) -> Result<JobBoard, LoadError> {
         let jobs = self.jobs.all()?;
         let total_seen = jobs.len();
         let lanes = Lane::ALL
@@ -76,14 +77,14 @@ impl<R: JobRepository> JobBoardService<R> {
                 in_lane.sort_by_key(|job| {
                     (Reverse(job.score()), Reverse(job.is_closing_soon(today)), Reverse(job.scraper_fit), job.company.to_lowercase())
                 });
-                LaneView { lane, jobs: in_lane.into_iter().map(|job| view_of(job, today)).collect() }
+                LaneView { lane, jobs: in_lane.into_iter().map(|job| view_of(job, today, terms)).collect() }
             })
             .collect();
         Ok(JobBoard { lanes, total_seen })
     }
 }
 
-fn view_of(job: &Job, today: NaiveDate) -> JobView {
+fn view_of(job: &Job, today: NaiveDate, terms: &FreelanceTerms) -> JobView {
     let assessment = job.assessment.as_ref();
     let (fetch_attempts, fetch_error) = job
         .fetch_failure
@@ -104,12 +105,13 @@ fn view_of(job: &Job, today: NaiveDate) -> JobView {
         location_gate: assessment.map(|a| a.location),
         language_gate: assessment.map(|a| a.language),
         language_note: assessment.and_then(|a| a.language_note.clone()),
+        freelance: job.freelance_gates(terms),
         guard: job.guard.clone(),
         strengths: assessment.map(|a| a.strengths.clone()).unwrap_or_default(),
         gaps: assessment.map(|a| a.gaps.clone()).unwrap_or_default(),
         fetch_attempts,
         fetch_error,
-        signals: job.signals(today),
+        signals: job.signals(today, terms),
         closing_soon: job.is_closing_soon(today),
         guard_flagged: job.guard_flagged(),
     }
@@ -144,7 +146,7 @@ mod tests {
         let soon = NaiveDate::from_ymd_opt(2026, 11, 2);
         let service = JobBoardService::new(InMemory(vec![ranked("Calm", 80, None), ranked("Urgent", 80, soon), ranked("Top", 90, None)]));
 
-        let board = service.board(today).unwrap();
+        let board = service.board(today, &FreelanceTerms::default()).unwrap();
 
         let order: Vec<_> = board.jobs_in(Lane::Shortlist).iter().map(|j| j.company.as_str()).collect();
         assert_eq!(order, ["Top", "Urgent", "Calm"]);

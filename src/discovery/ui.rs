@@ -37,6 +37,8 @@ fn signal_tag(signal: &Signal) -> (String, Tone) {
         Signal::LocationFail => ("Location fail".into(), Tone::Closed),
         Signal::LanguageFail => ("Language fail".into(), Tone::Closed),
         Signal::GuardFlag => ("Guard flag".into(), Tone::Interview),
+        Signal::ContractFail => ("Not freelance".into(), Tone::Closed),
+        Signal::RateBelowFloor => ("Rate below floor".into(), Tone::Closed),
     }
 }
 
@@ -189,6 +191,10 @@ fn details(ui: &mut Ui, job: &JobView) {
         }
         if let Some(gate) = job.language_gate {
             check_row(ui, "Language gate", gate_tag(gate));
+        }
+        for (label, reading) in [("Contract", &job.freelance.contract), ("Day rate", &job.freelance.day_rate), ("Commute", &job.freelance.commute)] {
+            check_row(ui, label, gate_tag(reading.gate));
+            ui.add(egui::Label::new(RichText::new(reading.value.as_str()).small().color(Palette::of(ui).faint)).truncate());
         }
         let guard = match job.guard.as_deref() {
             Some("clean") => ("Clean", Tone::Hired),

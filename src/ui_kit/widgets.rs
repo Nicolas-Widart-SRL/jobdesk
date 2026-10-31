@@ -55,6 +55,28 @@ pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     response
 }
 
+/// The double-ruled verdict on a posting.
+pub fn stamp(ui: &mut Ui, text: &str, tone: Tone) -> Response {
+    let color = tone.color(&Palette::of(ui));
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::FontId::new(26.0, semibold()), color);
+    let size = vec2(galley.size().x.max(46.0) + 16.0, 46.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    for inset in [0.0, 3.0] {
+        ui.painter().rect_stroke(rect.shrink(inset), 1.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
+    }
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    response
+}
+
+/// One card's edge showing under the stack, `inset` narrower on each side.
+pub fn stack_edge(ui: &mut Ui, inset: f32) {
+    let p = Palette::of(ui);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 5.0), Sense::hover());
+    let edge = rect.shrink2(vec2(inset, 0.0));
+    ui.painter().rect(edge, CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }, p.raised, Stroke::new(1.0, p.line), egui::StrokeKind::Inside);
+}
+
 pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     Frame::new().fill(p.panel).stroke(Stroke::new(1.0, p.line)).corner_radius(CornerRadius::same(8)).show(ui, add).inner

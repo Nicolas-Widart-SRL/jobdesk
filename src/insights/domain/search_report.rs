@@ -43,6 +43,7 @@ pub struct Tally {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SearchReport {
     pub sent: usize,
+    pub resolved: usize,
     pub tally: Tally,
     pub reached_interview: usize,
     pub reached_offer: usize,
@@ -52,12 +53,19 @@ pub struct SearchReport {
     pub by_channel: Vec<(String, usize)>,
 }
 
+const CALIBRATION_MINIMUM: usize = 3;
+
 impl SearchReport {
+    pub fn can_calibrate(&self) -> bool {
+        self.resolved >= CALIBRATION_MINIMUM
+    }
+
     pub fn from_facts(facts: &[ApplicationFact]) -> Self {
         let mut report = Self::default();
         report.tally.drafted = facts.iter().filter(|f| f.progress == Progress::Drafted).count();
         let sent: Vec<_> = facts.iter().filter(|f| f.progress != Progress::Drafted).collect();
         report.sent = sent.len();
+        report.resolved = sent.iter().filter(|fact| fact.is_final).count();
         for fact in &sent {
             match fact.progress {
                 Progress::Active => report.tally.active += 1,

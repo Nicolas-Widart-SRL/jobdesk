@@ -436,10 +436,11 @@ impl Shell {
                 }
             }
             Screen::Dossier => {
+                let today = snapshot.today;
                 let view = self.refreshed_dossier();
                 match (view, &mut self.pages) {
                     (Some(view), Some(pages)) => {
-                        self.dossier_screen.show(ui, &view, pages);
+                        self.dossier_screen.show(ui, &view, pages, today);
                     }
                     _ => {
                         page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));

@@ -52,14 +52,19 @@ pub enum Subtitle<'a> {
 }
 
 /// A screen's head: title and subtitle on the left, `actions` on the right, level with the last line.
-/// Actions are added right to left. They share the head's width with the title, so keep both short.
+/// Actions are added right to left. Title and subtitle are cut to the width the actions leave, with the full text on hover.
 pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, actions: impl FnOnce(&mut Ui)) {
     let (x, top, bottom) = HEAD_PADDING;
     Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let right = ui.max_rect().right();
+        // The actions' width from the last frame, as they are laid out after the title.
+        let reserved_id = ui.scope_id().with("page_head_actions");
+        let reserved = ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(0.0);
+        let room = (ui.available_width() - reserved).max(0.0);
         let text = ui
             .vertical(|ui| {
+                ui.set_max_width(room);
                 ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
                 let (text, style) = match title {
                     Title::Slab(text) => (text, Type::H1),
@@ -67,14 +72,14 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, actions:
                     Title::Typed(text) => (text, Type::PATH),
                 };
                 let text = rich(ui, text, style, Ink::Text);
-                ui.label(text);
+                ui.add(egui::Label::new(text).truncate());
                 if let Some(subtitle) = subtitle {
                     let (text, style) = match subtitle {
                         Subtitle::Text(text) => (text, Type::BODY),
                         Subtitle::Typed(text) => (text, Type::MONO),
                     };
                     let text = rich(ui, text, style, Ink::Muted);
-                    ui.label(text);
+                    ui.add(egui::Label::new(text).truncate());
                 }
             })
             .response
@@ -83,6 +88,12 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, actions:
         let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
         side.spacing_mut().item_spacing.x = HEAD_GAP.0;
         actions(&mut side);
+        let used = side.min_rect().width();
+        let wanted = if used > 0.0 { used + HEAD_GAP.0 } else { 0.0 };
+        if (wanted - reserved).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(reserved_id, wanted));
+            ui.ctx().request_repaint();
+        }
     });
 }
 

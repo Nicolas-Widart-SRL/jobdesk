@@ -2,15 +2,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
+use chrono::Datelike;
 use egui::{Align, ColorImage, Frame, Layout, Margin, ScrollArea, TextureHandle, TextureOptions, Ui, vec2};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::CommonMarkCache;
+use egui_extras::{Column, TableBuilder};
 
-use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, OutcomeRecord, PageImage, PageState, PageStore, PdfDocument, StatusBucket};
-use crate::ui_kit::tokens::{GUTTER, LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_PADDING, TAG_HEIGHT};
+use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, PageImage, PageState, PageStore, PdfDocument, Stage, StatusBucket};
+use crate::shared_kernel::dates::parse_iso_date;
+use crate::ui_kit::tokens::{GUTTER, LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TAG_HEIGHT};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, command_action, divider, table_rule, list_row, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body, panel_header,
-    rich, segmented, side_column, slip, small_button, table_head, tag,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
+    panel_header, rich, segmented, side_column, slip, small_button, table_cell, table_head, tag,
 };
+
+/// Keyword table rows: a tag and its cell padding.
+const KEYWORD_HEAD_HEIGHT: f32 = 36.0;
+const KEYWORD_ROW_HEIGHT: f32 = 40.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Section {
@@ -27,6 +34,7 @@ pub struct DossierScreen {
     section: Section,
     selected_pack: usize,
     markdown: CommonMarkCache,
+    /// One rendering per PDF path: a rebuilt file replaces the older pages.
     textures: HashMap<(PathBuf, u64), Vec<TextureHandle>>,
 }
 
@@ -52,8 +60,10 @@ fn split(ui: &mut Ui, id: &'static str, main: impl FnOnce(&mut Ui), side: impl F
     });
 }
 
-fn short_date(date: NaiveDate) -> String {
-    date.format("%-d %b").to_string()
+/// "21 Oct", with the year when it is not this year.
+fn short_date(date: NaiveDate, today: NaiveDate) -> String {
+    let format = if date.year() == today.year() { "%-d %b" } else { "%-d %b %Y" };
+    date.format(format).to_string()
 }
 
 impl DossierScreen {
@@ -62,7 +72,7 @@ impl DossierScreen {
         self.selected_pack = 0;
     }
 
-    pub fn show(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) {
+    pub fn show(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore, today: NaiveDate) {
         let card = &dossier.card;
         let title = format!("{}, {}", card.company, card.role);
         let folder = card.archive_folder.as_ref().map(|folder| format!("documents/applications/{folder}/"));
@@ -76,10 +86,10 @@ impl DossierScreen {
             }
             tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
         });
-        page_body(ui, |ui| self.body(ui, dossier, pages));
+        page_body(ui, |ui| self.body(ui, dossier, pages, today));
     }
 
-    fn body(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) {
+    fn body(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore, today: NaiveDate) {
         let sections = [
             (Section::Documents, "Documents".to_owned()),
             (Section::Evaluation, "Evaluation".to_owned()),
@@ -93,16 +103,16 @@ impl DossierScreen {
         ui.add_space(SPLIT_GAP - ui.spacing().item_spacing.y);
         match self.section {
             Section::Documents => self.documents(ui, dossier, pages),
-            Section::Evaluation => self.evaluation(ui, dossier),
+            Section::Evaluation => self.evaluation(ui, dossier, today),
             Section::Posting => posting(ui, dossier),
-            Section::Prep => self.prep(ui, dossier),
-            Section::Outcome => outcome(ui, dossier),
+            Section::Prep => self.prep(ui, dossier, today),
+            Section::Outcome => outcome(ui, dossier, today),
         }
     }
 
     fn documents(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) {
         let documents: Vec<(&PdfDocument, PageState)> = dossier.contents.documents.iter().map(|document| (document, pages.pages(document))).collect();
-        let markdown = &mut self.markdown;
+        let cache = &mut self.markdown;
         let textures = &mut self.textures;
         split(
             ui,
@@ -119,12 +129,12 @@ impl DossierScreen {
                     keywords(ui, &dossier.findings.keywords);
                 });
             },
-            |ui| verification(ui, markdown, dossier),
+            |ui| verification(ui, cache, dossier),
         );
     }
 
-    fn evaluation(&mut self, ui: &mut Ui, dossier: &Dossier) {
-        let markdown = &mut self.markdown;
+    fn evaluation(&mut self, ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
+        let cache = &mut self.markdown;
         split(
             ui,
             "dossier_evaluation",
@@ -135,7 +145,7 @@ impl DossierScreen {
                         ui.set_width(ui.available_width());
                         match &dossier.findings.evaluation {
                             Some(text) => {
-                                CommonMarkViewer::new().show(ui, markdown, text);
+                                markdown(ui, cache, text);
                             }
                             None => {
                                 muted(ui, "The evaluation lives in the /apply run. No saved run matches this application.");
@@ -144,14 +154,14 @@ impl DossierScreen {
                     });
                 });
             },
-            |ui| sources(ui, dossier),
+            |ui| sources(ui, dossier, today),
         );
     }
 
-    fn prep(&mut self, ui: &mut Ui, dossier: &Dossier) {
+    fn prep(&mut self, ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
         let packs = &dossier.contents.prep_packs;
         let company = dossier.card.company.to_lowercase();
-        let (markdown, selected) = (&mut self.markdown, &mut self.selected_pack);
+        let (cache, selected) = (&mut self.markdown, &mut self.selected_pack);
         split(
             ui,
             "dossier_prep",
@@ -179,11 +189,11 @@ impl DossierScreen {
                     panel_header(ui, "Interview prep", Some(&pack.name));
                     panel_body(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        CommonMarkViewer::new().show(ui, markdown, &pack.text);
+                        markdown(ui, cache, &pack.text);
                     });
                 });
             },
-            |ui| stages(ui, dossier.card.outcome.as_ref()),
+            |ui| stages(ui, dossier, today),
         );
     }
 }
@@ -229,6 +239,9 @@ fn compiled_pages(ui: &mut Ui, textures: &mut HashMap<(PathBuf, u64), Vec<Textur
                 }
                 PageState::Ready(images) => {
                     let key = (document.path.clone(), document.modified);
+                    if !textures.contains_key(&key) {
+                        textures.retain(|(path, _), _| *path != document.path);
+                    }
                     let pages = textures.entry(key).or_insert_with(|| textures_for(ui, images));
                     for (index, texture) in pages.iter().enumerate() {
                         let size = texture.size_vec2();
@@ -240,17 +253,6 @@ fn compiled_pages(ui: &mut Ui, textures: &mut HashMap<(PathBuf, u64), Vec<Textur
                 }
             }
         }
-    });
-}
-
-/// One table cell of a fixed width, padded like the canvas's table. A single line centres on `height`.
-fn cell(ui: &mut Ui, width: f32, height: f32, padding: (f32, f32), add: impl FnOnce(&mut Ui)) {
-    let inner = vec2(width - padding.0 * 2.0, height);
-    Frame::new().inner_margin(Margin::symmetric(padding.0 as i8, padding.1 as i8)).show(ui, |ui| {
-        ui.allocate_ui_with_layout(inner, Layout::left_to_right(Align::Center), |ui| {
-            ui.set_min_size(inner);
-            add(ui);
-        });
     });
 }
 
@@ -278,37 +280,44 @@ fn keywords(ui: &mut Ui, rows: &[KeywordRow]) {
     }
     let total = ui.available_width();
     let widths = KEYWORD_COLUMNS.map(|share| (total * share).floor());
-    let head = Type::TABLE_HEAD.font();
-    let head_height = ui.fonts_mut(|fonts| fonts.row_height(&head));
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        for (title, width) in ["Keyword", "Priority", "Status", "Where"].into_iter().zip(widths) {
-            cell(ui, width, head_height, TABLE_HEAD_PADDING, |ui| {
-                table_head(ui, title);
-            });
-        }
-    });
-    table_rule(ui);
-    for (index, row) in rows.iter().enumerate() {
-        if index > 0 {
-            divider(ui);
-        }
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            cell(ui, widths[0], TAG_HEIGHT, TABLE_CELL_PADDING, |ui| {
-                ui.add(egui::Label::new(rich(ui, row.keyword.as_str(), Type::MONO, Ink::Text)).wrap());
-            });
-            cell(ui, widths[1], TAG_HEIGHT, TABLE_CELL_PADDING, |ui| {
-                ui.add(egui::Label::new(rich(ui, row.priority.as_str(), Type::BODY, Ink::Muted)).wrap());
-            });
-            cell(ui, widths[2], TAG_HEIGHT, TABLE_CELL_PADDING, |ui| {
-                tag(ui, row.status.as_str(), keyword_tone(row));
-            });
-            cell(ui, widths[3], TAG_HEIGHT, TABLE_CELL_PADDING, |ui| {
-                ui.add(egui::Label::new(rich(ui, row.note.as_str(), Type::BODY, Ink::Muted)).wrap());
+    let last = rows.len() - 1;
+    // Cells pad themselves, so the rules run unbroken.
+    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    TableBuilder::new(ui)
+        .id_salt("dossier_keywords")
+        .vscroll(false)
+        .striped(false)
+        .cell_layout(Layout::left_to_right(Align::Center))
+        .column(Column::exact(widths[0]).clip(true))
+        .column(Column::exact(widths[1]).clip(true))
+        .column(Column::exact(widths[2]).clip(true))
+        .column(Column::remainder().clip(true))
+        .header(KEYWORD_HEAD_HEIGHT, |mut header| {
+            for title in ["Keyword", "Priority", "Status", "Where"] {
+                header.col(|ui| {
+                    table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(KEYWORD_ROW_HEIGHT, rows.len(), |mut line| {
+                let index = line.index();
+                let row = &rows[index];
+                let rule = if index == last { CellRule::Last } else { CellRule::Row };
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.keyword.as_str(), Type::MONO, Ink::Text)).truncate()));
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.priority.as_str(), Type::BODY, Ink::Muted)).truncate()));
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| tag(ui, row.status.as_str(), keyword_tone(row)).on_hover_text(row.status.as_str()));
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.note.as_str(), Type::BODY, Ink::Muted)).truncate()));
+                });
             });
         });
-    }
 }
 
 /// A slip row: a label that wraps, with a tag on the right.
@@ -325,7 +334,8 @@ fn tagged_row(ui: &mut Ui, first: bool, label: &str, tag_text: &str, tone: Tone)
     });
 }
 
-fn verification(ui: &mut Ui, markdown: &mut CommonMarkCache, dossier: &Dossier) {
+/// Claude's reply, so Markdown under the trust rules when no checklist line could be read.
+fn verification(ui: &mut Ui, cache: &mut CommonMarkCache, dossier: &Dossier) {
     let checklist = &dossier.findings.checklist;
     let passed = checklist.iter().filter(|item| item.result == CheckResult::Pass).count();
     let note = (!checklist.is_empty()).then(|| format!("{passed} of {}", checklist.len()));
@@ -334,7 +344,7 @@ fn verification(ui: &mut Ui, markdown: &mut CommonMarkCache, dossier: &Dossier) 
         if let Some(text) = &dossier.findings.verification_text {
             panel_body(ui, |ui| {
                 ui.set_width(ui.available_width());
-                CommonMarkViewer::new().show(ui, markdown, text);
+                markdown(ui, cache, text);
             });
         } else if checklist.is_empty() {
             panel_body(ui, |ui| {
@@ -349,7 +359,7 @@ fn verification(ui: &mut Ui, markdown: &mut CommonMarkCache, dossier: &Dossier) 
     });
 }
 
-fn sources(ui: &mut Ui, dossier: &Dossier) {
+fn sources(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
     let guard = dossier.contents.posting.as_ref().and_then(|posting| posting.guard.as_deref());
     slip(ui, |ui| {
         panel_header(ui, "Source checks", None);
@@ -366,7 +376,7 @@ fn sources(ui: &mut Ui, dossier: &Dossier) {
         }
         divider(ui);
         let research = dossier.contents.research.as_ref();
-        let note = research.and_then(|note| note.fetched_on).map(|date| format!("fetched {}", short_date(date)));
+        let note = research.and_then(|note| note.fetched_on).map(|date| format!("fetched {}", short_date(date, today)));
         panel_header(ui, "Company research", note.as_deref());
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -414,11 +424,17 @@ fn leading_tag(ui: &mut Ui, text: &str, tone: Tone) {
     });
 }
 
-fn faint_date(ui: &mut Ui, date: NaiveDate) {
-    ui.label(rich(ui, short_date(date), Type::BODY, Ink::Faint));
+fn faint_date(ui: &mut Ui, date: NaiveDate, today: NaiveDate) {
+    ui.label(rich(ui, short_date(date, today), Type::BODY, Ink::Faint));
 }
 
-fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
+/// The stage to tag "Next": the first one not reached, unless the application is over.
+fn next_stage(over: bool, stages: &[Stage]) -> Option<usize> {
+    (!over).then(|| stages.iter().position(|stage| !stage.reached)).flatten()
+}
+
+fn stages(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
+    let outcome = dossier.card.outcome.as_ref();
     slip(ui, |ui| {
         panel_header(ui, "Stages", Some("outcome.md"));
         let stages = outcome.map_or(&[][..], |outcome| outcome.stages.as_slice());
@@ -428,7 +444,8 @@ fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
                 muted(ui, "No stages recorded.");
             });
         }
-        let next = stages.iter().position(|stage| !stage.reached);
+        let over = dossier.card.is_final || outcome.is_some_and(|outcome| outcome.resolved_on.is_some());
+        let next = next_stage(over, stages);
         for (index, stage) in stages.iter().enumerate() {
             list_row(ui, index == 0, |ui| {
                 ui.horizontal(|ui| {
@@ -439,7 +456,7 @@ fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
                     }
                     ui.label(stage.name.as_str());
                     if let Some(date) = stage.date {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| faint_date(ui, date));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| faint_date(ui, date, today));
                     }
                 });
             });
@@ -448,16 +465,18 @@ fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
 }
 
 /// One line of the outcome notes: `- 2026-10-21: text` gives the date and the text.
+/// Only one list bullet comes off; the rest stays as written. Blank lines make no row.
 fn note_line(line: &str) -> Option<(Option<NaiveDate>, &str)> {
-    let line = line.trim().trim_start_matches(['-', '*']).trim_start();
+    let line = line.trim();
     if line.is_empty() {
         return None;
     }
-    let dated = line.split_once(':').and_then(|(date, text)| NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").ok().map(|date| (Some(date), text.trim())));
+    let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
+    let dated = line.split_once(':').and_then(|(date, text)| parse_iso_date(date).map(|date| (Some(date), text.trim_start())));
     Some(dated.unwrap_or((None, line)))
 }
 
-fn outcome(ui: &mut Ui, dossier: &Dossier) {
+fn outcome(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
     let record = dossier.card.outcome.as_ref();
     split(
         ui,
@@ -476,7 +495,7 @@ fn outcome(ui: &mut Ui, dossier: &Dossier) {
                     list_row(ui, index == 0, |ui| {
                         ui.horizontal(|ui| {
                             if let Some(date) = date {
-                                faint_date(ui, date);
+                                faint_date(ui, date, today);
                             }
                             ui.add(egui::Label::new(text).wrap());
                         });
@@ -528,6 +547,28 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 10, 21);
         assert_eq!(note_line("- 2026-10-21: They valued the replay story."), Some((date, "They valued the replay story.")));
         assert_eq!(note_line("Moved to applied: see tracker"), Some((None, "Moved to applied: see tracker")));
-        assert_eq!(note_line("  - "), None);
+        assert_eq!(note_line("   "), None);
+    }
+
+    #[test]
+    fn outcome_notes_lose_one_bullet_and_nothing_else() {
+        assert_eq!(note_line("-20% vs ask"), Some((None, "-20% vs ask")));
+        assert_eq!(note_line("**Feedback** was kind"), Some((None, "**Feedback** was kind")));
+        assert_eq!(note_line("- - nested"), Some((None, "- nested")));
+        assert_eq!(note_line("* 2026-10-21:  two spaces"), Some((NaiveDate::from_ymd_opt(2026, 10, 21), "two spaces")));
+    }
+
+    #[test]
+    fn dates_name_the_year_only_when_it_differs() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        assert_eq!(short_date(NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(), today), "4 Nov");
+        assert_eq!(short_date(NaiveDate::from_ymd_opt(2025, 11, 4).unwrap(), today), "4 Nov 2025");
+    }
+
+    #[test]
+    fn a_finished_application_has_no_next_stage() {
+        let stages = [Stage { name: "Phone screen".into(), reached: true, date: None }, Stage { name: "Technical".into(), reached: false, date: None }];
+        assert_eq!(next_stage(false, &stages), Some(1));
+        assert_eq!(next_stage(true, &stages), None);
     }
 }

@@ -8,4 +8,4 @@ pub use crate::dossier::domain::{
     ApplicationRef, ArchiveContents, ArchiveRepository, CheckItem, CheckResult, KeywordRow, NamedText, PageImage, PageRasterizer, PdfDocument, PostingText,
     ResearchNote, RunFindings,
 };
-pub use crate::tracking::application::{OutcomeRecord, StatusBucket};
+pub use crate::tracking::application::{OutcomeRecord, Stage, StatusBucket};

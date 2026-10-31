@@ -448,7 +448,7 @@ impl Shell {
                     }
                 }
             }
-            Screen::Insights => insights::ui::show(ui, &snapshot.insights, snapshot.skill_gaps.as_ref()),
+            Screen::Insights => insights::ui::show(ui, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref()),
             Screen::Runs => {
                 if let Some(desk) = &mut self.desk {
                     self.run_screen.show(ui, desk);

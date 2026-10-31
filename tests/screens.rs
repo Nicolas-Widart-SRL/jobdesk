@@ -187,7 +187,7 @@ fn a_command_button_leads_to_a_started_run() {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
-    harness.get_by_label("/setup").click();
+    harness.get_by_label("Calibrate").click();
     harness.run_steps(3);
     harness.get_by_label("Run a command");
 

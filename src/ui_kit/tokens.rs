@@ -80,18 +80,23 @@ pub const SHELL_GAP: (f32, f32) = (20.0, 8.0);
 pub const NAV_TOP: f32 = 4.0;
 pub const HEAD_PADDING: (f32, f32, f32) = (32.0, 26.0, 6.0);
 pub const HEAD_GAP: (f32, f32) = (16.0, 10.0);
+pub const HEAD_TITLE_MIN: f32 = 240.0;
 pub const SCREEN_PADDING: (f32, f32, f32) = (32.0, 18.0, 32.0);
 pub const SCREEN_GAP: f32 = 28.0;
 pub const STATUS_PADDING: (f32, f32) = (28.0, 6.0);
 pub const STATUS_GAP: (f32, f32) = (18.0, 4.0);
 pub const STATUS_DOT: f32 = 8.0;
+pub const BRAND_MARK_WIDTH: f32 = 26.0;
+pub const BRAND_GAP: f32 = 8.0;
 pub const KEYS_GAP: f32 = 3.0;
 pub const HEADER_GAP: (f32, f32) = (10.0, 2.0);
 pub const NOTE_GAP: (f32, f32) = (12.0, 8.0);
 pub const LEADING_TAG_WIDTH: f32 = 94.0;
 pub const ROW_ITEM_GAP: f32 = 10.0;
 pub const PICK_ROW_INLINE: f32 = 8.0;
+pub const COMMAND_NAME_WIDTH: f32 = 115.0;
 pub const TABLE_HEAD_PADDING: (f32, f32) = (12.0, 8.0);
+pub const TABLE_HEAD_HEIGHT: f32 = 36.0;
 pub const TABLE_CELL_PADDING: (f32, f32) = (12.0, 9.0);
 pub const SPLIT_GAP: f32 = 28.0;
 pub const SPLIT_MAIN_BASIS: f32 = 520.0;
@@ -147,7 +152,6 @@ pub const RADIUS_CARD: u8 = 2;
 pub const RADIUS_STAMP: u8 = 1;
 
 pub const TAB_TOP: CornerRadius = CornerRadius { nw: RADIUS_TAB, ne: RADIUS_TAB, sw: 0, se: 0 };
-pub const TAB_LEFT: CornerRadius = CornerRadius { nw: RADIUS_TAB, ne: 0, sw: RADIUS_TAB, se: 0 };
 pub const SEGMENT_TOP: CornerRadius = CornerRadius { nw: RADIUS_PANEL, ne: RADIUS_PANEL, sw: 0, se: 0 };
 pub const DEAL_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: RADIUS_PANEL, sw: RADIUS_PANEL, se: RADIUS_PANEL };
 pub const EDGE_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: 0, sw: RADIUS_BUTTON, se: RADIUS_BUTTON };
@@ -183,16 +187,20 @@ impl Type {
     pub const STEP_NOW: Self = Self { face: Face::Semibold, size: 13.0 };
     pub const TAG: Self = Self { face: Face::Semibold, size: 12.5 };
     pub const KEY: Self = Self { face: Face::Semibold, size: 11.5 };
+    pub const KEYS: Self = Self { face: Face::Medium, size: 13.0 };
     pub const TABLE_HEAD: Self = Self { face: Face::Semibold, size: 13.0 };
 
     pub const MONO: Self = Self { face: Face::Typed, size: 13.5 };
     pub const COMMAND: Self = Self { face: Face::TypedBold, size: 18.0 };
     pub const PATH: Self = Self { face: Face::TypedBold, size: 21.0 };
+    /// A run's command line as its screen's title, smaller than a path so a long line fits.
+    pub const HEAD_COMMAND: Self = Self { face: Face::TypedBold, size: 16.0 };
 
     pub const BRAND: Self = Self { face: Face::Slab, size: 23.0 };
     pub const H1: Self = Self { face: Face::Slab, size: 32.0 };
     pub const LEAD: Self = Self { face: Face::Slab, size: 44.0 };
     pub const SECTION: Self = Self { face: Face::Slab, size: 17.0 };
+    pub const SLIP_TITLE: Self = Self { face: Face::Slab, size: 19.0 };
     pub const SCORE: Self = Self { face: Face::Slab, size: 21.0 };
     pub const FIT: Self = Self { face: Face::Slab, size: 16.0 };
     pub const STAMP: Self = Self { face: Face::Slab, size: 32.0 };

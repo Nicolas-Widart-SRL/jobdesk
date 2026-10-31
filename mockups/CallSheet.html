@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Call sheet</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="app" data-theme="{{theme}}">
+  <div class="callwin">
+    <header class="calltop">
+      <span class="clock" role="timer" aria-label="Call time">{{clock}}</span>
+      <span class="grow"></span>
+      <label class="chk"><input type="checkbox" checked="{{pinned}}" onChange="{{togglePin}}"><span>Always on top</span></label>
+      <sc-if value="{{isCall}}" hint-placeholder-val="{{ true }}">
+        <button class="btn sm" type="button" onClick="{{toggleClock}}">{{clockAct}}</button>
+      </sc-if>
+    </header>
+
+    <sc-if value="{{isCall}}" hint-placeholder-val="{{ true }}">
+      <div class="callbody">
+        <div class="col" style="gap: 2px">
+          <h1>Tessel Group, technical round</h1>
+          <div class="muted">Ines Maes, Head of Platform. Joris Peeters, Staff Engineer.</div>
+        </div>
+        <section class="panel">
+          <div class="ph">Stories <span class="mono">Tap when told</span></div>
+          <sc-for list="{{stories}}" as="i" hint-placeholder-count="3">
+            <button class="ticket {{i.cls}}" type="button" aria-pressed="{{i.on}}" onClick="{{i.pick}}"><span class="box" aria-hidden="true"></span><span class="grow"><span style="font-weight: 600">{{i.t}}</span><br><span class="muted">{{i.d}}</span></span></button>
+          </sc-for>
+        </section>
+        <section class="panel">
+          <div class="ph">If they push on a gap</div>
+          <div class="li" style="align-items: baseline; border-top: 0"><span style="font-weight: 600; flex: 0 0 100px">Card schemes</span><span class="muted grow">New to you, say so. Bridge from regulated financial messaging at SWIFT.</span></div>
+        </section>
+        <section class="panel">
+          <div class="ph">Ask them <span class="mono">Tap when asked</span></div>
+          <sc-for list="{{asks}}" as="i" hint-placeholder-count="3">
+            <button class="ticket {{i.cls}}" type="button" aria-pressed="{{i.on}}" onClick="{{i.pick}}"><span class="box" aria-hidden="true"></span><span class="grow">{{i.t}}</span></button>
+          </sc-for>
+        </section>
+        <section class="panel">
+          <div class="ph">Notes <span class="mono">Stamped with call time</span></div>
+          <div class="pb col" style="gap: 8px">
+            <div class="field"><label for="note">Type a note, press Return</label><input id="note" value="{{note}}" onChange="{{setNote}}" onKeyDown="{{noteKey}}"></div>
+            <sc-for list="{{notes}}" as="n" hint-placeholder-count="1">
+              <div class="row" style="align-items: baseline"><span class="num faint">{{n.at}}</span><span class="grow">{{n.t}}</span></div>
+            </sc-for>
+          </div>
+        </section>
+        <button class="btn pri" type="button" onClick="{{endCall}}">End call and debrief</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isDebrief}}" hint-placeholder-val="{{ false }}">
+      <div class="callbody">
+        <div class="col" style="gap: 2px"><h1>Debrief, while it is fresh</h1><div class="muted">Tessel Group, technical round</div></div>
+        <div class="col" style="gap: 6px">
+          <div style="font-weight: 600">How did it go?</div>
+          <div class="seg" role="group" aria-label="How it went"><sc-for list="{{moods}}" as="m" hint-placeholder-count="3"><button class="{{m.cls}}" type="button" onClick="{{m.pick}}">{{m.label}}</button></sc-for></div>
+        </div>
+        <div class="col" style="gap: 6px">
+          <div style="font-weight: 600">What comes next?</div>
+          <div class="seg" role="group" aria-label="Next step"><sc-for list="{{nexts}}" as="m" hint-placeholder-count="3"><button class="{{m.cls}}" type="button" onClick="{{m.pick}}">{{m.label}}</button></sc-for></div>
+        </div>
+        <div class="col" style="gap: 2px">
+          <div style="font-weight: 600">Told</div><div class="muted">{{toldText}}</div>
+          <div style="font-weight: 600; margin-top: 8px">Not asked, carried to the next prep pack</div><div class="muted">{{openText}}</div>
+          <div style="font-weight: 600; margin-top: 8px">Notes</div><div class="muted">{{noteText}}</div>
+        </div>
+        <label class="chk"><input type="checkbox" checked="{{thanks}}" onChange="{{toggleThanks}}"><span>Draft a thank-you note. It lands in your in-tray, you send it.</span></label>
+        <div>
+          <div class="muted" style="font-size: 12px; margin-bottom: 4px">Sent to Claude</div>
+          <div class="code mono" style="white-space: pre-wrap">{{line}}</div>
+        </div>
+        <button class="btn pri" type="button" onClick="{{logIt}}">Log outcome</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isLogged}}" hint-placeholder-val="{{ false }}">
+      <div class="callbody">
+        <div class="col" style="gap: 6px; align-items: flex-start">
+          <h1>Logged</h1>
+          <p class="muted">/outcome is updating outcome.md in the background. Next stage prep will start from these notes.</p>
+          <a class="btn" href="Tray.html">Back to the in-tray</a>
+        </div>
+      </div>
+    </sc-if>
+
+    <footer class="status">
+      <span>{{statusText}}</span>
+      <div class="seg" role="group" aria-label="Theme" style="margin-left: auto"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+      <span class="faint">Sample data</span>
+    </footer>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"$preview":{"width":520,"height":1160}}'>
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    this.state = { phase: 'call', running: false, secs: 0, pinned: true, told: {}, asked: {}, note: '', notes: [], mood: 'Strong', next: 'Next round booked', thanks: true };
+  }
+  componentDidMount() {
+    this.onTheme = () => this.forceUpdate(); window.addEventListener('storage', this.onTheme);
+    this.timer = setInterval(() => { if (this.state.running) this.setState({ secs: this.state.secs + 1 }); }, 1000);
+  }
+  componentWillUnmount() { window.removeEventListener('storage', this.onTheme); clearInterval(this.timer); }
+  themeVals() {
+    let saved = null;
+    try { saved = localStorage.getItem('jobdesk-theme'); } catch (e) {}
+    const theme = saved || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({
+      label, cls: label.toLowerCase() === theme ? 'on' : '',
+      pick: () => { const v = label.toLowerCase(); try { localStorage.setItem('jobdesk-theme', v); } catch (e) {} this.setState({ theme: v }); },
+    }));
+    return { theme, themes };
+  }
+  fmt(n) { return String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0'); }
+  addNote() {
+    const s = this.state, t = s.note.trim();
+    if (t) this.setState({ note: '', notes: [{ at: this.fmt(s.secs), t }, ...s.notes] });
+  }
+  renderVals() {
+    const s = this.state;
+    const pick = (key, field) => () => this.setState({ [field]: { ...s[field], [key]: !s[field][key] } });
+    const stories = [
+      ['Persée', 'Greenfield rewrite of the Walloon tax system. Led about 20 developers, made the architecture-level changes.'],
+      ['SWIFT', 'Team lead on a greenfield microservice. Architecture decisions, coached 3 developers.'],
+      ['GM Electronics', 'OCPP on Spring Boot, thousands of simultaneous WebSocket connections.'],
+    ].map(([t, d]) => ({ t, d, on: !!s.told[t], cls: s.told[t] ? 'on' : '', pick: pick(t, 'told') }));
+    const asks = ['Who owns the ledger model?', 'How do teams version events today?', 'What would a good first 90 days look like on this mission?']
+      .map((t) => ({ t, on: !!s.asked[t], cls: s.asked[t] ? 'on' : '', pick: pick(t, 'asked') }));
+    const seg = (xs, field) => xs.map((label) => ({ label, cls: s[field] === label ? 'on' : '', pick: () => this.setState({ [field]: label }) }));
+    const told = stories.filter((x) => x.on).map((x) => x.t);
+    const open = asks.filter((x) => !x.on).map((x) => x.t);
+    const noteText = s.notes.length ? s.notes.map((n) => n.t).reverse().join(' ') : 'None';
+    const line = '/outcome tessel\nTechnical round done, went ' + s.mood.toLowerCase() + '. ' + s.next + '. ' +
+      (told.length ? 'Stories told: ' + told.join(', ') + '. ' : '') + (s.notes.length ? 'Notes: ' + noteText : '');
+    return {
+      ...this.themeVals(), stories, asks, notes: s.notes, note: s.note, pinned: s.pinned, thanks: s.thanks, line, noteText,
+      clock: this.fmt(s.secs), clockAct: s.running ? 'Pause' : s.secs ? 'Resume' : 'Start call',
+      isCall: s.phase === 'call', isDebrief: s.phase === 'debrief', isLogged: s.phase === 'logged',
+      moods: seg(['Weak', 'Mixed', 'Strong'], 'mood'), nexts: seg(['Waiting to hear', 'Next round booked', 'It ended here'], 'next'),
+      toldText: told.length ? told.join(', ') : 'None marked', openText: open.length ? open.join(' ') : 'Nothing left',
+      statusText: s.phase === 'call' ? 'Notes stay on this computer until you log them' : 'Status changes go through /outcome',
+      togglePin: () => this.setState({ pinned: !s.pinned }), toggleThanks: () => this.setState({ thanks: !s.thanks }),
+      toggleClock: () => this.setState({ running: !s.running }),
+      setNote: (e) => this.setState({ note: e.target.value }),
+      noteKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.addNote(); } },
+      endCall: () => { this.addNote(); this.setState({ phase: 'debrief', running: false }); },
+      logIt: () => this.setState({ phase: 'logged' }),
+    };
+  }
+}
+</script>
+</body>
+</html>

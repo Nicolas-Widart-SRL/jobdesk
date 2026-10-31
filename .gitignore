@@ -3,3 +3,11 @@
 **/*.new.png
 **/*.old.png
 .DS_Store
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Lead plan files, agent worktrees and the planner's local memory stay local.
+/.claude/plans/
+/.claude/worktrees/
+/.claude/agent-memory-local/

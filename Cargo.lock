@@ -2065,6 +2065,7 @@ dependencies = [
  "egui_kittest",
  "hayro",
  "notify",
+ "pulldown-cmark",
  "rfd",
  "serde",
  "serde_json",

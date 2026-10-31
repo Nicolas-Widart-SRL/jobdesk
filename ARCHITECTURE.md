@@ -12,7 +12,7 @@ Each feature is a bounded context with its own language.
 | --- | --- | --- |
 | `discovery` | job, lane, assessment, gate, signal, freelance terms | `job_scraper/seen_jobs.json`, the candidate profile and evaluation framework |
 | `tracking` | application, status, bucket, follow-up, outcome | `job_search_tracker.csv`, `documents/applications/*/outcome.md` |
-| `insights` | search report, funnel, skill gap, study order | tracking's application layer, `upskill/report-*.md` |
+| `insights` | search report, funnel, skill gap, study order | tracking's application layer, discovery's application layer, the profile count, `upskill/report-*.md` |
 | `intray` | card, decision, skip reason, queue | discovery's, tracking's, dossier's and runs' application layers, its own decisions file |
 | `runs` | run, activity, prompt, decision, step rail, command catalog | the `claude` CLI stream, its own run logs |
 | `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |

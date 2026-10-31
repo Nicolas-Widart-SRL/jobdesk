@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Galley, Rect, Response, RichText, TextWrapMode, Ui, WidgetText};
+use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextWrapMode, Ui, WidgetText};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
+use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::tokens::Type;
@@ -48,6 +51,120 @@ pub fn figure(ui: &mut Ui, text: impl Into<String>, ink: impl Into<Ink>) -> Resp
     ui.label(text)
 }
 
+/// A strong line over a muted one, each cut to one line, the pair centred in the height it has. Such as a role in a table row.
+pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
+    let p = Palette::of(ui);
+    let width = ui.available_width();
+    let title = line(ui, title, Type::STRONG, p.text, width);
+    let detail = line(ui, detail, Type::BODY, p.muted, width);
+    ui.vertical(|ui| {
+        ui.add_space(((ui.available_height() - title.size().y - detail.size().y) / 2.0).max(0.0));
+        ui.label(title);
+        ui.label(detail);
+    })
+    .response
+}
+
+/// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.
+/// Images never load: each shows as its alt text. A link opens only on click, and only for `http` or `https`.
+pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    // The image pass runs once per distinct text, and is kept while the text stays on screen.
+    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<ImageFreeCache>().get(text).clone());
+    let before = ui.ctx().output(|output| output.commands.len());
+    CommonMarkViewer::new().show(ui, cache, &text);
+    ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
+}
+
+#[derive(Default)]
+struct ImageFree;
+
+impl egui::cache::ComputerMut<&str, Arc<str>> for ImageFree {
+    fn compute(&mut self, text: &str) -> Arc<str> {
+        without_images(text).into()
+    }
+}
+
+type ImageFreeCache = egui::cache::FrameCache<Arc<str>, ImageFree>;
+
+/// Drops any url opened after `from` that is not `http` or `https`.
+fn keep_web_links(commands: &mut Vec<OutputCommand>, from: usize) {
+    let mut index = 0;
+    commands.retain(|command| {
+        let safe = index < from || !matches!(command, OutputCommand::OpenUrl(open) if WebUrl::parse(&open.url).is_none());
+        index += 1;
+        safe
+    });
+}
+
+/// Same extensions as the viewer, so both read the same images.
+fn markdown_options() -> Options {
+    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES | Options::ENABLE_DEFINITION_LIST
+}
+
+/// Every ASCII punctuation mark escaped, so the text cannot form Markdown again.
+fn escaped(text: &str) -> String {
+    text.chars().fold(String::new(), |mut out, c| {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    })
+}
+
+/// One pass: each outermost image becomes its escaped alt text.
+fn replace_images(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let (mut copied, mut depth, mut alt, mut found) = (0, 0, String::new(), false);
+    for (event, range) in Parser::new_ext(text, markdown_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Image { .. }) => {
+                if depth == 0 {
+                    out.push_str(&text[copied..range.start]);
+                    copied = range.end;
+                    alt.clear();
+                    found = true;
+                }
+                depth += 1;
+            }
+            Event::End(TagEnd::Image) => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push_str(&escaped(&alt));
+                }
+            }
+            Event::Text(part) | Event::Code(part) if depth > 0 => alt.push_str(&part),
+            Event::SoftBreak | Event::HardBreak if depth > 0 => alt.push(' '),
+            _ => {}
+        }
+    }
+    out.push_str(&text[copied..]);
+    found.then_some(out)
+}
+
+/// Markdown with every image swapped for its alt text, so no loader is ever asked for one.
+/// The parser finds the images, so `![` inside code stays as written.
+fn without_images(text: &str) -> String {
+    if !text.contains("![") {
+        return text.to_owned();
+    }
+    let mut text = text.to_owned();
+    // Escaped alt text cannot form a new image, so the second pass only confirms the first.
+    for _ in 0..2 {
+        match replace_images(&text) {
+            Some(next) => text = next,
+            None => return text,
+        }
+    }
+    // Unreachable in practice: show the whole text as plain characters rather than risk an image.
+    escaped(&text)
+}
+
+/// The height `text` takes wrapped at `width`, for rows sized before they are drawn.
+pub fn wrapped_height(ui: &Ui, text: &str, style: Type, width: f32) -> f32 {
+    WidgetText::from(RichText::new(text).font(style.font())).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font()).size().y
+}
+
 /// A single line cut to `width`, for widgets that paint their own text.
 pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
     let text = RichText::new(text).font(style.font()).color(color);
@@ -57,4 +174,57 @@ pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, 
 pub(in crate::ui_kit) fn paint_centred(ui: &Ui, rect: Rect, galley: Arc<Galley>, color: Color32) {
     let at = Align2::CENTER_CENTER.anchor_size(rect.center(), galley.size()).min;
     ui.painter().galley(at, galley, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    /// Clicks the link named `label` and returns every url a frame asked to open.
+    fn opened_by_click(source: &'static str, label: &str) -> Vec<String> {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&opened);
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).build_ui(move |ui| {
+            markdown(ui, &mut cache, source);
+            let urls: Vec<String> = ui.ctx().output(|output| {
+                output.commands.iter().filter_map(|command| if let OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
+            });
+            seen.borrow_mut().extend(urls);
+        });
+        harness.run();
+        harness.get_by_label(label).click();
+        harness.run();
+        opened.take()
+    }
+
+    #[test]
+    fn markdown_links_open_only_for_the_web() {
+        assert_eq!(opened_by_click("[terminal](file:///Applications/Utilities/Terminal.app)", "terminal"), Vec::<String>::new());
+        assert_eq!(opened_by_click("[script](javascript:alert(1))", "script"), Vec::<String>::new());
+        assert_eq!(opened_by_click("[posting](https://tessel.example/jobs/1)", "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+    }
+
+    #[test]
+    fn markdown_images_become_their_alt_text() {
+        assert_eq!(without_images("Hi ![a *logo*](https://x.example/l.png) there"), "Hi a logo there");
+        assert_eq!(without_images("![ref][r]\n\n[r]: file:///etc/x.png"), "ref\n\n[r]: file:///etc/x.png");
+        assert_eq!(without_images("[![badge](https://x.example/b.svg)](https://x.example)"), "[badge](https://x.example)");
+        assert_eq!(without_images("![\\!\\[x\\](y)](z)"), "\\!\\[x\\]\\(y\\)");
+        assert_eq!(without_images("no images, just ! and [x]"), "no images, just ! and [x]");
+        assert_eq!(without_images("![two\nlines](u)"), "two lines");
+    }
+
+    #[test]
+    fn image_syntax_in_code_stays_as_written() {
+        let code = "Use `![a](b)` here.\n\n```\n![logo](file:///x.png)\n```\n";
+        assert_eq!(without_images(code), code);
+        assert_eq!(without_images("`![a](b)` and ![c](d)"), "`![a](b)` and c");
+    }
 }

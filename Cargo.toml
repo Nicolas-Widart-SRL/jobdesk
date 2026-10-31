@@ -11,7 +11,7 @@ identifier = "com.nicolaswidart.jobdesk"
 category = "Productivity"
 authors = ["Nicolas Widart"]
 description = "Desktop view over an ai-job-search checkout"
-icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon.png"]
+icons = ["assets/brand/jobdesk.icns", "assets/brand/jobdesk.ico", "assets/brand/jobdesk-icon-1024.png"]
 resources = ["assets/fonts/*-OFL.txt"]
 out-dir = "target/packages"
 before-packaging-command = "cargo build --release"
@@ -33,6 +33,7 @@ egui_commonmark = { version = "0.26", default-features = false }
 egui_extras = "0.37"
 hayro = "0.8"
 notify = "8"
+pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use chrono::{Local, NaiveDateTime};
+use chrono::{Local, NaiveDate, NaiveDateTime};
 
 use crate::shell::Snapshot;
 use crate::workspace::ChangeWatcher;
@@ -19,6 +19,11 @@ fn wait(now: NaiveDateTime) -> Duration {
     to_midnight.map_or(REFRESH, |left| left.min(REFRESH))
 }
 
+/// How long to wait before the next load, or none when the day moved on while `today`'s snapshot loaded.
+fn next_wait(today: NaiveDate, now: NaiveDateTime) -> Option<Duration> {
+    (now.date() == today).then(|| wait(now))
+}
+
 /// Rebuilds the snapshot on a worker when the workspace changes. Stops when the receiver drops.
 pub fn spawn(root: WorkspaceRoot, repaint: impl Fn() + Send + 'static) -> Receiver<Snapshot> {
     let (snapshots, received) = mpsc::channel();
@@ -26,12 +31,15 @@ pub fn spawn(root: WorkspaceRoot, repaint: impl Fn() + Send + 'static) -> Receiv
         let (changed, changes) = mpsc::channel();
         let _watcher = ChangeWatcher::start(root.path(), changed);
         loop {
-            let snapshot = Snapshot::load(root.path(), Local::now().date_naive());
+            let today = Local::now().date_naive();
+            let snapshot = Snapshot::load(root.path(), today);
             if snapshots.send(snapshot).is_err() {
                 return;
             }
             repaint();
-            let wait = wait(Local::now().naive_local());
+            let Some(wait) = next_wait(today, Local::now().naive_local()) else {
+                continue;
+            };
             match changes.recv_timeout(wait) {
                 Ok(()) | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => thread::sleep(wait),
@@ -56,6 +64,14 @@ mod tests {
         assert_eq!(wait(at(23, 50)), Duration::from_secs(600));
         assert_eq!(wait(at(12, 0)), REFRESH);
         assert_eq!(wait(at(0, 0)), REFRESH);
+    }
+
+    #[test]
+    fn a_load_that_crosses_midnight_reloads_at_once() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let at = |date: chrono::NaiveDate, h, m| date.and_hms_opt(h, m, 0).unwrap();
+        assert_eq!(next_wait(day, at(day, 23, 50)), Some(Duration::from_secs(600)));
+        assert_eq!(next_wait(day, at(day.succ_opt().unwrap(), 0, 0)), None);
     }
 
     #[test]

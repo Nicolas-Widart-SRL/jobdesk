@@ -19,14 +19,26 @@ esac
 
 cd "$(git rev-parse --show-toplevel)"
 
+# git-cliff logs warnings on stderr even when it succeeds, so its stderr shows only on a failure.
+cliff() {
+  local err status=0
+  err=$(mktemp)
+  git cliff "$@" 2>"$err" || status=$?
+  if [ "$status" -ne 0 ]; then
+    cat "$err" >&2
+  fi
+  rm -f "$err"
+  return "$status"
+}
+
 if [ -n "$(git status --porcelain)" ]; then
   echo "Working tree is not clean." >&2
   exit 1
 fi
 
 # An explicit bump raises the version even with nothing to release, so count the commits first.
-commits=$(git cliff --unreleased --context 2>/dev/null | jq '[.[].commits[]] | length')
-tag=$(git cliff --bumped-version --bump="$bump" 2>/dev/null)
+commits=$(cliff --unreleased --context | jq '[.[].commits[]] | length')
+tag=$(cliff --bumped-version --bump="$bump")
 if [ "$commits" -eq 0 ] || git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   echo "No releasable commits since the last tag." >&2
   exit 1
@@ -34,7 +46,7 @@ fi
 version=${tag#v}
 
 git switch -c "release/$tag"
-git cliff --unreleased --bump="$bump" --prepend CHANGELOG.md 2>/dev/null
+cliff --unreleased --bump="$bump" --prepend CHANGELOG.md
 perl -pi -e 's/^version = "[^"]*"/version = "'"$version"'"/ if !$done && /^version = / && ($done = 1)' Cargo.toml
 cargo update --workspace --quiet
 git commit -q -am "chore(release): $tag"

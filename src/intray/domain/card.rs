@@ -30,7 +30,7 @@ impl CardKind {
         }
     }
 
-    fn pauses_a_run(self) -> bool {
+    pub fn pauses_a_run(self) -> bool {
         matches!(self, Self::Permission | Self::Question)
     }
 }
@@ -135,6 +135,11 @@ impl Card {
     pub fn is_on_horizon(&self, today: NaiveDate) -> bool {
         self.days_left(today).is_some_and(|days| (0..HORIZON_DAYS).contains(&days))
     }
+
+    /// Ranks as a deadline that has not passed. One day wider than the horizon, since its last day still ranks.
+    pub fn is_deadline_ahead(&self, today: NaiveDate) -> bool {
+        self.tier(today) == Tier::Deadline && self.days_left(today).is_some_and(|days| days >= 0)
+    }
 }
 
 /// Paused runs, then deadlines by date, then the rest. A passed deadline sorts first of all dates.
@@ -204,5 +209,13 @@ mod tests {
         assert!(card("a", CardKind::Send, Some(0)).is_on_horizon(today()));
         assert!(card("a", CardKind::Send, Some(13)).is_on_horizon(today()));
         assert!(!card("a", CardKind::Send, Some(14)).is_on_horizon(today()));
+    }
+
+    #[test]
+    fn a_deadline_ahead_runs_through_the_last_ranked_day() {
+        assert!(card("a", CardKind::Send, Some(0)).is_deadline_ahead(today()));
+        assert!(card("a", CardKind::Send, Some(14)).is_deadline_ahead(today()));
+        assert!(!card("a", CardKind::Send, Some(15)).is_deadline_ahead(today()));
+        assert!(!card("a", CardKind::Send, None).is_deadline_ahead(today()));
     }
 }

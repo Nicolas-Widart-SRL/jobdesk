@@ -141,7 +141,7 @@ fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pr
     let n = queue.set_aside.len();
     let names = queue.set_aside_distinct();
     let pronoun = if n == 1 { "it" } else { "them" };
-    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", queue.set_aside_names());
+    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", names.join(", "));
     let chip = horizon_return(ui, &format!("{n} back"), &label, active, |ui| {
         strong(ui, "Set aside with Later");
         for name in &names {
@@ -319,8 +319,8 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
-/// An offer that asks for a reason scrolls into view once per decision, so the reasons show right after N.
-/// Other offers, and picking a reason, leave the scroll alone, so the next card's head stays in view.
+/// An offer that still asks for a reason scrolls into view once per decision, so the reasons show right after N.
+/// Other offers, a skip that came with its reason, and picking a reason leave the scroll alone, so the next card's head stays in view.
 fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
     let shown = ui.scope(|ui| undo_strip(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -338,7 +338,7 @@ fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
         });
     }));
     let seen = ui.ctx().data_mut(|data| data.get_temp::<usize>(undo_seen_id()));
-    if offer.asks_reason && seen != Some(offer.id) {
+    if offer.asks_reason && offer.reason.is_none() && seen != Some(offer.id) {
         shown.response.scroll_to_me(None);
         ui.ctx().data_mut(|data| data.insert_temp(undo_seen_id(), offer.id));
     }

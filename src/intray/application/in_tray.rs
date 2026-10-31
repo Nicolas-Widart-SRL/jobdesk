@@ -85,9 +85,10 @@ impl Queue {
         counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect()
     }
 
-    /// Says so when nothing, set aside or not, is dated inside the horizon.
+    /// Says so when nothing, set aside or not, is dated inside the horizon,
+    /// and no pending card ranks as a deadline still ahead, such as one due the day after the strip ends.
     pub fn horizon_note(&self) -> Option<String> {
-        if !self.marks.is_empty() {
+        if !self.marks.is_empty() || self.cards.iter().any(|card| card.is_deadline_ahead(self.today)) {
             return None;
         }
         let other = if self.overdue() > 0 { "other " } else { "" };
@@ -122,8 +123,9 @@ pub struct InTray {
     can_undo: bool,
     recorded: usize,
     reading: Option<String>,
-    /// Cards brought back together. They deal ahead of the rest until each is decided, for this session only.
+    /// Cards brought back together. They deal ahead of the rest until each is decided, for this session and day only.
     returned: Vec<String>,
+    returned_on: Option<NaiveDate>,
     issue: Option<String>,
 }
 
@@ -138,7 +140,7 @@ impl InTray {
 
     /// Decisions last until the window closes. For a machine with no app data folder, and tests.
     pub fn unsaved() -> Self {
-        Self { store: None, decisions: Vec::new(), can_undo: false, recorded: 0, reading: None, returned: Vec::new(), issue: None }
+        Self { store: None, decisions: Vec::new(), can_undo: false, recorded: 0, reading: None, returned: Vec::new(), returned_on: None, issue: None }
     }
 
     pub fn issue(&self) -> Option<&str> {
@@ -157,7 +159,19 @@ impl InTray {
         self.decisions.iter().any(|decision| decision.key == key && decision.outcome == Outcome::Kept)
     }
 
-    /// Derives the cards again. Cards brought back come first, in rank order.
+    fn returned(&self, today: NaiveDate) -> &[String] {
+        if self.returned_on == Some(today) { &self.returned } else { &[] }
+    }
+
+    /// Cards brought back on another day deal by rank again.
+    fn forget_returns_before(&mut self, today: NaiveDate) {
+        if self.returned_on != Some(today) {
+            self.returned.clear();
+            self.returned_on = None;
+        }
+    }
+
+    /// Derives the cards again. Paused runs come first, then cards brought back today, each in rank order.
     /// The card being read stays on top of them all, so new work lands behind it.
     pub fn queue(&self, sources: &Sources) -> Queue {
         let today = sources.today;
@@ -173,7 +187,8 @@ impl InTray {
         let (aside, mut cards): (Vec<Card>, Vec<Card>) = derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
         let set_aside = aside.into_iter().map(|card| card.name).collect();
         rank(&mut cards, today);
-        cards.sort_by_key(|card| !self.returned.contains(&card.key));
+        let returned = self.returned(today);
+        cards.sort_by_key(|card| (!card.kind.pauses_a_run(), !returned.contains(&card.key)));
         if let Some(at) = self.reading.as_ref().and_then(|key| cards.iter().position(|card| &card.key == key)) {
             cards[..=at].rotate_right(1);
         }
@@ -198,6 +213,7 @@ impl InTray {
         self.can_undo = true;
         self.recorded += 1;
         self.reading = None;
+        self.forget_returns_before(today);
         self.returned.retain(|key| key != &card.key);
         self.save();
     }
@@ -225,6 +241,8 @@ impl InTray {
 
     /// Returns every card set aside today ahead of the rest, the card being read included.
     pub fn bring_back_all(&mut self, today: NaiveDate) {
+        self.forget_returns_before(today);
+        self.returned_on = Some(today);
         for decision in self.decisions.iter().filter(|decision| decision.sets_aside(today)) {
             if !self.returned.contains(&decision.key) {
                 self.returned.push(decision.key.clone());
@@ -589,6 +607,44 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_run_still_deals_ahead_of_cards_brought_back() {
+        let runs = [paused_run()];
+        let jobs = board(vec![job("Top", 95), job("Acme", 80), job("Beta", 70)]);
+        let pipeline = Pipeline::default();
+        let archives = HashMap::new();
+        let sources = Sources { board: &jobs, pipeline: &pipeline, archives: &archives, runs: &runs, today: today() };
+        let mut tray = InTray::unsaved();
+        for key in ["triage:beta", "triage:acme"] {
+            let card = tray.queue(&sources).cards.into_iter().find(|card| card.key == key).unwrap();
+            tray.later(&card, today());
+        }
+
+        tray.bring_back_all(today());
+
+        let kinds: Vec<(CardKind, String)> = tray.queue(&sources).cards.into_iter().map(|card| (card.kind, card.name)).collect();
+        assert_eq!(kinds[0].0, CardKind::Question);
+        assert_eq!(kinds[1..].iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), ["Acme", "Beta", "Top"]);
+    }
+
+    #[test]
+    fn cards_brought_back_deal_by_rank_again_the_next_day() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Top", 95), job("Acme", 80)]);
+        later_on(&mut tray, &jobs, "triage:acme");
+        tray.bring_back_all(today());
+        assert_eq!(dealt(&tray, &jobs), ["Acme", "Top"]);
+
+        let tomorrow = today().succ_opt().unwrap();
+        let names = |tray: &InTray| queue(tray, &jobs, tomorrow).cards.into_iter().map(|card| card.name).collect::<Vec<_>>();
+        assert_eq!(names(&tray), ["Top", "Acme"]);
+
+        let other = Card { key: "other".into(), ..top(&tray, &jobs) };
+        tray.skip(&other, tomorrow);
+        assert!(tray.returned.is_empty() && tray.returned_on.is_none(), "a decision on a new day drops the old returns");
+        assert_eq!(names(&tray), ["Top", "Acme"]);
+    }
+
+    #[test]
     fn a_new_decision_gets_a_new_offer_and_a_reason_keeps_it() {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Acme", 90)]);
@@ -604,13 +660,17 @@ mod tests {
         assert_ne!(again.id, first.id);
     }
 
-    #[test]
-    fn a_paused_run_stays_paused_when_its_card_is_set_aside() {
+    fn paused_run() -> Run {
         let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
         let mut run = Run::new(&request);
         let prompt = Prompt { request_id: "p".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None };
         run.apply(AgentEvent::PromptRaised(prompt));
-        let runs = [run];
+        run
+    }
+
+    #[test]
+    fn a_paused_run_stays_paused_when_its_card_is_set_aside() {
+        let runs = [paused_run()];
         let empty = JobBoard::default();
         let pipeline = Pipeline::default();
         let archives = HashMap::new();
@@ -690,6 +750,16 @@ mod tests {
 
         let mark = Mark { on: today(), label: "Acme closes".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
         assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
+    }
+
+    #[test]
+    fn a_card_due_the_day_after_the_strip_still_counts_as_a_deadline() {
+        let last = Queue { cards: vec![pending(CardKind::Triage, Some(today() + chrono::Duration::days(HORIZON_DAYS)))], today: today(), ..Default::default() };
+        assert!(last.marks.is_empty());
+        assert_eq!(last.horizon_note(), None);
+
+        let beyond = Queue { cards: vec![pending(CardKind::Triage, Some(today() + chrono::Duration::days(HORIZON_DAYS + 1)))], today: today(), ..Default::default() };
+        assert_eq!(beyond.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
     }
 
     #[test]

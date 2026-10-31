@@ -550,6 +550,18 @@ fn each_skip_scrolls_its_reasons_into_view_once() {
 }
 
 #[test]
+fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_suggested_skip"));
+    for _ in 0..8 {
+        press(&mut harness, Key::L);
+    }
+    let resting = tab_top(&harness);
+    press(&mut harness, Key::Y);
+    assert!(is_shown(&harness, "Skipped, rate: Federal Data Agency"), "Y skips with the suggested reason");
+    assert_eq!(tab_top(&harness), resting);
+}
+
+#[test]
 fn overdue_cards_show_in_todays_cell() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
     assert!(harness.query_by_label_contains(" overdue").is_some());

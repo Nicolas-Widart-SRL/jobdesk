@@ -5,6 +5,7 @@ use egui::{Color32, CornerRadius, Galley, Rect, Response, Role, Sense, Stroke, S
 use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::paint_key;
+use crate::ui_kit::surfaces::hairline;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
@@ -141,40 +142,35 @@ fn request_command(ui: &Ui, command: &str) {
     ui.ctx().data_mut(|data| data.insert_temp(command_request_id(), command.to_owned()));
 }
 
-/// A command button on any screen. The shell picks the request up and opens the launcher.
-pub fn command_button(ui: &mut Ui, command: &str) {
-    let clicked = press(ui, command, Look::Plain, COMMAND, None).on_hover_text("Open in command launcher").clicked();
-    if clicked {
-        request_command(ui, command);
-    }
-}
-
-pub fn danger_command_button(ui: &mut Ui, command: &str) {
-    let clicked = press(ui, command, Look::Danger, COMMAND, None).on_hover_text("Open in command launcher").clicked();
-    if clicked {
-        request_command(ui, command);
-    }
-}
-
-fn command_action_with(ui: &mut Ui, label: &str, line: &str, look: Look, fit: Fit) -> Response {
-    let response = press(ui, label, look, fit, None).on_hover_text(line);
+/// A button showing `label` that opens `line` in the launcher. The shell picks the request up.
+fn command_action_with(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, fit: Fit) -> Response {
+    let response = press(ui, label, look, fit, None).on_hover_text(hint);
     if response.clicked() {
         request_command(ui, line);
     }
     response
 }
 
+/// A command button on any screen, labelled with the command itself.
+pub fn command_button(ui: &mut Ui, command: &str) {
+    command_action_with(ui, command, command, "Open in command launcher", Look::Plain, COMMAND);
+}
+
+pub fn danger_command_button(ui: &mut Ui, command: &str) {
+    command_action_with(ui, command, command, "Open in command launcher", Look::Danger, COMMAND);
+}
+
 /// A button with a plain label that opens `line` in the command launcher.
 pub fn command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
-    command_action_with(ui, label, line, Look::Plain, NORMAL)
+    command_action_with(ui, label, line, line, Look::Plain, NORMAL)
 }
 
 pub fn primary_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
-    command_action_with(ui, label, line, Look::Primary, NORMAL)
+    command_action_with(ui, label, line, line, Look::Primary, NORMAL)
 }
 
 pub fn small_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
-    command_action_with(ui, label, line, Look::Plain, SMALL)
+    command_action_with(ui, label, line, line, Look::Plain, SMALL)
 }
 
 pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
@@ -294,8 +290,7 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
                 }
             }
         });
-        let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), crate::ui_kit::tokens::HAIRLINE), Sense::hover());
-        ui.painter().rect_filled(rule, 0.0, p.text);
+        hairline(ui, p.text);
     });
     picked
 }

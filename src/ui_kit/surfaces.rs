@@ -1,11 +1,11 @@
-use egui::{Align, CornerRadius, Frame, Layout, Margin, Panel, Rect, Response, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, Panel, Rect, Response, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
-    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING,
+    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP,
     STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, TABLE_CELL_PADDING, Type,
 };
 
@@ -51,10 +51,13 @@ pub enum Subtitle<'a> {
     Typed(&'a str),
 }
 
-/// A screen's head: title and subtitle on the left, `actions` on the right, level with the last line.
+/// A screen's head: title and subtitle on the left, `actions` on the right, their bottom edges level, as `align-items: flex-end` sets them.
 /// Actions are added right to left. Title and subtitle are cut to the width the actions leave, with the full text on hover.
 /// When the actions leave less than `HEAD_TITLE_MIN`, they move to a row of their own under the title.
-/// `actions` runs twice a frame: once unseen and disabled to measure it, then for real.
+///
+/// `actions` runs twice a frame: first in an unseen, disabled sizing pass to measure it, then for real.
+/// So it must change nothing except inside `clicked()`, and must not give its widgets explicit ids,
+/// because the sizing pass would claim the same ids first.
 pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut actions: impl FnMut(&mut Ui)) {
     let (x, top, bottom) = HEAD_PADDING;
     Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
@@ -65,14 +68,14 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
         let mut sizing = ui.new_child(UiBuilder::new().id_salt("page_head_sizing").max_rect(measure).layout(Layout::right_to_left(Align::Center)).sizing_pass().invisible());
         sizing.spacing_mut().item_spacing.x = HEAD_GAP.0;
         actions(&mut sizing);
-        let used = sizing.min_rect().width();
-        let beside = if used > 0.0 { full - used - HEAD_GAP.0 } else { full };
+        let used = sizing.min_rect().size();
+        let beside = if used.x > 0.0 { full - used.x - HEAD_GAP.0 } else { full };
         let inline = beside >= HEAD_TITLE_MIN;
         let room = if inline { beside } else { full };
         let (title, style) = match title {
             Title::Slab(text) => (text, Type::H1),
             Title::Lead(text) => (text, Type::LEAD),
-            Title::Typed(text) => (text, Type::PATH),
+            Title::Typed(text) => (text, Type::HEAD_COMMAND),
         };
         let title = line(ui, title, style, Palette::of(ui).text, room);
         let subtitle = subtitle.map(|subtitle| {
@@ -82,9 +85,15 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             };
             line(ui, text, style, Palette::of(ui).muted, room)
         });
+        let line_gap = ITEM_GAP - 2.0;
+        // A title block shorter than the actions drops, so both end on one line.
+        let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |subtitle| line_gap + subtitle.size().y);
+        if inline && used.y > text_height {
+            ui.add_space(used.y - text_height);
+        }
         let text = ui
             .vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                ui.spacing_mut().item_spacing.y = line_gap;
                 ui.add(egui::Label::new(title));
                 if let Some(subtitle) = subtitle {
                     ui.add(egui::Label::new(subtitle));
@@ -93,7 +102,7 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             .response
             .rect;
         if inline {
-            let row = Rect::from_min_max(text.min, pos2(right, text.bottom()));
+            let row = Rect::from_min_max(pos2(text.left(), text.bottom() - used.y.max(text.height())), pos2(right, text.bottom()));
             let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
             side.spacing_mut().item_spacing.x = HEAD_GAP.0;
             actions(&mut side);
@@ -124,40 +133,72 @@ pub fn side_column(id: &'static str, width: f32) -> Panel {
     Panel::right(id).exact_size(width).resizable(false).show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: GUTTER, ..Default::default() }))
 }
 
-/// A fixed column on the left of a screen's content, such as a list to pick from.
-pub fn list_column(id: &'static str, width: f32) -> Panel {
-    Panel::left(id).exact_size(width).resizable(false).show_separator_line(false).frame(Frame::new().inner_margin(Margin { right: GUTTER, ..Default::default() }))
+/// A main column and a side column of slips, `SPLIT_GAP` apart, both starting at the top.
+/// The side column is `side_width` wide, but never wider than the main one.
+/// Each column gets the height left in `ui`: a column that should scroll on its own puts a scroll area in it.
+/// `add` gets the main column, then the side one, so both can use the same state.
+pub fn split<R>(ui: &mut Ui, side_width: f32, add: impl FnOnce(&mut Ui, &mut Ui) -> R) -> R {
+    let area = ui.available_rect_before_wrap();
+    let side_width = side_width.min((area.width() - SPLIT_GAP) / 2.0);
+    let main_rect = Rect::from_min_max(area.min, pos2(area.right() - side_width - SPLIT_GAP, area.bottom()));
+    let side_rect = Rect::from_min_max(pos2(area.right() - side_width, area.top()), area.max);
+    let id = ui.next_auto_id();
+    let column = |rect: Rect, salt: &str| UiBuilder::new().id_salt(id.with(salt)).max_rect(rect).layout(Layout::top_down(Align::Min));
+    let mut main = ui.new_child(column(main_rect, "split_main"));
+    main.set_width(main_rect.width());
+    let mut side = ui.new_child(column(side_rect, "split_side"));
+    side.set_width(side_rect.width());
+    let inner = add(&mut main, &mut side);
+    ui.allocate_rect(main.min_rect().union(side.min_rect()), Sense::hover());
+    inner
 }
 
-/// A strip along the bottom of a column, for input.
-pub fn input_strip(id: &'static str) -> Panel {
-    Panel::bottom(id).show_separator_line(false).frame(Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }))
+/// How far a section's heading, body and rows sit in from its edge.
+/// A panel's sit flush with the column; a slip's sit `INSET` in, as app.css pads only `.split > .b > .panel`.
+fn inset_id() -> egui::Id {
+    egui::Id::NULL.with("section_inset")
+}
+
+fn inset(ui: &Ui) -> i8 {
+    ui.data(|data| data.get_temp(inset_id())).unwrap_or(INSET)
 }
 
 /// Stacked sections set their own padding, so nothing adds a gap between them.
-fn stacked<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// `inset` holds for the section's own content, and the one around it comes back after.
+fn stacked<R>(ui: &mut Ui, inset: i8, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.spacing_mut().item_spacing.y = 0.0;
-    add(ui)
+    let outer: Option<i8> = ui.data_mut(|data| data.get_temp(inset_id()));
+    ui.data_mut(|data| data.insert_temp(inset_id(), inset));
+    let inner = add(ui);
+    ui.data_mut(|data| match outer {
+        Some(outer) => {
+            data.insert_temp(inset_id(), outer);
+        }
+        None => {
+            data.remove_temp::<i8>(inset_id());
+        }
+    });
+    inner
 }
 
-/// A section: a heavy rule on the sheet, with no fill of its own.
+/// A section: a heavy rule on the sheet, with no fill of its own. Its content sits flush with the column.
 pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let color = Palette::of(ui).text;
-    let shown = Frame::new().inner_margin(Margin { top: SECTION_RULE as i8, ..Default::default() }).show(ui, |ui| stacked(ui, add));
+    let shown = Frame::new().inner_margin(Margin { top: SECTION_RULE as i8, ..Default::default() }).show(ui, |ui| stacked(ui, 0, add));
     let mut rule = shown.response.rect;
     rule.set_height(SECTION_RULE);
     ui.painter().rect_filled(rule, 0.0, color);
     shown.inner
 }
 
-/// A side slip: the only kind of section with a fill.
+/// A side slip: the only kind of section with a fill. Its content sits `INSET` in.
 pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let fill = Palette::of(ui).panel;
-    Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, add)).inner
+    Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, INSET, add)).inner
 }
 
 fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
-    Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
+    Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
         ui.horizontal(|ui| {
             let heading = rich(ui, title, Type::SECTION, ink);
             ui.label(heading);
@@ -181,22 +222,20 @@ pub fn panel_header_tone(ui: &mut Ui, title: &str, note: Option<&str>, tone: Ton
     header(ui, title, note, tone.into());
 }
 
-pub fn divider(ui: &mut Ui) {
-    let color = Palette::of(ui).line;
+/// A hairline across the whole width, in `color`.
+pub(in crate::ui_kit) fn hairline(ui: &mut Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HAIRLINE), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, color);
 }
 
-/// The rule under a table's head row, in the text colour.
-pub fn table_rule(ui: &mut Ui) {
-    let color = Palette::of(ui).text;
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), HAIRLINE), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, color);
+pub fn divider(ui: &mut Ui) {
+    let color = Palette::of(ui).line;
+    hairline(ui, color);
 }
 
 pub fn panel_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new()
-        .inner_margin(Margin::symmetric(INSET, BODY_PADDING))
+        .inner_margin(Margin::symmetric(inset(ui), BODY_PADDING))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = ITEM_GAP;
             add(ui)
@@ -210,7 +249,7 @@ pub fn list_row<R>(ui: &mut Ui, first: bool, add: impl FnOnce(&mut Ui) -> R) -> 
         divider(ui);
     }
     Frame::new()
-        .inner_margin(Margin::symmetric(INSET, ROW_PADDING))
+        .inner_margin(Margin::symmetric(inset(ui), ROW_PADDING))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = ITEM_GAP;
             ui.set_width(ui.available_width());

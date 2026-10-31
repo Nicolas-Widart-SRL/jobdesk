@@ -96,6 +96,7 @@ pub const ROW_ITEM_GAP: f32 = 10.0;
 pub const PICK_ROW_INLINE: f32 = 8.0;
 pub const COMMAND_NAME_WIDTH: f32 = 115.0;
 pub const TABLE_HEAD_PADDING: (f32, f32) = (12.0, 8.0);
+pub const TABLE_HEAD_HEIGHT: f32 = 36.0;
 pub const TABLE_CELL_PADDING: (f32, f32) = (12.0, 9.0);
 pub const SPLIT_GAP: f32 = 28.0;
 pub const SPLIT_MAIN_BASIS: f32 = 520.0;
@@ -192,6 +193,8 @@ impl Type {
     pub const MONO: Self = Self { face: Face::Typed, size: 13.5 };
     pub const COMMAND: Self = Self { face: Face::TypedBold, size: 18.0 };
     pub const PATH: Self = Self { face: Face::TypedBold, size: 21.0 };
+    /// A run's command line as its screen's title, smaller than a path so a long line fits.
+    pub const HEAD_COMMAND: Self = Self { face: Face::TypedBold, size: 16.0 };
 
     pub const BRAND: Self = Self { face: Face::Slab, size: 23.0 };
     pub const H1: Self = Self { face: Face::Slab, size: 32.0 };

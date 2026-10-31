@@ -271,6 +271,26 @@ fn a_reply_shows_an_image_as_its_alt_text() {
     assert!(is_shown(&harness, "Tracking pixel"));
 }
 
+/// Cmd or Ctrl K opens the launcher while a field has focus, and the field never sees it:
+/// on Windows a text field takes Ctrl K to delete to the end of the line.
+#[test]
+fn the_launcher_shortcut_works_while_typing() {
+    let mut shell = shell(Screen::Runs, "shortcut_typing");
+    *shell.desk_slot() = Some(apply_run(stop_point()));
+    let mut harness = tray_harness(shell);
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("keep this");
+    harness.run_steps(2);
+    harness.key_press(Key::Home);
+    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label("All commands");
+    harness.get_by_label("Runs").click();
+    harness.run_steps(3);
+    assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
+}
+
 /// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.
 /// A taller prompt after a measured one in the same run starts from no measure too.
 #[test]

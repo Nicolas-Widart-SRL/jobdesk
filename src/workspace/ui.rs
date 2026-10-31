@@ -1,9 +1,10 @@
 use egui::{Align, Frame, Layout, Margin, ScrollArea, Ui, vec2};
+use egui_extras::{Column, TableBuilder};
 
-use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_PADDING, TAG_HEIGHT};
+use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich,
-    slip, small_button, small_command_action, table_head, table_rule, tag,
+    CellRule, Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
+    rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
 
@@ -28,21 +29,6 @@ fn right<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) {
     ui.with_layout(Layout::right_to_left(Align::Center), add);
 }
 
-/// A wide main column and a side column of slips, side by side.
-fn split(ui: &mut Ui, main: impl FnOnce(&mut Ui), side: impl FnOnce(&mut Ui)) {
-    let side_width = SPLIT_SIDE_BASIS.min((ui.available_width() - SPLIT_GAP) / 2.0);
-    let main_width = ui.available_width() - SPLIT_GAP - side_width;
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = SPLIT_GAP;
-        for (width, add) in [(main_width, Box::new(main) as Box<dyn FnOnce(&mut Ui)>), (side_width, Box::new(side))] {
-            ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(width);
-                add(ui);
-            });
-        }
-    });
-}
-
 /// What the user asked the shell to do from this screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceAction {
@@ -60,14 +46,18 @@ pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut Env
     });
     page_body(ui, |ui| {
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            split(ui, |ui| profile(ui, view), |ui| tools(ui, environment, view.has_salary_data));
+            split(ui, SPLIT_SIDE_BASIS, |main, side| {
+                profile(main, view);
+                tools(side, environment, view.has_salary_data);
+            });
             ui.add_space(SPLIT_GAP);
-            split(ui, |ui| portals(ui, view), |ui| {
-                templates(ui, view);
-                ui.add_space(12.0);
-                sync(ui, view);
-                ui.add_space(12.0);
-                reset(ui);
+            split(ui, SPLIT_SIDE_BASIS, |main, side| {
+                portals(main, view);
+                templates(side, view);
+                side.add_space(12.0);
+                sync(side, view);
+                side.add_space(12.0);
+                reset(side);
             });
         });
     });
@@ -96,39 +86,44 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
     });
 }
 
-/// One line of the portal table, its cells placed by `PORTAL_COLUMNS`.
-fn portal_line(ui: &mut Ui, padding: (f32, f32), mut cell: impl FnMut(&mut Ui, usize)) {
-    let width = ui.available_width();
-    Frame::new().inner_margin(Margin::symmetric(0, padding.1 as i8)).show(ui, |ui| {
-        line(ui, TAG_HEIGHT, |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            for (column, share) in PORTAL_COLUMNS.iter().enumerate() {
-                let cell_width = width * share;
-                ui.allocate_ui_with_layout(vec2(cell_width, TAG_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
-                    ui.set_width(cell_width);
-                    ui.add_space(padding.0);
-                    cell(ui, column);
+fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
+    let total = ui.available_width();
+    let last = portals.len().saturating_sub(1);
+    // Cells pad themselves, so the rules run unbroken.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        TableBuilder::new(ui)
+            .id_salt("workspace_portals")
+            .vscroll(false)
+            .striped(false)
+            .cell_layout(Layout::left_to_right(Align::Center))
+            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true))
+            .column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true))
+            .column(Column::remainder().clip(true))
+            .header(TABLE_HEAD_HEIGHT, |mut header| {
+                for title in ["Portal", "Jobs seen", "State"] {
+                    header.col(|ui| {
+                        table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(TAG_HEIGHT + TABLE_CELL_PADDING.1 * 2.0, portals.len(), |mut line| {
+                    let index = line.index();
+                    let portal = &portals[index];
+                    let rule = if index == last { CellRule::Last } else { CellRule::Row };
+                    line.col(|ui| {
+                        table_cell(ui, rule, |ui| ui.monospace(portal.name.as_str()));
+                    });
+                    line.col(|ui| {
+                        table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
+                    });
+                    line.col(|ui| {
+                        table_cell(ui, rule, |ui| if portal.enabled { tag(ui, "Enabled", Tone::Hired) } else { tag(ui, "Disabled", Tone::Plain) });
+                    });
                 });
-            }
-        });
+            });
     });
-}
-
-fn portal_cell(ui: &mut Ui, portal: &PortalRow, column: usize) {
-    match column {
-        0 => {
-            ui.monospace(portal.name.as_str());
-        }
-        1 => {
-            ui.monospace(portal.jobs_seen.to_string());
-        }
-        _ if portal.enabled => {
-            tag(ui, "Enabled", Tone::Hired);
-        }
-        _ => {
-            tag(ui, "Disabled", Tone::Plain);
-        }
-    }
 }
 
 fn portals(ui: &mut Ui, view: &WorkspaceView) {
@@ -140,16 +135,7 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
                 muted(ui, "No portals installed.");
             });
         } else {
-            portal_line(ui, TABLE_HEAD_PADDING, |ui, column| {
-                table_head(ui, ["Portal", "Jobs seen", "State"][column]);
-            });
-            table_rule(ui);
-            for (index, portal) in view.portals.iter().enumerate() {
-                if index > 0 {
-                    divider(ui);
-                }
-                portal_line(ui, TABLE_CELL_PADDING, |ui, column| portal_cell(ui, portal, column));
-            }
+            portal_table(ui, &view.portals);
         }
         Frame::new().inner_margin(Margin::symmetric(0, 12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -192,16 +178,25 @@ fn tool_mark(ui: &mut Ui, check: &ToolCheck) {
     }
 }
 
+/// "2 of 3 ready": only required tools count, so a missing optional one never reads as a shortfall.
+fn ready_note(results: &[ToolCheck]) -> String {
+    let required = results.iter().filter(|check| check.spec.required);
+    let ready = required.clone().filter(|check| check.version.is_some()).count();
+    format!("{ready} of {} ready", required.count())
+}
+
 fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool) {
-    let results = environment.results().map(<[ToolCheck]>::to_vec);
-    let ready = results.as_ref().map(|results| results.iter().filter(|check| check.version.is_some()).count() + usize::from(has_salary_data));
-    let note = ready.zip(results.as_ref()).map(|(ready, results)| format!("{ready} of {} ready", results.len() + 1));
+    let running = environment.is_running();
+    let mut recheck = false;
+    let checks: &EnvironmentChecks = environment;
+    let results = checks.results();
+    let note = results.map(ready_note);
     slip(ui, |ui| {
         panel_header(ui, "Environment", note.as_deref());
-        match &results {
+        match results {
             Some(results) => {
                 for (index, check) in results.iter().enumerate() {
-                    let note = if check.spec.name == "claude" { environment.version_of("claude").unwrap_or(check.spec.purpose) } else { check.spec.purpose };
+                    let note = if check.spec.name == "claude" { checks.version_of("claude").unwrap_or(check.spec.purpose) } else { check.spec.purpose };
                     tool_row(ui, index == 0, check.spec.name, note, |ui| tool_mark(ui, check));
                 }
             }
@@ -209,21 +204,22 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
                 tool_row(ui, true, "Checking tools", "", |_| {});
             }
         }
-        tool_row(ui, false, "salary_data.json", "Optional", |ui| {
+        tool_row(ui, false, "salary_data.json", "Salary figures", |ui| {
             if has_salary_data {
                 tag(ui, "Ready", Tone::Hired);
             } else {
-                tag(ui, "Missing", Tone::Closed);
+                tag(ui, "Optional", Tone::Plain);
             }
         });
         panel_body(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.add_enabled_ui(!environment.is_running(), |ui| small_button(ui, "Check again")).inner.clicked() {
-                    environment.recheck();
-                }
+                recheck = ui.add_enabled_ui(!running, |ui| small_button(ui, "Check again")).inner.clicked();
             });
         });
     });
+    if recheck {
+        environment.recheck();
+    }
 }
 
 fn templates(ui: &mut Ui, view: &WorkspaceView) {
@@ -278,4 +274,16 @@ fn reset(ui: &mut Ui) {
             });
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::application::TOOLS;
+
+    #[test]
+    fn only_required_tools_count_towards_ready() {
+        let checks: Vec<ToolCheck> = TOOLS.iter().map(|spec| ToolCheck { spec: *spec, version: (spec.name != "bun" && spec.required).then(|| "1.0".to_owned()) }).collect();
+        assert_eq!(ready_note(&checks), "4 of 5 ready", "pdftotext is optional and missing");
+    }
 }

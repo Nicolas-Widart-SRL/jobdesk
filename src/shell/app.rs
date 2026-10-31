@@ -265,8 +265,9 @@ impl Shell {
     }
 
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
-        let typing = ctx.egui_wants_keyboard_input();
-        if self.workspace.is_some() && !typing && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K)) {
+        // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
+        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
+        if ask && self.workspace.is_some() {
             self.screen = Screen::Launcher;
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
@@ -360,11 +361,16 @@ impl Shell {
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = STATUS_GAP.0;
-            if let Some(version) = self.environment.as_ref().and_then(|environment| environment.version_of("claude")) {
+            // Nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
+            if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
+                let (tone, text) = match environment.version_of("claude") {
+                    Some(version) => (Tone::Hired, format!("Claude CLI {version}")),
+                    None => (Tone::Closed, "Claude CLI not found".to_owned()),
+                };
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = ROW_GAP;
-                    status_dot(ui, Tone::Hired);
-                    ui.label(rich(ui, format!("Claude CLI {version}"), Type::NOTE, Ink::Muted));
+                    status_dot(ui, tone);
+                    ui.label(rich(ui, text, Type::NOTE, Ink::Muted));
                 });
             }
             let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
@@ -375,7 +381,9 @@ impl Shell {
             let issues = self.snapshot.issues.len();
             if issues > 0 {
                 alert(ui, format!("{issues} source could not be read"));
-            } else {
+            }
+            // Workspace always says how runs sign in, as docs/auth-review.md promises.
+            if issues == 0 || self.screen == Screen::Workspace {
                 let line = rich(ui, self.screen_note(), Type::NOTE, Ink::Muted);
                 ui.label(line);
             }

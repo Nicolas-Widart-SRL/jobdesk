@@ -2,20 +2,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::{Datelike, NaiveDate};
-use egui::{Align, ColorImage, Frame, Layout, Margin, ScrollArea, TextureHandle, TextureOptions, Ui, vec2};
+use egui::{Align, ColorImage, Layout, ScrollArea, TextureHandle, TextureOptions, Ui, vec2};
 use egui_commonmark::CommonMarkCache;
 use egui_extras::{Column, TableBuilder};
 
 use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, PageImage, PageState, PageStore, PdfDocument, Stage, StatusBucket};
 use crate::shared_kernel::dates::parse_iso_date;
-use crate::ui_kit::tokens::{GUTTER, LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TAG_HEIGHT};
+use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
     CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
-    panel_header, rich, segmented, side_column, slip, small_button, table_cell, table_head, tag, wrapped_height,
+    panel_header, rich, segmented, slip, small_button, split, table_cell, table_head, tag, wrapped_height,
 };
 
-/// The keyword table's head row, as in the Jobs table.
-const KEYWORD_HEAD_HEIGHT: f32 = 36.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Section {
@@ -47,14 +45,11 @@ fn bucket_tone(bucket: StatusBucket) -> Tone {
     }
 }
 
-/// The canvas split: the main column on the left, a slip column on the right.
-fn split(ui: &mut Ui, id: &'static str, main: impl FnOnce(&mut Ui), side: impl FnOnce(&mut Ui)) {
-    side_column(id, SPLIT_SIDE_BASIS + GUTTER as f32).show(ui, |ui| {
-        ScrollArea::vertical().id_salt((id, "side")).auto_shrink([false, false]).show(ui, side);
-    });
-    let gap = Margin { right: (SPLIT_GAP - GUTTER as f32) as i8, ..Default::default() };
-    egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| {
-        ScrollArea::vertical().id_salt((id, "main")).auto_shrink([false, false]).show(ui, main);
+/// The canvas split, each column scrolling on its own.
+fn scrolled_split(ui: &mut Ui, id: &'static str, main: impl FnOnce(&mut Ui), side: impl FnOnce(&mut Ui)) {
+    split(ui, SPLIT_SIDE_BASIS, |left, right| {
+        ScrollArea::vertical().id_salt((id, "main")).auto_shrink([false, false]).show(left, main);
+        ScrollArea::vertical().id_salt((id, "side")).auto_shrink([false, false]).show(right, side);
     });
 }
 
@@ -115,7 +110,7 @@ impl DossierScreen {
         // Pages of documents no longer drawn, or of an older build, are released.
         self.textures.retain(|(path, modified), _| documents.iter().any(|(document, _)| document.path == *path && document.modified == *modified));
         let textures = &mut self.textures;
-        split(
+        scrolled_split(
             ui,
             "dossier_documents",
             |ui| {
@@ -136,7 +131,7 @@ impl DossierScreen {
 
     fn evaluation(&mut self, ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
         let cache = &mut self.markdown;
-        split(
+        scrolled_split(
             ui,
             "dossier_evaluation",
             |ui| {
@@ -163,7 +158,7 @@ impl DossierScreen {
         let packs = &dossier.contents.prep_packs;
         let company = dossier.card.company.to_lowercase();
         let (cache, selected) = (&mut self.markdown, &mut self.selected_pack);
-        split(
+        scrolled_split(
             ui,
             "dossier_prep",
             |ui| {
@@ -303,7 +298,7 @@ fn keywords(ui: &mut Ui, rows: &[KeywordRow]) {
         .column(Column::exact(widths[1]).clip(true))
         .column(Column::exact(widths[2]).clip(true))
         .column(Column::remainder().clip(true))
-        .header(KEYWORD_HEAD_HEIGHT, |mut header| {
+        .header(TABLE_HEAD_HEIGHT, |mut header| {
             for title in ["Keyword", "Priority", "Status", "Where"] {
                 header.col(|ui| {
                     table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
@@ -499,7 +494,7 @@ fn note_line(line: &str) -> Option<(Option<NaiveDate>, &str)> {
 
 fn outcome(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
     let record = dossier.card.outcome.as_ref();
-    split(
+    scrolled_split(
         ui,
         "dossier_outcome",
         |ui| {

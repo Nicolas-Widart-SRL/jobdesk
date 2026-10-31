@@ -89,10 +89,6 @@ impl SearchReport {
         report.by_channel = counted(sent.iter().map(|f| f.channel.as_str()));
         report
     }
-
-    pub fn past_screen_rate(&self) -> Option<f32> {
-        (self.sent > 0).then(|| self.reached_interview as f32 / self.sent as f32)
-    }
 }
 
 fn counted<'a>(values: impl Iterator<Item = &'a str>) -> Vec<(String, usize)> {
@@ -118,7 +114,6 @@ mod tests {
     fn drafted_stays_out_of_statistics() {
         let report = SearchReport::from_facts(&[fact(Progress::Drafted, Furthest::Applied, false, false)]);
         assert_eq!((report.sent, report.tally.drafted), (0, 1));
-        assert_eq!(report.past_screen_rate(), None);
         assert!(report.by_sector.is_empty());
     }
 

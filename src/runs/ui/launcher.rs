@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
-use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, GUTTER, HEADER_PADDING, INSET, ROW_GAP, SPLIT_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, muted, page_body, page_head, panel, panel_body, primary_button, rich, side_column, slip, strong};
+use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -56,17 +56,10 @@ impl Launcher {
     }
 
     fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
-        let mut started = None;
-        side_column("command_form", FORM_WIDTH + GUTTER as f32).show(ui, |ui| {
-            slip(ui, |ui| {
-                ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| started = self.form(ui, desk));
-            });
-        });
-        let gap = Margin { right: (SPLIT_GAP - GUTTER as f32) as i8, ..Default::default() };
-        egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panel(ui, |ui| self.list(ui)));
-        });
-        started
+        split(ui, FORM_WIDTH, |main, side| {
+            ScrollArea::vertical().auto_shrink([false, false]).show(main, |ui| panel(ui, |ui| self.list(ui)));
+            slip(side, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.form(ui, desk)).inner)
+        })
     }
 
     /// Each group's heading stands on the hairline of its first row.

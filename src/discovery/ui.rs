@@ -2,7 +2,7 @@ use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::discovery::application::{FitLevel, Gate, JobBoard, JobView, Lane, Signal, Verdict};
-use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP};
+use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
     CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, muted, open_link, page_body, page_head, panel, panel_body, primary_command_action, rich, score, segmented, side_column, slip, stamp,
     strong, table_cell, table_head, tag, title_over,
@@ -138,7 +138,7 @@ impl JobsScreen {
             .column(Column::exact(84.0))
             .column(Column::exact(140.0).clip(true))
             .column(Column::exact(112.0).clip(true))
-            .header(36.0, |mut header| {
+            .header(TABLE_HEAD_HEIGHT, |mut header| {
                 for title in ["Score", "Role", "Location", "Day rate", "Deadline", "Signals", "Portal"] {
                     header.col(|ui| {
                         table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
@@ -287,6 +287,7 @@ fn details(ui: &mut Ui, job: &JobView) {
 }
 
 /// A gate: its name on the left, what the posting says and the reading on the right.
+/// The value wraps in the room between them, so a guard's reason or a language note shows in full.
 fn gate_row(ui: &mut Ui, label: &str, value: &str, reading: Option<(&str, Tone)>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
@@ -295,7 +296,7 @@ fn gate_row(ui: &mut Ui, label: &str, value: &str, reading: Option<(&str, Tone)>
             if let Some((text, tone)) = reading {
                 tag(ui, text, tone);
             }
-            ui.add(egui::Label::new(value).truncate());
+            ui.add(egui::Label::new(value).wrap());
         });
     });
 }

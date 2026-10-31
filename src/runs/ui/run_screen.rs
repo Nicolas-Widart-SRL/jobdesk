@@ -5,12 +5,11 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
 use crate::ui_kit::tokens::{
-    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, OFFSET_SHADOW, PROMPT_MARGIN, PROMPT_PADDING, ROW_GAP, SCREEN_GAP, SPLIT_GAP,
-    SPLIT_SIDE_BASIS,
+    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, OFFSET_SHADOW, PROMPT_MARGIN, PROMPT_PADDING, ROW_GAP, SCREEN_GAP, SPLIT_SIDE_BASIS,
 };
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, list_row, markdown, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
-    side_column, slip, slip_bar, step_rail, strong, tag,
+    slip, slip_bar, split, step_rail, strong, tag,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
@@ -95,9 +94,10 @@ impl RunScreen {
             step_rail(ui, steps.labels, steps.current, run.is_busy() || run.needs_user());
             ui.add_space(SCREEN_GAP);
         }
-        side_column("run_facts", SPLIT_SIDE_BASIS + GUTTER as f32).show(ui, |ui| self.facts(ui, desk, run));
-        let gap = Margin { right: (SPLIT_GAP - GUTTER as f32) as i8, bottom: 1, ..Default::default() };
-        egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| self.detail(ui, desk, run));
+        split(ui, SPLIT_SIDE_BASIS, |main, side| {
+            self.facts(side, desk, run);
+            self.detail(main, desk, run);
+        });
     }
 
     /// The activity, then the prompt under it, outside the activity's scroll area.
@@ -154,8 +154,9 @@ impl RunScreen {
     }
 
     fn activity_row(&mut self, ui: &mut Ui, item: &Activity) {
-        let indent = INSET as f32 + if item.nested { EVENT_NESTED } else { 0.0 };
-        let padding = Margin { left: indent as i8, right: INSET, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 };
+        // The activity is a main-column section, so its rows sit flush with the column, as `.ev` does.
+        let indent = if item.nested { EVENT_NESTED } else { 0.0 };
+        let padding = Margin { left: indent as i8, right: 0, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 };
         Frame::new().inner_margin(padding).show(ui, |ui| match &item.kind {
             ActivityKind::You(text) => {
                 ui.horizontal(|ui| {
@@ -198,7 +199,7 @@ impl RunScreen {
             self.prompt(ui, desk, run, &prompt, budget);
         } else if takes_input(run) {
             divider(ui);
-            Frame::new().inner_margin(Margin { left: INSET, right: INSET, top: ROW_GAP as i8, bottom: 0 }).show(ui, |ui| self.reply_box(ui, desk, run));
+            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| self.reply_box(ui, desk, run));
         }
     }
 
@@ -409,7 +410,12 @@ fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool:
 }
 
 fn who(ui: &mut Ui, name: &str) {
-    ui.add_sized([EVENT_WHO_WIDTH, 16.0], egui::Label::new(rich(ui, name, Type::SMALL, Ink::Muted)).truncate());
+    // Left-aligned in a fixed slot, as `.who2` is, so the text after it lines up.
+    let slot = egui::vec2(EVENT_WHO_WIDTH, 16.0);
+    ui.allocate_ui_with_layout(slot, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_size(slot);
+        ui.add(egui::Label::new(rich(ui, name, Type::SMALL, Ink::Muted)).truncate());
+    });
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {

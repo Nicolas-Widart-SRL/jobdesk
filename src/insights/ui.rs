@@ -1,10 +1,11 @@
-use egui::{Align, Frame, Layout, Margin, ScrollArea, Ui, vec2};
+use egui::{Align, Layout, ScrollArea, Ui};
+use egui_extras::{Column, TableBuilder};
 
-use crate::insights::application::{SearchInsights, SkillGap, SkillGapView, WorkflowBand};
-use crate::ui_kit::tokens::{SCREEN_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_PADDING};
+use crate::insights::application::{GapRow, SearchInsights, SkillGapView, WorkflowBand, gap_rows};
+use crate::ui_kit::tokens::{SCREEN_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    FlowNode, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, flow_band, list_row, muted, note, page_body, page_head, panel, panel_body, panel_header,
-    primary_command_action, rich, slip, small_command_action, strong, table_head, tag, tally_strip,
+    CellRule, FlowNode, Ink, Subtitle, Title, Tone, Type, command_action, command_button, flow_band, list_row, muted, note, page_body, page_head, panel, panel_body, panel_header,
+    primary_command_action, rich, slip, small_command_action, split, strong, table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
@@ -171,67 +172,77 @@ fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
         });
         return;
     }
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = SPLIT_GAP;
-        let main = (ui.available_width() - SPLIT_GAP - SPLIT_SIDE_BASIS).max(0.0);
-        ui.allocate_ui_with_layout(vec2(main, 0.0), Layout::top_down(Align::Min), |ui| {
-            ui.set_width(main);
-            panel(ui, |ui| {
-                panel_header(ui, "Skill gaps", Some(&report.file_name));
-                gap_table(ui, report);
-            });
+    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| {
+            panel_header(ui, "Skill gaps", Some(&report.file_name));
+            gap_table(ui, &gap_rows(report));
         });
-        ui.allocate_ui_with_layout(vec2(SPLIT_SIDE_BASIS, 0.0), Layout::top_down(Align::Min), |ui| {
-            ui.set_width(SPLIT_SIDE_BASIS);
-            study_order(ui, report);
-        });
+        study_order(side, report);
     });
 }
 
-fn gap_table(ui: &mut Ui, report: &SkillGapView) {
-    let width = ui.available_width();
-    let widths = GAP_COLUMNS.map(|share| share * width);
-    ui.spacing_mut().item_spacing.y = 0.0;
-    table_row(ui, &widths, TABLE_HEAD_PADDING, |ui, column| {
-        table_head(ui, ["Gap", "Priority", "Change", "Source"][column]);
-    });
-    for gap in &report.gaps {
-        divider(ui);
-        let is_new = report.new_gaps.iter().any(|name| same_skill(name, &gap.skill));
-        table_row(ui, &widths, TABLE_CELL_PADDING, |ui, column| gap_cell(ui, gap, is_new, column));
-    }
-}
-
-fn gap_cell(ui: &mut Ui, gap: &SkillGap, is_new: bool, column: usize) {
-    match column {
-        0 => {
-            strong(ui, gap.skill.as_str());
-        }
-        1 => {
-            tag(ui, gap.priority.as_str(), priority_tone(&gap.priority));
-        }
-        2 if is_new => {
-            muted(ui, "New");
-        }
-        2 => {}
-        _ => {
-            muted(ui, format!("{} · {}", gap.kind, gap.source));
-        }
-    }
-}
-
-fn table_row(ui: &mut Ui, widths: &[f32], (x, y): (f32, f32), mut cell: impl FnMut(&mut Ui, usize)) {
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        for (column, width) in widths.iter().enumerate() {
-            ui.allocate_ui_with_layout(vec2(*width, 0.0), Layout::top_down(Align::Min), |ui| {
-                Frame::new().inner_margin(Margin::symmetric(x as i8, y as i8)).show(ui, |ui| {
-                    ui.set_width(width - 2.0 * x);
-                    cell(ui, column);
+fn gap_table(ui: &mut Ui, rows: &[GapRow]) {
+    let total = ui.available_width();
+    let widths = GAP_COLUMNS.map(|share| (total * share).floor());
+    let source_width = total - widths[0] - widths[1] - widths[2];
+    // Gap and source wrap, so each row is as tall as its taller one.
+    let room = |width: f32| width - TABLE_CELL_PADDING.0 * 2.0;
+    let heights: Vec<f32> = rows
+        .iter()
+        .map(|row| {
+            let tallest = [(&row.skill, Type::STRONG, widths[0]), (&row.source, Type::BODY, source_width)]
+                .into_iter()
+                .map(|(text, style, width)| wrapped_height(ui, text, style, room(width)))
+                .fold(TAG_HEIGHT, f32::max);
+            tallest + TABLE_CELL_PADDING.1 * 2.0
+        })
+        .collect();
+    let last = rows.len().saturating_sub(1);
+    // Cells pad themselves, so the rules run unbroken.
+    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    TableBuilder::new(ui)
+        .id_salt("insights_skill_gaps")
+        .vscroll(false)
+        .striped(false)
+        .cell_layout(Layout::left_to_right(Align::Center))
+        .column(Column::exact(widths[0]).clip(true))
+        .column(Column::exact(widths[1]).clip(true))
+        .column(Column::exact(widths[2]).clip(true))
+        .column(Column::remainder().clip(true))
+        .header(TABLE_HEAD_HEIGHT, |mut header| {
+            for title in ["Gap", "Priority", "Change", "Source"] {
+                header.col(|ui| {
+                    table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
+                });
+            }
+        })
+        .body(|body| {
+            body.heterogeneous_rows(heights.into_iter(), |mut line| {
+                let index = line.index();
+                let row = &rows[index];
+                let rule = if index == last { CellRule::Last } else { CellRule::Row };
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.skill.as_str(), Type::STRONG, Ink::Text)).wrap()));
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| {
+                        if !row.priority.is_empty() {
+                            tag(ui, row.priority.as_str(), priority_tone(&row.priority));
+                        }
+                    });
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| {
+                        if row.is_new {
+                            muted(ui, "New");
+                        }
+                    });
+                });
+                line.col(|ui| {
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.source.as_str(), Type::BODY, Ink::Muted)).wrap()));
                 });
             });
-        }
-    });
+        });
 }
 
 fn study_order(ui: &mut Ui, report: &SkillGapView) {
@@ -257,10 +268,6 @@ fn study_order(ui: &mut Ui, report: &SkillGapView) {
             });
         }
     });
-}
-
-fn same_skill(left: &str, right: &str) -> bool {
-    left.trim().eq_ignore_ascii_case(right.trim())
 }
 
 fn priority_tone(priority: &str) -> Tone {

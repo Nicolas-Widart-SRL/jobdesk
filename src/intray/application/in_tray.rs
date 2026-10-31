@@ -125,6 +125,8 @@ pub struct InTray {
     /// Cards brought back together. They deal ahead of the rest until each is decided, for this session and day only.
     returned: Vec<String>,
     returned_on: Option<NaiveDate>,
+    /// Whether the last decision was on a card brought back, so undoing it puts the card back in front.
+    undo_returned: bool,
     issue: Option<String>,
 }
 
@@ -139,7 +141,7 @@ impl InTray {
 
     /// Decisions last until the window closes. For a machine with no app data folder, and tests.
     pub fn unsaved() -> Self {
-        Self { store: None, decisions: Vec::new(), can_undo: false, recorded: 0, reading: None, returned: Vec::new(), returned_on: None, issue: None }
+        Self { store: None, decisions: Vec::new(), can_undo: false, recorded: 0, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
     }
 
     pub fn issue(&self) -> Option<&str> {
@@ -213,6 +215,7 @@ impl InTray {
         self.recorded += 1;
         self.reading = None;
         self.forget_returns_before(today);
+        self.undo_returned = self.returned(today).contains(&card.key);
         self.returned.retain(|key| key != &card.key);
         self.save();
     }
@@ -295,6 +298,10 @@ impl InTray {
         }
         self.can_undo = false;
         self.reading = self.decisions.pop().map(|decision| decision.key);
+        if let Some(key) = self.reading.clone().filter(|key| self.undo_returned && !self.returned.contains(key)) {
+            self.returned.push(key);
+        }
+        self.undo_returned = false;
         self.save();
     }
 
@@ -642,6 +649,36 @@ mod tests {
         tray.bring_back_all(today());
 
         assert_eq!(kinds(&tray), [CardKind::Permission, CardKind::Question, CardKind::Triage]);
+    }
+
+    #[test]
+    fn undoing_a_decision_on_a_card_brought_back_keeps_it_in_front() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Top", 95), job("Acme", 80)]);
+        later_on(&mut tray, &jobs, "triage:acme");
+        tray.bring_back_all(today());
+        tray.skip(&top(&tray, &jobs), today());
+        assert_eq!(dealt(&tray, &jobs), ["Top"]);
+
+        tray.undo();
+        tray.stop_reading();
+
+        assert_eq!(dealt(&tray, &jobs), ["Acme", "Top"]);
+    }
+
+    #[test]
+    fn undoing_a_decision_on_a_plain_card_does_not_bring_it_forward() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Top", 95), job("Acme", 80), job("Beta", 70)]);
+        later_on(&mut tray, &jobs, "triage:beta");
+        tray.bring_back_all(today());
+        let plain = queue(&tray, &jobs, today()).cards.into_iter().find(|card| card.key == "triage:top").unwrap();
+        tray.skip(&plain, today());
+
+        tray.undo();
+        tray.stop_reading();
+
+        assert_eq!(dealt(&tray, &jobs), ["Beta", "Top", "Acme"]);
     }
 
     #[test]

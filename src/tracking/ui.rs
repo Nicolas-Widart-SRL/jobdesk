@@ -2,9 +2,10 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body, primary_button, rich, side_column, slip,
-    strong, tag,
+    Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body, primary_button,
+    primary_command_action, rich, side_column, slip, small_command_action, strong, tag,
 };
+use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
 #[derive(Default)]
 pub struct TrackerScreen {
@@ -35,7 +36,10 @@ impl TrackerScreen {
     /// Returns the archive folder of a dossier the user asked to open.
     pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
         let subtitle = Subtitle::Text("Read from job_search_tracker.csv. Status changes go through /outcome.");
-        page_head(ui, Title::Slab("Tracker"), Some(subtitle), |_| {});
+        page_head(ui, Title::Slab("Tracker"), Some(subtitle), |ui| {
+            primary_command_action(ui, "Record a result", "/outcome");
+            command_action(ui, "Check mail", "/gmail-sync");
+        });
         page_body(ui, |ui| self.body(ui, pipeline))
     }
 
@@ -66,21 +70,34 @@ impl TrackerScreen {
 
     fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline) {
         let lanes: Vec<&PipelineLane> = pipeline.lanes.iter().filter(|lane| !lane.cards.is_empty() || lane.bucket != StatusBucket::Hired).collect();
+        // Every lane takes the height of the tallest, measured on the frame before.
+        let tallest_id = ui.scope_id().with("tallest_lane");
+        let tallest: f32 = ui.ctx().data(|data| data.get_temp(tallest_id)).unwrap_or(0.0);
+        let mut measured = 0.0_f32;
+        ui.spacing_mut().item_spacing.x = BOARD_GAP;
         ui.columns(lanes.len(), |columns| {
             for (ui, lane) in columns.iter_mut().zip(lanes) {
                 lane_frame(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        lane_title(ui, lane.bucket.label(), bucket_tone(lane.bucket));
-                        ui.monospace(lane.cards.len().to_string());
-                    });
-                    for card in &lane.cards {
-                        if self.card(ui, card) {
-                            self.selected = Some((card.company.clone(), card.role.clone()));
+                    ui.set_min_height(tallest);
+                    let used = ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            lane_title(ui, lane.bucket.label(), bucket_tone(lane.bucket));
+                            ui.label(rich(ui, lane.cards.len().to_string(), Type::BODY, Ink::Faint));
+                        });
+                        for card in &lane.cards {
+                            if self.card(ui, card) {
+                                self.selected = Some((card.company.clone(), card.role.clone()));
+                            }
                         }
-                    }
+                    });
+                    measured = measured.max(used.response.rect.height());
                 });
             }
         });
+        if measured != tallest {
+            ui.ctx().data_mut(|data| data.insert_temp(tallest_id, measured));
+            ui.ctx().request_repaint();
+        }
     }
 
     fn card(&self, ui: &mut Ui, card: &ApplicationCard) -> bool {
@@ -111,14 +128,15 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
     }
     note(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(format!("{due} quiet {FOLLOW_UP_DAYS}+ days can get a follow-up. {stale} quiet {STALE_DAYS}+ days ready to resolve."));
+            ui.spacing_mut().item_spacing.x = NOTE_GAP.0;
+            ui.label(format!("{due} applications quiet {FOLLOW_UP_DAYS}+ days can get a follow-up. {stale} quiet {STALE_DAYS}+ days ready to resolve."));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                command_button(ui, "/outcome stale");
-                command_button(ui, "/outcome followup");
+                small_command_action(ui, "Review quiet applications", "/outcome stale");
+                small_command_action(ui, "Draft follow-ups", "/outcome followup");
             });
         });
     });
-    ui.add_space(10.0);
+    ui.add_space(SCREEN_GAP);
 }
 
 fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {

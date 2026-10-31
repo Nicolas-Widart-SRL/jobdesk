@@ -48,6 +48,20 @@ pub fn figure(ui: &mut Ui, text: impl Into<String>, ink: impl Into<Ink>) -> Resp
     ui.label(text)
 }
 
+/// A strong line over a muted one, each cut to one line, the pair centred in the height it has. Such as a role in a table row.
+pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
+    let p = Palette::of(ui);
+    let width = ui.available_width();
+    let title = line(ui, title, Type::STRONG, p.text, width);
+    let detail = line(ui, detail, Type::BODY, p.muted, width);
+    ui.vertical(|ui| {
+        ui.add_space(((ui.available_height() - title.size().y - detail.size().y) / 2.0).max(0.0));
+        ui.label(title);
+        ui.label(detail);
+    })
+    .response
+}
+
 /// A single line cut to `width`, for widgets that paint their own text.
 pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
     let text = RichText::new(text).font(style.font()).color(color);

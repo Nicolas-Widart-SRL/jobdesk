@@ -6,7 +6,7 @@ use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BODY_PADDING, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
     NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING,
-    STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, Type,
+    STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, TABLE_CELL_PADDING, Type,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -189,6 +189,34 @@ pub fn list_row<R>(ui: &mut Ui, first: bool, add: impl FnOnce(&mut Ui) -> R) -> 
             add(ui)
         })
         .inner
+}
+
+/// How a table cell is ruled underneath: the head in ink, body rows in a hairline, the last row not at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellRule {
+    Head,
+    Row,
+    Last,
+}
+
+/// One cell of a table, padded inline and ruled underneath. Lay the table out with no item spacing, so rules meet.
+pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = Palette::of(ui);
+    let rect = ui.max_rect();
+    let color = match rule {
+        CellRule::Head => Some(p.text),
+        CellRule::Row => Some(p.line),
+        CellRule::Last => None,
+    };
+    if let Some(color) = color {
+        ui.painter().rect_filled(Rect::from_min_max(pos2(rect.left(), rect.bottom() - HAIRLINE), rect.right_bottom()), 0.0, color);
+    }
+    let inner = rect.shrink2(vec2(TABLE_CELL_PADDING.0, 0.0));
+    ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)), |ui| {
+        ui.spacing_mut().item_spacing = vec2(ITEM_GAP, 0.0);
+        add(ui)
+    })
+    .inner
 }
 
 /// A whole row that picks something, such as a run in a list.

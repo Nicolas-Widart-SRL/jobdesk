@@ -30,7 +30,7 @@ impl CardKind {
         }
     }
 
-    pub fn pauses_a_run(self) -> bool {
+    fn pauses_a_run(self) -> bool {
         matches!(self, Self::Permission | Self::Question)
     }
 }
@@ -125,7 +125,7 @@ impl Card {
     fn tier(&self, today: NaiveDate) -> Tier {
         if self.kind.pauses_a_run() {
             Tier::PausedRun
-        } else if self.days_left(today).is_some_and(|days| days <= HORIZON_DAYS) {
+        } else if self.days_left(today).is_some_and(|days| days < HORIZON_DAYS) {
             Tier::Deadline
         } else {
             Tier::Rest
@@ -136,9 +136,8 @@ impl Card {
         self.days_left(today).is_some_and(|days| (0..HORIZON_DAYS).contains(&days))
     }
 
-    /// Ranks as a deadline that has not passed. One day wider than the horizon, since its last day still ranks.
-    pub fn is_deadline_ahead(&self, today: NaiveDate) -> bool {
-        self.tier(today) == Tier::Deadline && self.days_left(today).is_some_and(|days| days >= 0)
+    pub fn pauses_a_run(&self) -> bool {
+        self.kind.pauses_a_run()
     }
 }
 
@@ -212,10 +211,10 @@ mod tests {
     }
 
     #[test]
-    fn a_deadline_ahead_runs_through_the_last_ranked_day() {
-        assert!(card("a", CardKind::Send, Some(0)).is_deadline_ahead(today()));
-        assert!(card("a", CardKind::Send, Some(14)).is_deadline_ahead(today()));
-        assert!(!card("a", CardKind::Send, Some(15)).is_deadline_ahead(today()));
-        assert!(!card("a", CardKind::Send, None).is_deadline_ahead(today()));
+    fn a_deadline_ranks_first_only_inside_the_horizon() {
+        let mut cards = vec![card("fourteen", CardKind::Send, Some(14)), card("follow up", CardKind::FollowUp, None), card("thirteen", CardKind::Triage, Some(13))];
+        rank(&mut cards, today());
+        let keys: Vec<_> = cards.iter().map(|card| card.key.as_str()).collect();
+        assert_eq!(keys, ["thirteen", "fourteen", "follow up"], "a date 14 days out ranks with the rest, by kind");
     }
 }

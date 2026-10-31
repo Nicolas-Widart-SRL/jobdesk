@@ -85,10 +85,9 @@ impl Queue {
         counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect()
     }
 
-    /// Says so when nothing, set aside or not, is dated inside the horizon,
-    /// and no pending card ranks as a deadline still ahead, such as one due the day after the strip ends.
+    /// Says so when nothing, set aside or not, is dated inside the horizon.
     pub fn horizon_note(&self) -> Option<String> {
-        if !self.marks.is_empty() || self.cards.iter().any(|card| card.is_deadline_ahead(self.today)) {
+        if !self.marks.is_empty() {
             return None;
         }
         let other = if self.overdue() > 0 { "other " } else { "" };
@@ -188,7 +187,7 @@ impl InTray {
         let set_aside = aside.into_iter().map(|card| card.name).collect();
         rank(&mut cards, today);
         let returned = self.returned(today);
-        cards.sort_by_key(|card| (!card.kind.pauses_a_run(), !returned.contains(&card.key)));
+        cards.sort_by_key(|card| if card.pauses_a_run() { 0 } else if returned.contains(&card.key) { 1 } else { 2 });
         if let Some(at) = self.reading.as_ref().and_then(|key| cards.iter().position(|card| &card.key == key)) {
             cards[..=at].rotate_right(1);
         }
@@ -627,6 +626,25 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_run_brought_back_keeps_its_rank_among_paused_runs() {
+        let permission = PromptKind::Permission { tool: "Bash".into(), detail: "ls".into(), can_remember: false };
+        let runs = [paused_on("r1", PromptKind::Questions(vec![])), paused_on("r2", permission)];
+        let jobs = board(vec![job("Acme", 80)]);
+        let pipeline = Pipeline::default();
+        let archives = HashMap::new();
+        let sources = Sources { board: &jobs, pipeline: &pipeline, archives: &archives, runs: &runs, today: today() };
+        let kinds = |tray: &InTray| tray.queue(&sources).cards.into_iter().map(|card| card.kind).collect::<Vec<_>>();
+        let mut tray = InTray::unsaved();
+        assert_eq!(kinds(&tray), [CardKind::Permission, CardKind::Question, CardKind::Triage]);
+
+        let question = tray.queue(&sources).cards.into_iter().find(|card| card.kind == CardKind::Question).unwrap();
+        tray.later(&question, today());
+        tray.bring_back_all(today());
+
+        assert_eq!(kinds(&tray), [CardKind::Permission, CardKind::Question, CardKind::Triage]);
+    }
+
+    #[test]
     fn cards_brought_back_deal_by_rank_again_the_next_day() {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Top", 95), job("Acme", 80)]);
@@ -661,9 +679,13 @@ mod tests {
     }
 
     fn paused_run() -> Run {
-        let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        paused_on("r1", PromptKind::Questions(vec![]))
+    }
+
+    fn paused_on(id: &str, kind: PromptKind) -> Run {
+        let request = RunRequest { run_id: id.into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
         let mut run = Run::new(&request);
-        let prompt = Prompt { request_id: "p".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None };
+        let prompt = Prompt { request_id: "p".into(), kind, input_json: "{}".into(), suggestions_json: None };
         run.apply(AgentEvent::PromptRaised(prompt));
         run
     }
@@ -752,14 +774,24 @@ mod tests {
         assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
     }
 
-    #[test]
-    fn a_card_due_the_day_after_the_strip_still_counts_as_a_deadline() {
-        let last = Queue { cards: vec![pending(CardKind::Triage, Some(today() + chrono::Duration::days(HORIZON_DAYS)))], today: today(), ..Default::default() };
-        assert!(last.marks.is_empty());
-        assert_eq!(last.horizon_note(), None);
+    fn closing_in(company: &str, score: u8, days: i64) -> JobView {
+        JobView { deadline: Some(today() + chrono::Duration::days(days)), days_to_deadline: Some(days), ..job(company, score) }
+    }
 
-        let beyond = Queue { cards: vec![pending(CardKind::Triage, Some(today() + chrono::Duration::days(HORIZON_DAYS + 1)))], today: today(), ..Default::default() };
-        assert_eq!(beyond.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+    #[test]
+    fn a_date_past_the_strip_ranks_with_the_rest_and_has_no_mark() {
+        let tray = InTray::unsaved();
+        let far = board(vec![job("Plain", 90), closing_in("Fourteen", 70, HORIZON_DAYS)]);
+        let dealt_far = queue(&tray, &far, today());
+        assert_eq!(dealt(&tray, &far), ["Plain", "Fourteen"]);
+        assert!(dealt_far.marks.is_empty());
+        assert_eq!(dealt_far.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+
+        let near = board(vec![job("Plain", 90), closing_in("Thirteen", 70, HORIZON_DAYS - 1)]);
+        let dealt_near = queue(&tray, &near, today());
+        assert_eq!(dealt(&tray, &near), ["Thirteen", "Plain"]);
+        assert_eq!(dealt_near.marks.iter().map(|mark| mark.key.as_str()).collect::<Vec<_>>(), ["triage:thirteen"]);
+        assert_eq!(dealt_near.horizon_note(), None);
     }
 
     #[test]

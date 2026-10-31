@@ -63,3 +63,21 @@ pub fn install_fonts(ctx: &Context) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Claude marks flags with symbols like ⚠, which none of the design's faces carry.
+    #[test]
+    fn every_face_falls_back_to_symbols() {
+        let ctx = Context::default();
+        install_fonts(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        for face in [Face::Sans, Face::Medium, Face::Semibold, Face::Slab, Face::Typed, Face::TypedBold] {
+            let id = egui::FontId::new(14.0, face.family());
+            assert!(ctx.fonts_mut(|fonts| fonts.has_glyph(&id, '⚠')), "{face:?} has no ⚠");
+        }
+    }
+}

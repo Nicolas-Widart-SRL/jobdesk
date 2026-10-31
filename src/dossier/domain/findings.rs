@@ -72,10 +72,8 @@ fn keyword_rows(message: &str) -> Vec<KeywordRow> {
         };
         if row.first().is_some_and(|cell| cell.eq_ignore_ascii_case("keyword")) {
             in_table = true;
-        } else if in_table && !is_rule(&row) {
-            if let [keyword, priority, status, rest @ ..] = row.as_slice() {
-                rows.push(KeywordRow { keyword: keyword.clone(), priority: priority.clone(), status: status.clone(), note: rest.join(" ") });
-            }
+        } else if in_table && !is_rule(&row) && let [keyword, priority, status, rest @ ..] = row.as_slice() {
+            rows.push(KeywordRow { keyword: keyword.clone(), priority: priority.clone(), status: status.clone(), note: rest.join(" ") });
         }
     }
     rows

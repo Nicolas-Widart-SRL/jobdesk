@@ -183,11 +183,9 @@ impl Run {
             AgentEvent::ToolFinished { id, failed } => {
                 let state = if failed { ToolState::Failed } else { ToolState::Done };
                 for activity in self.activity.iter_mut().rev() {
-                    if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind {
-                        if *known == id {
-                            *current = state;
-                            break;
-                        }
+                    if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind && *known == id {
+                        *current = state;
+                        break;
                     }
                 }
             }

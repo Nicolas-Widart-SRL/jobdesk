@@ -159,7 +159,7 @@ fn render_with(mut shell: Shell, theme: Theme, name: &str) {
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .wgpu()
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
@@ -183,7 +183,7 @@ fn a_command_button_leads_to_a_started_run() {
     *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
     let mut harness = Harness::builder()
         .with_size([1280.0, 820.0])
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
@@ -233,7 +233,7 @@ fn smallest_window(final_event: AgentEvent, name: &str) -> Harness<'static> {
     *shell.desk_slot() = Some(apply_run(final_event));
     let mut harness = Harness::builder()
         .with_size([1040.0, 640.0])
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
@@ -334,7 +334,7 @@ fn the_first_frame_shows_the_prompt_in_one_pass() {
 fn tray_harness(mut shell: Shell) -> Harness<'static> {
     let mut harness = Harness::builder()
         .with_size([1280.0, 820.0])
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
@@ -474,7 +474,7 @@ fn wgpu_tray(mut shell: Shell, theme: Theme) -> Harness<'static> {
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .wgpu()
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
@@ -553,7 +553,7 @@ fn render_dossier(section: Option<&str>, theme: Theme, name: &str) {
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .wgpu()
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
@@ -582,7 +582,7 @@ fn render_workspace(theme: Theme, name: &str) {
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .wgpu()
         .build_ui(move |ui| shell.show(ui));
     for _ in 0..20 {

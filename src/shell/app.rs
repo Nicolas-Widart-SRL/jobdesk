@@ -470,11 +470,9 @@ impl Shell {
                 }
             }
             Screen::Launcher => {
-                if let Some(desk) = &mut self.desk {
-                    if let Some(id) = self.launcher.show(ui, desk) {
-                        self.run_screen.select(id);
-                        self.screen = Screen::Runs;
-                    }
+                if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
+                    self.run_screen.select(id);
+                    self.screen = Screen::Runs;
                 }
             }
         }

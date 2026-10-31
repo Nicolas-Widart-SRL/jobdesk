@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -61,7 +61,7 @@ impl AgentSession for ClaudeSession {
     }
 }
 
-fn command_for(claude: &PathBuf, workspace: &PathBuf, path: &str, request: &RunRequest) -> Command {
+fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest) -> Command {
     let mut command = Command::new(claude);
     command
         .current_dir(workspace)
@@ -83,7 +83,7 @@ fn command_for(claude: &PathBuf, workspace: &PathBuf, path: &str, request: &RunR
     command
 }
 
-fn supervise(workspace: &PathBuf, logs: &PathBuf, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>) {
+fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>) {
     let sink = Arc::new(Mutex::new(sink));
     let emit = {
         let sink = Arc::clone(&sink);
@@ -114,10 +114,8 @@ fn supervise(workspace: &PathBuf, logs: &PathBuf, request: &RunRequest, sink: Ev
     loop {
         match inbox.recv() {
             Ok(Outgoing::Message(text)) => {
-                if let Some(log) = &log {
-                    if let Ok(mut log) = log.lock() {
-                        log.append_user(&text);
-                    }
+                if let Some(log) = &log && let Ok(mut log) = log.lock() {
+                    log.append_user(&text);
                 }
                 write_line(&mut stdin, &user_message(&text));
             }
@@ -139,10 +137,8 @@ fn supervise(workspace: &PathBuf, logs: &PathBuf, request: &RunRequest, sink: Ev
 }
 
 fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
-    if let Some(pipe) = stdin {
-        if writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_err() {
-            *stdin = None;
-        }
+    if let Some(pipe) = stdin && writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_err() {
+        *stdin = None;
     }
 }
 
@@ -150,10 +146,8 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some(log) = &log {
-                if let Ok(mut log) = log.lock() {
-                    log.append(&line);
-                }
+            if let Some(log) = &log && let Ok(mut log) = log.lock() {
+                log.append(&line);
             }
             parse_line(&line).into_iter().for_each(&emit);
         }

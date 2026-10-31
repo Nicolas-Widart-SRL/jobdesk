@@ -30,7 +30,8 @@ Never write a value from a real job search in it.
    `trail ask "<task>" --source` finds the code and shows the crux of each hit,
    `trail skeleton <file>` shows a file's API, and `trail callers <symbol> --depth all` shows what a change reaches.
    Read whole files only where a step needs them, several files in one turn.
-2. Split the work into steps. One step is one commit that builds and passes tests on its own.
+2. Split the work into steps. One step is one branch that merges as a unit.
+   Its first commit builds and passes tests on its own. Review fixes land as more commits on the same branch.
 3. Order the steps so each one depends only on the steps before it.
    `shared_kernel` or a feature's `domain` first, then its `application`, then `infrastructure`, then `ui` and `shell`.
    A new feature joins `FEATURES` in `tests/architecture.rs` in its first step.
@@ -42,7 +43,8 @@ Never write a value from a real job search in it.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.
-   Only risky steps get a review before they merge. A docs-only step is never risky.
+   A change to `.claude/agents/*.md` or `.claude/skills/*.md` is always risky: those files steer the agents.
+   Only risky steps get a review before they merge. Any other docs-only step is never risky.
 
 ## Report
 

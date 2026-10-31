@@ -52,7 +52,7 @@
                 <thead><tr><th>Score</th><th>Role</th><th>Location</th><th>Day rate</th><th>Deadline</th><th>Signals</th><th>Portal</th></tr></thead>
                 <tbody>
                   <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
-                    <tr class="{{r.cls}}" onClick="{{r.pick}}" tabIndex="0">
+                    <tr class="{{r.cls}}" onClick="{{r.pick}}" onKeyDown="{{r.key}}" tabIndex="0">
                       <td class="num score">{{r.score}}</td>
                       <td><div style="font-weight: 600">{{r.role}}</div><div class="muted">{{r.co}}</div></td>
                       <td class="muted">{{r.loc}}</td>
@@ -176,7 +176,11 @@ class Component extends DCLogic {
       pick: () => { const f = all.find((a) => a.tab === id); this.setState({ tab: id, sel: f ? f.id : null }); },
     }));
     const list = all.filter((a) => a.tab === this.state.tab);
-    const rows = list.map((r) => ({ ...r, rateText: r.rate ? 'EUR ' + r.rate : 'Not stated', cls: 'pick' + (r.id === this.state.sel ? ' sel' : ''), pick: () => this.setState({ sel: r.id }) }));
+    const rows = list.map((r) => {
+      const pick = () => this.setState({ sel: r.id });
+      const key = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
+      return { ...r, rateText: r.rate ? 'EUR ' + r.rate : 'Not stated', cls: 'pick' + (r.id === this.state.sel ? ' sel' : ''), pick, key };
+    });
     const c = list.find((a) => a.id === this.state.sel) || list[0] || all[0];
     const band = (s) => (typeof s !== 'number' ? 'Not scored' : s >= 75 ? 'Strong Fit' : s >= 60 ? 'Good Fit' : s >= 45 ? 'Moderate Fit' : s >= 30 ? 'Weak Fit' : 'Poor Fit');
     const bandTone = (s) => (typeof s !== 'number' ? 'c-plain' : s >= 75 ? 'c-hired' : s >= 60 ? 'c-active' : s >= 45 ? 'c-interview' : 'c-closed');
@@ -186,12 +190,13 @@ class Component extends DCLogic {
     const contractV = c.contract === 'Permanent' ? 'FAIL' : c.contract === 'Unknown' ? 'FLAG' : 'PASS';
     const rateV = !c.rate ? 'FLAG' : c.rate < 700 ? 'FAIL' : 'PASS';
     const G = (k, v, r) => ({ k, v, r, tone: tone(r) });
+    const gateRows = [
+      G('Contract', c.contract, contractV), G('Day rate, floor 700', c.rate ? 'EUR ' + c.rate : 'Not stated', rateV), G('Work mode', c.loc, c.loc2 || 'PASS'),
+      G('Commute', c.commute, c.commute === 'Over 2h' ? 'FAIL' : 'PASS'), G('Language', c.lang ? 'German' : 'English, French', c.lang || 'PASS'), G('Posting guard', guard, guard === 'clean' ? 'PASS' : 'FLAG'),
+    ];
     const j = {
-      ...c, verdict: band(c.score), tone: bandTone(c.score), flagged, canDraft: !flagged && c.tab !== 'excl' && c.tab !== 'fetch',
-      gateRows: [
-        G('Contract', c.contract, contractV), G('Day rate, floor 700', c.rate ? 'EUR ' + c.rate : 'Not stated', rateV), G('Work mode', c.loc, c.loc2 || 'PASS'),
-        G('Commute', c.commute, c.commute === 'Over 2h' ? 'FAIL' : 'PASS'), G('Language', c.lang ? 'German' : 'English, French', c.lang || 'PASS'), G('Posting guard', guard, guard === 'clean' ? 'PASS' : 'FLAG'),
-      ],
+      ...c, verdict: band(c.score), tone: bandTone(c.score), flagged, gateRows,
+      canDraft: !flagged && c.tab !== 'excl' && c.tab !== 'fetch' && gateRows.every((g) => g.r !== 'FAIL'),
       good: wrapT(c.good), gaps: wrapT(c.gaps),
       dims: ['Technical, 30%', 'Experience, 25%', 'Behavioral, 15%', 'Career, 30%'].map((label, i) => ({ label, v: c.s[i], w: c.s[i] + '%' })),
     };

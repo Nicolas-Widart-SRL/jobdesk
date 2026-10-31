@@ -8,23 +8,24 @@
 #   scripts/cleanup.sh feat/standing-orders   after steps merge into feat/standing-orders
 #   DRY_RUN=1 scripts/cleanup.sh              print what would go, remove nothing
 #
-# It keeps a worktree with uncommitted changes, a locked worktree, the checkout
-# it runs from, and every branch not yet merged.
+# It keeps a worktree with uncommitted changes or ignored files other than build
+# output, a locked worktree, the checkout it runs from, and every branch not yet merged.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 here=$(pwd)
 root=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
 
-git fetch --quiet --prune origin
+# A dry run fetches without pruning, so it removes no remote-tracking ref.
+if [ -n "${DRY_RUN:-}" ]; then git fetch --quiet origin; else git fetch --quiet --prune origin; fi
 bases=("$@" origin/main)
 run() { if [ -n "${DRY_RUN:-}" ]; then echo "  would run: $*"; else "$@"; fi; }
 
-# True when one of the bases already holds every change of the commit.
+# True when one of the bases already holds every change of the commit:
+# merging the commit into the base leaves the base's tree as it is.
 merged() {
   local base tree
   for base in "${bases[@]}"; do
     git rev-parse -q --verify "$base" >/dev/null || continue
-    if ! git cherry "$base" "$1" | grep -q '^+'; then return 0; fi
     tree=$(git merge-tree --write-tree "$base" "$1" 2>/dev/null | head -1) || continue
     [ "$tree" = "$(git rev-parse "$base^{tree}")" ] && return 0
   done
@@ -41,6 +42,11 @@ while IFS=$'\t' read -r path head branch locked; do
   if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
     echo "keep $path: uncommitted changes"; kept=$((kept + 1)); continue
   fi
+  # git worktree remove deletes ignored files. Only build output and test artefacts may go.
+  if git -C "$path" status --porcelain --ignored 2>/dev/null | grep '^!! ' \
+      | grep -qvE '^!! (target/|graft/|.*\.DS_Store$|.*\.(diff|new|old)\.png$)'; then
+    echo "keep $path: ignored local files"; kept=$((kept + 1)); continue
+  fi
   echo "remove worktree $path ($name)"
   run git worktree remove "$path"
 done < <(git worktree list --porcelain | awk '
@@ -51,7 +57,7 @@ done < <(git worktree list --porcelain | awk '
   /^$/ { print path "\t" head "\t" branch "\t" locked; path = "" }
   END { if (path != "") print path "\t" head "\t" branch "\t" locked }')
 
-git worktree prune
+if [ -n "${DRY_RUN:-}" ]; then git worktree prune --dry-run --verbose; else git worktree prune; fi
 in_use=$(git worktree list --porcelain | awk '/^branch / { print substr($0, 19) }')
 for branch in $(git for-each-ref --format='%(refname:short)' refs/heads); do
   case "$branch" in main) continue ;; esac

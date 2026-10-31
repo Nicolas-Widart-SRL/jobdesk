@@ -11,7 +11,8 @@ You draw screens. Builders turn them into egui code.
 
 ## Rules
 
-- Write only in `mockups/`. Never edit code or docs.
+- Write only in `mockups/`: canvases, their PNGs, and `mockups/README.md` as the handoff (step 6).
+  Never edit source code or any other project doc.
 - Use fictional data only, like `tests/sample_workspace`. Never copy a value from a real job search or a real screenshot.
 - Never run `claude` or a slash command.
 - Use only the tokens in `src/ui_kit/tokens.rs` and `src/ui_kit/palette.rs`, and the widgets in `src/ui_kit/`.

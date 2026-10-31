@@ -171,7 +171,7 @@ a.node:hover { background: var(--raised); }
 .lane { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px 12px; border-radius: 4px; background: var(--panel); }
 .lane .tag { height: auto; padding: 0; border: 0; font: 600 17px/1.3 var(--slab); }
 .panel.card { display: block; padding: 9px 11px; border: 0; border-radius: 2px; background: var(--sheet); }
-.panel.card:hover { background: var(--raised); }
+a.panel.card:hover { background: var(--raised); }
 .card .fit { font: 600 16px/1 var(--slab); color: var(--text); }
 
 /* PDF page stand-in */
@@ -215,8 +215,8 @@ a.node:hover { background: var(--raised); }
 .clear h2 { font: 600 34px/1.15 var(--slab); }
 
 /* Ask or run: an overlay, so the card underneath stays where it was */
-.scrim { position: absolute; inset: 0; z-index: 5; display: flex; justify-content: center; align-items: flex-start; padding: 110px 16px 16px; }
-.scrim-hit { position: absolute; inset: 0; padding: 0; border: 0; background: var(--bg); opacity: .72; cursor: default; }
+.scrim { position: fixed; inset: 0; z-index: 5; display: flex; justify-content: center; align-items: flex-start; padding: 110px 16px 16px; overflow-y: auto; }
+.scrim-hit { position: fixed; inset: 0; padding: 0; border: 0; background: var(--bg); opacity: .72; cursor: default; }
 .ask { position: relative; display: flex; flex-direction: column; gap: 12px; width: min(640px, 100%); padding: 16px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); }
 .ask button.li { width: 100%; border: 0; border-top: 1px solid var(--line); color: var(--text); text-align: left; cursor: pointer; }
 .ask button.li.sel { background: var(--panel); }

@@ -13,6 +13,7 @@ pub struct WorkflowBand {
     pub active: usize,
     pub interview: usize,
     pub offer: usize,
+    pub hired: usize,
     pub closed: usize,
 }
 
@@ -29,6 +30,7 @@ pub fn workflow_band(report: &SearchInsights, board: &JobBoard, profile: (usize,
         active: tally.active,
         interview: tally.interview,
         offer: tally.offer,
+        hired: tally.hired,
         closed: tally.closed,
     }
 }
@@ -64,12 +66,12 @@ mod tests {
             ],
             total_seen: 4,
         };
-        let report = SearchReport::from_facts(&[fact(Progress::Drafted), fact(Progress::Active), fact(Progress::Active), fact(Progress::Offer), fact(Progress::Closed)]);
+        let report = SearchReport::from_facts(&[fact(Progress::Drafted), fact(Progress::Active), fact(Progress::Active), fact(Progress::Offer), fact(Progress::Hired), fact(Progress::Closed)]);
 
         let band = workflow_band(&report, &board, (7, 9));
 
         assert_eq!((band.profile_filled, band.profile_total), (7, 9));
         assert_eq!((band.new_postings, band.seen, band.shortlisted), (2, 4, 1));
-        assert_eq!((band.drafted, band.active, band.interview, band.offer, band.closed), (1, 2, 0, 1, 1));
+        assert_eq!((band.drafted, band.active, band.interview, band.offer, band.hired, band.closed), (1, 2, 0, 1, 1, 1));
     }
 }

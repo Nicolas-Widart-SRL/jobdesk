@@ -42,11 +42,20 @@
           <section class="lane" aria-label="{{l.name}}">
             <div class="row" style="padding: 0 2px"><span class="tag {{l.tone}}">{{l.name}}</span><span class="num faint">{{l.n}}</span></div>
             <sc-for list="{{l.cards}}" as="c" hint-placeholder-count="3">
-              <a class="panel card" href="{{c.href}}">
-                <div class="trunc" style="font-weight: 600">{{c.co}}</div>
-                <div class="muted trunc">{{c.role}}</div>
-                <div class="row" style="margin-top: 6px"><span class="faint grow trunc">{{c.meta}}</span><span class="num fit">{{c.fit}}</span></div>
-              </a>
+              <sc-if value="{{c.link}}" hint-placeholder-val="{{ true }}">
+                <a class="panel card" href="{{c.href}}">
+                  <div class="trunc" style="font-weight: 600">{{c.co}}</div>
+                  <div class="muted trunc">{{c.role}}</div>
+                  <div class="row" style="margin-top: 6px"><span class="faint grow trunc">{{c.meta}}</span><span class="num fit">{{c.fit}}</span></div>
+                </a>
+              </sc-if>
+              <sc-if value="{{c.plain}}" hint-placeholder-val="{{ false }}">
+                <div class="panel card">
+                  <div class="trunc" style="font-weight: 600">{{c.co}}</div>
+                  <div class="muted trunc">{{c.role}}</div>
+                  <div class="row" style="margin-top: 6px"><span class="faint grow trunc">{{c.meta}}</span><span class="num fit">{{c.fit}}</span></div>
+                </div>
+              </sc-if>
             </sc-for>
           </section>
         </sc-for>
@@ -102,7 +111,8 @@ class Component extends DCLogic {
       ['Standing orders', 'Standing.html', ''],
       ['Workspace', 'Workspace.html', ''],
     ].map(([label, href, count]) => ({ label, href, count, cls: label === page ? 'on' : '' }));
-    const C = (co, role, meta, fit, href) => ({ co, role, meta, fit, href: href || 'Application.html' });
+    // Only Tessel Group has a dossier canvas. Cards with no destination stay plain.
+    const C = (co, role, meta, fit, href) => ({ co, role, meta, fit, href: href || '', link: !!href, plain: !href });
     const L = (name, tone, cards, n) => ({ name, tone, cards, n: n ?? cards.length });
     const lanes = [
       L('Drafted', 'c-drafted', [C('Harbor Bank', 'Lead Java Engineer', 'Deadline in 3 days', 81, 'Tray.html'), C('Kestrel Payments', 'Solution Architect', 'Run in progress', 78, 'Run.html')]),
@@ -111,7 +121,7 @@ class Component extends DCLogic {
         C('Lumen Telecom', 'Technical Lead', '12d quiet, 0 of 2 follow-ups', 69), C('Atlas Freight', 'Java Architect', '9d quiet', 66),
         C('Pine Mobility', 'Senior Java Engineer', '7d quiet', 62), C('Sable Analytics', 'Tech Lead', '3d quiet', 75),
       ]),
-      L('Interview', 'c-interview', [C('Tessel Group', 'Solution Architect', 'Technical on 4 Nov', 78), C('Nimbus Labs', 'Staff Engineer', 'Final round next', 74), C('Riverton Bank', 'Application Architect', 'Phone screen done', 71)]),
+      L('Interview', 'c-interview', [C('Tessel Group', 'Solution Architect', 'Technical on 4 Nov', 78, 'Application.html'), C('Nimbus Labs', 'Staff Engineer', 'Final round next', 74), C('Riverton Bank', 'Application Architect', 'Phone screen done', 71)]),
       L('Offer', 'c-offer', [C('Ardent Software', 'Lead Architect', 'Offer received', 82)]),
       L('Closed', 'c-closed', [C('Quay Finance', 'Tech Lead', 'Rejected', 68), C('Delta Works', 'Java Lead', 'No response', 60), C('Mosaic Data', 'Architect', 'Withdrawn', 63)], 8),
     ];

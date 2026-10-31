@@ -118,7 +118,10 @@ impl JobsScreen {
             }
         });
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
-            panel(ui, |ui| self.table(ui, jobs));
+            // The fixed columns overflow a narrow window, so the table scrolls sideways there.
+            panel(ui, |ui| {
+                egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs));
+            });
         });
     }
 

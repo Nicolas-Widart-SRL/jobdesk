@@ -18,12 +18,13 @@
     <div class="ask" role="dialog" aria-label="Ask or run">
       <div class="field">
         <label for="askq">What do you want to do?</label>
-        <input id="askq" value="{{q}}" onChange="{{setQ}}" onKeyDown="{{onKey}}" placeholder="Paste a posting URL, or type a company or task">
+        <input id="askq" value="{{q}}" onChange="{{setQ}}" onKeyDown="{{onKey}}" placeholder="Paste a posting URL, or type a company or task"
+          role="combobox" aria-autocomplete="list" aria-controls="askhits" aria-expanded="{{expanded}}" aria-activedescendant="{{activeId}}">
       </div>
       <sc-if value="{{hasHits}}" hint-placeholder-val="{{ true }}">
-        <div class="list">
+        <div class="list" id="askhits" role="listbox" aria-label="Matching commands">
           <sc-for list="{{hits}}" as="h" hint-placeholder-count="6">
-            <button class="li {{h.cls}}" type="button" onClick="{{h.pick}}"><span class="grow trunc">{{h.t}}</span><span class="muted" style="white-space: nowrap">{{h.est}}</span></button>
+            <button class="li {{h.cls}}" type="button" role="option" id="{{h.id}}" aria-selected="{{h.selected}}" tabIndex="-1" onClick="{{h.pick}}"><span class="grow trunc">{{h.t}}</span><span class="muted" style="white-space: nowrap">{{h.est}}</span></button>
           </sc-for>
         </div>
         <div>
@@ -88,12 +89,13 @@ class Component extends DCLogic {
   }
   renderVals() {
     const list = this.hits(), sel = Math.min(this.state.sel, Math.max(list.length - 1, 0));
-    const hits = list.map((h, i) => ({ ...h, cls: i === sel ? 'sel' : '', pick: () => this.run(h) }));
+    const hits = list.map((h, i) => ({ ...h, id: 'askhit-' + i, selected: i === sel ? 'true' : 'false', cls: i === sel ? 'sel' : '', pick: () => this.run(h) }));
     let saved = null;
     try { saved = localStorage.getItem('jobdesk-theme'); } catch (e) {}
     return {
       rootCls: this.props.embedded ? '' : 'app', theme: saved || 'system', q: this.state.q, hits, hit: hits[sel] || {},
       hasHits: hits.length > 0, noHits: hits.length === 0,
+      expanded: hits.length > 0 ? 'true' : 'false', activeId: hits[sel] ? hits[sel].id : '',
       setQ: (e) => this.setState({ q: e.target.value, sel: 0 }), onKey: (e) => this.onKey(e), close: () => this.close(),
     };
   }

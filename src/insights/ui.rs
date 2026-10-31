@@ -63,7 +63,12 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand) {
             marks: vec![(band.active, Some(Tone::Active.into())), (band.interview, Some(Tone::Interview.into())), (band.offer, Some(Tone::Offer.into()))],
             note: format!("{} applied, {} interview, {} offer", band.active, band.interview, band.offer),
         },
-        FlowNode { label: "Outcome", figure: band.closed.to_string(), marks: vec![(band.closed, Some(Tone::Closed.into()))], note: "closed".to_owned() },
+        FlowNode {
+            label: "Outcome",
+            figure: (band.hired + band.closed).to_string(),
+            marks: vec![(band.hired, Some(Tone::Hired.into())), (band.closed, Some(Tone::Closed.into()))],
+            note: format!("{} hired, {} closed", band.hired, band.closed),
+        },
     ];
     flow_band(ui, &nodes);
 }

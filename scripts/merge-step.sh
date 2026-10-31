@@ -27,6 +27,12 @@ worktree_of() {
 step_tree=$(worktree_of "$step")
 change_tree=$(worktree_of "$change")
 
+dirty() { [ -n "$step_tree" ] && [ -n "$(git -C "$step_tree" status --porcelain)" ]; }
+if dirty; then
+  echo "merge-step: $step has uncommitted changes in $step_tree. Ask its builder to commit them." >&2
+  exit 1
+fi
+
 if ! git merge-base --is-ancestor "$change" "$step"; then
   [ -n "$step_tree" ] || { echo "merge-step: $step needs a rebase and has no worktree" >&2; exit 1; }
   if ! git -C "$step_tree" rebase --quiet "$change"; then
@@ -37,14 +43,21 @@ if ! git merge-base --is-ancestor "$change" "$step"; then
   echo "rebased $step onto $change"
 fi
 
+# The exact commit that gets checked is the one that merges.
+commit=$(git rev-parse "refs/heads/$step")
 if [ -z "${NO_CHECK:-}" ]; then
   [ -n "$step_tree" ] || { echo "merge-step: $step has no worktree to check. Set NO_CHECK=1 to skip." >&2; exit 1; }
   scripts/check.sh "$step_tree" || { echo "merge-step: checks failed, $change is unchanged" >&2; exit 1; }
+  if [ "$(git rev-parse "refs/heads/$step")" != "$commit" ] || dirty; then
+    echo "merge-step: $step changed while it was checked, $change is unchanged" >&2
+    exit 1
+  fi
 fi
 
 if [ -n "$change_tree" ]; then
-  git -C "$change_tree" merge --quiet --ff-only "$step"
+  git -C "$change_tree" merge --quiet --ff-only "$commit"
 else
-  git fetch --quiet . "$step:$change"
+  git merge-base --is-ancestor "$change" "$commit" || { echo "merge-step: $commit does not fast-forward $change" >&2; exit 1; }
+  git update-ref "refs/heads/$change" "$commit" "$(git rev-parse "refs/heads/$change")"
 fi
 echo "merged $step into $change: $(git log -1 --format='%h %s' "$change")"

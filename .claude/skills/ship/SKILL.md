@@ -50,6 +50,7 @@ which print one line per check. Read a subagent's report once, then keep only it
 
 A change with one step skips the step review: the change review is its only review.
 A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
+A change to `.claude/agents/*.md` or `.claude/skills/*.md` is not docs-only: it is risky and gets a review.
 
 The planner has no edit tools, so it cannot change what it plans.
 The lead never fixes a finding itself: the builder that built the step fixes it.

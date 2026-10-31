@@ -1,6 +1,106 @@
-# Mockups handoff: In tray horizon indicators
+# Mockups handoff
 
-## Brief
+Two In tray briefs. The newest comes first.
+
+## 1. In tray: undo in visible space
+
+### Brief
+
+The user wrote: "The undo button is currently not visible on my screen size. We could find a more subtle place to put it in visible space."
+Their window is about 1000x650. The undo bar (`undo_bar()` in `src/intray/ui.rs`, built from `undo_strip` and `undo_button`) is drawn after the stack, inside the card's `ScrollArea`. So it sits below "6 behind this one", and they had to scroll to find it.
+It is a full-width dark bar, for example "Set aside: X [Undo U]", and after N it also holds the skip reasons (`SkipReason::ALL`). The workaround today scrolls the bar into view once when a skip asks for a reason.
+
+The new spot must stay visible at any window height without scrolling, and be quieter than the dark bar. The skip-reason picker must still fit, and stay reachable by mouse and keyboard.
+Out of scope: the horizon strip, card face content, ranking, other screens and code.
+None of the user's screenshot content is copied: the company in the screenshot is replaced with fictional names.
+
+### Canvas
+
+`TrayUndo.html` mirrors the app's layout. The head, strip and rail stay put, and only the card column scrolls (the `.app.fit` rules in `app.css`). The rail is 280px wide, as in `side_column("tray_side", 280.0)`.
+Pick the parameters with `?scene=A|B|C|D`, `?place=rail|tab|pill` and `?theme=light|dark`. Today is Saturday 31 October, and 6 cards are left.
+
+| PNG | Size | Placement | State |
+| --- | --- | --- | --- |
+| `TrayUndo-A.png`, `TrayUndo-A-1040.png` | 1280x820, 1040x650 | rail (chosen) | After L: a raised row heads Cleared today, "Orion Freight [Undo U] / Set aside until tomorrow". The strip shows "1 back". |
+| `TrayUndo-B.png`, `TrayUndo-B-1040.png` | 1280x820, 1040x650 | rail | After N on a skippable card, with no reason yet: "Quarry Labs [Undo U] / Skipped. Why? Optional." and the toggles Rate, Scope, Domain and Location. |
+| `TrayUndo-B-dark.png` | 1280x820 | rail | B in dark. |
+| `TrayUndo-C.png`, `TrayUndo-C-1040.png` | 1280x820, 1040x650 | rail | A reason picked: "Skipped, scope", with Scope filled. |
+| `TrayUndo-D.png`, `TrayUndo-D-1040.png` | 1280x820, 1040x650 | rail | No undo offer: Cleared today lists plain rows. There is no gap in the rail or under the card, because the card column never held the bar. |
+| `TrayUndo-alt-tab-B-1040.png` | 1040x650 | tab (alternative 1) | B as a slim line beside the card tab, pinned above the scrolling card. |
+| `TrayUndo-alt-pill-B-1040.png` | 1040x650 | pill (alternative 2) | B as a pill pinned to the bottom of the card column. |
+
+### Chosen placement: the head of the Cleared today rail
+
+- **Always in view.** The rail is the `side_column`, built outside the card's `ScrollArea`, so it never scrolls. At 1040x650 the undo row sits at about y 350 to 460, under the strip and level with the card's title.
+- **Where the decision lands.** The last decision is the head of the Cleared today log, so its undo lives on that row. Nothing new appears on screen. The row turns into a plain log line once the next decision is made.
+- **Quieter.** It is a `raised` row inside an existing slip, with a small Undo button, instead of an inverted full-width bar.
+- **The reasons fit.** The four small toggles take about 251px with 4px gaps, inside the rail's 252px content width. They wrap to a second row if a label ever grows.
+- **No gap.** With no offer the row is simply absent (scene D), and the card column is untouched in every state.
+- **Covers nothing.** It never overlaps the card or its action buttons.
+
+Rejected:
+
+- **Alternative 1, a line beside the card tab.**
+  - The tab row would have to move out of the `ScrollArea` to stay pinned.
+  - At 1040 the line wraps to two rows, which pushes the card down by about 30px.
+  - Next to the new card's tab, "Skipped: Quarry Labs" reads as if it describes the card below it.
+- **Alternative 2, a pill above the footer.**
+  - It floats over the card. In the PNG it covers the gates, and once scrolled it would cover the action buttons unless the scroll area reserves about 64px at the bottom.
+  - It is a second layer to manage, and louder than a row in the rail.
+
+### Rules for the builder
+
+- **Row content**:
+  - The first line is the card name in `Type::STRONG`, truncated, with a small "Undo U" key button on the right.
+  - The second line is in `Ink::Muted`:
+    - Later: "Set aside until tomorrow".
+    - A skip with no reason: "Skipped. Why? Optional."
+    - Anything else: `Decision::label()`, such as "Skipped, scope", "Command opened" or "Kept".
+- **Reasons**:
+  - They show only when `offer.asks_reason` is true, as `SkipReason::ALL` in order, with `on` set to `offer.reason == Some(reason)`.
+  - Picking one sends `Pressed::Reason`. Picking another replaces it. Picking the selected one again keeps it, as `give_reason` does today.
+- **Log**:
+  - For a logged outcome (skip, follow, keep), the undo row replaces that decision's plain row (`queue.cleared[0]`), so it is never drawn twice.
+  - Later is not logged, so its row sits above the log only while it can be undone. The header count stays `cleared.len()`: 2 in scene A, 3 in B to D.
+  - "Nothing yet." shows only when there is no log and no offer.
+- **Lifetime**: unchanged. The offer lasts until the next decision or U.
+- **Keyboard**:
+  - U still undoes from anywhere.
+  - The reason toggles and the Undo button are ordinary focusable buttons with the existing focus ring. Because the side column is built before the central panel, Tab reaches them first.
+  - No new shortcuts. Number keys stay free for the cards.
+- **Accessibility**: the row's label is "Last decision: Skipped, Quarry Labs. Press U to undo."
+- **Data the row needs**: `UndoOffer` carries `text` ("Skipped: Quarry Labs") today. The row needs the parts: the `name`, the `label` (`Decision::label()`), and whether the outcome is logged (or the `Outcome` itself). This is an `application` change in `in_tray.rs`.
+
+### New widgets
+
+| Widget | Where | Purpose | Tokens |
+| --- | --- | --- | --- |
+| `undo_row(ui, name, note, add) ` | `src/ui_kit/tray.rs` | The raised head row of a slip's list. It shows the name, the note, the Undo button slot and the extra content (reasons). | Fill `raised`, inset `INSET` (14), new `UNDO_ROW_PADDING: (i8, i8) = (10, 12)` (top, bottom), `ITEM_GAP` (6) between lines, `Type::STRONG` and `Ink::Muted` |
+| `small_key_button(ui, text, key)` | `src/ui_kit/controls.rs` | The Undo button: `press(ui, text, Look::Plain, SMALL, Some(key))` | `SMALL_BUTTON_HEIGHT`, `SMALL_BUTTON_PADDING`, `Type::SMALL_BUTTON`, `KEY_SIZE` |
+| `small_toggle(ui, text, on)` | `src/ui_kit/controls.rs` | A reason button. Off, it looks like `small_button`. On, it is filled `text` with `sheet` ink, like `.seg button.on`, and its `WidgetInfo` is `selected`. | `SMALL_BUTTON_HEIGHT`, `SMALL_BUTTON_PADDING`, `RADIUS_BUTTON`, `HAIRLINE`, new `TOGGLE_GAP: f32 = 4.0` (6px makes the four reasons wrap in the rail) |
+
+### What to remove
+
+- **`src/intray/ui.rs`**: the `undo_bar()` call inside the `ScrollArea`, `undo_bar()` itself, `undo_seen_id()` and the `scroll_to_me` workaround. Nothing needs to scroll into view any more.
+- **`UndoOffer.id`**: remove it if nothing else reads it. Its doc comment ties it to the scroll-once logic.
+- **`src/ui_kit/tray.rs`**: `undo_bar` and `undo_button`, and the `UNDO_PADDING` and `UNDO_GAP` tokens once they are unused.
+- **`tests/ui_kit_gallery.rs` lines 296 to 301**: replace the `undo_bar` example with `undo_row`, `small_key_button` and `small_toggle`, then refresh the gallery and screen snapshots on macOS.
+
+### Proposed doc changes (for the lead)
+
+- **`README.md` line 10**, replace "N skips, U undoes." with:
+  > N skips, U undoes the last decision. Until your next one it waits at the top of Cleared today, where a skip also takes its optional reason.
+- **`ARCHITECTURE.md` line 57** (the queue paragraph), after "Decisions and skip reasons live in `decisions.json` in the app's data folder." add:
+  > The last decision can be undone until the next one. Its row heads the Cleared today rail, which sits outside the card's scroll area, so it stays in view at any window height.
+- **`ARCHITECTURE.md` Features table, `intray` row**: no change.
+
+### Noticed, out of scope
+
+At 1040 wide, a horizon cell is about 56px inside, so today's "6 to decide" wraps to two lines (`TrayUndo-*-1040.png`). The app may already handle this, after `3d36e4d` fitted the counts to narrow columns.
+
+## 2. In tray: horizon indicators
+
+### Brief
 
 The user wrote: "can we make this clear on the dates fields, there is no number or indicator."
 Their tray had 7 decisions, all "No deadline", so all 14 cells of the horizon strip were blank.
@@ -17,7 +117,7 @@ The user approved these indicators:
 
 Out of scope: the card face, stack, undo bar, end panel, ranking and the other screens.
 
-## Canvas
+### Canvas
 
 `TrayHorizon.html` is a copy of `Tray.html` with only the strip redrawn. It uses `app.css` and `support.js`.
 Choose a scene with `?scene=A|B|C|D|E` (or the `scene` prop) and a theme with `?theme=light|dark`. Today is Saturday 31 October. All data is fictional.
@@ -39,7 +139,7 @@ States not drawn, and why:
 - **Feature failed to load**: none of its own. With no queue, the strip is scene D without the chip.
 - **Theme**: the screen does not differ between themes beyond tokens, so A and E are drawn in dark only as checks.
 
-## Rules for the builder
+### Rules for the builder
 
 - **Order within a cell**: day label, then dated marks, then the count block (today) or the return chip (tomorrow).
 - **Today's count block**, top to bottom:
@@ -69,7 +169,7 @@ States not drawn, and why:
   - Fill a `panel` rect of the text size plus `HORIZON_NOTE_PADDING` (14 by 7) behind it. Each cell hairline then stops 7px above and below the text, so the line reads as a label on the strip, not text struck by rules.
 - **Accessibility**: the chip's `WidgetInfo` label is "2 set aside, back tomorrow: Federal Data Agency, Meridian Rail Systems. Bring them back now."
 
-## New widgets (`src/ui_kit/tray.rs`)
+### New widgets (`src/ui_kit/tray.rs`)
 
 | Widget | Purpose | Tokens |
 | --- | --- | --- |
@@ -80,7 +180,7 @@ States not drawn, and why:
 The tooltip reuses egui's popup, which `install_theme` already styles: `sheet` fill, a `text` hairline, `RADIUS_PANEL` and the `WINDOW_SHADOW` offset in `line`. A tooltip width of about 250 matches the canvas.
 The overdue count needs no new application state: `Card.due` is public, so the UI can count from `queue.cards`. A `Queue::overdue()` helper beside `headline()` would keep the rule in one place.
 
-## Proposed doc changes (for the lead)
+### Proposed doc changes (for the lead)
 
 - **`ARCHITECTURE.md` line 59** (the Later paragraph), replace "Its mark pulls it back to the top." with:
   > Its mark pulls it back to the top. Tomorrow's cell on the horizon counts the cards set aside, names them on hover, and brings them all back when clicked.
@@ -92,12 +192,12 @@ The overdue count needs no new application state: `Card.due` is public, so the U
 - **`README.md` line 10**, replace "L sets the card aside until tomorrow," with:
   > L sets the card aside until tomorrow (the horizon's next day shows how many, and a click brings them back),
 
-## Changes in round 2
+### Changes in round 2
 
 - **Overdue**: a new "N overdue" line in today's cell, the new scene E (light and dark), and the conditional note wording. The answered open question is removed.
 - **Note mask**: `.hz-none` is now a padded block (7px by 14px, `background-color: var(--panel)`, `z-index: 2`), so the hairlines stop well clear of the text. Before, the mask was only as tall as the text, so the line read as crossed out at normal zoom. I re-rendered A, A-dark and D and checked each at full size.
 - **`Tray.html` line 380**: the Lumen follow-up draft now signs off "Robin Vasquez". No other canvas has the real name.
 
-## Changes in round 1
+### Changes in round 1
 
 - **`app.css`**: added the `.hz-count`, `.hz-late`, `.hz-kind`, `.hz-back`, `.hz-tip`, `.hz-none` and `.tbox.lift` classes. I also fixed a selector-strength bug: `.app button` outranked `.mark` and `.c-*`, so the horizon marks in `Tray.html` drew in the plain text colour and regular weight. The new `.hz .mark` rules give them the `TAG` face and kind tone that `horizon_mark` uses in the app, so `Tray.html` now matches the app too.

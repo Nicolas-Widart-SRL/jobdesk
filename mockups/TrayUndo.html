@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>In-tray, undo placement</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="app fit" data-theme="{{theme}}" tabIndex="-1" onKeyDown="{{onKey}}">
+  <header class="side">
+    <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>Jobdesk</div>
+    <button class="btn pri" type="button">Ask or run <span class="keys"><span>⌘</span><span>K</span></span></button>
+    <nav class="nav" aria-label="Main">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="6">
+        <a class="{{item.cls}}" href="{{item.href}}">{{item.label}}<span class="count num">{{item.count}}</span></a>
+      </sc-for>
+    </nav>
+  </header>
+  <main class="main">
+    <header class="head lead">
+      <div class="grow"><h1>{{headline}}</h1><div class="muted">Paused runs come first, then deadlines, then the rest.</div></div>
+    </header>
+    <div class="body">
+      <div class="tbox lift">
+        <section class="horizon" aria-label="Next 14 days">
+          <sc-for list="{{days}}" as="d" hint-placeholder-count="14">
+            <div class="{{d.cls}}" style="grid-row: 1; grid-column: {{d.col}}">
+              <span class="d num">{{d.label}}</span>
+              <sc-if value="{{d.hasCount}}" hint-placeholder-val="{{ false }}">
+                <span class="hz-count num">{{d.countText}}</span>
+                <sc-for list="{{d.kinds}}" as="k" hint-placeholder-count="1"><span class="hz-kind num">{{k.t}}</span></sc-for>
+              </sc-if>
+              <sc-if value="{{d.hasBack}}" hint-placeholder-val="{{ false }}">
+                <div class="hz-back"><button type="button">{{d.backText}}</button></div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <div class="hz-none"><span>No deadlines in the next 14 days</span></div>
+        </section>
+      </div>
+      <div class="split">
+        <section class="{{aCls}}" aria-label="Decision">
+          <div class="tabrow">
+            <div class="ktab c-closed">Triage<span class="muted" style="font-weight: 500">No deadline</span></div>
+            <sc-if value="{{lineOn}}" hint-placeholder-val="{{ false }}">
+              <div class="undo-line" role="status">
+                <span>{{u.verb}}: <b>{{u.name}}</b></span>
+                <sc-if value="{{u.asks}}" hint-placeholder-val="{{ false }}">
+                  <span>{{u.why}}</span>
+                  <sc-for list="{{reasons}}" as="r" hint-placeholder-count="4">
+                    <button class="{{r.cls}}" type="button" aria-pressed="{{r.on}}" onClick="{{r.pick}}">{{r.t}}</button>
+                  </sc-for>
+                </sc-if>
+                <button class="btn sm" type="button" onClick="{{doUndo}}">Undo <span class="kb">U</span></button>
+              </div>
+            </sc-if>
+          </div>
+          <div class="scroll">
+            <article class="deal">
+              <div class="col" style="gap: 2px"><h2>Pelican Health, Platform Architect</h2><div class="muted">Remote first, 1 day on site a month</div></div>
+              <p class="take">No freelance gate fails, but 2 of 6 need a look at the posting.</p>
+              <div class="row wrap" style="gap: 10px"><span class="stamp c-hired">77</span><div class="grow"><div style="font-weight: 600">Strong Fit</div><div class="muted">Triage score, from posting text only</div></div></div>
+              <div class="gates">
+                <sc-for list="{{gates}}" as="g" hint-placeholder-count="6">
+                  <div class="gate"><div class="grow"><div class="muted" style="font-size: 13px">{{g.k}}</div><div class="trunc" style="font-weight: 500">{{g.v}}</div></div><span class="tag {{g.tone}}">{{g.r}}</span></div>
+                </sc-for>
+              </div>
+              <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 20px">
+                <div class="col" style="gap: 3px"><div style="font-weight: 600">Strengths</div><sc-for list="{{good}}" as="g" hint-placeholder-count="3"><div class="muted">{{g.t}}</div></sc-for></div>
+                <div class="col" style="gap: 3px"><div style="font-weight: 600">Gaps</div><sc-for list="{{gaps}}" as="g" hint-placeholder-count="3"><div class="muted">{{g.t}}</div></sc-for></div>
+              </div>
+              <div class="actions">
+                <button class="btn pri" type="button">Draft application <span class="kb">Y</span></button>
+                <button class="btn" type="button">Open posting</button>
+                <button class="btn" type="button">Skip <span class="kb">N</span></button>
+                <button class="btn" type="button">Later <span class="kb">L</span></button>
+                <span class="muted">Y follows the suggestion</span>
+              </div>
+              <div class="mono faint" style="overflow-wrap: anywhere">Opens /apply pelicanhealth.example/careers/platform-architect in the launcher</div>
+            </article>
+            <sc-for list="{{edges}}" as="e" hint-placeholder-count="5">
+              <div class="edge" style="margin-inline: {{e.m}}px"></div>
+            </sc-for>
+            <div class="mono faint behind">{{behind}}</div>
+          </div>
+          <sc-if value="{{pillOn}}" hint-placeholder-val="{{ false }}">
+            <div class="undo-pill" role="status">
+              <span>{{u.verb}}: <b>{{u.name}}</b></span>
+              <sc-if value="{{u.asks}}" hint-placeholder-val="{{ false }}">
+                <span class="muted">{{u.why}}</span>
+                <sc-for list="{{reasons}}" as="r" hint-placeholder-count="4">
+                  <button class="{{r.cls}}" type="button" aria-pressed="{{r.on}}" onClick="{{r.pick}}">{{r.t}}</button>
+                </sc-for>
+              </sc-if>
+              <button class="btn sm" type="button" onClick="{{doUndo}}">Undo <span class="kb">U</span></button>
+            </div>
+          </sc-if>
+        </section>
+
+        <div class="col b" style="gap: 16px">
+          <section class="panel">
+            <div class="ph">Cleared today <span class="mono">{{logN}}</span></div>
+            <div class="list">
+              <sc-if value="{{railOn}}" hint-placeholder-val="{{ false }}">
+                <div class="li undo-row" role="status" aria-label="{{u.aria}}">
+                  <div class="top"><span class="grow trunc" style="font-weight: 600">{{u.name}}</span><button class="btn sm" type="button" onClick="{{doUndo}}">Undo <span class="kb">U</span></button></div>
+                  <span class="muted">{{u.note}}</span>
+                  <sc-if value="{{u.asks}}" hint-placeholder-val="{{ false }}">
+                    <div class="reasons" role="group" aria-label="Skip reason">
+                      <sc-for list="{{reasons}}" as="r" hint-placeholder-count="4">
+                        <button class="{{r.cls}}" type="button" aria-pressed="{{r.on}}" onClick="{{r.pick}}">{{r.t}}</button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-for list="{{logRows}}" as="l" hint-placeholder-count="2">
+                <div class="li" style="padding-block: 6px"><span class="grow trunc">{{l.t}}</span><span class="muted" style="white-space: nowrap">{{l.label}}</span></div>
+              </sc-for>
+              <sc-if value="{{noLog}}" hint-placeholder-val="{{ false }}">
+                <div class="pb muted">Nothing yet.</div>
+              </sc-if>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <footer class="status">
+      <span class="row"><span class="dot"></span>Claude CLI 2.1.308</span>
+      <span>Slash commands stay the only writers of your files.</span>
+      <div class="seg" role="group" aria-label="Theme" style="margin-left: auto"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+      <span class="faint">Sample data</span>
+    </footer>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"scene":{"editor":"enum","options":["A","B","C","D"],"default":"A"},"place":{"editor":"enum","options":["rail","tab","pill"],"default":"rail"},"$preview":{"width":1280,"height":820}}'>
+// Where the undo offer lives. Scenes: A after L, B after N with no reason yet, C a reason picked, D no offer.
+// place: rail (chosen), tab (alternative 1), pill (alternative 2).
+// ?scene=A|B|C|D, ?place=rail|tab|pill and ?theme=light|dark pick one for the headless render. All data is fictional.
+const EARLIER = [{ t: 'Saltmarsh Energy', label: 'Skipped, domain' }, { t: 'Juniper Retail', label: 'Command opened' }];
+const SCENES = {
+  A: { undo: { verb: 'Set aside', name: 'Orion Freight', asks: false, reason: null }, aside: 1, log: EARLIER },
+  B: { undo: { verb: 'Skipped', name: 'Quarry Labs', asks: true, reason: null }, aside: 0, log: EARLIER },
+  C: { undo: { verb: 'Skipped', name: 'Quarry Labs', asks: true, reason: 'Scope' }, aside: 0, log: EARLIER },
+  D: { undo: null, aside: 0, log: [{ t: 'Quarry Labs', label: 'Skipped, scope' }, ...EARLIER] },
+};
+const REASONS = ['Rate', 'Scope', 'Domain', 'Location'];
+
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    const scene = this.pick('scene', p, Object.keys(SCENES), 'A');
+    const s = SCENES[scene];
+    this.state = { scene, place: this.pick('place', p, ['rail', 'tab', 'pill'], 'rail'), undo: s.undo ? { ...s.undo } : null, aside: s.aside, log: s.log };
+  }
+  pick(key, p, options, fallback) {
+    let q = null;
+    try { q = new URLSearchParams(window.location.search).get(key); } catch (e) {}
+    const v = q || (p || {})[key] || fallback;
+    const hit = options.find((o) => o.toLowerCase() === String(v).toLowerCase());
+    return hit || fallback;
+  }
+  themeVals() {
+    let url = null;
+    try { url = new URLSearchParams(window.location.search).get('theme'); } catch (e) {}
+    const theme = url || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({ label, cls: label.toLowerCase() === theme ? 'on' : '', pick: () => this.setState({ theme: label.toLowerCase() }) }));
+    return { theme, themes };
+  }
+  // U takes the decision back: the card returns on top and the offer ends.
+  doUndo() { if (this.state.undo) this.setState({ undo: null, aside: 0 }); }
+  setReason(t) { const u = this.state.undo; if (u && u.asks) this.setState({ undo: { ...u, reason: u.reason === t ? u.reason : t } }); }
+  onKey(e) {
+    const k = (e.key || '').toLowerCase();
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (k === 'u') this.doUndo();
+  }
+  renderVals() {
+    const s = this.state;
+    const count = 6 + (s.undo ? 0 : 0);
+    const nav = [['In-tray', String(count)], ['Jobs', '5'], ['Tracker', ''], ['Insights', ''], ['Runs', ''], ['Workspace', '']]
+      .map(([label, c]) => ({ label, href: label === 'In-tray' ? 'Tray.html' : label + '.html', count: c, cls: label === 'In-tray' ? 'on' : '' }));
+    const names = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const days = Array.from({ length: 14 }, (_, i) => ({
+      label: names[i % 7] + ' ' + (i === 0 ? 31 : i), col: i + 1, cls: 'hz' + (i === 0 ? ' today' : ''),
+      hasCount: i === 0, countText: count + ' to decide', kinds: [{ t: count + ' triage' }],
+      hasBack: i === 1 && s.aside > 0, backText: s.aside + ' back',
+    }));
+    const G = (k, v, r) => ({ k, v, r, tone: r === 'Pass' ? 'c-hired' : r === 'Fail' ? 'c-closed' : 'c-interview' });
+    const T = (xs) => xs.map((t) => ({ t }));
+    const gates = [G('Contract', 'Freelance, 9 months, can extend', 'Pass'), G('Day rate', 'Not stated, floor 700', 'Flag'), G('Work mode', 'Remote, 1 day a month on site', 'Pass'),
+      G('Commute', '1h 10 by train, monthly', 'Pass'), G('Language', 'English', 'Pass'), G('Posting guard', 'clean', 'Flag')];
+    const good = T(['Platform work on Kubernetes and Kafka matches the last two missions.', 'Asks for coaching a team of eight, which fits the lead profile.', 'Java and Spring Boot are named as the core stack.']);
+    const gaps = T(['Healthcare compliance (HDS, GDPR health data) is asked for and not on the profile.', 'The rate is not stated. The posting says "market rate".', 'The guard flagged one line of marketing copy as instructions.']);
+
+    const u = s.undo;
+    const reasons = u && u.asks ? REASONS.map((t) => ({ t, on: u.reason === t ? 'true' : 'false', cls: 'btn sm tog' + (u.reason === t ? ' on' : ''), pick: () => this.setReason(t) })) : [];
+    const uv = u ? {
+      ...u,
+      why: u.reason ? 'Reason:' : 'Why?',
+      note: u.verb === 'Set aside' ? 'Set aside until tomorrow' : u.reason ? 'Skipped, ' + u.reason.toLowerCase() : 'Skipped. Why? Optional.',
+      aria: 'Last decision: ' + u.verb + ', ' + u.name + '. Press U to undo.',
+    } : {};
+    // A skip is logged, so its row replaces the plain one. Later is not logged, so it adds a row only while it can be undone.
+    const logged = s.log.length + (u && u.verb !== 'Set aside' ? 1 : 0);
+    const place = s.place;
+    return {
+      ...this.themeVals(), nav, headline: count + ' decisions, about ' + count + ' minutes', days, gates, good, gaps,
+      edges: Array.from({ length: 5 }, (_, i) => ({ m: (i + 1) * 5 })), behind: (count - 1) + ' behind this one',
+      u: uv, reasons, railOn: !!u && place === 'rail', lineOn: !!u && place === 'tab', pillOn: !!u && place === 'pill',
+      aCls: 'a' + (u && place === 'pill' ? ' pilled' : ''),
+      logRows: place === 'rail' || !u || u.verb === 'Set aside' ? s.log : [{ t: u.name, label: u.reason ? 'Skipped, ' + u.reason.toLowerCase() : 'Skipped' }, ...s.log],
+      logN: String(logged), noLog: logged === 0 && !u,
+      doUndo: () => this.doUndo(), onKey: (e) => this.onKey(e),
+    };
+  }
+}
+</script>
+</body>
+</html>

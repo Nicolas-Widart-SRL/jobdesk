@@ -40,7 +40,8 @@ pub enum AgentEvent {
     TextDelta(String),
     AssistantText { text: String, nested: bool },
     ToolStarted { id: String, name: String, summary: String, nested: bool },
-    ToolFinished { id: String, failed: bool },
+    /// `Err` means the tool failed, and holds the reason when its output said why.
+    ToolFinished { id: String, outcome: Result<(), Option<String>> },
     PromptRaised(Prompt),
     PromptWithdrawn { request_id: String },
     UsageChanged(Usage),

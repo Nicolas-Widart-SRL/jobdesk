@@ -194,6 +194,26 @@ a.panel.card:hover { background: var(--raised); }
 .mark { padding: 0; border: 0; background: none; font-size: 12.5px; font-weight: 600; line-height: 1.2; text-align: left; cursor: pointer; }
 .mark:hover { text-decoration: underline; }
 .mark:disabled { color: var(--faint); text-decoration: line-through; cursor: default; }
+/* Outrank `.app button` so a mark keeps the TAG face and its card's tone, as horizon_mark draws it. */
+.hz .mark { font-size: 12.5px; font-weight: 600; }
+.hz .mark.c-drafted { color: var(--drafted); } .hz .mark.c-interview { color: var(--interview); } .hz .mark.c-offer { color: var(--offer); }
+.hz .mark.c-closed { color: var(--closed); } .hz .mark.c-active { color: var(--active); } .hz .mark.c-plain { color: var(--muted); }
+.hz .mark:disabled { color: var(--faint); }
+/* Horizon indicators, so no cell is silently blank: what waits today, what returns tomorrow,
+   and one quiet line across the empty days when no dated card falls in view. */
+.hz-count { font-size: 12.5px; font-weight: 600; line-height: 1.2; }
+.hz-kind { font-size: 12.5px; line-height: 1.2; color: var(--muted); }
+.hz-back { position: relative; align-self: flex-start; margin-top: 1px; }
+.hz-back > button { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--line); border-radius: 2px; background: var(--sheet); font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.hz-back > button:hover, .hz-back.show > button { border-color: var(--text); }
+.hz-tip { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 4; width: 250px; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); }
+.hz-back:hover .hz-tip, .hz-back.show .hz-tip { display: flex; }
+.hz-tip .muted { margin-top: 4px; font-size: 13px; }
+/* Overdue uses the warning ink, the same token egui's warn_fg_color takes. */
+.hz-late { color: var(--interview); }
+/* The note is a panel-filled box that sits above the cells, so the hairlines stop 7px clear of the text. */
+.hz-none { position: relative; z-index: 2; grid-row: 1; grid-column: 3 / -1; align-self: center; justify-self: center; padding: 7px 14px; background-color: var(--panel); color: var(--muted); font-size: 12.5px; line-height: 1.2; white-space: nowrap; }
+.tbox.lift { overflow: visible; }
 .ktab { display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 14px; border-radius: 6px 6px 0 0; background: var(--panel); font-weight: 600; }
 .deal { display: flex; flex-direction: column; gap: 16px; padding: 20px 22px; border-radius: 0 4px 4px 4px; background: var(--panel); }
 .deal.wait { margin-bottom: 5px; border: 1px solid var(--interview); box-shadow: 5px 5px 0 var(--interview); }

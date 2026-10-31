@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use chrono::NaiveDate;
 
 use crate::shared_kernel::{LoadError, WebUrl};
-use crate::tracking::domain::{ApplicationRepository, DeadlineState, ReachedStage, StatusBucket, TrackedApplication};
+use crate::tracking::domain::{ApplicationRepository, DeadlineState, OutcomeRecord, ReachedStage, StatusBucket, TrackedApplication, archive_folder};
 
 /// The `/outcome` defaults.
 pub const FOLLOW_UP_DAYS: i64 = 10;
@@ -31,6 +31,10 @@ pub struct ApplicationCard {
     pub reached: ReachedStage,
     pub is_rejection: bool,
     pub is_final: bool,
+    pub cv_file: String,
+    pub cover_letter_file: String,
+    pub archive_folder: Option<String>,
+    pub outcome: Option<OutcomeRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +67,10 @@ impl Pipeline {
 
     pub fn stale_count(&self) -> usize {
         self.cards().filter(|card| card.stale).count()
+    }
+
+    pub fn card_in_folder(&self, folder: &str) -> Option<&ApplicationCard> {
+        self.cards().find(|card| card.archive_folder.as_deref() == Some(folder))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -115,6 +123,10 @@ fn card_of(application: &TrackedApplication, today: NaiveDate) -> ApplicationCar
         reached: application.reached(),
         is_rejection: application.status.is_rejection(),
         is_final: application.status.is_final(),
+        cv_file: application.cv_file.clone(),
+        cover_letter_file: application.cover_letter_file.clone(),
+        archive_folder: archive_folder(&application.company, &application.role),
+        outcome: application.outcome.clone(),
     }
 }
 

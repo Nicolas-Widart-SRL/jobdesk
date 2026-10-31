@@ -19,6 +19,7 @@ eframe = { version = "0.37", default-features = false, features = ["accesskit", 
 egui = "0.37"
 egui_commonmark = { version = "0.26", default-features = false }
 egui_extras = "0.37"
+hayro = "0.8"
 notify = "8"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }

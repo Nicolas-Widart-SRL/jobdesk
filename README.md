@@ -4,6 +4,8 @@ Native macOS and Windows view over an [ai-job-search](https://github.com/ai-job-
 
 Overview, Jobs, Tracker and Insights update live as commands change your files. The Runs screen starts any slash command through your local `claude` CLI and shows its progress, permission requests, questions, cost and history.
 
+Open an application from Tracker for its dossier: compiled PDFs, verification results, keyword coverage, evaluation, archived posting, prep packs, outcome notes and follow-up drafts. Verification, keywords and evaluation exist only in `/apply` output, so they appear for applications run through Jobdesk.
+
 Jobdesk itself never writes to your checkout. Slash commands stay the only writers, and rules you allow "for this run" last for that session only. It stores no credentials and uses the login of your installed Claude CLI. Run logs, which include the text of your runs, are kept in the app's data folder and are readable only by your user.
 
 Only one run works at a time, because two commands could overwrite each other's files. A session waiting for your reply does not block a new run.

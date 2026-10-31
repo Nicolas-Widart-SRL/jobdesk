@@ -122,7 +122,8 @@ mod tests {
             status_label: String::new(), bucket, applied_on: String::new(), deadline: None, deadline_state: None,
             contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None,
             follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
-            is_rejection: false, is_final: false,
+            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
+            archive_folder: None, outcome: None,
         }
     }
 

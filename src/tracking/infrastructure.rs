@@ -58,6 +58,8 @@ struct Row {
     contact_person: String,
     fit_rating: String,
     notes: String,
+    cv_file: String,
+    cover_letter_file: String,
     source: String,
     deadline: String,
 }
@@ -82,6 +84,8 @@ fn parse_rows(text: &str) -> csv::Result<Vec<Row>> {
                 contact_person: cell("contact_person"),
                 fit_rating: cell("fit_rating"),
                 notes: cell("notes"),
+                cv_file: cell("cv_file"),
+                cover_letter_file: cell("cover_letter_file"),
                 source: cell("source"),
                 deadline: cell("deadline"),
             })
@@ -102,6 +106,8 @@ fn application_from(row: Row, outcome: Option<OutcomeRecord>) -> TrackedApplicat
         channel: row.channel.trim().to_owned(),
         contact_person: row.contact_person.trim().to_owned(),
         notes: row.notes,
+        cv_file: row.cv_file.trim().to_owned(),
+        cover_letter_file: row.cover_letter_file.trim().to_owned(),
         outcome,
     }
 }

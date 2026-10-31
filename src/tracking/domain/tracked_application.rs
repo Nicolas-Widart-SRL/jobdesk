@@ -38,6 +38,8 @@ pub struct TrackedApplication {
     pub fit_rating: Option<u8>,
     pub notes: String,
     pub source: Option<WebUrl>,
+    pub cv_file: String,
+    pub cover_letter_file: String,
     pub outcome: Option<OutcomeRecord>,
 }
 
@@ -129,6 +131,8 @@ pub mod fixtures {
             fit_rating: None,
             notes: notes.into(),
             source: None,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
             outcome: None,
         }
     }

@@ -97,6 +97,15 @@ impl Run {
         }
     }
 
+    /// Claude's own top-level messages, oldest first.
+    pub fn replies(&self) -> Vec<String> {
+        let reply = |activity: &Activity| match &activity.kind {
+            ActivityKind::Claude(text) if !activity.nested => Some(text.clone()),
+            _ => None,
+        };
+        self.activity.iter().filter_map(reply).collect()
+    }
+
     /// Whether commands must wait, because two runs at once could overwrite each other's files.
     pub fn is_busy(&self) -> bool {
         matches!(self.status, RunStatus::Starting | RunStatus::Working | RunStatus::Stopping)

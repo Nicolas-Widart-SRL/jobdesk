@@ -4,12 +4,15 @@ use std::sync::mpsc::Sender;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Paths whose changes can alter what the screens show.
-const WATCHED: [(&str, RecursiveMode); 5] = [
+const WATCHED: [(&str, RecursiveMode); 8] = [
     (".", RecursiveMode::NonRecursive),
     ("job_scraper", RecursiveMode::Recursive),
     ("documents/applications", RecursiveMode::Recursive),
     ("upskill", RecursiveMode::Recursive),
     ("reports", RecursiveMode::Recursive),
+    ("cv", RecursiveMode::NonRecursive),
+    ("cover_letters", RecursiveMode::NonRecursive),
+    ("company_research", RecursiveMode::Recursive),
 ];
 
 pub fn path_exists(path: &Path) -> bool {

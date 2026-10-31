@@ -5,6 +5,9 @@ use std::sync::mpsc::Receiver;
 use egui::{Frame, Margin, Panel, RichText, ThemePreference, Ui};
 
 use crate::discovery::ui::JobsScreen;
+use crate::dossier;
+use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
+use crate::dossier::ui::{DossierAction, DossierScreen};
 use crate::insights;
 use crate::overview;
 use crate::overview::application::Destination;
@@ -28,6 +31,7 @@ pub enum Screen {
     Insights,
     Runs,
     Launcher,
+    Dossier,
 }
 
 impl Screen {
@@ -41,6 +45,7 @@ impl Screen {
             Self::Insights => "Insights",
             Self::Runs => "Runs",
             Self::Launcher => "Run a command",
+            Self::Dossier => "Application dossier",
         }
     }
 
@@ -52,6 +57,7 @@ impl Screen {
             Self::Insights => "Search health and your latest skill gap report",
             Self::Runs => "Every command Jobdesk ran in this workspace",
             Self::Launcher => "Every action is the unchanged slash command. Forms only build its arguments.",
+            Self::Dossier => "Documents, evaluation, prep and outcome for one application",
         }
     }
 }
@@ -70,6 +76,16 @@ pub struct Shell {
     run_screen: RunScreen,
     logs: Option<PathBuf>,
     confirm_quit: bool,
+    dossier_screen: DossierScreen,
+    pages: Option<PageStore>,
+    open_dossier: Option<OpenDossier>,
+}
+
+/// The dossier on screen. It is rebuilt when its files or saved runs change.
+struct OpenDossier {
+    folder: String,
+    view: Option<Dossier>,
+    run_activity: usize,
 }
 
 impl Shell {
@@ -87,6 +103,9 @@ impl Shell {
             run_screen: RunScreen::default(),
             logs: None,
             confirm_quit: false,
+            dossier_screen: DossierScreen::default(),
+            pages: None,
+            open_dossier: None,
         }
     }
 
@@ -97,6 +116,31 @@ impl Shell {
 
     pub fn desk_slot(&mut self) -> &mut Option<RunDesk> {
         &mut self.desk
+    }
+
+    pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
+        self.pages = Some(pages);
+        self.show_dossier(folder.to_owned());
+    }
+
+    fn show_dossier(&mut self, folder: String) {
+        self.open_dossier = Some(OpenDossier { folder, view: None, run_activity: 0 });
+        self.dossier_screen.reset();
+        self.screen = Screen::Dossier;
+    }
+
+    fn refreshed_dossier(&mut self) -> Option<Dossier> {
+        let runs = self.desk.as_ref().map_or(&[][..], RunDesk::runs);
+        let run_activity = runs.iter().map(|run| run.activity.len()).sum();
+        let open = self.open_dossier.as_mut()?;
+        if open.view.is_none() || open.run_activity != run_activity {
+            let card = self.snapshot.pipeline.card_in_folder(&open.folder)?;
+            let contents = self.snapshot.archives.get(&open.folder).cloned().unwrap_or_default();
+            let transcripts: Vec<RunTranscript> = runs.iter().map(RunTranscript::from).collect();
+            open.view = Some(compose_dossier(card, &contents, &transcripts));
+            open.run_activity = run_activity;
+        }
+        open.view.clone()
     }
 
     fn start(ctx: &egui::Context, path: Option<PathBuf>, logs: Option<PathBuf>) -> Self {
@@ -116,6 +160,9 @@ impl Shell {
                     let repaint = ctx.clone();
                     self.desk = Some(runs::open_desk(root.path(), logs.clone(), Arc::new(move || repaint.request_repaint())));
                 }
+                let repaint = ctx.clone();
+                self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
+                self.open_dossier = None;
                 self.workspace = Some(root);
                 self.folder_error = None;
             }
@@ -132,9 +179,15 @@ impl Shell {
     pub fn show(&mut self, ui: &mut Ui) {
         if let Some(latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
             self.snapshot = latest;
+            if let Some(open) = &mut self.open_dossier {
+                open.view = None;
+            }
         }
         if let Some(desk) = &mut self.desk {
             desk.poll();
+        }
+        if let Some(pages) = &mut self.pages {
+            pages.poll();
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let p = Palette::of(ui);
@@ -196,7 +249,7 @@ impl Shell {
         ui.add_space(10.0);
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         for screen in Screen::NAV {
-            let on = self.screen == screen;
+            let on = self.screen == screen || (self.screen == Screen::Dossier && screen == Screen::Tracker);
             let title = if screen == Screen::Runs && waiting > 0 { format!("Runs  {waiting} waiting") } else { screen.title().to_owned() };
             let text = RichText::new(title).color(if on { p.text } else { p.muted });
             let button = egui::Button::new(text).fill(if on { p.raised } else { egui::Color32::TRANSPARENT }).stroke(egui::Stroke::NONE).min_size(egui::vec2(ui.available_width(), 32.0)).wrap_mode(egui::TextWrapMode::Truncate);
@@ -283,7 +336,24 @@ impl Shell {
                     }
                 }
                 Screen::Jobs => self.jobs.show(ui, &snapshot.board),
-                Screen::Tracker => self.tracker.show(ui, &snapshot.pipeline),
+                Screen::Tracker => {
+                    if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline) {
+                        self.show_dossier(folder);
+                    }
+                }
+                Screen::Dossier => {
+                    let view = self.refreshed_dossier();
+                    match (view, &mut self.pages) {
+                        (Some(view), Some(pages)) => {
+                            if self.dossier_screen.show(ui, &view, pages) == Some(DossierAction::Back) {
+                                self.screen = Screen::Tracker;
+                            }
+                        }
+                        _ => {
+                            muted(ui, "This application is no longer in the tracker.");
+                        }
+                    }
+                }
                 Screen::Insights => insights::ui::show(ui, &snapshot.insights, snapshot.skill_gaps.as_ref()),
                 Screen::Runs => {
                     if let Some(desk) = &mut self.desk {

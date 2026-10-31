@@ -192,6 +192,71 @@ fn a_command_button_leads_to_a_started_run() {
     assert_eq!(harness.get_all_by_label("Starting").count(), 2, "run list and run header");
 }
 
+const FINDINGS: &str = "## Verification Checklist\n- [x] All claims match the profile\n- [x] CV is exactly 2 pages\n- [ ] Addressed to a named person\n\n| Keyword | Priority | Status | Note |\n|---|---|---|---|\n| event sourcing | required | covered | Skills |\n| Azure | preferred | missing (gap) | Named in letter |\n";
+const EVALUATION: &str = "**Overall fit: 78, Strong Fit.**\n\n**Skills match:** Java, Kafka and event sourcing match.\n\n**Experience match:** Public sector work maps well.";
+
+fn dossier_shell(name: &str) -> Shell {
+    let mut shell = shell(Screen::Tracker, name);
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/apply https://tessel.example/1", &StartOptions { model: None, budget_usd: 5.0 }).unwrap();
+    let guard = sink.lock().unwrap();
+    let emit = guard.as_ref().unwrap();
+    for text in [EVALUATION, FINDINGS] {
+        emit(AgentEvent::AssistantText { text: text.into(), nested: false });
+    }
+    emit(AgentEvent::ProcessExited { failure: None });
+    drop(guard);
+    *shell.desk_slot() = Some(desk);
+    shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
+    shell
+}
+
+fn render_dossier(section: Option<&str>, theme: Theme, name: &str) {
+    let mut shell = dossier_shell(name);
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_pixels_per_point(1.5)
+        .with_theme(theme)
+        .with_context_setup(|ctx| install_look(ctx))
+        .wgpu()
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    if let Some(section) = section {
+        harness.get_by_label_contains(section).click();
+    }
+    for _ in 0..40 {
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn dossier_documents_dark() {
+    render_dossier(None, Theme::Dark, "dossier_documents_dark");
+}
+
+#[test]
+fn dossier_documents_light() {
+    render_dossier(None, Theme::Light, "dossier_documents_light");
+}
+
+#[test]
+fn dossier_evaluation_dark() {
+    render_dossier(Some("Evaluation"), Theme::Dark, "dossier_evaluation_dark");
+}
+
+#[test]
+fn dossier_prep_light() {
+    render_dossier(Some("Interview prep"), Theme::Light, "dossier_prep_light");
+}
+
+#[test]
+fn dossier_outcome_dark() {
+    render_dossier(Some("Outcome and follow-ups"), Theme::Dark, "dossier_outcome_dark");
+}
+
 #[test]
 fn run_permission_dark() {
     render_run(permission_prompt(), Theme::Dark, "run_permission_dark");

@@ -1,4 +1,5 @@
 pub mod discovery;
+pub mod dossier;
 pub mod insights;
 pub mod overview;
 pub mod runs;

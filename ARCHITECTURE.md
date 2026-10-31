@@ -15,6 +15,7 @@ Each feature is a bounded context with its own language.
 | `insights` | search report, funnel, skill gap, study order | tracking's application layer, `upskill/report-*.md` |
 | `overview` | workflow stage, attention item | discovery's and tracking's application layers |
 | `runs` | run, activity, prompt, decision, step rail, command catalog | the `claude` CLI stream, its own run logs |
+| `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |
 | `workspace` | workspace root | the checkout folder, file changes |
 
 `shared_kernel` holds the few value types every feature agrees on. `ui_kit` holds the design
@@ -45,6 +46,8 @@ function. `tests/architecture.rs` enforces the remaining rules, including that `
 
 ## Runtime
 
+PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no PDF library ships beside the app. A rebuilt PDF renders again because pages are keyed by path and modification time.
+
 A worker thread rebuilds an immutable `Snapshot` when watched files change and sends it to the
 UI thread. The UI never reads from disk. A feature that fails to load reports an issue and the
 others keep working.
@@ -54,7 +57,8 @@ Each run owns one `claude -p` child process, with the stream-json protocol over 
 ## Trust
 
 Posting text, notes and reports are third-party or generated data. Screens render them as
-plain text, and a link opens only on click and only for `http` or `https`. Claude's replies render
-as Markdown with no image loading.
+plain text, and a link opens only on click and only for `http` or `https`. Claude's replies and prep packs
+render as Markdown with no image loading. Archived postings always render as plain text. Paths read
+from the tracker must stay inside the workspace.
 
 Jobdesk never bypasses permissions. Every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB. The CLI suggests saving allow rules to project settings, so `stream_json` rewrites every remembered rule to session scope to keep the checkout unchanged.

@@ -1,7 +1,7 @@
 use egui::{Frame, Panel, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder};
 
 use crate::tracking::application::{ApplicationCard, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
-use crate::ui_kit::{Palette, Tone, command_button, divider, muted, open_link, panel, panel_body, strong, tag};
+use crate::ui_kit::{Palette, Tone, command_button, divider, muted, open_link, panel, panel_body, primary_button, strong, tag};
 
 #[derive(Default)]
 pub struct TrackerScreen {
@@ -29,7 +29,9 @@ fn card_meta(card: &ApplicationCard) -> String {
 }
 
 impl TrackerScreen {
-    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) {
+    /// Returns the archive folder of a dossier the user asked to open.
+    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
+        let mut open = None;
         if pipeline.is_empty() {
             panel(ui, |ui| {
                 panel_body(ui, |ui| {
@@ -38,18 +40,19 @@ impl TrackerScreen {
                     command_button(ui, "/apply");
                 });
             });
-            return;
+            return None;
         }
         action_bar(ui, pipeline);
         let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
         if let Some(card) = selected {
             Panel::right("application_details").exact_size(320.0).resizable(false).frame(Frame::new().inner_margin(egui::Margin { left: 12, ..Default::default() })).show(ui, |ui| {
-                panel(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, card)));
+                panel(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
             });
         }
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.board(ui, pipeline));
         });
+        open
     }
 
     fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline) {
@@ -118,11 +121,15 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
     ui.add_space(10.0);
 }
 
-fn details(ui: &mut Ui, card: &ApplicationCard) {
+fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
+    let mut open = None;
     panel_body(ui, |ui| {
         ui.label(RichText::new(card.company.as_str()).size(15.0).family(crate::ui_kit::semibold()));
         muted(ui, card.role.as_str());
         tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
+        if card.archive_folder.is_some() && primary_button(ui, "Open dossier").clicked() {
+            open = card.archive_folder.clone();
+        }
     });
     divider(ui);
     panel_body(ui, |ui| {
@@ -156,6 +163,7 @@ fn details(ui: &mut Ui, card: &ApplicationCard) {
             open_link(ui, "Open posting", card.source.as_ref());
         });
     });
+    open
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {

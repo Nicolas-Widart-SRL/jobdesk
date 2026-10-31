@@ -41,7 +41,7 @@ cargo packager --release --formats app,dmg
 
 Output lands in `target/packages`. On Windows use `--formats nsis`. `.github/workflows/build.yml` builds both platforms once the repo has a GitHub remote.
 
-These builds are not signed with a developer identity. macOS and Windows warn on other machines until they are signed and notarized. After changing the icon, run `python3 scripts/make_icon.py`.
+These builds are not signed with a developer identity. macOS and Windows warn on other machines until they are signed and notarized. The app icons live in `assets/brand/`.
 
 ## Authentication
 

@@ -27,7 +27,14 @@ worktree_of() {
 step_tree=$(worktree_of "$step")
 change_tree=$(worktree_of "$change")
 
-dirty() { [ -n "$step_tree" ] && [ -n "$(git -C "$step_tree" status --porcelain)" ]; }
+# True when the step's worktree holds anything not committed, untracked files included.
+# A failing git status counts as dirty.
+dirty() {
+  [ -n "$step_tree" ] || return 1
+  local status
+  status=$(git -C "$step_tree" status --porcelain --untracked-files=normal) || return 0
+  [ -n "$status" ]
+}
 if dirty; then
   echo "merge-step: $step has uncommitted changes in $step_tree. Ask its builder to commit them." >&2
   exit 1
@@ -57,7 +64,9 @@ fi
 if [ -n "$change_tree" ]; then
   git -C "$change_tree" merge --quiet --ff-only "$commit"
 else
-  git merge-base --is-ancestor "$change" "$commit" || { echo "merge-step: $commit does not fast-forward $change" >&2; exit 1; }
-  git update-ref "refs/heads/$change" "$commit" "$(git rev-parse "refs/heads/$change")"
+  # The tip checked for ancestry is the one update-ref expects, so a concurrent move fails the update.
+  old=$(git rev-parse "refs/heads/$change")
+  git merge-base --is-ancestor "$old" "$commit" || { echo "merge-step: $commit does not fast-forward $change" >&2; exit 1; }
+  git update-ref "refs/heads/$change" "$commit" "$old"
 fi
 echo "merged $step into $change: $(git log -1 --format='%h %s' "$change")"

@@ -39,14 +39,15 @@ while IFS=$'\t' read -r path head branch locked; do
   name=${branch:-detached $head}
   if [ -n "$locked" ]; then echo "keep $path: locked"; kept=$((kept + 1)); continue; fi
   if ! merged "$head"; then echo "keep $path: $name is not merged"; kept=$((kept + 1)); continue; fi
-  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
-    echo "keep $path: uncommitted changes"; kept=$((kept + 1)); continue
+  if ! status=$(git -C "$path" status --porcelain --ignored --untracked-files=normal 2>/dev/null); then
+    echo "keep $path: git status failed"; kept=$((kept + 1)); continue
   fi
+  # Read the whole list: an early-exiting grep could fail the pipeline and pass a dirty worktree.
+  changes=$(grep -v '^!! ' <<<"$status" || true)
+  if [ -n "$changes" ]; then echo "keep $path: uncommitted changes"; kept=$((kept + 1)); continue; fi
   # git worktree remove deletes ignored files. Only build output and test artefacts may go.
-  if git -C "$path" status --porcelain --ignored 2>/dev/null | grep '^!! ' \
-      | grep -qvE '^!! (target/|graft/|.*\.DS_Store$|.*\.(diff|new|old)\.png$)'; then
-    echo "keep $path: ignored local files"; kept=$((kept + 1)); continue
-  fi
+  local_files=$(grep '^!! ' <<<"$status" | grep -vE '^!! (target/|graft/|.*\.DS_Store$|.*\.(diff|new|old)\.png$)' || true)
+  if [ -n "$local_files" ]; then echo "keep $path: ignored local files"; kept=$((kept + 1)); continue; fi
   echo "remove worktree $path ($name)"
   run git worktree remove "$path"
 done < <(git worktree list --porcelain | awk '

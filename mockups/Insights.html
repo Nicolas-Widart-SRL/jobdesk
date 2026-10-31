@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Insights</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="app" data-theme="{{theme}}" tabIndex="-1" onKeyDown="{{onKey}}">
+  <header class="side">
+    <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>Jobdesk</div>
+    <button class="btn pri" type="button" onClick="{{openAsk}}">Ask or run <span class="keys"><span>⌘</span><span>K</span></span></button>
+    <nav class="nav" aria-label="Main">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="6">
+        <a class="{{item.cls}}" href="{{item.href}}">{{item.label}}<span class="count num">{{item.count}}</span></a>
+      </sc-for>
+    </nav>
+  </header>
+  <main class="main">
+    <header class="head">
+      <div class="grow"><h1>Insights</h1><div class="muted">The whole workflow, search health and skill gaps, read live from your files</div></div>
+      <button class="btn" type="button" onClick="{{rebuild}}">Rebuild dashboard</button>
+      <button class="btn pri" type="button" onClick="{{findGaps}}">Find skill gaps</button>
+    </header>
+    <div class="body">
+      <sc-if value="{{hasSent}}" hint-placeholder-val="{{ false }}">
+        <div class="undo" role="status" style="margin-top: 0"><span class="grow" style="flex-basis: 260px">{{sentText}}</span><a class="btn sm" href="Tray.html">In-tray</a><button class="btn sm" type="button" onClick="{{undoSent}}">Undo</button></div>
+      </sc-if>
+      <section class="flow" aria-label="Workflow stages">
+        <sc-for list="{{flow}}" as="s" hint-placeholder-count="6">
+          <a class="node" href="{{s.href}}">
+            <span class="muted" style="font-weight: 500">{{s.label}}</span>
+            <b>{{s.n}}</b>
+            <div class="tally" aria-hidden="true"><sc-for list="{{s.marks}}" as="k" hint-placeholder-count="8"><i class="{{k.c}}"></i></sc-for></div>
+            <span class="muted">{{s.sub}}</span>
+            <sc-if value="{{s.more}}" hint-placeholder-val="{{ true }}">
+              <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+            </sc-if>
+          </a>
+        </sc-for>
+      </section>
+      <div class="note">
+        <span class="grow" style="flex-basis: 260px">8 resolved outcomes and 13 skip reasons can calibrate your fit scoring.</span>
+        <button class="btn sm" type="button" onClick="{{calibrate}}">Calibrate</button>
+      </div>
+      <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
+        <section class="panel">
+          <div class="ph">Status <span class="mono">18 sent</span></div>
+          <div class="pb row wrap" style="gap: 12px">
+            <div class="tally fat" style="grid-column: 1 / -1; flex: 0 0 100%" role="img" aria-label="Status breakdown: 6 Active, 3 Interview, 1 Offer, 0 Hired, 8 Closed"><sc-for list="{{strip}}" as="k" hint-placeholder-count="18"><i class="{{k.c}}"></i></sc-for></div>
+            <div class="col grow" style="gap: 6px; flex-basis: 100%">
+              <sc-for list="{{legend}}" as="l" hint-placeholder-count="5">
+                <div class="row"><span class="tag {{l.tone}}">{{l.label}}</span><span class="grow"></span><span class="num">{{l.n}}</span></div>
+              </sc-for>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="ph">Funnel <span class="mono">rejection rate 88%</span></div>
+          <div class="pb col" style="gap: 8px">
+            <sc-for list="{{funnel}}" as="f" hint-placeholder-count="4">
+              <div class="col" style="gap: 2px"><div class="row"><span class="grow">{{f.label}}</span><span class="num">{{f.n}}</span></div><div class="tally fat {{f.tone}}" aria-hidden="true"><sc-for list="{{f.ticks}}" as="k" hint-placeholder-count="4"><i></i></sc-for></div></div>
+            </sc-for>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="ph">Why you skip <span class="mono">13 reasons</span></div>
+          <div class="pb col" style="gap: 8px">
+            <sc-for list="{{skips}}" as="f" hint-placeholder-count="4">
+              <div class="col" style="gap: 2px"><div class="row"><span class="grow">{{f.label}}</span><span class="num">{{f.n}}</span></div><div class="tally fat" aria-hidden="true"><sc-for list="{{f.ticks}}" as="k" hint-placeholder-count="4"><i></i></sc-for></div></div>
+            </sc-for>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="ph">By sector</div>
+          <div class="pb col" style="gap: 8px">
+            <sc-for list="{{sectors}}" as="f" hint-placeholder-count="4">
+              <div class="col" style="gap: 2px"><div class="row"><span class="grow">{{f.label}}</span><span class="num">{{f.n}}</span></div><div class="tally fat" aria-hidden="true"><sc-for list="{{f.ticks}}" as="k" hint-placeholder-count="4"><i></i></sc-for></div></div>
+            </sc-for>
+          </div>
+        </section>
+      </div>
+      <div class="split">
+        <section class="panel a">
+          <div class="ph">Skill gaps <span class="mono">upskill/report-2026-10-28.md</span></div>
+          <div class="tbox">
+            <table class="t">
+              <thead><tr><th>Gap</th><th>Jobs asking</th><th>Heat</th><th>Change</th><th>Close it with</th></tr></thead>
+              <tbody>
+                <sc-for list="{{gaps}}" as="g" hint-placeholder-count="5">
+                  <tr>
+                    <td style="font-weight: 600">{{g.skill}}</td>
+                    <td class="num">{{g.n}}</td>
+                    <td><div class="tally c-interview" style="flex-wrap: nowrap" aria-hidden="true"><sc-for list="{{g.ticks}}" as="k" hint-placeholder-count="8"><i></i></sc-for></div></td>
+                    <td class="muted">{{g.delta}}</td>
+                    <td class="muted">{{g.how}}</td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel b">
+          <div class="ph">Study order</div>
+          <div class="list">
+            <sc-for list="{{order}}" as="o" hint-placeholder-count="4">
+              <div class="li"><span class="num faint">{{o.n}}</span><span class="grow">{{o.t}}</span><span class="muted" style="white-space: nowrap">{{o.d}}</span></div>
+            </sc-for>
+          </div>
+        </section>
+      </div>
+    </div>
+    <footer class="status">
+      <span class="row"><span class="dot"></span>Claude CLI 2.1.308</span>
+      <a href="Tray.html"><span class="tag c-interview">1 run needs you</span></a>
+      <span>Drafted rows stay out of every statistic</span>
+      <div class="seg" role="group" aria-label="Theme" style="margin-left: auto"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+      <span class="faint">Sample data</span>
+    </footer>
+  </main>
+  <sc-if value="{{askOpen}}" hint-placeholder-val="{{ false }}">
+    <dc-import name="Ask" embedded="{{ true }}" preset="{{askPreset}}" on-close="{{closeAsk}}" on-run="{{askRun}}" hint-size="0px,0px"></dc-import>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"$preview":{"width":1440,"height":1140}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {}; }
+  componentDidMount() { this.onTheme = () => this.forceUpdate(); window.addEventListener('storage', this.onTheme); }
+  componentWillUnmount() { window.removeEventListener('storage', this.onTheme); }
+  themeVals() {
+    let saved = null;
+    try { saved = localStorage.getItem('jobdesk-theme'); } catch (e) {}
+    const theme = saved || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({
+      label, cls: label.toLowerCase() === theme ? 'on' : '',
+      pick: () => { const v = label.toLowerCase(); try { localStorage.setItem('jobdesk-theme', v); } catch (e) {} this.setState({ theme: v }); },
+    }));
+    return { theme, themes };
+  }
+  askVals() {
+    const s = this.state || {};
+    return {
+      askOpen: !!s.ask, askPreset: s.preset || '', hasSent: !!s.sent,
+      sentText: 'Sent to Claude: ' + s.sent + '. It comes back in your in-tray when it needs you.',
+      openAsk: () => this.setState({ ask: true, preset: '' }), closeAsk: () => this.setState({ ask: false }),
+      askRun: (h) => this.setState({ ask: false, sent: h.t }), undoSent: () => this.setState({ sent: '' }),
+      onKey: (e) => { if ((e.metaKey || e.ctrlKey) && (e.key || '').toLowerCase() === 'k') { e.preventDefault(); this.setState({ ask: true, preset: '' }); } },
+    };
+  }
+  act(preset) { return () => this.setState({ ask: true, preset }); }
+  renderVals() {
+    const page = 'Insights';
+    const nav = [
+      ['In-tray', 'Tray.html', '9'],
+      ['Jobs', 'Jobs.html', '15'],
+      ['Tracker', 'Tracker.html', '12'],
+      ['Insights', 'Insights.html', ''],
+      ['Runs', 'Run.html', '1'],
+      ['Standing orders', 'Standing.html', ''],
+      ['Workspace', 'Workspace.html', ''],
+    ].map(([label, href, count]) => ({ label, href, count, cls: label === page ? 'on' : '' }));
+    const legend = [
+      { label: 'Active', n: 6, tone: 'c-active' }, { label: 'Interview', n: 3, tone: 'c-interview' }, { label: 'Offer', n: 1, tone: 'c-offer' },
+      { label: 'Hired', n: 0, tone: 'c-hired' }, { label: 'Closed', n: 8, tone: 'c-closed' },
+    ];
+    const ticks = (n) => Array.from({ length: n }, () => ({}));
+    const strip = [[6, 'c-active'], [3, 'c-interview'], [1, 'c-offer'], [8, 'c-closed']].flatMap(([n, c]) => Array.from({ length: n }, () => ({ c })));
+    const funnel = [
+      { label: 'Applied', n: 18, tone: 'c-active' }, { label: 'Interview', n: 7, tone: 'c-interview' },
+      { label: 'Offer', n: 2, tone: 'c-offer' }, { label: 'Hired', n: 0, tone: 'c-hired' },
+    ].map((f) => ({ ...f, ticks: ticks(f.n) }));
+    const sectors = [['Government', 6], ['Finance', 5], ['Energy', 3], ['Transport', 2], ['Telecom', 2]].map(([label, n]) => ({ label, n, ticks: ticks(n) }));
+    const skips = [['Rate', 6], ['Scope', 4], ['Domain', 2], ['Location', 1]].map(([label, n]) => ({ label, n, ticks: ticks(n) }));
+    const marks = (...parts) => parts.flatMap(([n, c]) => Array.from({ length: n }, () => ({ c })));
+    const flow = [
+      { label: 'Profile', n: '9/9', sub: 'skill files filled', href: 'Workspace.html', marks: marks([9, '']) },
+      { label: 'Scrape', n: '15', sub: 'new of 64 seen', href: 'Jobs.html', marks: marks([15, ''], [49, 'off']) },
+      { label: 'Rank', n: '5', sub: 'on shortlist', href: 'Jobs.html', marks: marks([5, '']) },
+      { label: 'Apply', n: '2', sub: 'drafted, not sent', href: 'Tray.html', marks: marks([2, 'c-drafted']) },
+      { label: 'In process', n: '10', sub: '6 applied, 3 interview, 1 offer', href: 'Tracker.html', marks: marks([6, 'c-active'], [3, 'c-interview'], [1, 'c-offer']) },
+      { label: 'Outcome', n: '8', sub: 'closed', href: 'Tracker.html', marks: marks([8, 'c-closed']) },
+    ].map((s, i, a) => ({ ...s, more: i < a.length - 1 }));
+    const G = (skill, n, delta, how) => ({ skill, n, delta, how, ticks: ticks(n) });
+    const gaps = [
+      G('Azure architecture certification', 14, 'Up 3', 'AZ-305 study path'),
+      G('TOGAF', 9, 'New', 'Foundation course'),
+      G('Domain-driven design, named', 8, 'Same', 'Add wording, skill is on profile'),
+      G('Payment and card schemes', 5, 'Up 1', 'Short primer'),
+      G('OpenTelemetry', 4, 'Down 2', 'Add to a side project'),
+    ];
+    const order = [
+      { n: 1, t: 'Name domain-driven design on the CV', d: '1 hour' },
+      { n: 2, t: 'Azure AZ-305', d: '6 weeks' },
+      { n: 3, t: 'TOGAF Foundation', d: '3 weeks' },
+      { n: 4, t: 'OpenTelemetry in laravel-modules demo', d: '1 week' },
+    ];
+    return { ...this.themeVals(), ...this.askVals(), nav, flow, skips, strip, legend, funnel, sectors, gaps, order, rebuild: this.act('dashboard'), findGaps: this.act('find skill gaps'), calibrate: this.act('calibrate') };
+  }
+}
+</script>
+</body>
+</html>

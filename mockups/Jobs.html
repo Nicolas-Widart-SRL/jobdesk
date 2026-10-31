@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jobs</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="app" data-theme="{{theme}}" tabIndex="-1" onKeyDown="{{onKey}}">
+  <header class="side">
+    <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>Jobdesk</div>
+    <button class="btn pri" type="button" onClick="{{openAsk}}">Ask or run <span class="keys"><span>⌘</span><span>K</span></span></button>
+    <nav class="nav" aria-label="Main">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="6">
+        <a class="{{item.cls}}" href="{{item.href}}">{{item.label}}<span class="count num">{{item.count}}</span></a>
+      </sc-for>
+    </nav>
+  </header>
+  <main class="main">
+    <header class="head">
+      <div class="grow"><h1>Jobs</h1><div class="muted">Triage scores from posting text only. /apply re-evaluates with company research.</div></div>
+      <button class="btn" type="button" onClick="{{findJobs}}">Find new postings</button>
+      <button class="btn pri" type="button" onClick="{{rankJobs}}">Score new postings</button>
+    </header>
+    <div class="body">
+      <sc-if value="{{hasSent}}" hint-placeholder-val="{{ false }}">
+        <div class="undo" role="status" style="margin-top: 0"><span class="grow" style="flex-basis: 260px">{{sentText}}</span><a class="btn sm" href="Tray.html">In-tray</a><button class="btn sm" type="button" onClick="{{undoSent}}">Undo</button></div>
+      </sc-if>
+      <div class="seg" role="group" aria-label="Filter jobs">
+        <sc-for list="{{tabs}}" as="t" hint-placeholder-count="5">
+          <button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}} <span class="num faint">{{t.n}}</span></button>
+        </sc-for>
+      </div>
+      <div class="split">
+        <section class="panel a">
+          <sc-if value="{{isNew}}" hint-placeholder-val="{{ false }}">
+            <div class="col" style="align-items: flex-start; padding: 32px 24px">
+              <div style="font: 600 22px/1.25 var(--slab)">15 postings wait for scoring</div>
+              <p class="muted">The scraper marked 2 high fit and 13 medium fit. Scores appear here when the run ends.</p>
+              <button class="btn pri" type="button" onClick="{{rankJobs}}">Score 15 postings</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{hasRows}}" hint-placeholder-val="{{ true }}">
+            <div class="tbox">
+              <table class="t">
+                <thead><tr><th>Score</th><th>Role</th><th>Location</th><th>Day rate</th><th>Deadline</th><th>Signals</th><th>Portal</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+                    <tr class="{{r.cls}}" onClick="{{r.pick}}" tabIndex="0">
+                      <td class="num score">{{r.score}}</td>
+                      <td><div style="font-weight: 600">{{r.role}}</div><div class="muted">{{r.co}}</div></td>
+                      <td class="muted">{{r.loc}}</td>
+                      <td class="num">{{r.rateText}}</td>
+                      <td class="num">{{r.deadline}}</td>
+                      <td><div class="row wrap" style="gap: 4px"><sc-for list="{{r.flags}}" as="f" hint-placeholder-count="1"><span class="tag {{f.tone}}">{{f.t}}</span></sc-for></div></td>
+                      <td class="mono faint">{{r.portal}}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </sc-if>
+        </section>
+        <sc-if value="{{hasRows}}" hint-placeholder-val="{{ true }}">
+          <aside class="panel b" aria-label="Job details">
+            <div class="pb col" style="gap: 10px; border-bottom: 1px solid var(--line)">
+              <div class="row"><div class="grow"><div style="font: 600 19px/1.25 var(--slab)">{{j.role}}</div><div class="muted">{{j.co}}, {{j.loc}}</div></div></div>
+              <div class="row" style="gap: 10px"><span class="stamp {{j.tone}}">{{j.score}}</span><span style="font-weight: 600">{{j.verdict}}</span></div>
+              <sc-for list="{{j.dims}}" as="d" hint-placeholder-count="4">
+                <div class="row">
+                  <span class="muted" style="flex: 0 0 136px">{{d.label}}</span>
+                  <div class="bar grow"><i style="width: {{d.w}}"></i></div>
+                  <span class="num" style="flex: 0 0 24px; text-align: right">{{d.v}}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div class="pb col" style="gap: 6px; border-bottom: 1px solid var(--line)">
+              <sc-for list="{{j.gateRows}}" as="g" hint-placeholder-count="6">
+                <div class="row"><span class="muted grow">{{g.k}}</span><span class="trunc">{{g.v}}</span><span class="tag {{g.tone}}">{{g.r}}</span></div>
+              </sc-for>
+            </div>
+            <div class="pb col" style="gap: 6px; border-bottom: 1px solid var(--line)">
+              <div style="font-weight: 600">Strengths</div>
+              <sc-for list="{{j.good}}" as="g" hint-placeholder-count="2"><div class="muted">{{g.t}}</div></sc-for>
+              <div style="font-weight: 600; margin-top: 6px">Gaps</div>
+              <sc-for list="{{j.gaps}}" as="g" hint-placeholder-count="1"><div class="muted">{{g.t}}</div></sc-for>
+            </div>
+            <div class="pb row wrap">
+              <sc-if value="{{j.canDraft}}" hint-placeholder-val="{{ true }}">
+                <button class="btn pri" type="button" onClick="{{draftJob}}">Draft application</button>
+              </sc-if>
+              <sc-if value="{{j.flagged}}" hint-placeholder-val="{{ false }}">
+                <a class="btn pri" href="Tray.html">Review in in-tray</a>
+              </sc-if>
+              <button class="btn" type="button" onClick="{{jobGaps}}">Find skill gaps</button>
+              <button class="btn" type="button">Open posting</button>
+            </div>
+          </aside>
+        </sc-if>
+      </div>
+    </div>
+    <footer class="status">
+      <span class="row"><span class="dot"></span>Claude CLI 2.1.308</span>
+      <a href="Tray.html"><span class="tag c-interview">1 run needs you</span></a>
+      <span>Source: job_scraper/seen_jobs.json</span>
+      <div class="seg" role="group" aria-label="Theme" style="margin-left: auto"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+      <span class="faint">Sample data</span>
+    </footer>
+  </main>
+  <sc-if value="{{askOpen}}" hint-placeholder-val="{{ false }}">
+    <dc-import name="Ask" embedded="{{ true }}" preset="{{askPreset}}" on-close="{{closeAsk}}" on-run="{{askRun}}" hint-size="0px,0px"></dc-import>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"$preview":{"width":1440,"height":1060}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { tab: 'short', sel: 'kestrel' }; }
+  componentDidMount() { this.onTheme = () => this.forceUpdate(); window.addEventListener('storage', this.onTheme); }
+  componentWillUnmount() { window.removeEventListener('storage', this.onTheme); }
+  themeVals() {
+    let saved = null;
+    try { saved = localStorage.getItem('jobdesk-theme'); } catch (e) {}
+    const theme = saved || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({
+      label, cls: label.toLowerCase() === theme ? 'on' : '',
+      pick: () => { const v = label.toLowerCase(); try { localStorage.setItem('jobdesk-theme', v); } catch (e) {} this.setState({ theme: v }); },
+    }));
+    return { theme, themes };
+  }
+  askVals() {
+    const s = this.state || {};
+    return {
+      askOpen: !!s.ask, askPreset: s.preset || '', hasSent: !!s.sent,
+      sentText: 'Sent to Claude: ' + s.sent + '. It comes back in your in-tray when it needs you.',
+      openAsk: () => this.setState({ ask: true, preset: '' }), closeAsk: () => this.setState({ ask: false }),
+      askRun: (h) => this.setState({ ask: false, sent: h.t }), undoSent: () => this.setState({ sent: '' }),
+      onKey: (e) => { if ((e.metaKey || e.ctrlKey) && (e.key || '').toLowerCase() === 'k') { e.preventDefault(); this.setState({ ask: true, preset: '' }); } },
+    };
+  }
+  act(preset) { return () => this.setState({ ask: true, preset }); }
+  renderVals() {
+    const page = 'Jobs';
+    const nav = [
+      ['In-tray', 'Tray.html', '9'],
+      ['Jobs', 'Jobs.html', '15'],
+      ['Tracker', 'Tracker.html', '12'],
+      ['Insights', 'Insights.html', ''],
+      ['Runs', 'Run.html', '1'],
+      ['Standing orders', 'Standing.html', ''],
+      ['Workspace', 'Workspace.html', ''],
+    ].map(([label, href, count]) => ({ label, href, count, cls: label === page ? 'on' : '' }));
+    const J = (id, tab, score, role, co, loc, deadline, flags, portal, s, more) => ({ id, tab, score, role, co, loc, deadline, flags, portal, s, ...more });
+    const hot = (t) => ({ t, tone: 'c-closed' });
+    const warn = (t) => ({ t, tone: 'c-interview' });
+    const all = [
+      J('meridian', 'short', 84, 'Tech Lead Java, Real-Time Traffic', 'Meridian Rail Systems', 'Brussels, hybrid', '5 Nov', [hot('Closing in 5d')], 'linkedin', [88, 90, 80, 78], { rate: 780, contract: 'Freelance, 12 months', commute: '1h 05', good: ['Led about 20 developers on a greenfield rewrite', 'Java and Spring Boot match the core stack'], gaps: ['No rail signalling experience'] }),
+      J('kestrel', 'short', 78, 'Solution Architect, Event Sourcing', 'Kestrel Payments', 'Remote, EU', 'None', [warn('Rate not stated')], 'freehire', [85, 72, 75, 80], { contract: 'Freelance, 6 months', commute: 'Remote', good: ['Event sourcing, CQRS and Axon in the core skills', 'Financial messaging background from SWIFT'], gaps: ['Card scheme domain is new'] }),
+      J('federal', 'short', 72, 'Java Application Architect', 'Federal Data Agency', 'Brussels, hybrid', 'None', [hot('Rate under floor')], 'linkedin', [78, 74, 70, 66], { rate: 640, contract: 'Freelance via broker', commute: '1h 05', good: ['Public sector track record at two agencies'], gaps: ['Posting prefers TOGAF, not on profile'] }),
+      J('brightwell', 'short', 71, 'Backend Lead, EV Charging', 'Brightwell Energy', 'Ghent, hybrid', 'None', [warn('Posted 7 months ago')], 'freehire', [76, 82, 62, 64], { rate: 750, contract: 'Freelance, 9 months', commute: '1h 50', good: ['OCPP and WebSocket load from GM Electronics'], gaps: ['Team lead scope is unclear'] }),
+      J('northgate', 'short', 64, 'Senior Java Developer', 'Northgate Insurance', 'Antwerp, 2 days', 'None', [warn('Rate not stated')], 'linkedin', [74, 66, 55, 58], { contract: 'Freelance, 12 months', commute: '1h 30', good: ['Spring Boot and Hibernate match'], gaps: ['Less architecture scope than you want'] }),
+      J('halden', 'below', 58, 'Lead Developer Kafka', 'Halden Logistics', 'Liege, hybrid', 'None', [warn('Guard flag')], 'linkedin', [68, 56, 52, 52], { rate: 720, contract: 'Freelance, 12 months', commute: '0h 55', guard: '1 hidden block removed', good: ['Kafka and microservices match'], gaps: ['Logistics domain is new'] }),
+      J('vantor', 'excl', 76, 'Solution Architect', 'Vantor GmbH', 'Munich, hybrid', 'None', [hot('Language fail')], 'linkedin', [80, 78, 70, 74], { rate: 900, contract: 'Freelance, 12 months', commute: 'Over 2h', lang: 'FAIL', good: ['Strong technical match'], gaps: ['Requires fluent German, not in your languages'] }),
+      J('aster', 'excl', 67, 'Engineering Manager', 'Aster Health', 'Hasselt, on-site', 'None', [hot('Location fail')], 'freehire', [70, 68, 60, 68], { contract: 'Permanent', commute: '1h 10', loc2: 'FAIL', good: ['Team leadership matches'], gaps: ['Fully on-site is a deal-breaker', 'Permanent role, you only take freelance missions'] }),
+      J('orion', 'excl', 38, 'Full-Stack PHP Lead', 'Orion Retail', 'Remote, EU', 'None', [hot('Deal-breaker')], 'freehire', [48, 44, 32, 24], { contract: 'Freelance, 6 months', commute: 'Remote', good: ['Deep Laravel background'], gaps: ['PHP only is a deal-breaker'] }),
+      J('cobalt', 'fetch', '-', 'Lead Java Consultant', 'Cobalt Consulting', 'Brussels', 'None', [warn('Attempt 1')], 'linkedin', [0, 0, 0, 0], { contract: 'Unknown', commute: '1h 05', guard: 'Not fetched', good: [], gaps: ['403 after curl retry. Retries on the next run.'] }),
+    ];
+    const tabs = [['short', 'Shortlist'], ['below', 'Below threshold'], ['excl', 'Excluded'], ['fetch', 'Could not fetch'], ['new', 'New']].map(([id, label]) => ({
+      label, n: id === 'new' ? 15 : all.filter((a) => a.tab === id).length,
+      cls: id === this.state.tab ? 'on' : '',
+      pick: () => { const f = all.find((a) => a.tab === id); this.setState({ tab: id, sel: f ? f.id : null }); },
+    }));
+    const list = all.filter((a) => a.tab === this.state.tab);
+    const rows = list.map((r) => ({ ...r, rateText: r.rate ? 'EUR ' + r.rate : 'Not stated', cls: 'pick' + (r.id === this.state.sel ? ' sel' : ''), pick: () => this.setState({ sel: r.id }) }));
+    const c = list.find((a) => a.id === this.state.sel) || list[0] || all[0];
+    const band = (s) => (typeof s !== 'number' ? 'Not scored' : s >= 75 ? 'Strong Fit' : s >= 60 ? 'Good Fit' : s >= 45 ? 'Moderate Fit' : s >= 30 ? 'Weak Fit' : 'Poor Fit');
+    const bandTone = (s) => (typeof s !== 'number' ? 'c-plain' : s >= 75 ? 'c-hired' : s >= 60 ? 'c-active' : s >= 45 ? 'c-interview' : 'c-closed');
+    const tone = (v) => (v === 'FAIL' ? 'c-closed' : v === 'FLAG' ? 'c-interview' : 'c-hired');
+    const wrapT = (xs) => xs.map((t) => ({ t }));
+    const guard = c.guard || 'clean', flagged = guard === '1 hidden block removed';
+    const contractV = c.contract === 'Permanent' ? 'FAIL' : c.contract === 'Unknown' ? 'FLAG' : 'PASS';
+    const rateV = !c.rate ? 'FLAG' : c.rate < 700 ? 'FAIL' : 'PASS';
+    const G = (k, v, r) => ({ k, v, r, tone: tone(r) });
+    const j = {
+      ...c, verdict: band(c.score), tone: bandTone(c.score), flagged, canDraft: !flagged && c.tab !== 'excl' && c.tab !== 'fetch',
+      gateRows: [
+        G('Contract', c.contract, contractV), G('Day rate, floor 700', c.rate ? 'EUR ' + c.rate : 'Not stated', rateV), G('Work mode', c.loc, c.loc2 || 'PASS'),
+        G('Commute', c.commute, c.commute === 'Over 2h' ? 'FAIL' : 'PASS'), G('Language', c.lang ? 'German' : 'English, French', c.lang || 'PASS'), G('Posting guard', guard, guard === 'clean' ? 'PASS' : 'FLAG'),
+      ],
+      good: wrapT(c.good), gaps: wrapT(c.gaps),
+      dims: ['Technical, 30%', 'Experience, 25%', 'Behavioral, 15%', 'Career, 30%'].map((label, i) => ({ label, v: c.s[i], w: c.s[i] + '%' })),
+    };
+    return { ...this.themeVals(), ...this.askVals(), nav, tabs, rows, j, isNew: this.state.tab === 'new', hasRows: this.state.tab !== 'new',
+      findJobs: this.act('find new postings'), rankJobs: this.act('score new postings'), jobGaps: this.act('find skill gaps'),
+      draftJob: () => this.setState({ sent: 'Draft application, ' + c.co }) };
+  }
+}
+</script>
+</body>
+</html>

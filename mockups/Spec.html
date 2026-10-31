@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Build spec</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="app" data-theme="{{theme}}" style="display: block; background: var(--sheet)">
+  <div class="body" style="max-width: 1320px; margin: 0 auto; padding: 32px 24px">
+    <div class="row wrap">
+      <div class="grow"><h1 style="font: 600 44px/1.1 var(--slab)">Jobdesk build spec</h1><p class="muted">Rust and egui desktop app for macOS and Windows. Standalone repo that points at your checkout.</p></div>
+      <div class="seg" role="group" aria-label="Theme"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+    </div>
+
+    <section class="cards" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))" aria-label="Rules">
+      <sc-for list="{{rules}}" as="r" hint-placeholder-count="4">
+        <div class="panel pb"><div style="font-weight: 600">{{r.h}}</div><p class="muted">{{r.t}}</p></div>
+      </sc-for>
+    </section>
+
+    <section class="panel">
+      <div class="ph">In-tray cards <span class="mono">Y follows the suggestion, L later, N skip, U undo</span></div>
+      <div class="tbox">
+        <table class="t">
+          <thead><tr><th>Card</th><th>Comes from</th><th>Primary action</th></tr></thead>
+          <tbody>
+            <sc-for list="{{kinds}}" as="k" hint-placeholder-count="9">
+              <tr><td style="font-weight: 600">{{k.c}}</td><td class="muted">{{k.f}}</td><td class="muted">{{k.a}}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div class="pb muted">Order: paused runs, then deadlines, then the rest. Cards derive from each snapshot. Only decisions are stored. Later sets a card aside until the next morning pass, keeps its timeline mark, and leaves a paused run paused.</div>
+    </section>
+
+    <section class="panel">
+      <div class="ph">Every command, where its output appears</div>
+      <div class="tbox">
+        <table class="t">
+          <thead><tr><th>Command</th><th>Screen</th><th>File sources</th><th>Rendered as</th></tr></thead>
+          <tbody>
+            <sc-for list="{{map}}" as="m" hint-placeholder-count="10">
+              <tr><td class="mono">{{m.c}}</td><td>{{m.s}}</td><td class="mono muted">{{m.f}}</td><td class="muted">{{m.r}}</td></tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="split">
+      <section class="panel a">
+        <div class="ph">Architecture <span class="mono">Strict DDD, package by feature</span></div>
+        <div class="list">
+          <sc-for list="{{arch}}" as="a" hint-placeholder-count="6">
+            <div class="li" style="align-items: flex-start"><span class="mono" style="flex: 0 0 150px">{{a.m}}</span><span class="muted grow">{{a.t}}</span></div>
+          </sc-for>
+        </div>
+      </section>
+      <section class="panel b">
+        <div class="ph">Crates <span class="mono">crates.io, 31 Oct 2026</span></div>
+        <div class="list">
+          <sc-for list="{{crates}}" as="c" hint-placeholder-count="7">
+            <div class="li" style="padding-block: 6px"><span class="mono grow">{{c.n}}</span><span class="muted">{{c.u}}</span></div>
+          </sc-for>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="ph">Claude process <span class="mono">one child per run, cwd = repo</span></div>
+      <div class="pb col">
+        <div class="code mono">claude -p --input-format stream-json --output-format stream-json --verbose
+  --include-partial-messages --permission-prompt-tool stdio
+  --setting-sources project --max-budget-usd 3 --model &lt;choice&gt;</div>
+        <div class="tbox">
+          <table class="t">
+            <thead><tr><th>Event</th><th>Use in UI</th><th>Status</th></tr></thead>
+            <tbody>
+              <sc-for list="{{proto}}" as="p" hint-placeholder-count="7">
+                <tr><td class="mono">{{p.e}}</td><td class="muted">{{p.u}}</td><td><span class="tag {{p.tone}}">{{p.s}}</span></td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <div class="split">
+      <section class="panel a">
+        <div class="ph">Build order <span class="mono">Remaining work, existing features stay</span></div>
+        <div class="list">
+          <sc-for list="{{plan}}" as="p" hint-placeholder-count="4">
+            <div class="li" style="align-items: flex-start"><span class="num faint">{{p.n}}</span><div class="grow"><div style="font-weight: 500">{{p.h}}</div><div class="muted">{{p.t}}</div></div></div>
+          </sc-for>
+        </div>
+      </section>
+      <section class="panel b">
+        <div class="ph">Known risks</div>
+        <div class="list">
+          <sc-for list="{{risks}}" as="r" hint-placeholder-count="5">
+            <div class="li" style="align-items: flex-start"><div class="grow"><div style="font-weight: 500">{{r.h}}</div><div class="muted">{{r.t}}</div></div></div>
+          </sc-for>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"$preview":{"width":1440,"height":3600}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {}; }
+  componentDidMount() { this.onTheme = () => this.forceUpdate(); window.addEventListener('storage', this.onTheme); }
+  componentWillUnmount() { window.removeEventListener('storage', this.onTheme); }
+  themeVals() {
+    let saved = null;
+    try { saved = localStorage.getItem('jobdesk-theme'); } catch (e) {}
+    const theme = saved || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({
+      label, cls: label.toLowerCase() === theme ? 'on' : '',
+      pick: () => { const v = label.toLowerCase(); try { localStorage.setItem('jobdesk-theme', v); } catch (e) {} this.setState({ theme: v }); },
+    }));
+    return { theme, themes };
+  }
+  renderVals() {
+    const rules = [
+      { h: 'No workflow logic', t: 'Every action is the unchanged slash command. Spec changes upstream reach the app with no app change.' },
+      { h: 'Never writes repo state', t: 'Tracker, seen_jobs.json and archives change only through commands. Run logs, tray decisions, skip reasons and standing orders stay in the app data folder.' },
+      { h: 'Two data sources', t: 'State files feed the lists. Fit evaluation, verification checklist and keyword table exist only in run output, so the dossier reads them from saved runs.' },
+      { h: 'Postings are untrusted', t: 'Render as plain text. No HTML, no auto-loaded links, no remote images. Links open only after a click.' },
+      { h: 'Claude prepares, you decide', t: 'Every pending decision is one card in the in-tray. Actions run in the background and return as cards, always behind the card being read.' },
+      { h: 'Danger stays slow', t: 'Permission, question and guard cards have no one-key default. /reset and sending never appear as a card action or a standing order.' },
+    ];
+    const K = (c, f, a) => ({ c, f, a });
+    const kinds = [
+      K('Permission', 'control_request can_use_tool', 'No default. A allows, D denies'),
+      K('Question', 'AskUserQuestion in a run', 'No default. Number keys answer'),
+      K('Send', 'Drafted tracker row with compiled PDFs', 'Replies to /outcome <company>: submitted today'),
+      K('Triage', 'seen_jobs.json shortlist, freelance gates', 'Resumes /apply at its go-ahead stop, or follows a skip suggestion'),
+      K('Prep', 'Stage date in outcome.md, interview_prep_<stage>.md', 'Opens call sheet'),
+      K('Offer', 'Tracker status offer', 'Opens dossier'),
+      K('Guard flag', 'posting_guard findings', 'No default. Keep or skip'),
+      K('Follow-up', '10+ days quiet, under 2 follow-ups', 'Logs the sent note through /outcome'),
+      K('Close', '60+ days quiet', 'Runs /outcome stale, confirms that row only'),
+    ];
+    const M = (c, s, f, r) => ({ c, s, f, r });
+    const map = [
+      M('/scrape', 'In-tray, Jobs, Workspace', 'job_scraper/seen_jobs.json', 'New tab, fit tags, portal health table'),
+      M('/rank', 'In-tray, Jobs', 'job_scraper/seen_jobs.json', 'Triage cards, shortlist, freelance gates, 4 score bars, guard, strengths and gaps'),
+      M('/apply', 'In-tray, Out tray, Live run, Dossier', 'cv/, cover_letters/, tracker, archive', 'Send kit, step rail, PDFs, checklist, keyword table'),
+      M('/interview', 'In-tray, Call sheet, Dossier', 'interview_prep_<stage>.md, company_research/', 'Call sheet, formatted prep pack, stage list'),
+      M('/outcome', 'In-tray, Call sheet, Tracker, Dossier', 'tracker, outcome.md, followup_*.md', 'Follow-up and close cards, debrief, board, days quiet, stages'),
+      M('/upskill', 'Insights, Standing orders', 'upskill/report-*.md', 'Gap table, study order, change since last report'),
+      M('/html-report', 'Insights', 'reports/*.html, tracker', 'Native charts from same data, button opens HTML file'),
+      M('/gmail-sync', 'In-tray, Tracker, Workspace, Standing orders', 'gmail_sync/state.json, tracker', 'Last sync, status changes'),
+      M('/notion-sync', 'Workspace', 'job_scraper/notion_sync.json', 'Sync state'),
+      M('/setup, /expand', 'Workspace', 'skill files 01 to 09', 'Profile status, signals to confirm in run'),
+      M('/add-portal', 'Workspace', '.agents/skills/*', 'Portal table'),
+      M('/add-template', 'Workspace', 'templates/**/TEMPLATE.md', 'Active templates'),
+      M('/reset', 'Workspace, Live run', 'skill files, documents/', 'Danger confirmation, then run view'),
+    ];
+    const arch = [
+      { m: 'intray', t: 'New, replaces overview. Derives cards through each feature application layer. Owns ranking, keyboard, undo and skip reasons.' },
+      { m: 'call_sheet', t: 'New. Second egui viewport, always on top. Notes stay in app data until the debrief starts /outcome.' },
+      { m: 'standing_orders', t: 'New. Schedule, weekly cap, usage pause and allowed tools. Starts runs through the runs application layer.' },
+      { m: 'discovery', t: 'Jobs and portals from seen_jobs.json. Gains contract, day rate and commute gates, with EUR 700 from the candidate profile.' },
+      { m: 'tracking', t: 'Tracker board, days quiet, stages, follow-ups. Status changes only through commands.' },
+      { m: 'dossier', t: 'Worker renders PDF pages with pdfium, cached by path and mtime. Checklist and keyword table from saved runs. Gains send kit and fix loop.' },
+      { m: 'runs', t: 'Spawns claude, one reader thread per run, control_response writer, raw stream-json log in app data. Gains Out tray and resume at stops.' },
+      { m: 'insights, workspace', t: 'Native charts, gaps, pipeline band, skip reasons. Profile, environment, portals, templates, sync.' },
+      { m: 'shell, ui_kit, shared_kernel', t: 'notify watcher rebuilds an immutable snapshot, then swaps an Arc. Ask or run overlay lives in shell. Theme tokens, tally marks and stamps live in ui_kit.' },
+    ];
+    const C = (n, u) => ({ n, u });
+    const crates = [
+      C('eframe, egui 0.37', 'App, wgpu renderer'), C('egui_extras 0.37', 'Tables, images'), C('egui_plot 0.38', 'Charts'),
+      C('egui_commonmark 0.26', 'Markdown'), C('pdfium-render 0.9', 'PDF pages'), C('notify', 'File watching'),
+      C('csv, serde_json', 'State files'), C('cargo-packager 0.11', '.dmg, .msi'),
+    ];
+    const V = 'Tested 31 Oct', U = 'Not tested';
+    const P = (e, u, s) => ({ e, u, s, tone: s === V ? 'c-hired' : 'c-interview' });
+    const proto = [
+      P('control_request can_use_tool', 'Permission card, Allow or Deny', V),
+      P('can_use_tool, AskUserQuestion', 'Native question form', V),
+      P('user message /command', 'Slash command expands in session', V),
+      P('result, then next user message', 'Stop points, reply box, same session', V),
+      P('result.total_cost_usd', 'Cost, budget stop', V),
+      P('rate_limit_event', 'Usage meters in status bar', V),
+      P('parent_tool_use_id', 'Nest subagent work in Activity', U),
+      P('--resume session', 'Card resumes a run stopped overnight', U),
+      P('--allowedTools', 'Standing permissions, no settings.json change', U),
+      P('interrupt control request', 'Stop run. Fallback: kill child', U),
+    ];
+    const plan = [
+      { n: 1, h: 'In-tray', t: 'intray replaces overview. Cards from the snapshot, keyboard, undo, skip reasons. Freelance gates in discovery.' },
+      { n: 2, h: 'Background runs', t: 'Out tray, permission and question cards, resume at stops, Ask or run overlay on every screen.' },
+      { n: 3, h: 'Send kit and fix loop', t: 'Send cards, reveal PDFs, copy message, Ask Claude to fix on failed checks.' },
+      { n: 4, h: 'Call sheet', t: 'Floating viewport, note capture, debrief into /outcome.' },
+      { n: 5, h: 'Standing orders', t: 'Scheduler, weekly cap, usage pause, allowed tools, run log.' },
+      { n: 6, h: 'Windows and release', t: 'Signed and notarized builds, Windows path and process handling, listing in community thread 78.' },
+    ];
+    const risks = [
+      { h: 'Auth for public release', t: 'Reusing your own CLI login was tested for your use. Anthropic bars third parties offering claude.ai login. Public builds need review or API-key mode.' },
+      { h: 'PATH from Finder', t: 'Mac GUI apps miss your shell PATH, so claude, bun and lualatex vanish. Resolve PATH from a login shell at start.' },
+      { h: 'Windows child process', t: 'npm installs claude as a .cmd shim. Resolve it safely and spawn with no console window.' },
+      { h: 'Output parsing drift', t: 'Tables in run output are prose, not an API. Show raw Markdown when a parser finds nothing.' },
+      { h: 'Schedule needs a live process', t: 'Orders fire only while the app runs. Decide login item or launch agent per OS.' },
+      { h: 'Full-screen video calls', t: 'Always on top may not float over a macOS full-screen space. Not tested.' },
+      { h: '/outcome has no one-shot form', t: 'Send and Close cards answer its questions inside the session, so a wording change upstream can break them.' },
+      { h: 'Crate compatibility', t: 'egui_commonmark on egui 0.37 is not confirmed. Check before pinning.' },
+    ];
+    return { ...this.themeVals(), rules, kinds, map, arch, crates, proto, plan, risks };
+  }
+}
+</script>
+</body>
+</html>

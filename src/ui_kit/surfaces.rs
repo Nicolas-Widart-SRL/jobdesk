@@ -1,11 +1,12 @@
-use egui::{CornerRadius, Frame, Margin, Panel, Rect, Response, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, vec2};
+use egui::{Align, CornerRadius, Frame, Layout, Margin, Panel, Rect, Response, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::palette::Ink;
-use crate::ui_kit::text::{line, rich};
+use crate::ui_kit::palette::{Ink, Tone};
+use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
-    BODY_PADDING, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING,
-    PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_PADDING, SECTION_RULE, STEP_GAP, STEP_HEIGHT, STEP_PADDING, Type,
+    BODY_PADDING, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
+    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING,
+    STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, Type,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -20,6 +21,81 @@ pub fn desk_frame(ui: &Ui) -> Frame {
 /// The sheet plane, where a screen's content sits.
 pub fn sheet_frame(ui: &Ui) -> Frame {
     Frame::new().fill(Palette::of(ui).sheet)
+}
+
+/// The desk strip above the sheet, where the brand and the folder tabs stand.
+pub fn shell_top_frame(ui: &Ui) -> Frame {
+    let (x, top, bottom) = SHELL_PADDING;
+    Frame::new().fill(Palette::of(ui).bg).inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
+}
+
+/// The desk strip under the sheet, for the status line.
+pub fn status_frame(ui: &Ui) -> Frame {
+    Frame::new().fill(Palette::of(ui).bg).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
+}
+
+/// The big line at the top of a screen. The voice says what the line is.
+#[derive(Debug, Clone, Copy)]
+pub enum Title<'a> {
+    /// A screen's name.
+    Slab(&'a str),
+    /// The one line a screen leads with.
+    Lead(&'a str),
+    /// A command or a path.
+    Typed(&'a str),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Subtitle<'a> {
+    Text(&'a str),
+    Typed(&'a str),
+}
+
+/// A screen's head: title and subtitle on the left, `actions` on the right, level with the last line.
+/// Actions are added right to left. They share the head's width with the title, so keep both short.
+pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, actions: impl FnOnce(&mut Ui)) {
+    let (x, top, bottom) = HEAD_PADDING;
+    Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let right = ui.max_rect().right();
+        let text = ui
+            .vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                let (text, style) = match title {
+                    Title::Slab(text) => (text, Type::H1),
+                    Title::Lead(text) => (text, Type::LEAD),
+                    Title::Typed(text) => (text, Type::PATH),
+                };
+                let text = rich(ui, text, style, Ink::Text);
+                ui.label(text);
+                if let Some(subtitle) = subtitle {
+                    let (text, style) = match subtitle {
+                        Subtitle::Text(text) => (text, Type::BODY),
+                        Subtitle::Typed(text) => (text, Type::MONO),
+                    };
+                    let text = rich(ui, text, style, Ink::Muted);
+                    ui.label(text);
+                }
+            })
+            .response
+            .rect;
+        let row = Rect::from_min_max(text.min, pos2(right, text.bottom()));
+        let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
+        side.spacing_mut().item_spacing.x = HEAD_GAP.0;
+        actions(&mut side);
+    });
+}
+
+/// The content of a screen, under its head.
+pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let (x, top, bottom) = SCREEN_PADDING;
+    Frame::new()
+        .inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
 }
 
 /// A fixed column beside a screen's content. Planes and gutters separate it, never a line.
@@ -59,10 +135,10 @@ pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, add)).inner
 }
 
-pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
+fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
     Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let heading = rich(ui, title, Type::SECTION, Ink::Text);
+            let heading = rich(ui, title, Type::SECTION, ink);
             ui.label(heading);
             if let Some(note) = note {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -73,6 +149,15 @@ pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
         });
     });
     divider(ui);
+}
+
+pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
+    header(ui, title, note, Ink::Text);
+}
+
+/// A section heading in a status colour, such as the lane a card sits in.
+pub fn panel_header_tone(ui: &mut Ui, title: &str, note: Option<&str>, tone: Tone) {
+    header(ui, title, note, tone.into());
 }
 
 pub fn divider(ui: &mut Ui) {
@@ -255,4 +340,54 @@ pub fn step_rail(ui: &mut Ui, labels: &[&str], current: usize, live: bool) {
 pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadius) {
     let p = Palette::of(ui);
     ui.painter().rect(rect, radius, p.raised, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
+}
+
+/// One stage in a band of counts.
+pub struct FlowNode<'a> {
+    pub label: &'a str,
+    pub figure: String,
+    pub marks: Vec<(usize, Option<Ink>)>,
+    pub note: String,
+}
+
+/// A folder strip of counts, read left to right. Columns are equal, with a hairline between them.
+pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
+    if nodes.is_empty() {
+        return;
+    }
+    let p = Palette::of(ui);
+    let (x, top, bottom) = NODE_PADDING;
+    let padding = Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 };
+    let band = Frame::new().fill(p.panel).corner_radius(RADIUS_PANEL).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.columns(nodes.len(), |columns| {
+            for (column, node) in columns.iter_mut().zip(nodes) {
+                Frame::new().inner_margin(padding).show(column, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = NODE_GAP;
+                    ui.label(rich(ui, node.label, Type::TAB, Ink::Muted));
+                    ui.label(rich(ui, node.figure.as_str(), Type::FIGURE, Ink::Text));
+                    ui.add_space(NODE_TALLY_MARGIN.0);
+                    let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
+                    ui.add_space((NODE_TALLY_HEIGHT - tally.rect.height()).max(0.0) + NODE_TALLY_MARGIN.1);
+                    ui.label(rich(ui, node.note.as_str(), Type::BODY, Ink::Muted));
+                });
+            }
+        });
+    });
+    let rect = band.response.rect;
+    let pitch = rect.width() / nodes.len() as f32;
+    for index in 1..nodes.len() {
+        let at = rect.left() + pitch * index as f32;
+        ui.painter().rect_filled(Rect::from_min_max(pos2(at, rect.top()), pos2(at + HAIRLINE, rect.bottom())), 0.0, p.line);
+    }
+    // The arrow sits on the line between two nodes, on a patch of the band's fill.
+    for index in 1..nodes.len() {
+        let centre = pos2(rect.left() + pitch * index as f32, rect.top() + NODE_ARROW.0 + NODE_ARROW.1);
+        let patch = Rect::from_center_size(centre, Vec2::splat(NODE_ARROW.1 * 2.0));
+        ui.painter().rect_filled(patch, 0.0, p.panel);
+        let arrow = line(ui, "\u{2192}", Type::BODY, p.faint, f32::INFINITY);
+        paint_centred(ui, patch, arrow, p.faint);
+    }
 }

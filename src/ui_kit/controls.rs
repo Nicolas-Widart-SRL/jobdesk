@@ -7,7 +7,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::marks::paint_key;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, RADIUS_BUTTON,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_LEFT, TAB_TOP, Type,
 };
 
@@ -36,6 +36,16 @@ fn focus_ring(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
     }
 }
 
+fn look_colors(p: &Palette, look: Look, hovered: bool) -> (Color32, Color32) {
+    match look {
+        Look::Primary => (p.primary, p.primary),
+        Look::Plain if hovered => (p.raised, p.line),
+        Look::Danger if hovered => (p.raised, p.closed),
+        Look::Plain => (Color32::TRANSPARENT, p.line),
+        Look::Danger => (Color32::TRANSPARENT, p.closed),
+    }
+}
+
 fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Response {
     let p = Palette::of(ui);
     let ink = match look {
@@ -48,13 +58,7 @@ fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Re
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = match look {
-        Look::Primary => (p.primary, p.primary),
-        Look::Plain if response.hovered() => (p.raised, p.line),
-        Look::Danger if response.hovered() => (p.raised, p.closed),
-        Look::Plain => (Color32::TRANSPARENT, p.line),
-        Look::Danger => (Color32::TRANSPARENT, p.closed),
-    };
+    let (fill, border) = look_colors(&p, look, response.hovered());
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(fit.padding, (fit.height - galley.size().y) / 2.0), galley.size());
     if matches!(look, Look::Primary) && response.hovered() {
@@ -95,16 +99,77 @@ pub fn primary_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, Some(key))
 }
 
+/// A primary button that names its keyboard shortcut. The keys are plain glyphs, with no box.
+pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
+    let p = Palette::of(ui);
+    let ink = p.on_primary;
+    let label = line(ui, text, NORMAL.font, ink, f32::INFINITY);
+    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect();
+    let glyphs_width = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
+    // The keys sit 2px further out than a button's own gap.
+    let lead = if glyphs.is_empty() { 0.0 } else { BUTTON_GAP + 2.0 };
+    let size = vec2(NORMAL.padding * 2.0 + label.size().x + lead + glyphs_width, NORMAL.height);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (fill, border) = look_colors(&p, Look::Primary, response.hovered());
+    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    let text_rect = Rect::from_min_size(rect.min + vec2(NORMAL.padding, (NORMAL.height - label.size().y) / 2.0), label.size());
+    if response.hovered() {
+        ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
+    }
+    let mut x = text_rect.right() + lead;
+    ui.painter().galley(text_rect.min, label, ink);
+    for glyph in glyphs {
+        let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
+        x += glyph.size().x + KEYS_GAP;
+        ui.painter().galley(at, glyph, ink);
+    }
+    focus_ring(ui, &response, RADIUS_BUTTON);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
+    response
+}
+
 fn command_request_id() -> egui::Id {
     egui::Id::NULL.with("requested_command")
+}
+
+fn request_command(ui: &Ui, command: &str) {
+    ui.ctx().data_mut(|data| data.insert_temp(command_request_id(), command.to_owned()));
 }
 
 /// A command button on any screen. The shell picks the request up and opens the launcher.
 pub fn command_button(ui: &mut Ui, command: &str) {
     let clicked = press(ui, command, Look::Plain, COMMAND, None).on_hover_text("Open in command launcher").clicked();
     if clicked {
-        ui.ctx().data_mut(|data| data.insert_temp(command_request_id(), command.to_owned()));
+        request_command(ui, command);
     }
+}
+
+pub fn danger_command_button(ui: &mut Ui, command: &str) {
+    let clicked = press(ui, command, Look::Danger, COMMAND, None).on_hover_text("Open in command launcher").clicked();
+    if clicked {
+        request_command(ui, command);
+    }
+}
+
+fn command_action_with(ui: &mut Ui, label: &str, line: &str, look: Look, fit: Fit) -> Response {
+    let response = press(ui, label, look, fit, None).on_hover_text(line);
+    if response.clicked() {
+        request_command(ui, line);
+    }
+    response
+}
+
+/// A button with a plain label that opens `line` in the command launcher.
+pub fn command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
+    command_action_with(ui, label, line, Look::Plain, NORMAL)
+}
+
+pub fn primary_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
+    command_action_with(ui, label, line, Look::Primary, NORMAL)
+}
+
+pub fn small_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
+    command_action_with(ui, label, line, Look::Plain, SMALL)
 }
 
 pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
@@ -264,5 +329,30 @@ pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
     ui.painter().galley(at, galley, ink);
     focus_ring(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, text));
+    response
+}
+
+/// A command in the catalogue: its name, what it does and what it writes. Painted whole, so a test finds one label.
+pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: bool) -> Response {
+    let p = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), Sense::click());
+    if on || response.hovered() {
+        ui.painter().rect_filled(rect, 0.0, p.panel);
+    }
+    ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), HAIRLINE)), 0.0, p.line);
+    let left = rect.left() + PICK_ROW_INLINE;
+    let right = rect.right() - PICK_ROW_INLINE;
+    let summary_left = left + COMMAND_NAME_WIDTH;
+    let written = line(ui, writes, Type::MONO, p.faint, rect.width() / 2.0);
+    let named = line(ui, name, Type::MONO, p.text, COMMAND_NAME_WIDTH - ROW_ITEM_GAP);
+    let room = (right - written.size().x - ROW_ITEM_GAP - summary_left).max(0.0);
+    let summed = line(ui, summary, Type::BODY, p.text, room);
+    let centred = |galley: &Arc<Galley>, x: f32| egui::pos2(x, rect.center().y - galley.size().y / 2.0);
+    let (named_at, summed_at, written_at) = (centred(&named, left), centred(&summed, summary_left), centred(&written, right - written.size().x));
+    ui.painter().galley(named_at, named, p.text);
+    ui.painter().galley(summed_at, summed, p.text);
+    ui.painter().galley(written_at, written, p.faint);
+    focus_ring(ui, &response, 0);
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, format!("{name} {summary}")));
     response
 }

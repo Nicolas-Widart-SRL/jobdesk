@@ -3,11 +3,13 @@
 use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
+use jobdesk::ui_kit::tokens::BRAND_GAP;
 use jobdesk::ui_kit::{
-    Ink, Palette, Tone, Type, alert, bar, button, card_tab, clear_panel, code_box, command_button, danger_button, deal, desk_frame, divider, doughnut, faint_mono, fat_tally, figure,
-    folder_tab, horizon, horizon_day, horizon_mark, index_card, key_button, key_hint, lane, lane_title, list_row, measure, muted, note, page_frame, panel, panel_body, panel_header,
-    pick_row, primary_button, primary_key_button, prompt_box, rich, score, segmented, select_row, side_tab, slip, slip_bar, small_button, stack_edges, stamp, status_segmented,
-    step_rail, strong, table_head, tag, tally, undo_bar, undo_button,
+    FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
+    divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_day, horizon_mark, index_card, key_button, key_hint, lane, lane_title, list_row, measure,
+    muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box, rich, score, segmented,
+    select_row, shortcut_button, side_tab, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally, tally_strip,
+    undo_bar, undo_button,
 };
 
 const TONES: [(&str, Tone); 7] = [
@@ -108,6 +110,23 @@ fn buttons(ui: &mut Ui) {
     });
 }
 
+fn shell(ui: &mut Ui) {
+    desk_frame(ui).inner_margin(12).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = BRAND_GAP;
+            brand_mark(ui);
+            ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
+            ui.add_space(24.0);
+            shortcut_button(ui, "Ask or run", &["Cmd", "K"]);
+            status_dot(ui, Tone::Hired);
+        });
+    });
+    page_head(ui, Title::Slab("All commands"), Some(Subtitle::Text("Every action is the unchanged slash command.")), |ui| {
+        primary_button(ui, "Find skill gaps");
+    });
+    panel_header_tone(ui, "Interview", Some("2 waiting"), Tone::Interview);
+}
+
 fn marks(ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         for (name, tone) in TONES {
@@ -126,6 +145,8 @@ fn marks(ui: &mut Ui) {
         tally(ui, 12, 20, Tone::Active);
         fat_tally(ui, 5, 8, Tone::Hired);
     });
+    tally_strip(ui, &[(6, Some(Ink::Status(Tone::Active))), (3, Some(Ink::Status(Tone::Interview))), (1, Some(Ink::Status(Tone::Offer))), (4, None)], false);
+    tally_strip(ui, &[(5, Some(Ink::Status(Tone::Closed))), (3, None)], true);
     bar(ui, 0.6, Ink::Text);
     bar(ui, 0.35, Tone::Offer);
     measure(ui, "Interview", 3, 10, Tone::Interview);
@@ -170,6 +191,8 @@ fn sections(ui: &mut Ui) {
             divider(ui);
             select_row(ui, "/rank     Pick row, on", Type::MONO, true);
             select_row(ui, "/scrape   Pick row, off", Type::MONO, false);
+            command_row(ui, "/rank", "Score new postings", "seen_jobs.json", true);
+            command_row(ui, "/apply", "Evaluate and draft", "cv, cover_letters, tracker", false);
             panel_body(ui, |ui| {
                 muted(ui, "Panel body");
             });
@@ -193,6 +216,10 @@ fn sections(ui: &mut Ui) {
             ui.label("A note across the screen");
         });
     });
+    ui.add_space(10.0);
+    let stages = [("Scrape", "15", vec![(9, Some(Ink::Text)), (6, None)], "new of 64 seen"), ("Rank", "5", vec![(5, Some(Ink::Text))], "on shortlist"), ("Apply", "2", vec![(2, Some(Ink::Text))], "drafted, not sent")];
+    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned() }).collect();
+    flow_band(ui, &nodes);
     ui.add_space(10.0);
     code_box(ui, |ui| {
         ui.label(rich(ui, "cd cv && lualatex main_harbor.tex", Type::MONO, Ink::Text));
@@ -274,11 +301,12 @@ fn tray(ui: &mut Ui) {
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [(&str, fn(&mut Ui)); 9] = [
+        let sections_of_gallery: [(&str, fn(&mut Ui)); 10] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
             ("Buttons", buttons),
+            ("Shell", shell),
             ("Marks", marks),
             ("Tabs", tabs),
             ("Sections and rows", sections),
@@ -296,7 +324,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 3300.0])
+        .with_size([1000.0, 3700.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
         .with_context_setup(|ctx| install_look(ctx))

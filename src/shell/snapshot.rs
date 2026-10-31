@@ -9,7 +9,8 @@ use crate::insights::application::{SearchInsights, SkillGapView, search_insights
 use crate::overview::application::{Overview, compose};
 use crate::shared_kernel::LoadError;
 use crate::tracking::application::Pipeline;
-use crate::{discovery, dossier, insights, tracking};
+use crate::workspace::application::{WorkspaceView, workspace_view};
+use crate::{discovery, dossier, insights, tracking, workspace};
 
 /// One consistent view of the workspace. Screens only ever read this.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -20,6 +21,7 @@ pub struct Snapshot {
     pub insights: SearchInsights,
     pub skill_gaps: Option<SkillGapView>,
     pub archives: HashMap<String, ArchiveContents>,
+    pub workspace: WorkspaceView,
     pub issues: Vec<LoadError>,
 }
 
@@ -47,6 +49,6 @@ impl Snapshot {
                 Some((folder, dossier::load_archive(root, &reference, today)))
             })
             .collect();
-        Self { archives, overview: compose(&board, &pipeline), insights: search_insights(&pipeline), board, pipeline, skill_gaps, issues }
+        Self { archives, workspace: workspace_view(&workspace::inspect(root), &board), overview: compose(&board, &pipeline), insights: search_insights(&pipeline), board, pipeline, skill_gaps, issues }
     }
 }

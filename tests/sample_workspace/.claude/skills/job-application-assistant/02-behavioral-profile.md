@@ -1,0 +1,1 @@
+Thrives in skilled teams

@@ -16,9 +16,9 @@ Each feature is a bounded context with its own language.
 | `overview` | workflow stage, attention item | discovery's and tracking's application layers |
 | `runs` | run, activity, prompt, decision, step rail, command catalog | the `claude` CLI stream, its own run logs |
 | `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |
-| `workspace` | workspace root | the checkout folder, file changes |
+| `workspace` | workspace root, profile state, portal, tool check | the checkout folder, installed tools, file changes |
 
-`shared_kernel` holds the few value types every feature agrees on. `ui_kit` holds the design
+`shared_kernel` holds the few value types every feature agrees on, plus the host `PATH` lookup that `runs` and `workspace` both need. `ui_kit` holds the design
 tokens and generic widgets. `shell` is the composition root: it loads every feature into one
 snapshot and owns the window.
 

@@ -1,17 +1,21 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[cfg(unix)]
 const MARKER: &str = "__JOBDESK_PATH__";
 
 /// An app opened from the Finder has none of the PATH set in shell profiles, so `claude`,
 /// `bun` and `lualatex` would all look missing. Ask the login shell.
-pub fn resolved_path() -> String {
-    let inherited = env::var("PATH").unwrap_or_default();
-    match login_shell_path() {
-        Some(login) if !login.is_empty() => format!("{login}{}{inherited}", if cfg!(windows) { ';' } else { ':' }),
-        _ => inherited,
-    }
+pub fn resolved_path() -> &'static str {
+    static RESOLVED: OnceLock<String> = OnceLock::new();
+    RESOLVED.get_or_init(|| {
+        let inherited = env::var("PATH").unwrap_or_default();
+        match login_shell_path() {
+            Some(login) if !login.is_empty() => format!("{login}{}{inherited}", if cfg!(windows) { ';' } else { ':' }),
+            _ => inherited,
+        }
+    })
 }
 
 #[cfg(unix)]
@@ -46,18 +50,19 @@ fn between_markers(output: &str) -> Option<String> {
     Some(output[start..end].to_owned())
 }
 
-fn candidates(dir: &Path) -> Vec<PathBuf> {
+fn candidates(dir: &Path, name: &str) -> Vec<PathBuf> {
     if cfg!(windows) {
-        ["claude.exe", "claude.cmd", "claude.bat"].iter().map(|name| dir.join(name)).collect()
+        ["exe", "cmd", "bat"].iter().map(|extension| dir.join(format!("{name}.{extension}"))).collect()
     } else {
-        vec![dir.join("claude")]
+        vec![dir.join(name)]
     }
 }
 
-pub fn find_claude(path: &str) -> Option<PathBuf> {
+/// Looks through `path`, then the folders the Claude installer uses.
+pub fn find_executable(path: &str, name: &str) -> Option<PathBuf> {
     let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from);
     let usual = home.iter().flat_map(|home| [home.join(".local/bin"), home.join(".claude/local")]);
-    env::split_paths(path).chain(usual).flat_map(|dir| candidates(&dir)).find(|candidate| candidate.is_file())
+    env::split_paths(path).chain(usual).flat_map(|dir| candidates(&dir, name)).find(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
@@ -76,6 +81,6 @@ mod tests {
     fn finds_claude_on_the_given_path() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("claude"), "").unwrap();
-        assert_eq!(find_claude(dir.path().to_str().unwrap()), Some(dir.path().join("claude")));
+        assert_eq!(find_executable(dir.path().to_str().unwrap(), "claude"), Some(dir.path().join("claude")));
     }
 }

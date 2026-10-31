@@ -36,7 +36,7 @@ pub struct Usage {
 /// What the CLI reported, in this feature's terms.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
-    SessionStarted { session_id: String, model: String },
+    SessionStarted { session_id: String, model: String, api_key_source: String },
     TextDelta(String),
     AssistantText { text: String, nested: bool },
     ToolStarted { id: String, name: String, summary: String, nested: bool },

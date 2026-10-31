@@ -1,8 +1,15 @@
-# Jobdesk
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/jobdesk-banner-dark.png">
+    <img src="assets/brand/jobdesk-banner-light.png" alt="Jobdesk" width="640">
+  </picture>
+</h1>
 
 Native macOS and Windows view over an [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) checkout, built with Rust and egui.
 
 Overview, Jobs, Tracker and Insights update live as commands change your files. The Runs screen starts any slash command through your local `claude` CLI and shows its progress, permission requests, questions, cost and history.
+
+Workspace shows whether your profile, tools, portals, templates and sync are ready.
 
 Open an application from Tracker for its dossier: compiled PDFs, verification results, keyword coverage, evaluation, archived posting, prep packs, outcome notes and follow-up drafts. Verification, keywords and evaluation exist only in `/apply` output, so they appear for applications run through Jobdesk.
 
@@ -19,6 +26,24 @@ cargo run -- --workspace /path/to/ai-job-search
 ```
 
 You can also set `JOBDESK_WORKSPACE`, or choose the folder in the app. It reopens the last folder.
+
+## Package
+
+```bash
+cargo install cargo-packager --locked --version 0.11.8
+```
+
+```bash
+cargo packager --release --formats app,dmg
+```
+
+Output lands in `target/packages`. On Windows use `--formats nsis`. `.github/workflows/build.yml` builds both platforms once the repo has a GitHub remote.
+
+These builds are not signed with a developer identity. macOS and Windows warn on other machines until they are signed and notarized. After changing the icon, run `python3 scripts/make_icon.py`.
+
+## Authentication
+
+Jobdesk runs your installed Claude Code CLI and uses the authentication you set up there. It is not made or endorsed by Anthropic. Read [docs/auth-review.md](docs/auth-review.md) before distributing it.
 
 ## Test
 

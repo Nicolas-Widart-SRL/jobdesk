@@ -19,7 +19,7 @@ use crate::shell::{Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::{Palette, faint_mono, install_fonts, install_theme, muted, panel, panel_body, primary_button, segmented, semibold, strong, take_command_request};
 use crate::workspace;
-use crate::workspace::application::WorkspaceRoot;
+use crate::workspace::application::{EnvironmentChecks, WorkspaceRoot, auth_mode};
 
 const WORKSPACE_KEY: &str = "workspace";
 
@@ -30,12 +30,13 @@ pub enum Screen {
     Tracker,
     Insights,
     Runs,
+    Workspace,
     Launcher,
     Dossier,
 }
 
 impl Screen {
-    const NAV: [Self; 5] = [Self::Overview, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs];
+    const NAV: [Self; 6] = [Self::Overview, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Workspace];
 
     fn title(self) -> &'static str {
         match self {
@@ -44,6 +45,7 @@ impl Screen {
             Self::Tracker => "Tracker",
             Self::Insights => "Insights",
             Self::Runs => "Runs",
+            Self::Workspace => "Workspace",
             Self::Launcher => "Run a command",
             Self::Dossier => "Application dossier",
         }
@@ -56,6 +58,7 @@ impl Screen {
             Self::Tracker => "Status changes go through /outcome",
             Self::Insights => "Search health and your latest skill gap report",
             Self::Runs => "Every command Jobdesk ran in this workspace",
+            Self::Workspace => "Whether your checkout and tools are ready",
             Self::Launcher => "Every action is the unchanged slash command. Forms only build its arguments.",
             Self::Dossier => "Documents, evaluation, prep and outcome for one application",
         }
@@ -79,6 +82,7 @@ pub struct Shell {
     dossier_screen: DossierScreen,
     pages: Option<PageStore>,
     open_dossier: Option<OpenDossier>,
+    environment: Option<EnvironmentChecks>,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -106,6 +110,7 @@ impl Shell {
             dossier_screen: DossierScreen::default(),
             pages: None,
             open_dossier: None,
+            environment: None,
         }
     }
 
@@ -116,6 +121,10 @@ impl Shell {
 
     pub fn desk_slot(&mut self) -> &mut Option<RunDesk> {
         &mut self.desk
+    }
+
+    pub fn environment_slot(&mut self) -> &mut Option<EnvironmentChecks> {
+        &mut self.environment
     }
 
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
@@ -163,6 +172,8 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
+                let repaint = ctx.clone();
+                self.environment = Some(workspace::environment_checks(Arc::new(move || repaint.request_repaint())));
                 self.workspace = Some(root);
                 self.folder_error = None;
             }
@@ -188,6 +199,9 @@ impl Shell {
         }
         if let Some(pages) = &mut self.pages {
             pages.poll();
+        }
+        if let Some(environment) = &mut self.environment {
+            environment.poll();
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let p = Palette::of(ui);
@@ -360,6 +374,12 @@ impl Shell {
                         self.run_screen.show(ui, desk);
                     }
                 }
+                Screen::Workspace => {
+                    let auth = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
+                    if let Some(environment) = &mut self.environment {
+                        workspace::ui::show(ui, &snapshot.workspace, environment, auth);
+                    }
+                }
                 Screen::Launcher => {
                     if let Some(desk) = &mut self.desk {
                         if let Some(id) = self.launcher.show(ui, desk) {
@@ -397,8 +417,9 @@ fn requested_workspace() -> Option<PathBuf> {
 }
 
 pub fn run() -> eframe::Result {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")).unwrap_or_default();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk").with_icon(icon),
         ..Default::default()
     };
     eframe::run_native(

@@ -53,6 +53,11 @@ impl RunDesk {
         self.runs.iter_mut().find(|run| run.id == id)
     }
 
+    /// How the most recent run authenticated, as the CLI reported it.
+    pub fn latest_auth_source(&self) -> Option<&str> {
+        self.runs.iter().find_map(|run| run.api_key_source.as_deref())
+    }
+
     pub fn is_busy(&self) -> bool {
         self.runs.iter().any(Run::is_busy)
     }
@@ -179,7 +184,7 @@ mod tests {
     impl AgentGateway for FakeGateway {
         fn start(&self, request: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
             self.0.borrow_mut().requests.push(request.clone());
-            sink(AgentEvent::SessionStarted { session_id: "s1".into(), model: "m".into() });
+            sink(AgentEvent::SessionStarted { session_id: "s1".into(), model: "m".into(), api_key_source: "none".into() });
             Box::new(FakeSession(Rc::clone(&self.0)))
         }
     }

@@ -5,6 +5,17 @@ edition = "2024"
 rust-version = "1.95"
 publish = false
 
+[package.metadata.packager]
+product-name = "Jobdesk"
+identifier = "com.nicolaswidart.jobdesk"
+category = "Productivity"
+authors = ["Nicolas Widart"]
+description = "Desktop view over an ai-job-search checkout"
+icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon.png"]
+out-dir = "target/packages"
+before-packaging-command = "cargo build --release"
+binaries = [{ path = "jobdesk", main = true }]
+
 [lib]
 path = "src/lib.rs"
 

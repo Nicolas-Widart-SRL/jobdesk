@@ -59,6 +59,8 @@ pub struct Run {
     pub budget_usd: f64,
     pub session_id: Option<String>,
     pub model: Option<String>,
+    /// How the CLI authenticated. `none` means its own Claude login.
+    pub api_key_source: Option<String>,
     pub status: RunStatus,
     pub activity: Vec<Activity>,
     pub streaming_text: String,
@@ -83,6 +85,7 @@ impl Run {
             budget_usd: request.budget_usd,
             session_id: request.resume_session.clone(),
             model: None,
+            api_key_source: None,
             status: RunStatus::Starting,
             activity: vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false }],
             streaming_text: String::new(),
@@ -163,9 +166,10 @@ impl Run {
 
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::SessionStarted { session_id, model } => {
+            AgentEvent::SessionStarted { session_id, model, api_key_source } => {
                 self.session_id = Some(session_id);
                 self.model = Some(model);
+                self.api_key_source = Some(api_key_source);
                 if self.status == RunStatus::Starting {
                     self.status = RunStatus::Working;
                 }

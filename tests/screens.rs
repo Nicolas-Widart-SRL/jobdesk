@@ -12,6 +12,7 @@ use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
 use jobdesk::shell::{Screen, Shell, Snapshot, install_look};
+use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
 fn sample_workspace(root: &Path) {
     let source = Path::new("tests/sample_workspace");
@@ -75,7 +76,7 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
     desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }).unwrap();
     let events = [
-        AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into() },
+        AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
         AgentEvent::UsageChanged(Usage { five_hour: Some(0.08), seven_day: Some(0.25) }),
         tool("1", "Agent", "posting-fetcher: Fetch the posting", false),
         tool("2", "Bash", "python3 tools/posting_guard.py --text --json", true),
@@ -230,6 +231,41 @@ fn render_dossier(section: Option<&str>, theme: Theme, name: &str) {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+struct FixedTools;
+
+impl ToolProber for FixedTools {
+    fn probe(&self, tool: &ToolSpec) -> Option<String> {
+        (tool.name != "pdftotext" && tool.name != "bun").then(|| "1.0".to_owned())
+    }
+}
+
+fn render_workspace(theme: Theme, name: &str) {
+    let mut shell = shell(Screen::Workspace, name);
+    *shell.environment_slot() = Some(EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {})));
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_pixels_per_point(1.5)
+        .with_theme(theme)
+        .with_context_setup(|ctx| install_look(ctx))
+        .wgpu()
+        .build_ui(move |ui| shell.show(ui));
+    for _ in 0..20 {
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn workspace_dark() {
+    render_workspace(Theme::Dark, "workspace_dark");
+}
+
+#[test]
+fn workspace_light() {
+    render_workspace(Theme::Light, "workspace_light");
 }
 
 #[test]

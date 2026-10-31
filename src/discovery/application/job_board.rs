@@ -48,6 +48,10 @@ impl JobBoard {
         self.lanes.iter().find(|view| view.lane == lane).map_or(&[], |view| &view.jobs)
     }
 
+    pub fn seen_on_portal(&self, portal: &str) -> usize {
+        self.lanes.iter().flat_map(|view| &view.jobs).filter(|job| job.portal.as_deref() == Some(portal)).count()
+    }
+
     pub fn count(&self, lane: Lane) -> usize {
         self.jobs_in(lane).len()
     }

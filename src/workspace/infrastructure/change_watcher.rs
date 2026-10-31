@@ -4,7 +4,7 @@ use std::sync::mpsc::Sender;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Paths whose changes can alter what the screens show.
-const WATCHED: [(&str, RecursiveMode); 8] = [
+const WATCHED: [(&str, RecursiveMode); 12] = [
     (".", RecursiveMode::NonRecursive),
     ("job_scraper", RecursiveMode::Recursive),
     ("documents/applications", RecursiveMode::Recursive),
@@ -13,11 +13,11 @@ const WATCHED: [(&str, RecursiveMode); 8] = [
     ("cv", RecursiveMode::NonRecursive),
     ("cover_letters", RecursiveMode::NonRecursive),
     ("company_research", RecursiveMode::Recursive),
+    (".agents/skills", RecursiveMode::Recursive),
+    (".claude/skills", RecursiveMode::Recursive),
+    ("templates", RecursiveMode::Recursive),
+    ("gmail_sync", RecursiveMode::Recursive),
 ];
-
-pub fn path_exists(path: &Path) -> bool {
-    path.exists()
-}
 
 /// Keeps the operating system watch alive for as long as it is held.
 pub struct ChangeWatcher {

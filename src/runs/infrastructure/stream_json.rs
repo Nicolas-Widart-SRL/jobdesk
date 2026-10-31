@@ -14,7 +14,11 @@ pub fn parse_line(line: &str) -> Vec<AgentEvent> {
     let Ok(event) = serde_json::from_str::<Value>(line) else { return Vec::new() };
     match text_of(&event, "type") {
         "system" if text_of(&event, "subtype") == "init" => {
-            vec![AgentEvent::SessionStarted { session_id: text_of(&event, "session_id").to_owned(), model: text_of(&event, "model").to_owned() }]
+            vec![AgentEvent::SessionStarted {
+                session_id: text_of(&event, "session_id").to_owned(),
+                model: text_of(&event, "model").to_owned(),
+                api_key_source: text_of(&event, "apiKeySource").to_owned(),
+            }]
         }
         "stream_event" => text_delta(&event).into_iter().collect(),
         "assistant" => assistant_message(&event),
@@ -203,8 +207,8 @@ mod tests {
 
     #[test]
     fn reads_a_session_start() {
-        let events = parse_line(r#"{"type":"system","subtype":"init","session_id":"s","model":"m"}"#);
-        assert_eq!(events, [AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into() }]);
+        let events = parse_line(r#"{"type":"system","subtype":"init","session_id":"s","model":"m","apiKeySource":"none"}"#);
+        assert_eq!(events, [AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() }]);
     }
 
     #[test]

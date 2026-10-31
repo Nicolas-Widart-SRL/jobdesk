@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest};
-use crate::runs::infrastructure::host_path::{find_claude, resolved_path};
 use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
+use crate::shared_kernel::host_path::{find_executable, resolved_path};
 
 const STDERR_LINES_KEPT: usize = 12;
 
@@ -94,11 +94,11 @@ fn supervise(workspace: &PathBuf, logs: &PathBuf, request: &RunRequest, sink: Ev
         }
     };
     let path = resolved_path();
-    let Some(claude) = find_claude(&path) else {
+    let Some(claude) = find_executable(path, "claude") else {
         emit(AgentEvent::ProcessExited { failure: Some("Claude CLI not found. Install Claude Code, then run this again.".to_owned()) });
         return;
     };
-    let mut child = match command_for(&claude, workspace, &path, request).spawn() {
+    let mut child = match command_for(&claude, workspace, path, request).spawn() {
         Ok(child) => child,
         Err(error) => {
             emit(AgentEvent::ProcessExited { failure: Some(format!("Could not start Claude: {error}")) });

@@ -39,11 +39,8 @@ jobs:
         # bash -eo pipefail: a failing command in a pipe fails the step.
         shell: bash
 
-    env:
-      # The RELEASE_TOKEN PAT opens the release PR, so that PR's pull_request event starts CI, which a PR
-      # opened by GITHUB_TOKEN would not. The PAT also pushes the branch, because GITHUB_TOKEN has only contents: read.
-      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-
+    # Only the Open release PR step gets RELEASE_TOKEN. The actions before it are pinned to commits,
+    # because a changed action could leave behind a program that reads the token in a later step.
     steps:
       - name: Check branch
         env:
@@ -63,11 +60,11 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
 
       - name: Install git-cliff
         run: |
@@ -78,13 +75,18 @@ jobs:
           echo "$RUNNER_TEMP/git-cliff-${GIT_CLIFF_VERSION}" >> "$GITHUB_PATH"
 
       # scripts/release.sh runs cargo update --workspace to set the version in Cargo.lock.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Prepare the release commit
         id: version
         env:
           BUMP: ${{ inputs.bump }}
+          # Git asks gh for credentials, and gh answers with the GH_TOKEN of the step that runs git.
+          GH_TOKEN: ${{ github.token }}
         run: |
+          gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           scripts/release.sh "$BUMP"
@@ -107,8 +109,11 @@ jobs:
           echo "Releasing $tag (bump=$BUMP)."
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # The RELEASE_TOKEN PAT opens the release PR, so that PR's pull_request event starts CI, which a PR
+      # opened by GITHUB_TOKEN would not. The PAT also pushes the branch, because GITHUB_TOKEN has only contents: read.
       - name: Open release PR
         env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           git push origin "release/$TAG"

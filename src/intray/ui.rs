@@ -79,7 +79,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         if let Some(issue) = tray.issue() {
             alert(ui, issue);
         }
-        horizon(ui, queue, &mut pressed);
+        horizon(ui, queue, keys, &mut pressed);
         ui.add_space(12.0);
 
         let offer = tray.undo_offer();
@@ -90,9 +90,8 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
                     Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
                     None => clear(ui, queue, &mut pressed),
                 }
-                match &offer {
-                    Some(offer) => undo_bar(ui, offer, &mut pressed),
-                    None => ui.ctx().data_mut(|data| data.remove::<Option<UndoOffer>>(undo_seen_id())),
+                if let Some(offer) = &offer {
+                    undo_bar(ui, offer, &mut pressed);
                 }
             });
         });
@@ -117,7 +116,8 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
     None
 }
 
-fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
+/// `active` is off while a dialog covers the tray, so a focused chip keeps its tip to itself.
+fn horizon(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
     let days: Vec<_> = (0..HORIZON_DAYS as u64).map(|offset| queue.today + chrono::Days::new(offset)).collect();
     let note = queue.horizon_note();
     let tomorrow = queue.today + chrono::Days::new(1);
@@ -131,18 +131,18 @@ fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             let kinds: Vec<(usize, &str)> = kinds.iter().map(|(n, kind)| (*n, kind.as_str())).collect();
             horizon_count(ui, queue.cards.len(), queue.overdue(), &kinds);
         } else if *day == tomorrow && !queue.set_aside.is_empty() {
-            return_chip(ui, queue, pressed);
+            return_chip(ui, queue, active, pressed);
         }
     });
 }
 
 /// Names come from postings, so they show as plain labels only.
-fn return_chip(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
+fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
     let n = queue.set_aside.len();
     let names = queue.set_aside_distinct();
     let pronoun = if n == 1 { "it" } else { "them" };
     let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", queue.set_aside_names());
-    let chip = horizon_return(ui, &format!("{n} back"), &label, |ui| {
+    let chip = horizon_return(ui, &format!("{n} back"), &label, active, |ui| {
         strong(ui, "Set aside with Later");
         for name in &names {
             ui.label(*name);
@@ -319,8 +319,8 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
-/// An offer that asks for a reason scrolls into view once, so the reasons show right after N.
-/// Other offers leave the scroll alone, so the next card's head stays in view.
+/// An offer that asks for a reason scrolls into view once per decision, so the reasons show right after N.
+/// Other offers, and picking a reason, leave the scroll alone, so the next card's head stays in view.
 fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
     let shown = ui.scope(|ui| undo_strip(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -337,9 +337,10 @@ fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
             }
         });
     }));
-    let seen = ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Option<UndoOffer>>(undo_seen_id()).replace(offer.clone()));
-    if offer.asks_reason && seen.as_ref() != Some(offer) {
+    let seen = ui.ctx().data_mut(|data| data.get_temp::<usize>(undo_seen_id()));
+    if offer.asks_reason && seen != Some(offer.id) {
         shown.response.scroll_to_me(None);
+        ui.ctx().data_mut(|data| data.insert_temp(undo_seen_id(), offer.id));
     }
 }
 

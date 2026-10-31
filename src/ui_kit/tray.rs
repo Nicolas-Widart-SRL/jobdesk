@@ -68,9 +68,10 @@ pub fn horizon_count(ui: &mut Ui, count: usize, overdue: usize, kinds: &[(usize,
     }
 }
 
-/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover or focus.
+/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover,
+/// and on keyboard focus while `active`.
 /// In a narrow column the chip keeps to the column and its text elides.
-pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, tip: impl FnOnce(&mut Ui)) -> Response {
+pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, active: bool, tip: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let room = ui.available_width();
     let galley = line(ui, text, Type::TAG, p.text, (room - HORIZON_CHIP_PADDING * 2.0).max(0.0));
@@ -86,7 +87,7 @@ pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, tip: impl FnOnce(&mu
         ui.set_max_width(HORIZON_TIP_WIDTH);
         tip(ui)
     };
-    if response.has_focus() {
+    if active && response.has_focus() {
         response.show_tooltip_ui(tip);
         return response;
     }

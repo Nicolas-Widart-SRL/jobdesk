@@ -490,11 +490,63 @@ fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
     harness.get_by_label_contains("1 set aside, back tomorrow: Harbor Bank").click();
     harness.run_steps(3);
 
-    // The card being read stays on top, so Harbor Bank comes back behind it.
+    assert!(is_shown(&harness, HARBOR), "the card brought back is on top again");
     assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
     assert!(!is_shown(&harness, "All commands"), "the chip opens no launcher");
     assert!(started.lock().unwrap().is_none(), "the chip starts no run");
+}
+
+/// The top of the dealt card's tab, which moves only when the tray scrolls.
+fn tab_top(harness: &Harness) -> f32 {
+    let kinds = ["Permission", "Question", "Send", "Triage", "Prep", "Offer", "Guard flag", "Follow-up", "Close"];
+    kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
+}
+
+#[test]
+fn later_and_keep_leave_the_scroll_alone() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_no_scroll"));
+    let top = tab_top(&harness);
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+        assert_eq!(tab_top(&harness), top);
+    }
+    harness.get_by_label("Harmless, keep posting").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Kept: Halden Logistics"));
+    assert_eq!(tab_top(&harness), top);
+}
+
+#[test]
+fn each_skip_scrolls_its_reasons_into_view_once() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_skip_scroll"));
+    for _ in 0..2 {
+        press(&mut harness, Key::L);
+    }
+    let resting = tab_top(&harness);
+    press(&mut harness, Key::N);
+    let scrolled = harness.get_by_label("Domain").rect().top();
+    assert!(tab_top(&harness) < resting, "the reasons scroll into view");
+
+    let scroll_back = |harness: &mut Harness| {
+        for _ in 0..3 {
+            harness.get_by_label("Domain").scroll_up();
+            harness.run_steps(3);
+        }
+        assert_eq!(tab_top(harness), resting);
+    };
+    scroll_back(&mut harness);
+    let below = harness.get_by_label("Domain").rect().top();
+    harness.get_by_label("Domain").click_accesskit();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
+    assert_eq!(harness.get_by_label("Domain").rect().top(), below, "a reason does not scroll");
+
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, MERIDIAN));
+    press(&mut harness, Key::N);
+    assert!(is_shown(&harness, "Skipped: Meridian Rail Systems"));
+    assert_eq!(harness.get_by_label("Domain").rect().top(), scrolled, "the same skip again scrolls again");
 }
 
 #[test]

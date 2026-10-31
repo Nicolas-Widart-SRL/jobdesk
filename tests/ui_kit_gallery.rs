@@ -275,7 +275,7 @@ fn tray(ui: &mut Ui) {
         if today {
             horizon_count(ui, 7, 1, &[(5, "triage"), (2, "send")]);
         } else if *day == "Sun 1" {
-            horizon_return(ui, "1 back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", |ui| {
+            horizon_return(ui, "1 back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
                 ui.label("Juniper Retail");
             });
         }

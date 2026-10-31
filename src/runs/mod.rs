@@ -1,0 +1,20 @@
+//! Running slash commands through the local `claude` CLI and showing what they do.
+
+pub mod application;
+mod domain;
+mod infrastructure;
+pub mod ui;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::runs::application::RunDesk;
+use crate::runs::infrastructure::{ClaudeGateway, RunLogs};
+
+/// `logs` is the app's own data folder. Nothing here writes to the workspace itself.
+pub fn open_desk(workspace: &Path, logs: PathBuf, repaint: Arc<dyn Fn() + Send + Sync>) -> RunDesk {
+    let history = RunLogs::new(logs.clone(), workspace);
+    let mut desk = RunDesk::new(Box::new(ClaudeGateway::new(workspace.to_owned(), logs)), repaint);
+    desk.restore(&history);
+    desk
+}

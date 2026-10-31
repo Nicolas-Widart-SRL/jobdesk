@@ -1,0 +1,11 @@
+date,company,sector,role,role_type,channel,status,contact_person,fit_rating,notes,cv_file,cover_letter_file,source,deadline
+2026-10-29,Harbor Bank,Finance,Lead Java Engineer,,portal,drafted,,81,,cv/main_harbor.tex,cover_letters/cover_harbor.tex,https://harbor.example/1,2026-11-03
+2026-08-20,Corvid Systems,Tech,Backend Architect,,online,applied,,70,followed up 2026-09-01 followed up 2026-09-12,,,https://corvid.example/1,
+2026-10-16,Granite Cloud,Tech,Platform Lead,,portal,applied,,73,,,,https://granite.example/1,
+2026-10-19,Lumen Telecom,Telecom,Technical Lead,,referral,applied,Sam Peeters,69,,,,,
+2026-10-28,Sable Analytics,Finance,Tech Lead,,portal,applied,,75,,,,,
+2026-10-07,Tessel Group,Government,Solution Architect,,portal,interview,Alex Moreau,78,phone screen 2026-10-21,,,https://tessel.example/1,
+2026-10-12,Ardent Software,Tech,Lead Architect,,referral,offer,,82,offer received 2026-10-27,,,,
+2026-07-02,Quay Finance,Finance,Tech Lead,,portal,rejected,,68,rejected - no feedback given,,,,
+2026-06-14,Delta Works,Energy,Java Lead,,online,no_response,,60,,,,,
+2026-06-01,Mosaic Data,Tech,Architect,,portal,withdrawn,,63,,,,,

@@ -7,12 +7,13 @@ Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` 
 ```bash
 cargo run -- --workspace /path/to/ai-job-search
 cargo test                                              # all except paid live tests
-UPDATE_SNAPSHOTS=1 cargo test --test screens            # after an intended visual change
+UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery  # after an intended visual change
 cargo test --test live_claude -- --ignored --nocapture  # real session, costs a few cents
 cargo packager --release --formats app,dmg              # nsis on Windows
 ```
 
-- Refresh snapshots on macOS only: they depend on system fonts.
+- Refresh snapshots on macOS only, so every baseline comes from one renderer.
+- `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 - Code is hand-formatted with no rustfmt config, so match the surrounding lines and skip `cargo fmt`.
 
 ## Layout

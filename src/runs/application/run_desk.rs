@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use chrono::Local;
+use chrono::NaiveDateTime;
 
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Run, RunHistory, RunRequest};
 
@@ -91,12 +91,11 @@ impl RunDesk {
         })
     }
 
-    pub fn start(&mut self, line: &str, options: &StartOptions) -> Result<String, StartError> {
+    pub fn start(&mut self, line: &str, options: &StartOptions, now: NaiveDateTime) -> Result<String, StartError> {
         if self.is_busy() {
             return Err(StartError::AnotherRunIsActive);
         }
         self.started += 1;
-        let now = Local::now();
         let request = RunRequest {
             run_id: format!("{}-{}", now.format("%Y%m%d-%H%M%S"), self.started),
             line: line.to_owned(),
@@ -210,18 +209,29 @@ mod tests {
         StartOptions { model: None, budget_usd: 1.0 }
     }
 
+    fn now() -> NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 30, 0).unwrap()
+    }
+
+    #[test]
+    fn a_run_keeps_the_time_its_caller_gave() {
+        let (mut desk, _) = desk();
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        assert_eq!(desk.run(&id).unwrap().started_at, "2026-10-31 09:30");
+    }
+
     #[test]
     fn only_one_run_works_at_a_time() {
         let (mut desk, _) = desk();
-        desk.start("/rank", &options()).unwrap();
+        desk.start("/rank", &options(), now()).unwrap();
         desk.poll();
-        assert_eq!(desk.start("/scrape", &options()), Err(StartError::AnotherRunIsActive));
+        assert_eq!(desk.start("/scrape", &options(), now()), Err(StartError::AnotherRunIsActive));
     }
 
     #[test]
     fn a_stop_point_frees_the_desk_and_takes_a_reply_on_the_same_process() {
         let (mut desk, script) = desk();
-        let id = desk.start("/apply x", &options()).unwrap();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
         desk.poll();
         desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
         desk.poll();
@@ -237,7 +247,7 @@ mod tests {
     #[test]
     fn reply_after_exit_resumes_the_session() {
         let (mut desk, script) = desk();
-        let id = desk.start("/apply x", &options()).unwrap();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
         desk.poll();
         desk.sink_for(&id)(AgentEvent::ProcessExited { failure: None });
         desk.poll();
@@ -252,7 +262,7 @@ mod tests {
     #[test]
     fn decisions_reach_the_session_once() {
         let (mut desk, script) = desk();
-        let id = desk.start("/rank", &options()).unwrap();
+        let id = desk.start("/rank", &options(), now()).unwrap();
         let prompt = Prompt { request_id: "r".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None };
         desk.sink_for(&id)(AgentEvent::PromptRaised(prompt));
         desk.poll();
@@ -267,7 +277,7 @@ mod tests {
     #[test]
     fn stop_interrupts_and_clears_prompts() {
         let (mut desk, script) = desk();
-        let id = desk.start("/rank", &options()).unwrap();
+        let id = desk.start("/rank", &options(), now()).unwrap();
         desk.poll();
         desk.stop(&id);
         assert!(script.borrow().interrupted);

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use egui::{ComboBox, Panel, RichText, ScrollArea, TextEdit, Ui};
+use egui::{ComboBox, ScrollArea, TextEdit, Ui};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
-use crate::ui_kit::{Palette, faint_mono, muted, panel, panel_body, panel_header, primary_button, semibold, strong};
+use crate::ui_kit::{Ink, Tone, Type, alert, faint_mono, muted, panel, panel_body, panel_header, primary_button, rich, select_row, side_column, slip, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -47,8 +47,8 @@ impl Launcher {
     /// Returns the id of a run the user just started.
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let mut started = None;
-        Panel::right("command_form").exact_size(420.0).resizable(false).frame(egui::Frame::new().inner_margin(egui::Margin { left: 12, ..Default::default() })).show(ui, |ui| {
-            panel(ui, |ui| {
+        side_column("command_form", 420.0).show(ui, |ui| {
+            slip(ui, |ui| {
                 ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| started = self.form(ui, desk));
             });
         });
@@ -59,20 +59,13 @@ impl Launcher {
     }
 
     fn list(&mut self, ui: &mut Ui) {
-        let p = Palette::of(ui);
         for group in CommandGroup::ALL {
             panel(ui, |ui| {
                 panel_header(ui, group.label(), None);
                 for command in CATALOG.iter().filter(|command| command.group == group) {
                     let on = std::ptr::eq(command, self.command);
                     let label = format!("{:<14}{}", command.name, command.summary);
-                    let text = RichText::new(label).monospace().color(if on { p.text } else { p.muted });
-                    let button = egui::Button::new(text)
-                        .fill(if on { p.raised } else { egui::Color32::TRANSPARENT })
-                        .stroke(egui::Stroke::NONE)
-                        .min_size(egui::vec2(ui.available_width(), 30.0))
-                        .wrap_mode(egui::TextWrapMode::Truncate);
-                    if ui.add(button).clicked() {
+                    if select_row(ui, &label, Type::MONO, on).clicked() {
                         *self = Self::for_command(command);
                     }
                 }
@@ -83,10 +76,9 @@ impl Launcher {
 
     fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let mut started = None;
-        let p = Palette::of(ui);
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(self.command.name).monospace().size(15.0));
+            ui.label(rich(ui, self.command.name, Type::COMMAND, Ink::Text));
             muted(ui, self.command.summary);
             faint_mono(ui, format!("Changes: {}", self.command.writes));
             ui.add_space(6.0);
@@ -112,17 +104,17 @@ impl Launcher {
             ui.add_space(6.0);
             muted(ui, "Sent to Claude");
             let line = self.line();
-            ui.label(RichText::new(&line).monospace());
+            ui.label(rich(ui, &line, Type::MONO, Ink::Text));
             ui.add_space(6.0);
             if self.command.destructive {
-                ui.label(RichText::new("This deletes your data").color(p.closed).family(semibold()));
+                ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");
                 ui.checkbox(&mut self.reset_confirmed, "I understand");
             }
             let budget = self.budget.trim().parse::<f64>().ok().filter(|budget| *budget > 0.0);
             let ready = budget.is_some() && (!self.command.destructive || self.reset_confirmed) && !desk.is_busy();
             if budget.is_none() {
-                ui.label(RichText::new("Enter a budget above zero.").color(p.closed));
+                alert(ui, "Enter a budget above zero.");
             }
             if desk.is_busy() {
                 strong(ui, "Another run is active. One run at a time keeps your files safe.");
@@ -130,7 +122,7 @@ impl Launcher {
             ui.add_enabled_ui(ready, |ui| {
                 if primary_button(ui, "Run").clicked() {
                     let options = StartOptions { model: MODELS[self.model].1.map(str::to_owned), budget_usd: budget.unwrap_or_default() };
-                    started = desk.start(&line, &options).ok();
+                    started = desk.start(&line, &options, chrono::Local::now().naive_local()).ok();
                 }
             });
         });

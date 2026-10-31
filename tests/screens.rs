@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Key, Theme};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, SnapshotOptions};
@@ -71,10 +71,15 @@ fn done(id: &str) -> AgentEvent {
     AgentEvent::ToolFinished { id: id.into(), failed: false }
 }
 
+/// Start times show on screen, so scripted runs start at a fixed moment.
+fn run_started() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 30, 0).unwrap()
+}
+
 fn apply_run(final_event: AgentEvent) -> RunDesk {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
-    desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }).unwrap();
+    desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
         AgentEvent::UsageChanged(Usage { five_hour: Some(0.08), seven_day: Some(0.25) }),
@@ -396,7 +401,7 @@ fn dossier_shell(name: &str) -> Shell {
     let mut shell = shell(Screen::Tracker, name);
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
-    desk.start("/apply https://tessel.example/1", &StartOptions { model: None, budget_usd: 5.0 }).unwrap();
+    desk.start("/apply https://tessel.example/1", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
     for text in [EVALUATION, FINDINGS] {

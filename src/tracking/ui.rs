@@ -1,7 +1,7 @@
-use egui::{Frame, Panel, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder};
+use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
-use crate::ui_kit::{Palette, Tone, command_button, divider, muted, open_link, panel, panel_body, primary_button, strong, tag};
+use crate::ui_kit::{Ink, Tone, Type, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, panel, panel_body, primary_button, rich, side_column, slip, strong, tag};
 
 #[derive(Default)]
 pub struct TrackerScreen {
@@ -45,8 +45,8 @@ impl TrackerScreen {
         action_bar(ui, pipeline);
         let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
         if let Some(card) = selected {
-            Panel::right("application_details").exact_size(320.0).resizable(false).frame(Frame::new().inner_margin(egui::Margin { left: 12, ..Default::default() })).show(ui, |ui| {
-                panel(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
+            side_column("application_details", 320.0).show(ui, |ui| {
+                slip(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
             });
         }
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
@@ -59,44 +59,38 @@ impl TrackerScreen {
         let lanes: Vec<&PipelineLane> = pipeline.lanes.iter().filter(|lane| !lane.cards.is_empty() || lane.bucket != StatusBucket::Hired).collect();
         ui.columns(lanes.len(), |columns| {
             for (ui, lane) in columns.iter_mut().zip(lanes) {
-                ui.horizontal(|ui| {
-                    tag(ui, lane.bucket.label(), bucket_tone(lane.bucket));
-                    ui.monospace(lane.cards.len().to_string());
-                });
-                for card in &lane.cards {
-                    if self.card(ui, card) {
-                        self.selected = Some((card.company.clone(), card.role.clone()));
+                lane_frame(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        lane_title(ui, lane.bucket.label(), bucket_tone(lane.bucket));
+                        ui.monospace(lane.cards.len().to_string());
+                    });
+                    for card in &lane.cards {
+                        if self.card(ui, card) {
+                            self.selected = Some((card.company.clone(), card.role.clone()));
+                        }
                     }
-                }
+                });
             }
         });
     }
 
     fn card(&self, ui: &mut Ui, card: &ApplicationCard) -> bool {
-        let p = Palette::of(ui);
         let on = self.selected.as_ref().is_some_and(|(company, role)| company == &card.company && role == &card.role);
-        ui.scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
-            let hovered = ui.response().hovered();
-            Frame::new()
-                .fill(p.panel)
-                .stroke(Stroke::new(1.0, if on || hovered { p.faint } else { p.line }))
-                .corner_radius(8)
-                .inner_margin(egui::Margin::symmetric(12, 9))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add(egui::Label::new(RichText::new(card.company.as_str()).family(crate::ui_kit::semibold())).truncate());
-                    ui.add(egui::Label::new(RichText::new(card.role.as_str()).color(p.muted)).truncate());
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(card_meta(card)).small().color(p.faint)).truncate());
-                        if let Some(fit) = card.fit_rating {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(RichText::new(fit.to_string()).monospace().color(p.faint)));
-                        }
+        index_card(ui, on, |ui| {
+            ui.add(egui::Label::new(rich(ui, card.company.as_str(), Type::STRONG, Ink::Text)).truncate());
+            ui.add(egui::Label::new(rich(ui, card.role.as_str(), Type::BODY, Ink::Muted)).truncate());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(fit) = card.fit_rating {
+                        ui.label(rich(ui, fit.to_string(), Type::FIT, Ink::Text));
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(rich(ui, card_meta(card), Type::SMALL, Ink::Faint)).truncate());
                     });
                 });
+            });
         })
-        .response
         .clicked()
     }
 }
@@ -106,15 +100,12 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
     if due == 0 && stale == 0 {
         return;
     }
-    panel(ui, |ui| {
-        panel_body(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(format!("{due} quiet {FOLLOW_UP_DAYS}+ days can get a follow-up. {stale} quiet {STALE_DAYS}+ days ready to resolve."));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    command_button(ui, "/outcome stale");
-                    command_button(ui, "/outcome followup");
-                });
+    note(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!("{due} quiet {FOLLOW_UP_DAYS}+ days can get a follow-up. {stale} quiet {STALE_DAYS}+ days ready to resolve."));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                command_button(ui, "/outcome stale");
+                command_button(ui, "/outcome followup");
             });
         });
     });
@@ -124,7 +115,7 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
 fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
     let mut open = None;
     panel_body(ui, |ui| {
-        ui.label(RichText::new(card.company.as_str()).size(15.0).family(crate::ui_kit::semibold()));
+        ui.label(rich(ui, card.company.as_str(), Type::SECTION, Ink::Text));
         muted(ui, card.role.as_str());
         tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
         if card.archive_folder.is_some() && primary_button(ui, "Open dossier").clicked() {

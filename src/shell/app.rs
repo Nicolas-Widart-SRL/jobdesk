@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use chrono::Local;
-use egui::{Frame, Margin, Panel, RichText, ThemePreference, Ui};
+use egui::{Frame, Margin, Panel, ThemePreference, Ui};
 
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
@@ -17,7 +17,10 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
 use crate::shell::{Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
-use crate::ui_kit::{Palette, faint_mono, install_fonts, install_theme, muted, panel, panel_body, primary_button, segmented, semibold, strong, take_command_request};
+use crate::ui_kit::{
+    Ink, Type, alert, button, desk_frame, faint_mono, install_fonts, install_theme, muted, panel_body, primary_button, rich, sheet_frame, side_tab, slip, status_segmented, strong,
+    take_command_request,
+};
 use crate::workspace;
 use crate::workspace::application::{EnvironmentChecks, WorkspaceRoot, auth_mode};
 
@@ -212,14 +215,14 @@ impl Shell {
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
-        let p = Palette::of(ui);
         Panel::left("sidebar")
             .exact_size(216.0)
             .resizable(false)
-            .frame(Frame::new().fill(p.panel).inner_margin(Margin::symmetric(12, 14)))
+            .show_separator_line(false)
+            .frame(desk_frame(ui).inner_margin(Margin::symmetric(12, 14)))
             .show(ui, |ui| self.sidebar(ui, queue.cards.len()));
-        Panel::bottom("status_bar").frame(Frame::new().fill(p.bg).inner_margin(Margin::symmetric(24, 5))).show(ui, |ui| self.status_bar(ui));
-        egui::CentralPanel::default().frame(Frame::new().fill(p.bg)).show(ui, |ui| {
+        Panel::bottom("status_bar").show_separator_line(false).frame(desk_frame(ui).inner_margin(Margin::symmetric(24, 5))).show(ui, |ui| self.status_bar(ui));
+        egui::CentralPanel::default().frame(sheet_frame(ui)).show(ui, |ui| {
             if self.workspace.is_some() {
                 self.content(ui, &queue);
             } else {
@@ -280,7 +283,7 @@ impl Shell {
                 if primary_button(ui, "Keep working").clicked() {
                     self.confirm_quit = false;
                 }
-                if ui.button("End session and quit").clicked() {
+                if button(ui, "End session and quit").clicked() {
                     self.desk = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -289,8 +292,7 @@ impl Shell {
     }
 
     fn sidebar(&mut self, ui: &mut Ui, pending: usize) {
-        let p = Palette::of(ui);
-        ui.label(RichText::new("Jobdesk").size(14.0).family(semibold()));
+        ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
         ui.add_space(10.0);
         if self.workspace.is_some() && primary_button(ui, "Run command").on_hover_text("Cmd+K or Ctrl+K").clicked() {
             self.screen = Screen::Launcher;
@@ -299,19 +301,17 @@ impl Shell {
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         for screen in Screen::NAV {
             let on = self.screen == screen || (self.screen == Screen::Dossier && screen == Screen::Tracker);
-            let title = match screen {
-                Screen::Runs if waiting > 0 => format!("Runs  {waiting} waiting"),
-                Screen::InTray if pending > 0 => format!("In-tray  {pending}"),
-                _ => screen.title().to_owned(),
+            let count = match screen {
+                Screen::Runs if waiting > 0 => Some(format!("{waiting} waiting")),
+                Screen::InTray if pending > 0 => Some(pending.to_string()),
+                _ => None,
             };
-            let text = RichText::new(title).color(if on { p.text } else { p.muted });
-            let button = egui::Button::new(text).fill(if on { p.raised } else { egui::Color32::TRANSPARENT }).stroke(egui::Stroke::NONE).min_size(egui::vec2(ui.available_width(), 32.0)).wrap_mode(egui::TextWrapMode::Truncate);
-            if ui.add(button).clicked() {
+            if side_tab(ui, screen.title(), count.as_deref(), on).clicked() {
                 self.screen = screen;
             }
         }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            if ui.button("Change folder").clicked() {
+            if button(ui, "Change folder").clicked() {
                 let ctx = ui.ctx().clone();
                 self.choose_folder(&ctx);
             }
@@ -325,9 +325,10 @@ impl Shell {
         ui.horizontal(|ui| {
             let issues = self.snapshot.issues.len();
             if issues > 0 {
-                ui.label(RichText::new(format!("{issues} source could not be read")).color(Palette::of(ui).closed));
+                alert(ui, format!("{issues} source could not be read"));
             } else {
-                muted(ui, "Slash commands stay the only writers of your files.");
+                let line = rich(ui, "Slash commands stay the only writers of your files.", Type::NOTE, Ink::Muted);
+                ui.label(line);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let current = ui.ctx().options(|options| options.theme_preference);
@@ -336,7 +337,7 @@ impl Shell {
                     (ThemePreference::Light, "Light".to_owned()),
                     (ThemePreference::System, "System".to_owned()),
                 ];
-                if let Some(theme) = segmented(ui, current, &options) {
+                if let Some(theme) = status_segmented(ui, current, &options) {
                     ui.ctx().set_theme(theme);
                 }
             });
@@ -347,12 +348,12 @@ impl Shell {
         ui.add_space(64.0);
         ui.vertical_centered(|ui| {
             ui.set_max_width(420.0);
-            panel(ui, |ui| {
+            slip(ui, |ui| {
                 panel_body(ui, |ui| {
                     strong(ui, "Choose your ai-job-search folder");
                     muted(ui, "Jobdesk reads your checkout and never changes it.");
                     if let Some(error) = &self.folder_error {
-                        ui.label(RichText::new(error).color(Palette::of(ui).closed));
+                        alert(ui, error);
                     }
                     if primary_button(ui, "Choose folder").clicked() {
                         let ctx = ui.ctx().clone();
@@ -371,7 +372,7 @@ impl Shell {
                 ui.add_space(12.0);
             }
             for issue in &self.snapshot.issues {
-                ui.label(RichText::new(issue.to_string()).color(Palette::of(ui).closed));
+                alert(ui, issue.to_string());
             }
             let snapshot = &self.snapshot;
             match self.screen {

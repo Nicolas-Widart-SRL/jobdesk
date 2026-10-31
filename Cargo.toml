@@ -12,6 +12,7 @@ category = "Productivity"
 authors = ["Nicolas Widart"]
 description = "Desktop view over an ai-job-search checkout"
 icons = ["assets/icon.icns", "assets/icon.ico", "assets/icon.png"]
+resources = ["assets/fonts/*-OFL.txt"]
 out-dir = "target/packages"
 before-packaging-command = "cargo build --release"
 binaries = [{ path = "jobdesk", main = true }]

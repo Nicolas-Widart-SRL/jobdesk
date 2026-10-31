@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 const FEATURES: [&str; 7] = ["discovery", "dossier", "insights", "intray", "runs", "tracking", "workspace"];
 const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
+const APPEARANCE: [&str; 13] = [
+    "Color32", "Palette", "Stroke", "Shadow", "CornerRadius", "RichText", "Button::new", "ui.button", ".fill(", ".corner_radius(", ".color(", ".size(", ".family(",
+];
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap().flatten() {
@@ -80,6 +83,25 @@ fn features_respect_layer_rules() {
                         violations.push(format!("{}: {layer} must not touch {word}", file.display()));
                     }
                 }
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// `ui_kit` owns every colour, stroke and type style. Screens only arrange its widgets.
+#[test]
+fn appearance_lives_in_ui_kit() {
+    let mut files = Vec::new();
+    for feature in FEATURES.iter().chain(["shell"].iter()) {
+        rust_files(&Path::new("src").join(feature), &mut files);
+    }
+    let mut violations = Vec::new();
+    for file in files {
+        let code = production_code(&file);
+        for word in APPEARANCE {
+            if code.contains(word) {
+                violations.push(format!("{}: {word} belongs in ui_kit", file.display()));
             }
         }
     }

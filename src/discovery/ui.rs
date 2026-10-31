@@ -1,8 +1,8 @@
-use egui::{Panel, RichText, Sense, Ui};
+use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::discovery::application::{FitLevel, Gate, JobBoard, JobView, Lane, Signal};
-use crate::ui_kit::{Palette, Tone, command_button, divider, faint_mono, muted, open_link, panel, panel_body, segmented, strong, tag};
+use crate::ui_kit::{Ink, Tone, Type, command_button, divider, faint_mono, muted, open_link, panel, panel_body, rich, score, segmented, side_column, slip, strong, table_head, tag};
 
 /// What the user is looking at on this screen.
 pub struct JobsScreen {
@@ -82,9 +82,9 @@ impl JobsScreen {
         }
         let selected = jobs.iter().find(|job| Some(&job.key) == self.selected.as_ref());
 
-        Panel::right("job_details").exact_size(340.0).resizable(false).frame(egui::Frame::new().inner_margin(egui::Margin { left: 12, ..Default::default() })).show(ui, |ui| {
+        side_column("job_details", 340.0).show(ui, |ui| {
             if let Some(job) = selected {
-                panel(ui, |ui| {
+                slip(ui, |ui| {
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, job));
                 });
             }
@@ -111,7 +111,7 @@ impl JobsScreen {
             .header(28.0, |mut header| {
                 for title in ["Score", "Role", "Location", "Deadline", "Signals"] {
                     header.col(|ui| {
-                        ui.label(RichText::new(title).small().color(Palette::of(ui).faint));
+                        table_head(ui, title);
                     });
                 }
             })
@@ -120,18 +120,17 @@ impl JobsScreen {
                     let job = &jobs[row.index()];
                     row.set_selected(selected.as_ref() == Some(&job.key));
                     row.col(|ui| {
-                        let score = job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_label).to_owned(), |s| s.to_string());
-                        ui.label(RichText::new(score).monospace().strong());
+                        score(ui, job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_label).to_owned(), |s| s.to_string()));
                     });
                     row.col(|ui| {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 1.0;
                             ui.add(egui::Label::new(job.title.as_str()).truncate());
-                            ui.add(egui::Label::new(RichText::new(job.company.as_str()).color(Palette::of(ui).muted)).truncate());
+                            ui.add(egui::Label::new(rich(ui, job.company.as_str(), Type::BODY, Ink::Muted)).truncate());
                         });
                     });
                     row.col(|ui| {
-                        ui.add(egui::Label::new(RichText::new(job.location.as_deref().unwrap_or("-")).color(Palette::of(ui).muted)).truncate());
+                        ui.add(egui::Label::new(rich(ui, job.location.as_deref().unwrap_or("-"), Type::BODY, Ink::Muted)).truncate());
                     });
                     row.col(|ui| {
                         ui.monospace(job.deadline.map_or_else(|| "-".to_owned(), |d| d.format("%d %b").to_string()));
@@ -167,13 +166,13 @@ fn empty_state(ui: &mut Ui, lane: Lane, board: &JobBoard) {
 
 fn details(ui: &mut Ui, job: &JobView) {
     panel_body(ui, |ui| {
-        ui.label(RichText::new(job.title.as_str()).size(15.0).family(crate::ui_kit::semibold()));
+        ui.label(rich(ui, job.title.as_str(), Type::SECTION, Ink::Text));
         muted(ui, [Some(job.company.as_str()), job.location.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" · "));
         ui.add_space(4.0);
         match (job.score, job.verdict) {
-            (Some(score), Some(verdict)) => {
+            (Some(value), Some(verdict)) => {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(score.to_string()).monospace().size(26.0));
+                    score(ui, value.to_string());
                     muted(ui, verdict.label());
                 });
             }
@@ -194,7 +193,7 @@ fn details(ui: &mut Ui, job: &JobView) {
         }
         for (label, reading) in [("Contract", &job.freelance.contract), ("Day rate", &job.freelance.day_rate), ("Commute", &job.freelance.commute)] {
             check_row(ui, label, gate_tag(reading.gate));
-            ui.add(egui::Label::new(RichText::new(reading.value.as_str()).small().color(Palette::of(ui).faint)).truncate());
+            ui.add(egui::Label::new(rich(ui, reading.value.as_str(), Type::SMALL, Ink::Faint)).truncate());
         }
         let guard = match job.guard.as_deref() {
             Some("clean") => ("Clean", Tone::Hired),

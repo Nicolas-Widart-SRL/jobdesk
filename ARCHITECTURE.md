@@ -18,8 +18,8 @@ Each feature is a bounded context with its own language.
 | `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |
 | `workspace` | workspace root, profile state, portal, tool check | the checkout folder, installed tools, file changes |
 
-`shared_kernel` holds the few value types every feature agrees on, plus the host `PATH` lookup that `runs` and `workspace` both need. `ui_kit` holds the design
-tokens and generic widgets. `shell` is the composition root: it loads every feature into one
+`shared_kernel` holds the few value types every feature agrees on, plus the host `PATH` lookup that `runs` and `workspace` both need. `ui_kit` is the single owner of
+the Ledger design system: colour, spacing, radius, stroke and type tokens, plus every widget that paints them. It knows no feature, and screens only arrange its widgets, which `tests/architecture.rs` enforces. `tests/ui_kit_gallery.rs` snapshots every component in both themes. `shell` is the composition root: it loads every feature into one
 snapshot and owns the window.
 
 ## Layers

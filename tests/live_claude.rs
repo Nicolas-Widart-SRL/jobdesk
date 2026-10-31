@@ -46,7 +46,7 @@ fn a_full_session_works() {
     let mut desk = desk(&workspace, &logs);
 
     let id = desk
-        .start("Use AskUserQuestion to ask yes or no about colours. Then use Bash to run exactly: touch probe.txt . Then stop and say DONE.", &options())
+        .start("Use AskUserQuestion to ask yes or no about colours. Then use Bash to run exactly: touch probe.txt . Then stop and say DONE.", &options(), chrono::Local::now().naive_local())
         .unwrap();
 
     // Question, then permission with a remembered rule, then a stop point.
@@ -106,7 +106,7 @@ fn a_full_session_works() {
 fn stop_interrupts_a_running_tool() {
     let dir = tempfile::tempdir().unwrap();
     let mut desk = desk(dir.path(), &dir.path().join("logs"));
-    let id = desk.start("Use Bash to run exactly: python3 -c 'import time; time.sleep(60)'", &options()).unwrap();
+    let id = desk.start("Use Bash to run exactly: python3 -c 'import time; time.sleep(60)'", &options(), chrono::Local::now().naive_local()).unwrap();
 
     wait(&mut desk, &id, |desk| {
         if let Some(prompt) = desk.run(&id).unwrap().current_prompt().cloned() {

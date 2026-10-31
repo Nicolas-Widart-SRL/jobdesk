@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use egui::{ColorImage, Frame, Margin, Panel, RichText, ScrollArea, TextureHandle, TextureOptions, Ui, Vec2};
+use egui::{ColorImage, Frame, ScrollArea, TextureHandle, TextureOptions, Ui, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, OutcomeRecord, PageImage, PageState, PageStore, PdfDocument, StatusBucket};
-use crate::ui_kit::{Palette, Tone, command_button, divider, faint_mono, muted, open_link, panel, panel_body, panel_header, segmented, semibold, strong, tag};
+use crate::ui_kit::{Ink, Tone, Type, button, command_button, divider, faint_mono, list_row, muted, open_link, page_frame, panel, panel_body, panel_header, rich, segmented, side_column, slip, small_button, strong, tag};
 
 const PAGE_WIDTH: f32 = 270.0;
 
@@ -75,7 +75,7 @@ impl DossierScreen {
     }
 
     fn documents(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) {
-        Panel::right("dossier_checks").exact_size(380.0).resizable(false).frame(Frame::new().inner_margin(Margin { left: 12, ..Default::default() })).show(ui, |ui| {
+        side_column("dossier_checks", 380.0).show(ui, |ui| {
             ScrollArea::vertical().id_salt("dossier_checks_scroll").auto_shrink([false, false]).show(ui, |ui| {
                 verification(ui, &mut self.markdown, dossier);
                 ui.add_space(10.0);
@@ -121,8 +121,7 @@ impl DossierScreen {
                             for texture in textures.iter() {
                                 let size = texture.size_vec2();
                                 let shown = Vec2::new(PAGE_WIDTH, PAGE_WIDTH * size.y / size.x);
-                                let border = Palette::of(ui).line;
-                                Frame::new().stroke(egui::Stroke::new(1.0, border)).show(ui, |ui| {
+                                page_frame(ui, |ui| {
                                     ui.add(egui::Image::new((texture.id(), shown)).alt_text(format!("{} page", document.label)));
                                 });
                             }
@@ -134,7 +133,7 @@ impl DossierScreen {
     }
 
     fn evaluation(&mut self, ui: &mut Ui, dossier: &Dossier) {
-        Panel::right("dossier_sources").exact_size(340.0).resizable(false).frame(Frame::new().inner_margin(Margin { left: 12, ..Default::default() })).show(ui, |ui| sources(ui, dossier));
+        side_column("dossier_sources", 340.0).show(ui, |ui| sources(ui, dossier));
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             panel(ui, |ui| {
                 panel_header(ui, "Fit evaluation", dossier.findings_from.as_deref());
@@ -157,7 +156,7 @@ impl DossierScreen {
 
     fn prep(&mut self, ui: &mut Ui, dossier: &Dossier) {
         let packs = &dossier.contents.prep_packs;
-        Panel::right("dossier_stages").exact_size(320.0).resizable(false).frame(Frame::new().inner_margin(Margin { left: 12, ..Default::default() })).show(ui, |ui| stages(ui, dossier.card.outcome.as_ref()));
+        side_column("dossier_stages", 320.0).show(ui, |ui| stages(ui, dossier.card.outcome.as_ref()));
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             if packs.is_empty() {
                 panel(ui, |ui| {
@@ -241,10 +240,10 @@ fn header(ui: &mut Ui, dossier: &Dossier) -> Option<DossierAction> {
     let card = &dossier.card;
     let mut action = None;
     ui.horizontal(|ui| {
-        if ui.button("Tracker").clicked() {
+        if button(ui, "Tracker").clicked() {
             action = Some(DossierAction::Back);
         }
-        ui.label(RichText::new(format!("{} · {}", card.company, card.role)).size(15.0).family(semibold()));
+        ui.label(rich(ui, format!("{} · {}", card.company, card.role), Type::SECTION, Ink::Text));
         tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
         if let Some(fit) = card.fit_rating {
             ui.monospace(format!("Fit {fit}"));
@@ -263,7 +262,7 @@ fn verification(ui: &mut Ui, markdown: &mut CommonMarkCache, dossier: &Dossier) 
     let checklist = &dossier.findings.checklist;
     let passed = checklist.iter().filter(|item| item.result == CheckResult::Pass).count();
     let note = (!checklist.is_empty()).then(|| format!("{passed} of {}", checklist.len()));
-    panel(ui, |ui| {
+    slip(ui, |ui| {
         panel_header(ui, "Verification", note.as_deref());
         if let Some(text) = &dossier.findings.verification_text {
             panel_body(ui, |ui| {
@@ -277,11 +276,7 @@ fn verification(ui: &mut Ui, markdown: &mut CommonMarkCache, dossier: &Dossier) 
             });
         }
         for (index, item) in checklist.iter().enumerate() {
-            if index > 0 {
-                divider(ui);
-            }
-            Frame::new().inner_margin(Margin::symmetric(14, 6)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            list_row(ui, index == 0, |ui| {
                 ui.horizontal(|ui| {
                     let (text, tone) = if item.result == CheckResult::Pass { ("Pass", Tone::Hired) } else { ("Fail", Tone::Closed) };
                     tag(ui, text, tone);
@@ -308,14 +303,10 @@ fn keywords(ui: &mut Ui, dossier: &Dossier) {
     if rows.is_empty() {
         return;
     }
-    panel(ui, |ui| {
+    slip(ui, |ui| {
         panel_header(ui, "Keyword coverage", Some("CV text layer"));
         for (index, row) in rows.iter().enumerate() {
-            if index > 0 {
-                divider(ui);
-            }
-            Frame::new().inner_margin(Margin::symmetric(14, 6)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
+            list_row(ui, index == 0, |ui| {
                 ui.horizontal(|ui| {
                     ui.monospace(row.keyword.as_str());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| tag(ui, row.status.as_str(), keyword_tone(row)));
@@ -329,7 +320,7 @@ fn keywords(ui: &mut Ui, dossier: &Dossier) {
 fn sources(ui: &mut Ui, dossier: &Dossier) {
     ScrollArea::vertical().id_salt("dossier_sources_scroll").auto_shrink([false, false]).show(ui, |ui| {
         let guard = dossier.contents.posting.as_ref().and_then(|posting| posting.guard.as_deref());
-        panel(ui, |ui| {
+        slip(ui, |ui| {
             panel_header(ui, "Source checks", None);
             panel_body(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -348,7 +339,7 @@ fn sources(ui: &mut Ui, dossier: &Dossier) {
             });
         });
         ui.add_space(10.0);
-        panel(ui, |ui| {
+        slip(ui, |ui| {
             let research = dossier.contents.research.as_ref();
             let note = research.and_then(|note| note.fetched_on).map(|date| format!("fetched {date}"));
             panel_header(ui, "Company research", note.as_deref());
@@ -359,7 +350,7 @@ fn sources(ui: &mut Ui, dossier: &Dossier) {
                         if note.is_stale {
                             tag(ui, "Older than 30 days", Tone::Interview);
                         }
-                        ui.add(egui::Label::new(RichText::new(&note.text).monospace()).wrap());
+                        ui.add(egui::Label::new(rich(ui, &note.text, Type::MONO, Ink::Text)).wrap());
                     }
                     None => {
                         muted(ui, "No cached research for this company.");
@@ -391,7 +382,7 @@ fn posting(ui: &mut Ui, dossier: &Dossier) {
 }
 
 fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
-    panel(ui, |ui| {
+    slip(ui, |ui| {
         panel_header(ui, "Stages", Some("outcome.md"));
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -417,13 +408,12 @@ fn stages(ui: &mut Ui, outcome: Option<&OutcomeRecord>) {
 }
 
 fn follow_up_row(ui: &mut Ui, follow_up: &NamedText) {
-    let accent = Palette::of(ui).faint;
     panel_body(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&follow_up.name).monospace().color(accent));
+            faint_mono(ui, &follow_up.name);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Copy").on_hover_text("You send follow-ups yourself").clicked() {
+                if small_button(ui, "Copy").on_hover_text("You send follow-ups yourself").clicked() {
                     ui.ctx().copy_text(follow_up.text.clone());
                 }
             });

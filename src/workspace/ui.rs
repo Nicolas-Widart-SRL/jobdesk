@@ -1,13 +1,10 @@
 use egui::{ScrollArea, Ui};
 
-use crate::ui_kit::{Tone, command_button, divider, faint_mono, muted, panel, panel_body, panel_header, tag};
+use crate::ui_kit::{Tone, button, command_button, divider, faint_mono, list_row, muted, panel, panel_body, panel_header, tag};
 use crate::workspace::application::{AuthMode, EnvironmentChecks, ProfileState, ToolCheck, WorkspaceView};
 
-fn row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 6)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(add);
-    });
+fn row(ui: &mut Ui, first: bool, add: impl FnOnce(&mut Ui)) {
+    list_row(ui, first, |ui| ui.horizontal(add));
 }
 
 fn right(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
@@ -38,10 +35,7 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
     panel(ui, |ui| {
         panel_header(ui, "Profile", Some(".claude/skills"));
         for (index, file) in view.profile.iter().enumerate() {
-            if index > 0 {
-                divider(ui);
-            }
-            row(ui, |ui| {
+            row(ui, index == 0, |ui| {
                 ui.monospace(file.name.as_str());
                 right(ui, |ui| match file.state {
                     ProfileState::Filled => {
@@ -76,10 +70,7 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
             });
         }
         for (index, portal) in view.portals.iter().enumerate() {
-            if index > 0 {
-                divider(ui);
-            }
-            row(ui, |ui| {
+            row(ui, index == 0, |ui| {
                 ui.monospace(portal.name.as_str());
                 right(ui, |ui| {
                     if portal.enabled {
@@ -101,8 +92,8 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
     });
 }
 
-fn tool_row(ui: &mut Ui, check: &ToolCheck) {
-    row(ui, |ui| {
+fn tool_row(ui: &mut Ui, first: bool, check: &ToolCheck) {
+    row(ui, first, |ui| {
         ui.monospace(check.spec.name);
         muted(ui, check.spec.purpose);
         right(ui, |ui| match (&check.version, check.spec.required) {
@@ -125,10 +116,7 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks) {
         match environment.results() {
             Some(results) => {
                 for (index, check) in results.iter().enumerate() {
-                    if index > 0 {
-                        divider(ui);
-                    }
-                    tool_row(ui, check);
+                    tool_row(ui, index == 0, check);
                 }
             }
             None => {
@@ -141,7 +129,7 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks) {
         divider(ui);
         panel_body(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.add_enabled(!environment.is_running(), egui::Button::new("Check again")).clicked() {
+                if ui.add_enabled_ui(!environment.is_running(), |ui| button(ui, "Check again")).inner.clicked() {
                     environment.recheck();
                 }
             });
@@ -174,22 +162,20 @@ fn templates(ui: &mut Ui, view: &WorkspaceView) {
     let label = |custom: bool, stock: &str| if custom { "Custom".to_owned() } else { stock.to_owned() };
     panel(ui, |ui| {
         panel_header(ui, "Templates", Some("templates"));
-        row(ui, |ui| {
+        row(ui, true, |ui| {
             muted(ui, "CV");
             right(ui, |ui| {
                 ui.label(label(view.templates.custom_cv, "moderncv, banking"));
             });
         });
-        divider(ui);
-        row(ui, |ui| {
+        row(ui, false, |ui| {
             muted(ui, "Cover letter");
             right(ui, |ui| {
                 ui.label(label(view.templates.custom_letter, "cover.cls"));
             });
         });
         for name in &view.templates.registered {
-            divider(ui);
-            row(ui, |ui| {
+            row(ui, false, |ui| {
                 faint_mono(ui, name);
             });
         }
@@ -201,12 +187,11 @@ fn templates(ui: &mut Ui, view: &WorkspaceView) {
 fn sync(ui: &mut Ui, view: &WorkspaceView) {
     panel(ui, |ui| {
         panel_header(ui, "Sync", None);
-        row(ui, |ui| {
+        row(ui, true, |ui| {
             muted(ui, view.sync.gmail_last_sync.as_deref().map_or("Gmail, not synced yet".to_owned(), |last| format!("Gmail, last sync {last}")));
             right(ui, |ui| command_button(ui, "/gmail-sync"));
         });
-        divider(ui);
-        row(ui, |ui| {
+        row(ui, false, |ui| {
             muted(ui, if view.sync.notion_set_up { "Notion, connected" } else { "Notion, not connected" });
             right(ui, |ui| command_button(ui, "/notion-sync"));
         });
@@ -215,7 +200,7 @@ fn sync(ui: &mut Ui, view: &WorkspaceView) {
 
 fn reset(ui: &mut Ui) {
     panel(ui, |ui| {
-        row(ui, |ui| {
+        row(ui, true, |ui| {
             muted(ui, "Clear profile data, documents, or both.");
             right(ui, |ui| command_button(ui, "/reset"));
         });

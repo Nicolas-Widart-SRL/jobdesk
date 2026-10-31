@@ -1,7 +1,7 @@
-use egui::{RichText, ScrollArea, Ui};
+use egui::{ScrollArea, Ui};
 
 use crate::insights::application::{SearchInsights, SkillGapView};
-use crate::ui_kit::{Palette, Tone, command_button, doughnut, measure, muted, panel, panel_body, panel_header, semibold, strong, tag};
+use crate::ui_kit::{Ink, Tone, command_button, doughnut, figure, measure, muted, note, panel, panel_body, panel_header, slip, strong, tag};
 
 pub fn show(ui: &mut Ui, report: &SearchInsights, gaps: Option<&SkillGapView>) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -22,34 +22,30 @@ pub fn show(ui: &mut Ui, report: &SearchInsights, gaps: Option<&SkillGapView>) {
 }
 
 fn calibration(ui: &mut Ui, report: &SearchInsights) {
-    panel(ui, |ui| {
-        panel_body(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(format!("{} resolved outcomes can calibrate your fit scoring.", report.resolved));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| command_button(ui, "/setup"));
-            });
+    note(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} resolved outcomes can calibrate your fit scoring.", report.resolved));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| command_button(ui, "/setup"));
         });
     });
 }
 
 fn stats(ui: &mut Ui, report: &SearchInsights) {
-    let p = Palette::of(ui);
     let tally = &report.tally;
     let cards = [
-        ("Sent", report.sent, p.text),
-        ("Drafted", tally.drafted, p.drafted),
-        ("Active", tally.active, p.active),
-        ("Interview", tally.interview, p.interview),
-        ("Offer", tally.offer, p.offer),
-        ("Closed", tally.closed, p.closed),
+        ("Sent", report.sent, Ink::Text),
+        ("Drafted", tally.drafted, Tone::Drafted.into()),
+        ("Active", tally.active, Tone::Active.into()),
+        ("Interview", tally.interview, Tone::Interview.into()),
+        ("Offer", tally.offer, Tone::Offer.into()),
+        ("Closed", tally.closed, Tone::Closed.into()),
     ];
     ui.columns(cards.len(), |columns| {
-        for (ui, (label, value, color)) in columns.iter_mut().zip(cards) {
-            panel(ui, |ui| {
+        for (ui, (label, value, ink)) in columns.iter_mut().zip(cards) {
+            slip(ui, |ui| {
                 panel_body(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(value.to_string()).monospace().size(24.0).color(color));
+                    figure(ui, value.to_string(), ink);
                     muted(ui, label);
                 });
             });
@@ -58,25 +54,24 @@ fn stats(ui: &mut Ui, report: &SearchInsights) {
 }
 
 fn status_chart(ui: &mut Ui, report: &SearchInsights) {
-    let p = Palette::of(ui);
     let tally = &report.tally;
     let rows = [
-        ("Active", tally.active, p.active, Tone::Active),
-        ("Interview", tally.interview, p.interview, Tone::Interview),
-        ("Offer", tally.offer, p.offer, Tone::Offer),
-        ("Hired", tally.hired, p.hired, Tone::Hired),
-        ("Closed", tally.closed, p.closed, Tone::Closed),
+        ("Active", tally.active, Tone::Active),
+        ("Interview", tally.interview, Tone::Interview),
+        ("Offer", tally.offer, Tone::Offer),
+        ("Hired", tally.hired, Tone::Hired),
+        ("Closed", tally.closed, Tone::Closed),
     ];
     panel(ui, |ui| {
         panel_header(ui, "Status", Some(&format!("{} sent", report.sent)));
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let summary = rows.iter().map(|(label, value, ..)| format!("{value} {label}")).collect::<Vec<_>>().join(", ");
-                let segments: Vec<_> = rows.iter().map(|(_, value, color, _)| (*value, *color)).collect();
+                let summary = rows.iter().map(|(label, value, _)| format!("{value} {label}")).collect::<Vec<_>>().join(", ");
+                let segments: Vec<_> = rows.iter().map(|(_, value, tone)| (*value, *tone)).collect();
                 doughnut(ui, 120.0, &segments).on_hover_text(summary);
                 ui.vertical(|ui| {
-                    for (label, value, _, tone) in rows {
+                    for (label, value, tone) in rows {
                         ui.horizontal(|ui| {
                             tag(ui, label, tone);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.monospace(value.to_string()));
@@ -89,16 +84,15 @@ fn status_chart(ui: &mut Ui, report: &SearchInsights) {
 }
 
 fn funnel(ui: &mut Ui, report: &SearchInsights) {
-    let p = Palette::of(ui);
     let note = report.past_screen_rate().map(|rate| format!("{:.0}% past screen", rate * 100.0));
     panel(ui, |ui| {
         panel_header(ui, "Funnel", note.as_deref());
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
-            measure(ui, "Applied", report.sent, report.sent, p.active);
-            measure(ui, "Interview", report.reached_interview, report.sent, p.interview);
-            measure(ui, "Offer", report.reached_offer, report.sent, p.offer);
-            measure(ui, "Hired", report.reached_hired, report.sent, p.hired);
+            measure(ui, "Applied", report.sent, report.sent, Tone::Active);
+            measure(ui, "Interview", report.reached_interview, report.sent, Tone::Interview);
+            measure(ui, "Offer", report.reached_offer, report.sent, Tone::Offer);
+            measure(ui, "Hired", report.reached_hired, report.sent, Tone::Hired);
             if let Some(rate) = report.rejection_rate {
                 muted(ui, format!("Rejection rate {:.0}% of resolved", rate * 100.0));
             }
@@ -107,7 +101,6 @@ fn funnel(ui: &mut Ui, report: &SearchInsights) {
 }
 
 fn breakdown(ui: &mut Ui, report: &SearchInsights) {
-    let p = Palette::of(ui);
     panel(ui, |ui| {
         panel_header(ui, "By sector and channel", None);
         panel_body(ui, |ui| {
@@ -120,7 +113,7 @@ fn breakdown(ui: &mut Ui, report: &SearchInsights) {
                     muted(ui, heading);
                 }
                 for (label, count) in rows.iter().take(limit) {
-                    measure(ui, label, *count, report.sent, p.text);
+                    measure(ui, label, *count, report.sent, Ink::Text);
                 }
             }
         });
@@ -157,7 +150,7 @@ fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
                 egui::Grid::new("skill_gaps").num_columns(3).spacing([16.0, 6.0]).striped(false).show(ui, |ui| {
                     for gap in &report.gaps {
                         tag(ui, gap.priority.as_str(), priority_tone(&gap.priority));
-                        ui.label(RichText::new(gap.skill.as_str()).family(semibold()));
+                        strong(ui, gap.skill.as_str());
                         muted(ui, format!("{} · {}", gap.kind, gap.source));
                         ui.end_row();
                     }

@@ -63,7 +63,7 @@ impl Launcher {
             panel(ui, |ui| {
                 panel_header(ui, group.label(), None);
                 for command in CATALOG.iter().filter(|command| command.group == group) {
-                    let on = std::ptr::eq(command, self.command);
+                    let on = command.name == self.command.name;
                     let label = format!("{:<14}{}", command.name, command.summary);
                     if select_row(ui, &label, Type::MONO, on).clicked() {
                         *self = Self::for_command(command);

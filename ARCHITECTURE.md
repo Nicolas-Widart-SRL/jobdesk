@@ -48,8 +48,8 @@ function. `tests/architecture.rs` enforces the remaining rules, including that `
 
 PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no PDF library ships beside the app. A rebuilt PDF renders again because pages are keyed by path and modification time.
 
-A worker thread rebuilds an immutable `Snapshot` when watched files change and sends it to the
-UI thread. The UI never reads from disk. A feature that fails to load reports an issue and the
+A worker thread rebuilds an immutable `Snapshot` when watched files change, every hour and at
+local midnight, and sends it to the UI thread. So the app's today changes at midnight, not up to an hour later. The UI never reads from disk. A feature that fails to load reports an issue and the
 others keep working.
 
 Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout. A supervisor thread owns the child and a reader thread turns stdout lines into domain events. The UI thread applies them once per frame through `RunDesk::poll`. Dropping a session ends its process.

@@ -106,6 +106,8 @@ pub const TABLE_CELL_PADDING: (f32, f32) = (12.0, 9.0);
 pub const SPLIT_GAP: f32 = 28.0;
 pub const SPLIT_MAIN_BASIS: f32 = 520.0;
 pub const SPLIT_SIDE_BASIS: f32 = 340.0;
+/// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
+pub const TRAY_RAIL: f32 = 292.0;
 pub const CARD_GRID_MIN: f32 = 150.0;
 pub const FLOW_MIN: f32 = 170.0;
 pub const NODE_PADDING: (f32, f32, f32) = (16.0, 12.0, 14.0);

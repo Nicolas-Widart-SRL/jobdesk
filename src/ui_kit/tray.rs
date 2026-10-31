@@ -5,11 +5,11 @@ use egui::{CornerRadius, Frame, Label, Margin, Rect, Response, Role, Sense, Shap
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{small_key_button, small_toggle};
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{offset_shadow, paint_outlined};
+use crate::ui_kit::surfaces::{inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
     CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT, HORIZON_CHIP_HEIGHT,
-    HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, INSET, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
+    HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
     STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
@@ -170,8 +170,9 @@ pub fn undo_row(ui: &mut Ui, name: &str, note: &str, label: &str, toggles: &[(&s
     let p = Palette::of(ui);
     let (top, bottom) = UNDO_ROW_PADDING;
     let corners = if last { FOOT_CORNERS } else { CornerRadius::ZERO };
+    let x = inset(ui);
     let mut pressed = UndoPress::default();
-    let shown = Frame::new().fill(p.raised).corner_radius(corners).inner_margin(Margin { left: INSET, right: INSET, top, bottom }).show(ui, |ui| {
+    let shown = Frame::new().fill(p.raised).corner_radius(corners).inner_margin(Margin { left: x, right: x, top, bottom }).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = ITEM_GAP;
         ui.horizontal(|ui| {
@@ -210,7 +211,7 @@ mod tests {
     use super::*;
     use crate::ui_kit::{panel_body, slip};
 
-    const SLIP: f32 = 280.0;
+    const SLIP: f32 = crate::ui_kit::tokens::TRAY_RAIL - crate::ui_kit::tokens::GUTTER as f32;
     const LABEL: &str = "Last decision: Skipped, Quarry Labs. Press U to undo.";
 
     fn harness(presses: Rc<RefCell<UndoPress>>) -> Harness<'static> {

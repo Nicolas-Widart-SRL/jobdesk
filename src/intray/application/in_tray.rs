@@ -100,7 +100,7 @@ impl Queue {
     /// Today's log under the undo offer. A logged offer already stands for the newest entry, so that entry is left out.
     pub fn log_under(&self) -> &[Cleared] {
         let logged = self.undo.as_ref().is_some_and(|undo| undo.logged);
-        &self.cleared[usize::from(logged)..]
+        self.cleared.get(usize::from(logged)..).unwrap_or(&[])
     }
 
     pub fn headline(&self) -> String {
@@ -310,7 +310,7 @@ impl InTray {
             _ => last.label(),
         };
         let spoken = format!("Last decision: {}, {}. Press U to undo.", last.outcome.verb(), last.name);
-        Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.outcome != Outcome::Later, asks_reason, reason: last.reason })
+        Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
     /// The card returns to the top, the way it was before the decision.
@@ -327,8 +327,12 @@ impl InTray {
         self.save();
     }
 
-    pub fn give_reason(&mut self, reason: SkipReason) {
-        if let Some(last) = self.decisions.last_mut().filter(|last| last.outcome == Outcome::Skipped) {
+    /// Names why the last skip was made, while undo still offers it.
+    pub fn give_reason(&mut self, reason: SkipReason, today: NaiveDate) {
+        if self.undoable(today).is_none_or(|last| last.outcome != Outcome::Skipped) {
+            return;
+        }
+        if let Some(last) = self.decisions.last_mut() {
             last.reason = Some(reason);
             self.save();
         }
@@ -499,7 +503,7 @@ mod tests {
         let mut tray = InTray::new(Box::new(memory.clone()));
         tray.skip(&top(&tray, &jobs), today());
         assert!(tray.undo_offer(today()).unwrap().asks_reason);
-        tray.give_reason(SkipReason::Domain);
+        tray.give_reason(SkipReason::Domain, today());
 
         let reopened = InTray::new(Box::new(memory.clone()));
         assert!(dealt(&reopened, &jobs).is_empty());
@@ -731,7 +735,7 @@ mod tests {
         tray.skip(&top(&tray, &jobs), today());
         assert_eq!(tray.undo_offer(today()).unwrap().note, "Skipped. Why? Optional.");
 
-        tray.give_reason(SkipReason::Scope);
+        tray.give_reason(SkipReason::Scope, today());
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!(offer.note, "Skipped, scope");
         assert_eq!(offer.reason, Some(SkipReason::Scope));
@@ -776,7 +780,13 @@ mod tests {
     fn yesterdays_decision_cannot_be_undone_today() {
         let tomorrow = today().succ_opt().unwrap();
         let jobs = board(vec![job("Acme", 90)]);
-        let decide: [fn(&mut InTray, &Card); 2] = [|tray, card| tray.skip(card, today()), |tray, card| tray.later(card, today())];
+        let decide: [fn(&mut InTray, &Card); 3] = [
+            |tray, card| tray.skip(card, today()),
+            |tray, card| tray.later(card, today()),
+            |tray, card| {
+                tray.follow(card, card.primary.as_ref().unwrap(), today());
+            },
+        ];
         for decide in decide {
             let mut tray = InTray::unsaved();
             let card = top(&tray, &jobs);
@@ -788,6 +798,20 @@ mod tests {
             tray.undo(tomorrow);
             assert_eq!(tray.decisions, decided, "U leaves yesterday's decision alone");
         }
+    }
+
+    #[test]
+    fn a_reason_after_undo_leaves_the_older_skip_alone() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
+        tray.skip(&top(&tray, &jobs), today());
+        tray.skip(&top(&tray, &jobs), today());
+        tray.undo(today());
+
+        tray.give_reason(SkipReason::Rate, today());
+        assert_eq!(tray.decisions.len(), 1);
+        assert_eq!(tray.decisions[0].name, "Acme");
+        assert_eq!(tray.decisions[0].reason, None, "undo has moved on, so the reason has nothing to name");
     }
 
     fn paused_run() -> Run {

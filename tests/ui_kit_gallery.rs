@@ -3,7 +3,7 @@
 use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::BRAND_GAP;
+use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, TRAY_RAIL};
 use jobdesk::ui_kit::{
     FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
     divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, lane,
@@ -12,8 +12,8 @@ use jobdesk::ui_kit::{
     tally_strip, undo_row,
 };
 
-/// The width of a side slip in the rail.
-const SLIP: f32 = 280.0;
+/// The width of a side slip in the in-tray's rail.
+const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
 
 const TONES: [(&str, Tone); 7] = [
     ("Plain", Tone::Plain),

@@ -6,6 +6,7 @@ use crate::ui_kit::{
     horizon_mark as strip_mark, horizon_return,
     key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_row,
 };
+use crate::ui_kit::tokens::TRAY_RAIL;
 
 const GATE_COLUMNS: usize = 3;
 const CODE_HEIGHT: f32 = 150.0;
@@ -82,7 +83,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         horizon(ui, queue, keys, &mut pressed);
         ui.add_space(12.0);
 
-        side_column("tray_side", 292.0).show(ui, |ui| cleared(ui, queue, &mut pressed));
+        side_column("tray_side", TRAY_RAIL).show(ui, |ui| cleared(ui, queue, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match top {
                 Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
@@ -100,7 +101,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
     let today = queue.today;
     match pressed {
         Pressed::Undo => tray.undo(today),
-        Pressed::Reason(reason) => tray.give_reason(reason),
+        Pressed::Reason(reason) => tray.give_reason(reason, today),
         Pressed::Bring(key) => tray.pull_forward(&key, today),
         Pressed::BringAll => tray.bring_back_all(today),
         Pressed::Later => tray.later(top?, today),

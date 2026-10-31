@@ -1,6 +1,6 @@
 //! The in-tray's parts: one decision at a time, on top of a visible stack of what is left.
 
-use egui::{CornerRadius, Frame, Margin, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, vec2};
+use egui::{CornerRadius, Frame, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::paint_key;
@@ -9,20 +9,22 @@ use crate::ui_kit::surfaces::{offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
-    HORIZON_PADDING, ITEM_GAP, KEY_SIZE, OFFSET_SHADOW, RADIUS_BUTTON, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, Type, UNDO_GAP, UNDO_PADDING,
+    HORIZON_CHIP_HEIGHT, HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, KEY_SIZE, OFFSET_SHADOW, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
+    STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, Type, UNDO_GAP, UNDO_PADDING,
 };
 
-/// A strip of day cells, one column each. The first cell is today.
-pub fn horizon<T>(ui: &mut Ui, days: &[T], mut cell: impl FnMut(&mut Ui, &T, bool)) {
+/// A strip of day cells, one column each. The first cell is today. `note` reads across the third to the last day.
+pub fn horizon<T>(ui: &mut Ui, days: &[T], note: Option<&str>, mut cell: impl FnMut(&mut Ui, &T, bool)) {
     let p = Palette::of(ui);
     let (x, top, bottom) = HORIZON_PADDING;
     Frame::new().fill(p.panel).corner_radius(RADIUS_PANEL).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
+        let fill = ui.painter().add(Shape::Noop);
+        let mut rects = Vec::with_capacity(days.len());
         ui.columns(days.len(), |columns| {
             for (index, (ui, day)) in columns.iter_mut().zip(days).enumerate() {
                 let today = index == 0;
-                let corners = if today { CornerRadius { nw: RADIUS_PANEL, sw: RADIUS_PANEL, ne: 0, se: 0 } } else { CornerRadius::ZERO };
-                let shown = Frame::new().fill(if today { p.raised } else { p.panel }).corner_radius(corners).inner_margin(Margin { left: x, right: x, top, bottom }).show(ui, |ui| {
+                let shown = Frame::new().inner_margin(Margin { left: x, right: x, top, bottom }).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.set_min_height(HORIZON_CELL_HEIGHT - (top + bottom) as f32);
                     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -30,13 +32,58 @@ pub fn horizon<T>(ui: &mut Ui, days: &[T], mut cell: impl FnMut(&mut Ui, &T, boo
                         cell(ui, day, today);
                     });
                 });
-                if !today {
-                    let rect = shown.response.rect;
-                    ui.painter().vline(rect.left(), rect.y_range(), Stroke::new(HAIRLINE, p.line));
-                }
+                rects.push(shown.response.rect);
             }
         });
+        let Some(first) = rects.first() else { return };
+        let strip = rects.iter().fold(*first, |strip, rect| strip.union(*rect));
+        let corners = CornerRadius { nw: RADIUS_PANEL, sw: RADIUS_PANEL, ne: 0, se: 0 };
+        ui.painter().set(fill, Shape::rect_filled(Rect::from_x_y_ranges(first.x_range(), strip.y_range()), corners, p.raised));
+        for rect in &rects[1..] {
+            ui.painter().vline(rect.left(), strip.y_range(), Stroke::new(HAIRLINE, p.line));
+        }
+        if let (Some(note), true) = (note, rects.len() > 2) {
+            let galley = line(ui, note, Type::SMALL, p.muted, f32::INFINITY);
+            let across = rects[2].left()..=rects[rects.len() - 1].right();
+            let centre = pos2((across.start() + across.end()) / 2.0, strip.center().y);
+            let text_rect = Rect::from_center_size(centre, galley.size());
+            let (pad_x, pad_y) = HORIZON_NOTE_PADDING;
+            ui.painter().rect_filled(text_rect.expand2(vec2(pad_x, pad_y)), 0.0, p.panel);
+            ui.painter().galley(text_rect.min, galley, p.muted);
+            let response = ui.interact(text_rect, ui.scope_id().with("horizon_note"), Sense::hover());
+            response.widget_info(|| WidgetInfo::labeled(Role::Label, true, note));
+        }
     });
+}
+
+/// Today's pending count, the overdue line and one line per kind, in the cell's own gap.
+pub fn horizon_count(ui: &mut Ui, count: usize, overdue: usize, kinds: &[(usize, &str)]) {
+    let ink = if count == 0 { Ink::Muted } else { Ink::Text };
+    ui.label(rich(ui, format!("{count} to decide"), Type::TAG, ink));
+    if overdue > 0 {
+        ui.label(rich(ui, format!("{overdue} overdue"), Type::TAG, Tone::Interview));
+    }
+    for (n, kind) in kinds {
+        ui.label(rich(ui, format!("{n} {kind}"), Type::SMALL, Ink::Muted));
+    }
+}
+
+/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover.
+pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, tip: impl FnOnce(&mut Ui)) -> Response {
+    let p = Palette::of(ui);
+    let galley = line(ui, text, Type::TAG, p.text, f32::INFINITY);
+    let size = vec2(galley.size().x + HORIZON_CHIP_PADDING * 2.0, HORIZON_CHIP_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let edge = if response.hovered() { p.text } else { p.line };
+    ui.painter().rect_filled(rect, RADIUS_CARD, p.sheet);
+    ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
+    let at = pos2(rect.left() + HORIZON_CHIP_PADDING, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(at, galley, p.text);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    response.on_hover_ui(|ui| {
+        ui.set_max_width(HORIZON_TIP_WIDTH);
+        tip(ui)
+    })
 }
 
 pub fn horizon_day(ui: &mut Ui, text: &str, today: bool) -> Response {

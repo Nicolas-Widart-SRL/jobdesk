@@ -118,7 +118,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
 
 fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     let days: Vec<_> = (0..HORIZON_DAYS).map(|offset| queue.today + chrono::Days::new(offset)).collect();
-    horizon_strip(ui, &days, |ui, day, today| {
+    horizon_strip(ui, &days, None, |ui, day, today| {
         horizon_day(ui, &day.format("%a %-d").to_string(), today);
         for mark in queue.marks.iter().filter(|mark| mark.on == *day) {
             horizon_mark(ui, mark, pressed);

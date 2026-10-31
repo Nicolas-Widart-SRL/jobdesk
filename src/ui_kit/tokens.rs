@@ -58,6 +58,10 @@ pub const LANE_GAP: f32 = 6.0;
 
 pub const HORIZON_CELL_HEIGHT: f32 = 72.0;
 pub const HORIZON_PADDING: (i8, i8, i8) = (7, 7, 9);
+pub const HORIZON_CHIP_HEIGHT: f32 = 20.0;
+pub const HORIZON_CHIP_PADDING: f32 = 6.0;
+pub const HORIZON_NOTE_PADDING: (f32, f32) = (14.0, 7.0);
+pub const HORIZON_TIP_WIDTH: f32 = 250.0;
 pub const CARD_TAB_HEIGHT: f32 = 30.0;
 pub const CARD_TAB_PADDING: (i8, i8) = (14, 6);
 pub const CARD_TAB_GAP: f32 = 10.0;

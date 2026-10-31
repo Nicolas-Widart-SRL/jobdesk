@@ -69,4 +69,6 @@ plain text, and a link opens only on click and only for `http` or `https`. Claud
 render as Markdown with no image loading. Archived postings always render as plain text. Paths read
 from the tracker must stay inside the workspace.
 
-Jobdesk never bypasses permissions. Every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB. The CLI suggests saving allow rules to project settings, so `stream_json` rewrites every remembered rule to session scope to keep the checkout unchanged.
+By default `RunDesk` allows every tool permission itself and adds a notice to the activity for each one, so a run never stalls on a prompt nobody sees. This trades away the prompt as a check against injected posting text. Postings rely on `posting_guard` in the workspace instead. Questions from `AskUserQuestion` always reach the user. With `ask_permission` on, which a setting will expose later, every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB. The CLI suggests saving allow rules to project settings, so `stream_json` rewrites every remembered rule to session scope to keep the checkout unchanged.
+
+A pending prompt stays until it is answered or withdrawn, or the process ends. A turn's end does not clear it, because a background subagent can still be waiting on it. Background subagents also keep the run busy after its turn ends, because they can still write files.

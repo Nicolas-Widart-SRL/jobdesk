@@ -44,6 +44,8 @@ pub enum AgentEvent {
     PromptRaised(Prompt),
     PromptWithdrawn { request_id: String },
     UsageChanged(Usage),
+    /// How many subagents still work in the background. They can outlive the turn that started them.
+    BackgroundTasksChanged { count: usize },
     TurnEnded { failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64 },
     ProcessExited { failure: Option<String> },
 }

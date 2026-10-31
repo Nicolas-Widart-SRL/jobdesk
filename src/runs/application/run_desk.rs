@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::NaiveDateTime;
 
-use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Run, RunHistory, RunRequest};
+use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, PromptKind, Run, RunHistory, RunRequest};
 
 const HISTORY_LIMIT: usize = 50;
 
@@ -29,12 +29,19 @@ pub struct RunDesk {
     events: Receiver<(String, AgentEvent)>,
     event_sender: Sender<(String, AgentEvent)>,
     started: u32,
+    /// Off by default: every permission is allowed and noted in the activity. Questions always wait.
+    asks_permission: bool,
 }
 
 impl RunDesk {
     pub fn new(gateway: Box<dyn AgentGateway>, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (event_sender, events) = mpsc::channel();
-        Self { gateway, repaint, runs: Vec::new(), sessions: HashMap::new(), events, event_sender, started: 0 }
+        Self { gateway, repaint, runs: Vec::new(), sessions: HashMap::new(), events, event_sender, started: 0, asks_permission: false }
+    }
+
+    /// Sends each permission to the user instead of allowing it.
+    pub fn ask_permission(&mut self) {
+        self.asks_permission = true;
     }
 
     pub fn restore(&mut self, history: &dyn RunHistory) {
@@ -74,8 +81,18 @@ impl RunDesk {
     pub fn poll(&mut self) {
         while let Ok((id, event)) = self.events.try_recv() {
             let exited = matches!(event, AgentEvent::ProcessExited { .. });
+            let permission = match &event {
+                AgentEvent::PromptRaised(prompt) if !self.asks_permission && matches!(prompt.kind, PromptKind::Permission { .. }) => Some(prompt.request_id.clone()),
+                _ => None,
+            };
             if let Some(run) = self.run_mut(&id) {
                 run.apply(event);
+            }
+            if let Some(request_id) = permission
+                && let Some(prompt) = self.run_mut(&id).and_then(|run| run.allow_automatically(&request_id))
+                && let Some(session) = self.sessions.get_mut(&id)
+            {
+                session.respond(&prompt, &Decision::Allow { remember: false });
             }
             if exited {
                 self.sessions.remove(&id);
@@ -272,6 +289,19 @@ mod tests {
         desk.decide(&id, "r", Decision::Deny);
 
         assert_eq!(script.borrow().sent.len(), 1);
+    }
+
+    #[test]
+    fn permissions_are_allowed_and_questions_wait() {
+        let (mut desk, script) = desk();
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        let permission = PromptKind::Permission { tool: "Bash".into(), detail: "ls".into(), can_remember: false };
+        let prompt = |request_id: &str, kind| Prompt { request_id: request_id.into(), kind, input_json: "{}".into(), suggestions_json: None };
+        desk.sink_for(&id)(AgentEvent::PromptRaised(prompt("p", permission)));
+        desk.sink_for(&id)(AgentEvent::PromptRaised(prompt("q", PromptKind::Questions(vec![]))));
+        desk.poll();
+        assert_eq!(script.borrow().sent, ["Allow { remember: false }"]);
+        assert_eq!(desk.run(&id).unwrap().current_prompt().unwrap().request_id, "q");
     }
 
     #[test]

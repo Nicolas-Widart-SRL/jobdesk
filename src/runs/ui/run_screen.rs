@@ -35,6 +35,9 @@ fn status_tone(run: &Run) -> Tone {
     if run.needs_user() {
         return Tone::Interview;
     }
+    if run.background_agents > 0 {
+        return Tone::Active;
+    }
     match run.status {
         RunStatus::Starting | RunStatus::Working | RunStatus::Stopping => Tone::Active,
         RunStatus::AwaitingReply => Tone::Interview,
@@ -48,10 +51,16 @@ fn takes_input(run: &Run) -> bool {
     run.needs_user() || (run.session_id.is_some() && !run.is_busy())
 }
 
+/// Whether anything sits under the activity: a prompt, the reply box, or word of background agents.
+fn has_footer(run: &Run) -> bool {
+    takes_input(run) || run.background_agents > 0
+}
+
 fn status_label(run: &Run) -> &str {
     match run.current_prompt().map(|prompt| &prompt.kind) {
         Some(PromptKind::Permission { .. }) => "Waiting for permission",
         Some(PromptKind::Questions(_)) => "Waiting for your answer",
+        None if run.background_agents > 0 => "Agents working",
         None => run.status.label(),
     }
 }
@@ -109,7 +118,7 @@ impl RunScreen {
         let gap = ui.spacing().item_spacing.y;
         let shown = run.current_prompt().map(|prompt| prompt.request_id.as_str());
         let reserved_id = ui.scope_id().with(("prompt_height", &run.id, shown));
-        let input = takes_input(run);
+        let input = has_footer(run);
         let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
         let mut budget = 0.0;
         panel(ui, |ui| {
@@ -197,9 +206,17 @@ impl RunScreen {
         if let Some(prompt) = run.current_prompt().cloned() {
             ui.add_space(PROMPT_MARGIN.0);
             self.prompt(ui, desk, run, &prompt, budget);
+        } else if run.background_agents > 0 {
+            divider(ui);
+            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| muted(ui, background_note(run.background_agents)));
         } else if takes_input(run) {
             divider(ui);
-            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| self.reply_box(ui, desk, run));
+            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| {
+                if run.status == RunStatus::AwaitingReply {
+                    muted(ui, "Claude finished this step. Reply to continue, or press End session when you are done.");
+                }
+                self.reply_box(ui, desk, run);
+            });
         }
     }
 
@@ -408,6 +425,13 @@ fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool:
             desk.decide(&run.id, &prompt.request_id, Decision::Deny);
         }
     });
+}
+
+fn background_note(count: usize) -> String {
+    match count {
+        1 => "1 background agent is still working. Claude continues when it reports back.".to_owned(),
+        _ => format!("{count} background agents are still working. Claude continues when they report back."),
+    }
 }
 
 fn who(ui: &mut Ui, name: &str) {

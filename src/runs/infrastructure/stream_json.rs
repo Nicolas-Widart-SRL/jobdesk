@@ -20,6 +20,9 @@ pub fn parse_line(line: &str) -> Vec<AgentEvent> {
                 api_key_source: text_of(&event, "apiKeySource").to_owned(),
             }]
         }
+        "system" if text_of(&event, "subtype") == "background_tasks_changed" => {
+            vec![AgentEvent::BackgroundTasksChanged { count: event.get("tasks").and_then(Value::as_array).map_or(0, Vec::len) }]
+        }
         "stream_event" => text_delta(&event).into_iter().collect(),
         "assistant" => assistant_message(&event),
         "user" => tool_results(&event),
@@ -264,6 +267,12 @@ mod tests {
     fn reads_usage_windows() {
         let line = r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.25},"seven_day":{"utilization":0.5}}}}"#;
         assert_eq!(parse_line(line), [AgentEvent::UsageChanged(Usage { five_hour: Some(0.25), seven_day: Some(0.5) })]);
+    }
+
+    #[test]
+    fn counts_background_tasks() {
+        let line = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a","task_type":"local_agent"}]}"#;
+        assert_eq!(parse_line(line), [AgentEvent::BackgroundTasksChanged { count: 1 }]);
     }
 
     #[test]

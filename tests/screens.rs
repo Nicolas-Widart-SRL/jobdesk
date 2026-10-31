@@ -79,6 +79,8 @@ fn run_started() -> NaiveDateTime {
 fn apply_run(final_event: AgentEvent) -> RunDesk {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    // Permission prompts, as the coming setting will show them.
+    desk.ask_permission();
     desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
@@ -204,6 +206,8 @@ fn a_long_activity_keeps_the_prompt_visible() {
     let mut shell = shell(Screen::Runs, "long_activity");
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    // Permission prompts, as the coming setting will show them.
+    desk.ask_permission();
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
@@ -298,6 +302,7 @@ fn the_first_frame_shows_the_prompt_in_one_pass() {
     let mut shell = shell(Screen::Runs, "first_frame");
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.ask_permission();
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let session = AgentEvent::SessionStarted { session_id: "b7d2e410-93c1".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() };
     sink.lock().unwrap().as_ref().unwrap()(session);

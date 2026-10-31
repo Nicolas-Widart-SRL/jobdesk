@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::runs::domain::{AgentEvent, Decision, Prompt, RunRequest, StepRail, Usage};
+use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, RunRequest, StepRail, Usage};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunStatus {
@@ -73,6 +73,8 @@ pub struct Run {
     pub agents: Vec<String>,
     pub files_changed: Vec<String>,
     pub usage: Usage,
+    /// Subagents still working after the turn that started them ended.
+    pub background_agents: usize,
 }
 
 impl Run {
@@ -97,6 +99,7 @@ impl Run {
             agents: Vec::new(),
             files_changed: Vec::new(),
             usage: Usage::default(),
+            background_agents: 0,
         }
     }
 
@@ -110,8 +113,9 @@ impl Run {
     }
 
     /// Whether commands must wait, because two runs at once could overwrite each other's files.
+    /// Background subagents count too: they can still write after the turn ended.
     pub fn is_busy(&self) -> bool {
-        matches!(self.status, RunStatus::Starting | RunStatus::Working | RunStatus::Stopping)
+        matches!(self.status, RunStatus::Starting | RunStatus::Working | RunStatus::Stopping) || self.background_agents > 0
     }
 
     pub fn needs_user(&self) -> bool {
@@ -141,6 +145,15 @@ impl Run {
         Some(prompt)
     }
 
+    /// Jobdesk allows every tool for now. The notice keeps each allowance in the activity.
+    pub fn allow_automatically(&mut self, request_id: &str) -> Option<Prompt> {
+        let prompt = self.resolve_prompt(request_id, &Decision::Allow { remember: false })?;
+        if let PromptKind::Permission { tool, .. } = &prompt.kind {
+            self.notice(&format!("Allowed {tool} without asking."));
+        }
+        Some(prompt)
+    }
+
     pub fn notice(&mut self, text: &str) {
         self.activity.push(Activity { kind: ActivityKind::Notice(text.to_owned()), nested: false });
     }
@@ -157,6 +170,7 @@ impl Run {
     /// A run read back from its log has no live process.
     pub fn settle_after_restore(&mut self) {
         self.prompts.clear();
+        self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
         if !matches!(self.status, RunStatus::Failed(_) | RunStatus::Stopped) {
@@ -170,7 +184,8 @@ impl Run {
                 self.session_id = Some(session_id);
                 self.model = Some(model);
                 self.api_key_source = Some(api_key_source);
-                if self.status == RunStatus::Starting {
+                // Each turn starts with this, including the one Claude takes on its own when a background agent reports.
+                if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply) {
                     self.status = RunStatus::Working;
                 }
             }
@@ -192,6 +207,7 @@ impl Run {
             AgentEvent::PromptRaised(prompt) => self.prompts.push_back(prompt),
             AgentEvent::PromptWithdrawn { request_id } => self.prompts.retain(|prompt| prompt.request_id != request_id),
             AgentEvent::UsageChanged(usage) => self.usage = usage,
+            AgentEvent::BackgroundTasksChanged { count } => self.background_agents = count,
             AgentEvent::TurnEnded { failed, message, cost_usd, duration_ms } => self.turn_ended(failed, message, cost_usd, duration_ms),
             AgentEvent::ProcessExited { failure } => self.process_exited(failure),
         }
@@ -215,7 +231,7 @@ impl Run {
         self.streaming_text.clear();
         self.cost_usd = self.cost_of_ended_processes + cost_usd;
         self.duration_ms += duration_ms;
-        self.prompts.clear();
+        // A background subagent can still be waiting on a prompt after the main turn ends.
         if self.status == RunStatus::Stopping {
             self.status = RunStatus::Stopped;
             self.notice("You stopped this run.");
@@ -231,6 +247,7 @@ impl Run {
     fn process_exited(&mut self, failure: Option<String>) {
         self.cost_of_ended_processes = self.cost_usd;
         self.prompts.clear();
+        self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
         match failure {
@@ -282,6 +299,36 @@ mod tests {
         assert!(!run.is_busy());
         run.note_reply("yes");
         assert!(run.is_busy());
+    }
+
+    #[test]
+    fn background_agents_keep_the_run_busy_past_its_turn() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::BackgroundTasksChanged { count: 1 });
+        run.apply(turn(0.5));
+        assert!(run.is_busy());
+        run.apply(AgentEvent::BackgroundTasksChanged { count: 0 });
+        assert!(!run.is_busy());
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        assert_eq!(run.status, RunStatus::Working);
+    }
+
+    #[test]
+    fn an_automatic_allowance_is_noted() {
+        let mut run = run("/rank");
+        let permission = PromptKind::Permission { tool: "Bash".into(), detail: "ls".into(), can_remember: false };
+        run.apply(AgentEvent::PromptRaised(Prompt { kind: permission, ..prompt("a") }));
+        assert!(run.allow_automatically("a").is_some());
+        assert!(!run.needs_user());
+        assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Notice("Allowed Bash without asking.".into()));
+    }
+
+    #[test]
+    fn background_prompt_outlives_the_turn() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::PromptRaised(prompt("a")));
+        run.apply(turn(0.5));
+        assert_eq!(run.current_prompt().unwrap().request_id, "a");
     }
 
     #[test]

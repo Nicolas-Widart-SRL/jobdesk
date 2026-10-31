@@ -556,7 +556,7 @@ fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
     assert_eq!(tab_top(&harness), resting);
 }
 
-/// Meridian skipped, five cards set aside, then Federal Data Agency skipped with its suggested reason.
+/// L, L sets aside two cards and N skips Meridian. L five times sets aside five more, then Y skips Federal Data Agency with its suggested reason.
 const SKIP_OVER_LOG: [Key; 9] = [Key::L, Key::L, Key::N, Key::L, Key::L, Key::L, Key::L, Key::L, Key::Y];
 
 #[test]
@@ -565,9 +565,11 @@ fn a_logged_offer_shows_once_above_the_log() {
     for key in SKIP_OVER_LOG {
         press(&mut harness, key);
     }
-    assert!(is_shown(&harness, "Last decision: Skipped, Federal Data Agency. Press U to undo."));
+    let row = harness.get_by_label("Last decision: Skipped, Federal Data Agency. Press U to undo.").rect();
     assert_eq!(harness.query_all_by_label("Federal Data Agency").count(), 1, "the offer is not drawn again in the log");
     assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the older skip stays in the log");
+    let logged = harness.get_by_label("Meridian Rail Systems").rect();
+    assert!(row.bottom() <= logged.top(), "the undo row at {row:?} heads the log row at {logged:?}");
     assert!(is_shown(&harness, "Skipped"));
     assert!(!is_shown(&harness, "Nothing yet."));
 }

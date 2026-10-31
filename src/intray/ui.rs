@@ -82,8 +82,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         horizon(ui, queue, keys, &mut pressed);
         ui.add_space(12.0);
 
-        let offer = tray.undo_offer(queue.today);
-        side_column("tray_side", 292.0).show(ui, |ui| cleared(ui, queue, offer.as_ref(), &mut pressed));
+        side_column("tray_side", 292.0).show(ui, |ui| cleared(ui, queue, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match top {
                 Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
@@ -100,7 +99,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
 fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue) -> Option<Request> {
     let today = queue.today;
     match pressed {
-        Pressed::Undo => tray.undo(),
+        Pressed::Undo => tray.undo(today),
         Pressed::Reason(reason) => tray.give_reason(reason),
         Pressed::Bring(key) => tray.pull_forward(&key, today),
         Pressed::BringAll => tray.bring_back_all(today),
@@ -316,13 +315,13 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 
 /// The last decision heads the log while it can be undone, so its row is not drawn twice.
 /// Later is never logged: its row heads the rail without counting. The rail sits outside the card's scroll, so the row stays in view.
-fn cleared(ui: &mut Ui, queue: &Queue, offer: Option<&UndoOffer>, pressed: &mut Option<Pressed>) {
+fn cleared(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     slip(ui, |ui| {
         let count = (!queue.cleared.is_empty()).then(|| queue.cleared.len().to_string());
         panel_header(ui, "Cleared today", count.as_deref());
-        let rows = queue.log_under(offer);
+        let rows = queue.log_under();
         let last = rows.is_empty();
-        match offer {
+        match &queue.undo {
             Some(offer) => undo(ui, offer, last, pressed),
             None if last => panel_body(ui, |ui| {
                 ui.set_width(ui.available_width());

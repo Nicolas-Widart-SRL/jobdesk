@@ -68,11 +68,23 @@ pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
 /// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.
 /// Images never load: each shows as its alt text. A link opens only on click, and only for `http` or `https`.
 pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
-    let text = without_images(text);
+    // The image pass runs once per distinct text, and is kept while the text stays on screen.
+    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<ImageFreeCache>().get(text).clone());
     let before = ui.ctx().output(|output| output.commands.len());
     CommonMarkViewer::new().show(ui, cache, &text);
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
 }
+
+#[derive(Default)]
+struct ImageFree;
+
+impl egui::cache::ComputerMut<&str, Arc<str>> for ImageFree {
+    fn compute(&mut self, text: &str) -> Arc<str> {
+        without_images(text).into()
+    }
+}
+
+type ImageFreeCache = egui::cache::FrameCache<Arc<str>, ImageFree>;
 
 /// Drops any url opened after `from` that is not `http` or `https`.
 fn keep_web_links(commands: &mut Vec<OutputCommand>, from: usize) {
@@ -122,6 +134,7 @@ fn replace_images(text: &str) -> Option<String> {
                 }
             }
             Event::Text(part) | Event::Code(part) if depth > 0 => alt.push_str(&part),
+            Event::SoftBreak | Event::HardBreak if depth > 0 => alt.push(' '),
             _ => {}
         }
     }
@@ -130,19 +143,26 @@ fn replace_images(text: &str) -> Option<String> {
 }
 
 /// Markdown with every image swapped for its alt text, so no loader is ever asked for one.
-fn without_images(text: &str) -> std::borrow::Cow<'_, str> {
+/// The parser finds the images, so `![` inside code stays as written.
+fn without_images(text: &str) -> String {
     if !text.contains("![") {
-        return text.into();
+        return text.to_owned();
     }
     let mut text = text.to_owned();
-    for _ in 0..3 {
+    // Escaped alt text cannot form a new image, so the second pass only confirms the first.
+    for _ in 0..2 {
         match replace_images(&text) {
             Some(next) => text = next,
-            None => return text.into(),
+            None => return text,
         }
     }
-    // Still images after three passes: break every image opener.
-    text.replace("![", "!\\[").into()
+    // Unreachable in practice: show the whole text as plain characters rather than risk an image.
+    escaped(&text)
+}
+
+/// The height `text` takes wrapped at `width`, for rows sized before they are drawn.
+pub fn wrapped_height(ui: &Ui, text: &str, style: Type, width: f32) -> f32 {
+    WidgetText::from(RichText::new(text).font(style.font())).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font()).size().y
 }
 
 /// A single line cut to `width`, for widgets that paint their own text.
@@ -198,5 +218,13 @@ mod tests {
         assert_eq!(without_images("[![badge](https://x.example/b.svg)](https://x.example)"), "[badge](https://x.example)");
         assert_eq!(without_images("![\\!\\[x\\](y)](z)"), "\\!\\[x\\]\\(y\\)");
         assert_eq!(without_images("no images, just ! and [x]"), "no images, just ! and [x]");
+        assert_eq!(without_images("![two\nlines](u)"), "two lines");
+    }
+
+    #[test]
+    fn image_syntax_in_code_stays_as_written() {
+        let code = "Use `![a](b)` here.\n\n```\n![logo](file:///x.png)\n```\n";
+        assert_eq!(without_images(code), code);
+        assert_eq!(without_images("`![a](b)` and ![c](d)"), "`![a](b)` and c");
     }
 }

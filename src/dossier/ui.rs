@@ -1,23 +1,21 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use egui::{Align, ColorImage, Frame, Layout, Margin, ScrollArea, TextureHandle, TextureOptions, Ui, vec2};
 use egui_commonmark::CommonMarkCache;
 use egui_extras::{Column, TableBuilder};
 
 use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, PageImage, PageState, PageStore, PdfDocument, Stage, StatusBucket};
 use crate::shared_kernel::dates::parse_iso_date;
-use crate::ui_kit::tokens::{GUTTER, LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TAG_HEIGHT};
+use crate::ui_kit::tokens::{GUTTER, LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TAG_HEIGHT};
 use crate::ui_kit::{
     CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
-    panel_header, rich, segmented, side_column, slip, small_button, table_cell, table_head, tag,
+    panel_header, rich, segmented, side_column, slip, small_button, table_cell, table_head, tag, wrapped_height,
 };
 
-/// Keyword table rows: a tag and its cell padding.
+/// The keyword table's head row, as in the Jobs table.
 const KEYWORD_HEAD_HEIGHT: f32 = 36.0;
-const KEYWORD_ROW_HEIGHT: f32 = 40.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Section {
@@ -34,7 +32,7 @@ pub struct DossierScreen {
     section: Section,
     selected_pack: usize,
     markdown: CommonMarkCache,
-    /// One rendering per PDF path: a rebuilt file replaces the older pages.
+    /// Only the pages of the documents on screen: the rest are released each frame.
     textures: HashMap<(PathBuf, u64), Vec<TextureHandle>>,
 }
 
@@ -70,6 +68,7 @@ impl DossierScreen {
     pub fn reset(&mut self) {
         self.section = Section::Documents;
         self.selected_pack = 0;
+        self.textures.clear();
     }
 
     pub fn show(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore, today: NaiveDate) {
@@ -113,6 +112,8 @@ impl DossierScreen {
     fn documents(&mut self, ui: &mut Ui, dossier: &Dossier, pages: &mut PageStore) {
         let documents: Vec<(&PdfDocument, PageState)> = dossier.contents.documents.iter().map(|document| (document, pages.pages(document))).collect();
         let cache = &mut self.markdown;
+        // Pages of documents no longer drawn, or of an older build, are released.
+        self.textures.retain(|(path, modified), _| documents.iter().any(|(document, _)| document.path == *path && document.modified == *modified));
         let textures = &mut self.textures;
         split(
             ui,
@@ -239,9 +240,6 @@ fn compiled_pages(ui: &mut Ui, textures: &mut HashMap<(PathBuf, u64), Vec<Textur
                 }
                 PageState::Ready(images) => {
                     let key = (document.path.clone(), document.modified);
-                    if !textures.contains_key(&key) {
-                        textures.retain(|(path, _), _| *path != document.path);
-                    }
                     let pages = textures.entry(key).or_insert_with(|| textures_for(ui, images));
                     for (index, texture) in pages.iter().enumerate() {
                         let size = texture.size_vec2();
@@ -280,6 +278,19 @@ fn keywords(ui: &mut Ui, rows: &[KeywordRow]) {
     }
     let total = ui.available_width();
     let widths = KEYWORD_COLUMNS.map(|share| (total * share).floor());
+    let where_width = total - widths[0] - widths[1] - widths[2];
+    // The canvas wraps cells, so each row is as tall as its tallest cell.
+    let room = |width: f32| width - TABLE_CELL_PADDING.0 * 2.0;
+    let heights: Vec<f32> = rows
+        .iter()
+        .map(|row| {
+            let tallest = [(&row.keyword, Type::MONO, widths[0]), (&row.priority, Type::BODY, widths[1]), (&row.note, Type::BODY, where_width)]
+                .into_iter()
+                .map(|(text, style, width)| wrapped_height(ui, text, style, room(width)))
+                .fold(TAG_HEIGHT, f32::max);
+            tallest + TABLE_CELL_PADDING.1 * 2.0
+        })
+        .collect();
     let last = rows.len() - 1;
     // Cells pad themselves, so the rules run unbroken.
     ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
@@ -300,21 +311,21 @@ fn keywords(ui: &mut Ui, rows: &[KeywordRow]) {
             }
         })
         .body(|body| {
-            body.rows(KEYWORD_ROW_HEIGHT, rows.len(), |mut line| {
+            body.heterogeneous_rows(heights.into_iter(), |mut line| {
                 let index = line.index();
                 let row = &rows[index];
                 let rule = if index == last { CellRule::Last } else { CellRule::Row };
                 line.col(|ui| {
-                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.keyword.as_str(), Type::MONO, Ink::Text)).truncate()));
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.keyword.as_str(), Type::MONO, Ink::Text)).wrap()));
                 });
                 line.col(|ui| {
-                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.priority.as_str(), Type::BODY, Ink::Muted)).truncate()));
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.priority.as_str(), Type::BODY, Ink::Muted)).wrap()));
                 });
                 line.col(|ui| {
                     table_cell(ui, rule, |ui| tag(ui, row.status.as_str(), keyword_tone(row)).on_hover_text(row.status.as_str()));
                 });
                 line.col(|ui| {
-                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.note.as_str(), Type::BODY, Ink::Muted)).truncate()));
+                    table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, row.note.as_str(), Type::BODY, Ink::Muted)).wrap()));
                 });
             });
         });
@@ -429,6 +440,11 @@ fn faint_date(ui: &mut Ui, date: NaiveDate, today: NaiveDate) {
 }
 
 /// The stage to tag "Next": the first one not reached, unless the application is over.
+/// Closed covers rejected, ghosted, withdrawn and every status the tracker does not know.
+fn application_over(bucket: StatusBucket, is_final: bool, resolved: bool) -> bool {
+    matches!(bucket, StatusBucket::Closed | StatusBucket::Hired) || is_final || resolved
+}
+
 fn next_stage(over: bool, stages: &[Stage]) -> Option<usize> {
     (!over).then(|| stages.iter().position(|stage| !stage.reached)).flatten()
 }
@@ -444,7 +460,8 @@ fn stages(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
                 muted(ui, "No stages recorded.");
             });
         }
-        let over = dossier.card.is_final || outcome.is_some_and(|outcome| outcome.resolved_on.is_some());
+        let resolved = outcome.is_some_and(|outcome| outcome.resolved_on.is_some());
+        let over = application_over(dossier.card.bucket, dossier.card.is_final, resolved);
         let next = next_stage(over, stages);
         for (index, stage) in stages.iter().enumerate() {
             list_row(ui, index == 0, |ui| {
@@ -465,13 +482,17 @@ fn stages(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
 }
 
 /// One line of the outcome notes: `- 2026-10-21: text` gives the date and the text.
-/// Only one list bullet comes off; the rest stays as written. Blank lines make no row.
+/// Only one list bullet comes off; the rest stays as written. Blank lines and empty bullets make no row.
 fn note_line(line: &str) -> Option<(Option<NaiveDate>, &str)> {
     let line = line.trim();
+    let line = match line.strip_prefix(['-', '*', '+']) {
+        Some("") => return None,
+        Some(rest) if rest.starts_with([' ', '\t']) => rest.trim_start(),
+        _ => line,
+    };
     if line.is_empty() {
         return None;
     }
-    let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
     let dated = line.split_once(':').and_then(|(date, text)| parse_iso_date(date).map(|date| (Some(date), text.trim_start())));
     Some(dated.unwrap_or((None, line)))
 }
@@ -548,6 +569,12 @@ mod tests {
         assert_eq!(note_line("- 2026-10-21: They valued the replay story."), Some((date, "They valued the replay story.")));
         assert_eq!(note_line("Moved to applied: see tracker"), Some((None, "Moved to applied: see tracker")));
         assert_eq!(note_line("   "), None);
+        for empty in ["  - ", "-", "*", "+ ", "-\t"] {
+            assert_eq!(note_line(empty), None, "{empty:?}");
+        }
+        for bullet in ["+ 2026-10-21: x", "-\t2026-10-21: x", "*\t2026-10-21: x"] {
+            assert_eq!(note_line(bullet), Some((date, "x")), "{bullet:?}");
+        }
     }
 
     #[test]
@@ -570,5 +597,9 @@ mod tests {
         let stages = [Stage { name: "Phone screen".into(), reached: true, date: None }, Stage { name: "Technical".into(), reached: false, date: None }];
         assert_eq!(next_stage(false, &stages), Some(1));
         assert_eq!(next_stage(true, &stages), None);
+        assert!(application_over(StatusBucket::Closed, false, false), "ghosted and unknown statuses land in Closed");
+        assert!(application_over(StatusBucket::Hired, false, false));
+        assert!(application_over(StatusBucket::Interview, false, true));
+        assert!(!application_over(StatusBucket::Interview, false, false));
     }
 }

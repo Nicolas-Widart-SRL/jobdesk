@@ -4,7 +4,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
-    BODY_PADDING, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
+    BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
     NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING,
     STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, TABLE_CELL_PADDING, Type,
 };
@@ -53,46 +53,56 @@ pub enum Subtitle<'a> {
 
 /// A screen's head: title and subtitle on the left, `actions` on the right, level with the last line.
 /// Actions are added right to left. Title and subtitle are cut to the width the actions leave, with the full text on hover.
-pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, actions: impl FnOnce(&mut Ui)) {
+/// When the actions leave less than `HEAD_TITLE_MIN`, they move to a row of their own under the title.
+/// `actions` runs twice a frame: once unseen and disabled to measure it, then for real.
+pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut actions: impl FnMut(&mut Ui)) {
     let (x, top, bottom) = HEAD_PADDING;
     Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
+        let full = ui.available_width();
         let right = ui.max_rect().right();
-        // The actions' width from the last frame, as they are laid out after the title.
-        let reserved_id = ui.scope_id().with("page_head_actions");
-        let reserved = ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(0.0);
-        let room = (ui.available_width() - reserved).max(0.0);
+        let measure = Rect::from_min_size(ui.cursor().min, vec2(full, BUTTON_HEIGHT));
+        let mut sizing = ui.new_child(UiBuilder::new().id_salt("page_head_sizing").max_rect(measure).layout(Layout::right_to_left(Align::Center)).sizing_pass().invisible());
+        sizing.spacing_mut().item_spacing.x = HEAD_GAP.0;
+        actions(&mut sizing);
+        let used = sizing.min_rect().width();
+        let beside = if used > 0.0 { full - used - HEAD_GAP.0 } else { full };
+        let inline = beside >= HEAD_TITLE_MIN;
+        let room = if inline { beside } else { full };
+        let (title, style) = match title {
+            Title::Slab(text) => (text, Type::H1),
+            Title::Lead(text) => (text, Type::LEAD),
+            Title::Typed(text) => (text, Type::PATH),
+        };
+        let title = line(ui, title, style, Palette::of(ui).text, room);
+        let subtitle = subtitle.map(|subtitle| {
+            let (text, style) = match subtitle {
+                Subtitle::Text(text) => (text, Type::BODY),
+                Subtitle::Typed(text) => (text, Type::MONO),
+            };
+            line(ui, text, style, Palette::of(ui).muted, room)
+        });
         let text = ui
             .vertical(|ui| {
-                ui.set_max_width(room);
                 ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
-                let (text, style) = match title {
-                    Title::Slab(text) => (text, Type::H1),
-                    Title::Lead(text) => (text, Type::LEAD),
-                    Title::Typed(text) => (text, Type::PATH),
-                };
-                let text = rich(ui, text, style, Ink::Text);
-                ui.add(egui::Label::new(text).truncate());
+                ui.add(egui::Label::new(title));
                 if let Some(subtitle) = subtitle {
-                    let (text, style) = match subtitle {
-                        Subtitle::Text(text) => (text, Type::BODY),
-                        Subtitle::Typed(text) => (text, Type::MONO),
-                    };
-                    let text = rich(ui, text, style, Ink::Muted);
-                    ui.add(egui::Label::new(text).truncate());
+                    ui.add(egui::Label::new(subtitle));
                 }
             })
             .response
             .rect;
-        let row = Rect::from_min_max(text.min, pos2(right, text.bottom()));
-        let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
-        side.spacing_mut().item_spacing.x = HEAD_GAP.0;
-        actions(&mut side);
-        let used = side.min_rect().width();
-        let wanted = if used > 0.0 { used + HEAD_GAP.0 } else { 0.0 };
-        if (wanted - reserved).abs() > 0.5 {
-            ui.data_mut(|data| data.insert_temp(reserved_id, wanted));
-            ui.ctx().request_repaint();
+        if inline {
+            let row = Rect::from_min_max(text.min, pos2(right, text.bottom()));
+            let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
+            side.spacing_mut().item_spacing.x = HEAD_GAP.0;
+            actions(&mut side);
+        } else {
+            ui.add_space(HEAD_GAP.1);
+            ui.allocate_ui_with_layout(vec2(full, BUTTON_HEIGHT), Layout::right_to_left(Align::Center).with_main_wrap(true), |ui| {
+                ui.spacing_mut().item_spacing = HEAD_GAP.into();
+                actions(ui);
+            });
         }
     });
 }
@@ -435,5 +445,44 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
         ui.painter().rect_filled(patch, 0.0, p.panel);
         let arrow = line(ui, "\u{2192}", Type::BODY, p.faint, f32::INFINITY);
         paint_centred(ui, patch, arrow, p.faint);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    const LONG: &str = "Tessel Group Holdings International, Principal Solution Architect for Payments";
+
+    /// The title and the action on the very first frame, at `width`.
+    fn first_frame(width: f32) -> (Rect, Rect) {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([width, 300.0]).with_context_setup(setup).build_ui(|ui| {
+            page_head(ui, Title::Slab(LONG), Some(Subtitle::Typed("documents/applications/tessel/")), |ui| {
+                crate::ui_kit::button(ui, "Record a result");
+            });
+        });
+        harness.step();
+        (harness.get_by_label(LONG).rect(), harness.get_by_label("Record a result").rect())
+    }
+
+    #[test]
+    fn a_long_title_stops_short_of_the_actions_from_the_first_frame() {
+        let (title, action) = first_frame(900.0);
+        assert!(title.right() <= action.left(), "{title:?} runs under {action:?}");
+        assert!(title.width() >= HEAD_TITLE_MIN);
+    }
+
+    #[test]
+    fn actions_take_their_own_row_when_the_title_would_be_too_narrow() {
+        let (title, action) = first_frame(380.0);
+        assert!(action.top() >= title.bottom(), "{title:?} shares a row with {action:?}");
+        assert!(title.width() >= HEAD_TITLE_MIN);
     }
 }

@@ -80,6 +80,7 @@ pub const SHELL_GAP: (f32, f32) = (20.0, 8.0);
 pub const NAV_TOP: f32 = 4.0;
 pub const HEAD_PADDING: (f32, f32, f32) = (32.0, 26.0, 6.0);
 pub const HEAD_GAP: (f32, f32) = (16.0, 10.0);
+pub const HEAD_TITLE_MIN: f32 = 240.0;
 pub const SCREEN_PADDING: (f32, f32, f32) = (32.0, 18.0, 32.0);
 pub const SCREEN_GAP: f32 = 28.0;
 pub const STATUS_PADDING: (f32, f32) = (28.0, 6.0);

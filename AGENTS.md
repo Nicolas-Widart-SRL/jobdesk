@@ -15,6 +15,8 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - Refresh snapshots on macOS only, so every baseline comes from one renderer.
 - `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 - Code is hand-formatted with no rustfmt config, so match the surrounding lines and skip `cargo fmt`.
+- CI fails on any clippy warning: run `scripts/check.sh` before you commit.
+- Commit subjects follow Conventional Commits, because CI rejects others and git-cliff writes `CHANGELOG.md` from them.
 
 ## Layout
 

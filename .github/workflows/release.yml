@@ -1,0 +1,135 @@
+# Opens a release PR: scripts/release.sh picks the next version with git-cliff, adds its
+# CHANGELOG.md section and sets it in Cargo.toml and Cargo.lock on the branch release/vX.Y.Z.
+# Merging that PR builds the installers, tags and publishes the release (see tag-release.yml).
+# The RELEASE_TOKEN secret (a fine-grained PAT) pushes the branch and opens the PR, so CI runs on it.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump. auto: git-cliff picks the bump from the commits.'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+        default: auto
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  GIT_CLIFF_VERSION: '2.14.2'
+  GIT_CLIFF_SHA512: '26d1f7c8ea2400f2ccb0b2e7f321635f600b583bf4cd1f7afaa5e8c24068ad1088a2504e0a4d9f4333d4bb20a80329327d9462634343ee3af91e1a7fbdc6f18a'
+
+jobs:
+  release-pr:
+    name: Open release PR
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # bash -eo pipefail: a failing command in a pipe fails the step.
+        shell: bash
+
+    # Only the Open release PR step gets RELEASE_TOKEN. The actions before it are pinned to commits,
+    # because a changed action could leave behind a program that reads the token in a later step.
+    steps:
+      - name: Check branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ $REF != refs/heads/main ]]; then
+            echo "::error::Run this workflow on main, not on '$REF'."
+            exit 1
+          fi
+
+      - name: Check RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [[ -z $RELEASE_TOKEN ]]; then
+            echo "::error::The RELEASE_TOKEN secret is empty. Store a fine-grained personal access token with Contents and Pull requests read/write on this repository: gh secret set RELEASE_TOKEN."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install git-cliff
+        run: |
+          archive="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$archive"
+          echo "${GIT_CLIFF_SHA512}  $RUNNER_TEMP/$archive" | sha512sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/git-cliff-${GIT_CLIFF_VERSION}" >> "$GITHUB_PATH"
+
+      # scripts/release.sh runs cargo update --workspace to set the version in Cargo.lock.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Prepare the release commit
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          # Git asks gh for credentials, and gh answers with the GH_TOKEN of the step that runs git.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          scripts/release.sh "$BUMP"
+
+          branch=$(git branch --show-current)
+          tag=${branch#release/}
+          if ! [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::scripts/release.sh left an unexpected branch '$branch'."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error::Tag $tag already exists on origin."
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            echo "::error::Branch $branch already exists on origin. Merge or close its PR and delete the branch first."
+            exit 1
+          fi
+
+          echo "Releasing $tag (bump=$BUMP)."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The RELEASE_TOKEN PAT opens the release PR, so that PR's pull_request event starts CI, which a PR
+      # opened by GITHUB_TOKEN would not. The PAT also pushes the branch, because GITHUB_TOKEN has only contents: read.
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git push origin "release/$TAG"
+
+          body="$RUNNER_TEMP/body.md"
+          {
+            awk -v v="${TAG#v}" '
+              /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+              /^\[[^]]+\]: / { next }
+              found { print }
+            ' CHANGELOG.md
+            echo
+            echo '---'
+            echo
+            echo '- [ ] Review the CHANGELOG.md section. Edit it on this branch if needed: the GitHub release notes are read from CHANGELOG.md when the PR merges.'
+            echo "- [ ] Merging builds the installers on the merge commit, then tags \`$TAG\` and publishes the GitHub release (tag-release.yml)."
+          } > "$body"
+
+          gh pr create --base main --head "release/$TAG" --title "chore(release): $TAG" --body-file "$body"

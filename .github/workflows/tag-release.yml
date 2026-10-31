@@ -1,0 +1,175 @@
+# Releases when a release PR (opened by release.yml) merges: builds the installers on the merge commit,
+# then tags it and creates the GitHub release from the CHANGELOG.md section.
+#
+# The tag exists only once the installers built. A failed build leaves no tag.
+# "Re-run failed jobs" rebuilds the same commit, so it only helps with flaky or infrastructure failures.
+# For a code failure, merge the fix into main through a normal PR, then run this workflow by hand with the tag.
+# The run by hand builds the current main commit, then tags and publishes the same way.
+# The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
+name: Tag release
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, vX.Y.Z. Cargo.toml and CHANGELOG.md on main must already hold this version.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-release-${{ github.event.pull_request.head.ref || format('release/{0}', inputs.tag) }}
+  cancel-in-progress: false
+
+jobs:
+  # Picks the tag and the commit to build. From here on, both events go the same way.
+  version:
+    name: Read the release version
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.pull_request.merged == true &&
+        startsWith(github.event.pull_request.head.ref, 'release/v') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.base.ref == 'main'
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.read.outputs.tag }}
+      sha: ${{ steps.read.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      - name: Read version
+        id: read
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUT_TAG: ${{ inputs.tag }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          if [[ $EVENT == workflow_dispatch ]]; then
+            if [[ $REF != refs/heads/main ]]; then
+              echo "::error::Run this workflow on main, not on '$REF'."
+              exit 1
+            fi
+            if ! [[ $INPUT_TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag '$INPUT_TAG' is not vX.Y.Z."
+              exit 1
+            fi
+            tag=$INPUT_TAG
+            sha=$GITHUB_SHA
+          else
+            if ! [[ $HEAD_REF =~ ^release/(v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "::error::Head branch '$HEAD_REF' is not release/vX.Y.Z."
+              exit 1
+            fi
+            tag=${BASH_REMATCH[1]}
+            sha=$MERGE_SHA
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error::Tag $tag already exists on origin."
+            exit 1
+          fi
+          # installers.yml checks that Cargo.toml holds the same version.
+          if ! grep -qF "## [${tag#v}]" CHANGELOG.md; then
+            echo "::error::No CHANGELOG.md section for ${tag#v} at $sha"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  installers:
+    name: Installers
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/installers.yml
+    with:
+      ref: ${{ needs.version.outputs.sha }}
+      tag: ${{ needs.version.outputs.tag }}
+
+  publish:
+    name: Tag and publish release
+    needs: [version, installers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      SHA: ${{ needs.version.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    # Its actions are pinned to commits, because the job holds a token that can write the repository.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      # Edits made on the release branch count: the notes come from CHANGELOG.md at the built commit.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          version="${TAG#v}"
+          awk -v v="$version" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            /^\[[^]]+\]: / { next }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/release-notes.md"; then
+            echo "::error::No CHANGELOG.md section for $version at $SHA"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/release-notes.md"
+
+      # Only the installers: a failed earlier attempt may have left snapshot artifacts in the run.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dmg
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: setup
+          path: dist
+
+      # A re-run after a later step failed finds the tag it pushed, and keeps it.
+      - name: Tag the commit
+        run: |
+          tagged=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | cut -f1)
+          if [ "$tagged" = "$SHA" ]; then
+            echo "$TAG already tags $SHA."
+            exit 0
+          elif [ -n "$tagged" ]; then
+            echo "::error::Tag $TAG already exists on origin, on $tagged."
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "$TAG" "$SHA"
+          git push origin "refs/tags/$TAG"
+
+      # A re-run after this step failed finds the release, and uploads the installers again.
+      - name: Create the GitHub release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" dist/*
+          fi
+
+      # A run by hand usually finds the branch gone already.
+      - name: Delete the release branch
+        run: |
+          branch="release/$TAG"
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" > /dev/null; then
+            git push origin --delete "$branch"
+          else
+            echo "$branch is already deleted."
+          fi

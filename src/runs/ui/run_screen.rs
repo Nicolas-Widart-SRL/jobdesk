@@ -381,6 +381,7 @@ fn head_actions(ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
 }
 
 /// `budget` is the height the prompt's content may take, buttons included.
+#[allow(clippy::too_many_arguments)]
 fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool: &str, detail: &str, can_remember: bool, budget: f32) {
     let top = ui.cursor().top();
     strong(ui, format!("Claude wants to use {tool}"));

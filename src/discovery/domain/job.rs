@@ -160,10 +160,8 @@ impl Job {
                 Gate::Pass => {}
             }
         }
-        if let Some(days) = self.posted_on.map(|posted| days_from(posted, today)) {
-            if days > STALE_AFTER_DAYS {
-                signals.push(Signal::PostedDaysAgo { days });
-            }
+        if let Some(days) = self.posted_on.map(|posted| days_from(posted, today)) && days > STALE_AFTER_DAYS {
+            signals.push(Signal::PostedDaysAgo { days });
         }
         if self.guard_flagged() {
             signals.push(Signal::GuardFlag);

@@ -39,9 +39,19 @@ cargo install cargo-packager --locked --version 0.11.8
 cargo packager --release --formats app,dmg
 ```
 
-Output lands in `target/packages`. On Windows use `--formats nsis`. `.github/workflows/build.yml` builds both platforms once the repo has a GitHub remote.
+Output lands in `target/packages`. On Windows use `--formats nsis`. Run the Installers workflow from the Actions tab to build both installers for a branch.
 
 These builds are not signed with a developer identity. macOS and Windows warn on other machines until they are signed and notarized. The app icons live in `assets/brand/`.
+
+## Release
+
+1. Run the Release workflow from the Actions tab on `main`. It picks the next version from the Conventional Commits since the last tag, and opens a `release/vX.Y.Z` pull request with the new `CHANGELOG.md` section and version.
+2. Review the changelog on that branch, then merge the pull request.
+3. The Tag release workflow builds both installers on the merge commit, then tags it and publishes the GitHub release with the changelog section as its notes.
+
+The Release workflow needs the `RELEASE_TOKEN` secret: a fine-grained personal access token with Contents and Pull requests read and write on this repository. A pull request opened with the default token would not start CI.
+
+`scripts/release.sh` prepares the same release branch locally. It needs [git-cliff](https://git-cliff.org) and `jq`.
 
 ## Authentication
 

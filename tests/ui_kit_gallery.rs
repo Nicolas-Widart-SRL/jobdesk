@@ -291,10 +291,12 @@ fn tray(ui: &mut Ui) {
     });
 }
 
+type Section = (&'static str, fn(&mut Ui));
+
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [(&str, fn(&mut Ui)); 10] = [
+        let sections_of_gallery: [Section; 10] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -320,7 +322,7 @@ fn render(theme: Theme, name: &str) {
         .with_size([1000.0, 3700.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
-        .with_context_setup(|ctx| install_look(ctx))
+        .with_context_setup(install_look)
         .wgpu()
         .build_ui(|ui| {
             jobdesk::ui_kit::sheet_frame(ui).inner_margin(24).show(ui, gallery);

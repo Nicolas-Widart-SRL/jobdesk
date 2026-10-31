@@ -14,7 +14,7 @@ description = "Desktop view over an ai-job-search checkout"
 icons = ["assets/brand/jobdesk.icns", "assets/brand/jobdesk.ico", "assets/brand/jobdesk-icon-1024.png"]
 resources = ["assets/fonts/*-OFL.txt"]
 out-dir = "target/packages"
-before-packaging-command = "cargo build --release"
+before-packaging-command = "cargo build --release --locked"
 binaries = [{ path = "jobdesk", main = true }]
 
 [lib]

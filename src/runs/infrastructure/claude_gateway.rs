@@ -29,8 +29,10 @@ impl AgentGateway for ClaudeGateway {
         let (outbox, inbox) = mpsc::channel();
         let (workspace, logs, request) = (self.workspace.clone(), self.logs.clone(), request.clone());
         let to_self = outbox.clone();
-        thread::spawn(move || supervise(&workspace, &logs, &request, sink, &inbox, to_self));
-        Box::new(ClaudeSession { outbox, interrupts: 0 })
+        let process = Arc::new(Mutex::new(Process::default()));
+        let supervised = Arc::clone(&process);
+        thread::spawn(move || supervise(&workspace, &logs, &request, sink, &inbox, to_self, &supervised));
+        Box::new(ClaudeSession { outbox, interrupts: 0, process })
     }
 }
 
@@ -40,10 +42,31 @@ enum Outgoing {
     StreamEnded,
 }
 
-/// Dropping the session closes the outbox, which ends the process.
+/// The process a session started, shared by the session and its supervising thread.
+#[derive(Default)]
+struct Process {
+    /// Set while the process runs. Its process group has the same id.
+    pid: Option<u32>,
+    /// The session was dropped, so a process spawned after this point is killed at once.
+    ended: bool,
+}
+
+/// Dropping the session kills the process and every command it started, before the drop returns.
+/// The app can exit right after, so this cannot wait for the supervising thread.
 struct ClaudeSession {
     outbox: Sender<Outgoing>,
     interrupts: u32,
+    process: Arc<Mutex<Process>>,
+}
+
+impl Drop for ClaudeSession {
+    fn drop(&mut self) {
+        let Ok(mut process) = self.process.lock() else { return };
+        process.ended = true;
+        if let Some(pid) = process.pid.take() {
+            kill_tree(pid);
+        }
+    }
 }
 
 impl AgentSession for ClaudeSession {
@@ -72,6 +95,9 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Its own process group, so one kill reaches the tools it runs too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     if let Some(model) = &request.model {
         command.args(["--model", model]);
     }
@@ -83,7 +109,7 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     command
 }
 
-fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>) {
+fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>, process: &Mutex<Process>) {
     let sink = Arc::new(Mutex::new(sink));
     let emit = {
         let sink = Arc::clone(&sink);
@@ -105,6 +131,13 @@ fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSin
             return;
         }
     };
+    if let Ok(mut process) = process.lock() {
+        if process.ended {
+            kill_tree(child.id());
+        } else {
+            process.pid = Some(child.id());
+        }
+    }
     let log = RunLog::open(logs, workspace, request).ok().map(|log| Arc::new(Mutex::new(log)));
     let stderr_tail = collect_stderr(&mut child);
     let mut stdin = child.stdin.take();
@@ -121,19 +154,38 @@ fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSin
             }
             Ok(Outgoing::Control(line)) => write_line(&mut stdin, &line),
             Ok(Outgoing::StreamEnded) => break,
-            Err(_) => {
-                let _ = child.kill();
-                break;
-            }
+            // The dropped session already killed the process.
+            Err(_) => break,
         }
     }
     drop(stdin);
     let status = child.wait();
+    // The id is free for reuse from here, so the session must not kill it any more.
+    if let Ok(mut process) = process.lock() {
+        process.pid = None;
+    }
     let failure = status.ok().filter(|status| !status.success()).map(|status| {
         let tail = stderr_tail.lock().map(|tail| tail.iter().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default();
         if tail.is_empty() { format!("Claude exited with {status}") } else { tail }
     });
     emit(AgentEvent::ProcessExited { failure });
+}
+
+#[cfg(unix)]
+fn kill_tree(pid: u32) {
+    let Ok(group) = libc::pid_t::try_from(pid) else { return };
+    // SAFETY: kill only sends a signal. A negative id names the process group the child leads.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+}
+
+#[cfg(windows)]
+fn kill_tree(pid: u32) {
+    let mut command = Command::new("taskkill");
+    command.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+    let _ = command.status();
 }
 
 fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
@@ -172,5 +224,39 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
                 tail.pop_front();
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    fn alive(pid: libc::pid_t) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// A tool Claude started, here a background `sleep`, dies with Claude.
+    #[test]
+    fn killing_the_tree_reaches_grandchildren() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let grandchild: libc::pid_t = line.trim().parse().unwrap();
+
+        kill_tree(child.id());
+        child.wait().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive(grandchild) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(grandchild));
     }
 }

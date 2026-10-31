@@ -4,13 +4,23 @@ use egui::{Frame, Margin, ScrollArea, TextEdit, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
-use crate::ui_kit::tokens::{EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, PROMPT_MARGIN, ROW_GAP, SCREEN_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS};
+use crate::ui_kit::tokens::{
+    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, PROMPT_MARGIN, ROW_GAP, SCREEN_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS,
+};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, button, code_box, danger_button, divider, list_row, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
     side_column, slip, slip_bar, step_rail, strong, tag,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
+/// A prompt's scrolling part: at least two choices or lines, at most what reads at a glance.
+const CHOICES_MIN_HEIGHT: f32 = 60.0;
+const CHOICES_MAX_HEIGHT: f32 = 260.0;
+const DETAIL_MIN_HEIGHT: f32 = 40.0;
+const DETAIL_MAX_HEIGHT: f32 = 180.0;
+const DETAIL_GAP: f32 = 4.0;
+/// Kept beside the reply field for its Send button, which is laid out after the field.
+const SEND_ROOM: f32 = 64.0;
 
 #[derive(Default)]
 pub struct RunScreen {
@@ -30,6 +40,11 @@ fn status_tone(run: &Run) -> Tone {
         RunStatus::Failed(_) => Tone::Closed,
         RunStatus::Stopped | RunStatus::Closed => Tone::Plain,
     }
+}
+
+/// Whether the run waits on a prompt, or its session can take a reply.
+fn takes_input(run: &Run) -> bool {
+    run.needs_user() || (run.session_id.is_some() && !run.is_busy())
 }
 
 fn status_label(run: &Run) -> &str {
@@ -78,15 +93,18 @@ impl RunScreen {
         egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| self.detail(ui, desk, run));
     }
 
-    /// The activity, then the prompt. The prompt's height is kept from the frame before,
-    /// so the activity scrolls in what is left and the prompt never leaves the window.
+    /// The activity, then the prompt under it, outside the activity's scroll area.
+    /// The activity takes what the prompt left on the frame before. With no measure yet, the
+    /// prompt gets the whole column, and its own scroll areas shrink to keep its buttons in it.
+    /// A new measure redraws the frame, so a prompt is never left below the window.
     fn detail(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
-        let reserved_id = ui.scope_id().with("prompt_height");
-        let reserved = ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or_default();
+        let reserved_id = ui.scope_id().with(("prompt_height", &run.id));
+        let input = takes_input(run);
+        let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
         panel(ui, |ui| {
             panel_header(ui, "Activity", run.is_busy().then_some("live"));
             let room = (ui.available_height() - reserved).max(0.0);
-            ScrollArea::vertical().id_salt("run_activity").max_height(room).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
+            ScrollArea::vertical().id_salt(("run_activity", &run.id)).max_height(room).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let skipped = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
                 if skipped > 0 {
@@ -104,12 +122,20 @@ impl RunScreen {
                 }
             });
         });
-        let top = ui.cursor().top();
+        if !input {
+            return;
+        }
+        // The cursor moves past a gap after each item, so this counts the gap below the prompt.
+        // The gap above it, between the activity and the cursor, is added.
+        let start = ui.cursor().top();
         self.prompt_or_reply(ui, desk, run);
-        let used = ui.cursor().top() - top;
+        let used = ui.cursor().top() - start + ui.spacing().item_spacing.y;
         if (used - reserved).abs() > 0.5 {
             ui.data_mut(|data| data.insert_temp(reserved_id, used));
+            // A discard redraws within this frame when a pass is left. The repaint covers the
+            // frames where none is, so an idle window still settles on the new measure.
             ui.ctx().request_discard("the prompt under the activity changed height");
+            ui.ctx().request_repaint();
         }
     }
 
@@ -152,30 +178,30 @@ impl RunScreen {
 
     /// Shown under the activity, outside its scroll area.
     fn prompt_or_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
-        let prompt = run.current_prompt().cloned();
-        let can_reply = run.session_id.is_some() && !run.is_busy() && prompt.is_none();
-        if let Some(prompt) = prompt {
+        if let Some(prompt) = run.current_prompt().cloned() {
             ui.add_space(PROMPT_MARGIN.0);
             self.prompt(ui, desk, run, &prompt);
-        } else if can_reply {
+        } else if takes_input(run) {
             divider(ui);
             Frame::new().inner_margin(Margin { left: INSET, right: INSET, top: ROW_GAP as i8, bottom: 0 }).show(ui, |ui| self.reply_box(ui, desk, run));
         }
     }
 
+    /// The field, then Send on its right. The field comes first, so it is first in focus order.
     fn reply_box(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
         let blocked = desk.is_busy();
         ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let send = ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked();
-                let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
-                let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(ui.available_width()));
-                let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                if (send || entered) && !self.reply.trim().is_empty() && !blocked {
-                    let text = std::mem::take(&mut self.reply);
-                    let _ = desk.reply(&run.id, text.trim());
-                }
-            });
+            let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
+            let room = ui.available_width() - SEND_ROOM - ui.spacing().item_spacing.x;
+            let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(room));
+            let send = ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked())
+                .inner;
+            let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if (send || entered) && !self.reply.trim().is_empty() && !blocked {
+                let text = std::mem::take(&mut self.reply);
+                let _ = desk.reply(&run.id, text.trim());
+            }
         });
     }
 
@@ -189,7 +215,10 @@ impl RunScreen {
     }
 
     fn questions(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, questions: &[Question]) {
-        ScrollArea::vertical().id_salt("run_questions").max_height(260.0).show(ui, |ui| {
+        // The choices scroll in what the column leaves above the buttons.
+        let room = ui.available_height() - ui.spacing().item_spacing.y - BUTTON_HEIGHT;
+        let height = room.clamp(CHOICES_MIN_HEIGHT, CHOICES_MAX_HEIGHT);
+        ScrollArea::vertical().id_salt(("run_questions", &run.id, &prompt.request_id)).max_height(height).show(ui, |ui| {
             for question in questions {
                 strong(ui, &question.text);
                 let picked = self.picks.entry(question.text.clone()).or_default();
@@ -285,7 +314,9 @@ impl RunScreen {
                     if index > 0 {
                         divider(ui);
                     }
-                    if self.recent_row(ui, other, other.id == run.id) {
+                    let on = other.id == run.id;
+                    // Picking the run already shown keeps a reply being typed.
+                    if self.recent_row(ui, other, on) && !on {
                         self.select(other.id.clone());
                     }
                 }
@@ -330,12 +361,16 @@ fn head_actions(ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
 fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool: &str, detail: &str, can_remember: bool) {
     strong(ui, format!("Claude wants to use {tool}"));
     muted(ui, "Not on the allow list in .claude/settings.json.");
+    // The command scrolls in what the column leaves above the buttons.
+    let spacing = ui.spacing().item_spacing.y;
+    let room = ui.available_height() - CODE_PADDING.1 as f32 * 2.0 - spacing * 2.0 - DETAIL_GAP - BUTTON_HEIGHT;
+    let height = room.clamp(DETAIL_MIN_HEIGHT, DETAIL_MAX_HEIGHT);
     code_box(ui, |ui| {
-        ScrollArea::vertical().id_salt("run_permission").max_height(180.0).show(ui, |ui| {
+        ScrollArea::vertical().id_salt(("run_permission", &run.id, &prompt.request_id)).max_height(height).show(ui, |ui| {
             ui.add(egui::Label::new(rich(ui, detail, Type::MONO, Ink::Text)).wrap());
         });
     });
-    ui.add_space(4.0);
+    ui.add_space(DETAIL_GAP);
     ui.horizontal(|ui| {
         if primary_button(ui, "Allow once").clicked() {
             desk.decide(&run.id, &prompt.request_id, Decision::Allow { remember: false });

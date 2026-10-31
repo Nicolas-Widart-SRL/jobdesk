@@ -216,9 +216,67 @@ fn a_long_activity_keeps_the_prompt_visible() {
     drop(guard);
     *shell.desk_slot() = Some(desk);
     let harness = tray_harness(shell);
-    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 820.0));
-    let allow = harness.get_by_label("Allow once").rect();
-    assert!(window.contains_rect(allow), "Allow once at {allow:?}");
+    assert_in_window(&harness, [1280.0, 820.0], &["Allow once", "Deny"]);
+}
+
+fn assert_in_window(harness: &Harness, size: [f32; 2], labels: &[&str]) {
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, size.into());
+    for label in labels {
+        let rect = harness.get_by_label(label).rect();
+        assert!(window.contains_rect(rect), "{label} at {rect:?}");
+    }
+}
+
+/// The smallest window the app allows, with a run's step rail above the prompt.
+fn smallest_window(final_event: AgentEvent, name: &str) -> Harness<'static> {
+    let mut shell = shell(Screen::Runs, name);
+    *shell.desk_slot() = Some(apply_run(final_event));
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 640.0])
+        .with_context_setup(|ctx| install_look(ctx))
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness
+}
+
+#[test]
+fn a_permission_prompt_fits_the_smallest_window() {
+    let harness = smallest_window(permission_prompt(), "smallest_permission");
+    assert_in_window(&harness, [1040.0, 640.0], &["Allow once", "Allow for this run", "Deny"]);
+}
+
+#[test]
+fn a_question_with_many_choices_fits_the_smallest_window() {
+    let choices = (1..=8).map(|index| QuestionOption { label: format!("Choice {index}"), description: "Keeps the CV on two pages.".into() }).collect();
+    let question = Question { text: "Layout check found a hole on page 1. How should the CV be fixed?".into(), header: "Layout".into(), options: choices, multi_select: false };
+    let prompt = Prompt { request_id: "q".into(), kind: PromptKind::Questions(vec![question]), input_json: "{}".into(), suggestions_json: None };
+    let harness = smallest_window(AgentEvent::PromptRaised(prompt), "smallest_question");
+    assert_in_window(&harness, [1040.0, 640.0], &["Send answer", "Decline"]);
+}
+
+/// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.
+#[test]
+fn the_first_frame_shows_the_prompt_in_one_pass() {
+    let mut shell = shell(Screen::Runs, "first_frame");
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    for index in 0..60 {
+        let id = index.to_string();
+        sink.lock().unwrap().as_ref().unwrap()(tool(&id, "Read", &format!("jobs/posting_{index}.md"), false));
+    }
+    *shell.desk_slot() = Some(desk);
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 640.0])
+        .with_context_setup(|ctx| {
+            install_look(ctx);
+            ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+        })
+        .build_ui(move |ui| shell.show(ui));
+    assert!(!is_shown(&harness, "Allow once"));
+    sink.lock().unwrap().as_ref().unwrap()(permission_prompt());
+    harness.run_steps(1);
+    assert_in_window(&harness, [1040.0, 640.0], &["Allow once", "Deny"]);
 }
 
 fn tray_harness(mut shell: Shell) -> Harness<'static> {

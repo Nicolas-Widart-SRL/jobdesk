@@ -75,8 +75,6 @@ pub const STACK_EDGE_STEP: f32 = 5.0;
 pub const STACK_EDGES_SHOWN: usize = 6;
 /// Top and bottom padding of the undo row.
 pub const UNDO_ROW_PADDING: (i8, i8) = (10, 12);
-pub const UNDO_PADDING: (i8, i8) = (14, 8);
-pub const UNDO_GAP: f32 = 12.0;
 
 pub const STEP_HEIGHT: f32 = 34.0;
 pub const STEP_PADDING: f32 = 14.0;

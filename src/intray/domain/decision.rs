@@ -10,6 +10,17 @@ pub enum Outcome {
     Kept,
 }
 
+impl Outcome {
+    pub fn verb(self) -> &'static str {
+        match self {
+            Self::Followed => "Command opened",
+            Self::Later => "Set aside",
+            Self::Skipped => "Skipped",
+            Self::Kept => "Kept",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     Rate,
@@ -61,12 +72,7 @@ impl Decision {
     }
 
     pub fn label(&self) -> String {
-        let verb = match self.outcome {
-            Outcome::Followed => "Command opened",
-            Outcome::Later => "Set aside",
-            Outcome::Skipped => "Skipped",
-            Outcome::Kept => "Kept",
-        };
+        let verb = self.outcome.verb();
         self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb}, {}", reason.label().to_lowercase()))
     }
 }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Key, Theme};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
@@ -384,12 +384,15 @@ fn later_deals_the_next_card_and_undo_brings_it_back() {
 
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
-    assert!(is_shown(&harness, "Set aside: Harbor Bank"));
-    assert!(is_shown(&harness, "Nothing yet."), "setting aside clears nothing");
+    let row = "Last decision: Set aside, Harbor Bank. Press U to undo.";
+    assert!(is_shown(&harness, row));
+    assert!(is_shown(&harness, "Set aside until tomorrow"));
+    assert!(!is_shown(&harness, "Nothing yet."), "the undo row heads the rail");
 
     press(&mut harness, Key::U);
     assert!(is_shown(&harness, HARBOR));
-    assert!(!is_shown(&harness, "Set aside: Harbor Bank"));
+    assert!(!is_shown(&harness, row));
+    assert!(is_shown(&harness, "Nothing yet."), "setting aside clears nothing");
 }
 
 #[test]
@@ -435,7 +438,10 @@ fn skip_takes_a_reason_and_only_some_cards_allow_it() {
 
     harness.get_by_label("Domain").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
+    assert!(is_shown(&harness, "Skipped, domain"));
+    assert!(is_shown(&harness, "Last decision: Skipped, Meridian Rail Systems. Press U to undo."));
+    assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the logged skip is not drawn twice");
+    assert_eq!(harness.get_by_label("Domain").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
 }
 
 #[test]
@@ -467,7 +473,7 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
 
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Kept: Halden Logistics"));
+    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
 }
 
 #[test]
@@ -513,40 +519,28 @@ fn later_and_keep_leave_the_scroll_alone() {
     }
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Kept: Halden Logistics"));
+    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
     assert_eq!(tab_top(&harness), top);
 }
 
+/// The rail sits outside the card's scroll, so the row and its reasons show without scrolling.
 #[test]
-fn each_skip_scrolls_its_reasons_into_view_once() {
-    let mut harness = tray_harness(shell(Screen::InTray, "tray_skip_scroll"));
-    for _ in 0..2 {
-        press(&mut harness, Key::L);
-    }
-    let resting = tab_top(&harness);
-    press(&mut harness, Key::N);
-    let scrolled = harness.get_by_label("Domain").rect().top();
-    assert!(tab_top(&harness) < resting, "the reasons scroll into view");
-
-    let scroll_back = |harness: &mut Harness| {
-        for _ in 0..3 {
-            harness.get_by_label("Domain").scroll_up();
-            harness.run_steps(3);
-        }
-        assert_eq!(tab_top(harness), resting);
-    };
-    scroll_back(&mut harness);
-    let below = harness.get_by_label("Domain").rect().top();
-    harness.get_by_label("Domain").click_accesskit();
+fn the_undo_row_stays_in_view_in_the_smallest_window() {
+    let mut shell = shell(Screen::InTray, "tray_undo_smallest");
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 640.0])
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Skipped, domain: Meridian Rail Systems"));
-    assert_eq!(harness.get_by_label("Domain").rect().top(), below, "a reason does not scroll");
 
-    press(&mut harness, Key::U);
-    assert!(is_shown(&harness, MERIDIAN));
+    press(&mut harness, Key::L);
+    assert_in_window(&harness, [1040.0, 640.0], &["Undo"]);
+
+    press(&mut harness, Key::L);
+    let top = tab_top(&harness);
     press(&mut harness, Key::N);
-    assert!(is_shown(&harness, "Skipped: Meridian Rail Systems"));
-    assert_eq!(harness.get_by_label("Domain").rect().top(), scrolled, "the same skip again scrolls again");
+    assert_in_window(&harness, [1040.0, 640.0], &["Undo", "Rate", "Scope", "Domain", "Location"]);
+    assert_eq!(tab_top(&harness), top, "a skip does not scroll");
 }
 
 #[test]
@@ -557,7 +551,8 @@ fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
     }
     let resting = tab_top(&harness);
     press(&mut harness, Key::Y);
-    assert!(is_shown(&harness, "Skipped, rate: Federal Data Agency"), "Y skips with the suggested reason");
+    assert!(is_shown(&harness, "Last decision: Skipped, Federal Data Agency. Press U to undo."));
+    assert!(is_shown(&harness, "Skipped, rate"), "Y skips with the suggested reason");
     assert_eq!(tab_top(&harness), resting);
 }
 
@@ -604,6 +599,12 @@ fn intray_triage_light() {
 fn intray_skip_suggestion_dark() {
     let skips = [Key::L; 8];
     tray_after(wgpu_tray(shell(Screen::InTray, "intray_skip_suggestion_dark"), Theme::Dark), &skips, "intray_skip_suggestion_dark");
+}
+
+/// A skip that asks its reason, with nothing logged below it, so the row rounds the slip's foot.
+#[test]
+fn intray_undo_reasons_light() {
+    tray_after(wgpu_tray(shell(Screen::InTray, "intray_undo_reasons_light"), Theme::Light), &[Key::L, Key::L, Key::N], "intray_undo_reasons_light");
 }
 
 #[test]

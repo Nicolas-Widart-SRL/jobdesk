@@ -1,10 +1,10 @@
 use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
-use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
+use crate::intray::application::{Action, Body, Card, CardKind, Check, Cleared, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
     horizon_mark as strip_mark, horizon_return,
-    key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
+    key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_row,
 };
 
 const GATE_COLUMNS: usize = 3;
@@ -82,17 +82,12 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         horizon(ui, queue, keys, &mut pressed);
         ui.add_space(12.0);
 
-        let offer = tray.undo_offer();
-        side_column("tray_side", 280.0).show(ui, |ui| cleared(ui, queue));
+        let offer = tray.undo_offer(queue.today);
+        side_column("tray_side", 292.0).show(ui, |ui| cleared(ui, queue, offer.as_ref(), &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                match top {
-                    Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
-                    None => clear(ui, queue, &mut pressed),
-                }
-                if let Some(offer) = &offer {
-                    undo_bar(ui, offer, &mut pressed);
-                }
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match top {
+                Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
+                None => clear(ui, queue, &mut pressed),
             });
         });
     });
@@ -319,45 +314,32 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
-/// An offer that still asks for a reason scrolls into view once per decision, so the reasons show right after N.
-/// Other offers, a skip that came with its reason, and picking a reason leave the scroll alone, so the next card's head stays in view.
-fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
-    let shown = ui.scope(|ui| undo_strip(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(offer.text.as_str());
-            if offer.asks_reason {
-                for reason in SkipReason::ALL {
-                    if undo_button(ui, reason.label(), offer.reason == Some(reason), None).clicked() {
-                        *pressed = Some(Pressed::Reason(reason));
-                    }
-                }
-            }
-            if undo_button(ui, "Undo", false, Some("U")).clicked() {
-                *pressed = Some(Pressed::Undo);
-            }
-        });
-    }));
-    let seen = ui.ctx().data_mut(|data| data.get_temp::<usize>(undo_seen_id()));
-    if offer.asks_reason && offer.reason.is_none() && seen != Some(offer.id) {
-        shown.response.scroll_to_me(None);
-        ui.ctx().data_mut(|data| data.insert_temp(undo_seen_id(), offer.id));
-    }
-}
-
-fn undo_seen_id() -> egui::Id {
-    egui::Id::NULL.with("tray_undo_seen")
-}
-
-fn cleared(ui: &mut Ui, queue: &Queue) {
+/// The last decision heads the log while it can be undone, so its row is not drawn twice.
+/// Later is never logged: its row heads the rail without counting. The rail sits outside the card's scroll, so the row stays in view.
+fn cleared(ui: &mut Ui, queue: &Queue, offer: Option<&UndoOffer>, pressed: &mut Option<Pressed>) {
     slip(ui, |ui| {
         let count = (!queue.cleared.is_empty()).then(|| queue.cleared.len().to_string());
         panel_header(ui, "Cleared today", count.as_deref());
+        let skip = usize::from(offer.is_some_and(|offer| offer.logged));
+        let rows: &[Cleared] = queue.cleared.get(skip..).unwrap_or_default();
+        if let Some(offer) = offer {
+            let toggles: Vec<(&str, bool)> = if offer.asks_reason { SkipReason::ALL.iter().map(|&reason| (reason.label(), offer.reason == Some(reason))).collect() } else { Vec::new() };
+            let press = undo_row(ui, &offer.name, &offer.note, &offer.spoken, &toggles, rows.is_empty());
+            if press.undo {
+                *pressed = Some(Pressed::Undo);
+            } else if let Some(index) = press.toggle {
+                *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
+            }
+            if rows.is_empty() {
+                return;
+            }
+        }
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
-            if queue.cleared.is_empty() {
+            if rows.is_empty() {
                 muted(ui, "Nothing yet.");
             }
-            for entry in &queue.cleared {
+            for entry in rows {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new(entry.name.as_str()).truncate());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| muted(ui, entry.label.as_str()));

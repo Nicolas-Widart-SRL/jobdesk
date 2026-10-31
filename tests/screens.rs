@@ -189,13 +189,36 @@ fn a_command_button_leads_to_a_started_run() {
 
     harness.get_by_label("Calibrate").click();
     harness.run_steps(3);
-    harness.get_by_label("Run a command");
+    harness.get_by_label("All commands");
 
     harness.get_by_label("Run").click();
     harness.run_steps(3);
 
-    harness.get_by_label("Every command Jobdesk ran in this workspace");
-    assert_eq!(harness.get_all_by_label("Starting").count(), 2, "run list and run header");
+    harness.get_by_label("Recent runs");
+    assert_eq!(harness.get_all_by_label("Starting").count(), 2, "run head and recent runs");
+}
+
+/// However long the activity, the prompt's buttons stay in the window.
+#[test]
+fn a_long_activity_keeps_the_prompt_visible() {
+    let mut shell = shell(Screen::Runs, "long_activity");
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    let guard = sink.lock().unwrap();
+    let emit = guard.as_ref().unwrap();
+    for index in 0..200 {
+        let id = index.to_string();
+        emit(tool(&id, "Read", &format!("jobs/posting_{index}.md"), false));
+        emit(done(&id));
+    }
+    emit(permission_prompt());
+    drop(guard);
+    *shell.desk_slot() = Some(desk);
+    let harness = tray_harness(shell);
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 820.0));
+    let allow = harness.get_by_label("Allow once").rect();
+    assert!(window.contains_rect(allow), "Allow once at {allow:?}");
 }
 
 fn tray_harness(mut shell: Shell) -> Harness<'static> {
@@ -229,12 +252,12 @@ fn y_leads_from_a_card_to_a_started_run() {
     assert!(is_shown(&harness, HARBOR));
 
     press(&mut harness, Key::Y);
-    harness.get_by_label("Run a command");
+    harness.get_by_label("All commands");
     harness.get_by_label("/outcome");
 
     harness.get_by_label("Run").click();
     harness.run_steps(3);
-    harness.get_by_label("Every command Jobdesk ran in this workspace");
+    harness.get_by_label("Recent runs");
 }
 
 #[test]
@@ -310,7 +333,7 @@ fn a_paused_run_comes_first_and_y_does_nothing() {
 
     harness.get_by_label("Open run").click();
     harness.run_steps(3);
-    harness.get_by_label("Every command Jobdesk ran in this workspace");
+    harness.get_by_label("Recent runs");
 }
 
 #[test]

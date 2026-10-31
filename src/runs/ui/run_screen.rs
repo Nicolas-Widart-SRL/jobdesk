@@ -4,9 +4,10 @@ use egui::{Frame, Margin, ScrollArea, TextEdit, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
+use crate::ui_kit::tokens::{EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, PROMPT_MARGIN, ROW_GAP, SCREEN_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, button, code_box, danger_button, divider, faint_mono, input_strip, list_column, muted, page_body, page_head, panel, panel_body, panel_header, pick_row,
-    primary_button, prompt_box, rich, side_column, slip, slip_bar, step_rail, strong, tag,
+    Ink, Subtitle, Title, Tone, Type, button, code_box, danger_button, divider, list_row, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
+    side_column, slip, slip_bar, step_rail, strong, tag,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
@@ -46,102 +47,81 @@ impl RunScreen {
     }
 
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) {
-        page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
-        page_body(ui, |ui| self.body(ui, desk));
-    }
-
-    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) {
-        if desk.runs().is_empty() {
-            panel(ui, |ui| {
-                panel_body(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    strong(ui, "No runs yet");
-                    muted(ui, "Press Ask or run to start one.");
-                });
-            });
-            return;
-        }
         let known = self.selected.as_ref().is_some_and(|id| desk.run(id).is_some());
         if !known {
             self.selected = desk.runs().first().map(|run| run.id.clone());
         }
-        list_column("run_list", 240.0).show(ui, |ui| self.list(ui, desk));
-        let Some(id) = self.selected.clone() else { return };
-        let Some(run) = desk.run(&id).cloned() else { return };
-        side_column("run_facts", 280.0).show(ui, |ui| facts(ui, &run));
-        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 1, bottom: 1, ..Default::default() })).show(ui, |ui| self.detail(ui, desk, &run));
-    }
-
-    fn list(&mut self, ui: &mut Ui, desk: &RunDesk) {
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for run in desk.runs() {
-                let on = self.selected.as_ref() == Some(&run.id);
-                let response = pick_row(ui, on, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, Ink::Text)).truncate());
-                    ui.horizontal(|ui| {
-                        tag(ui, status_label(run), status_tone(run));
+        let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
+            page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+            page_body(ui, |ui| {
+                panel(ui, |ui| {
+                    panel_body(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        strong(ui, "No runs yet");
+                        muted(ui, "Press Ask or run to start one.");
                     });
-                    ui.label(rich(ui, &run.started_at, Type::SMALL, Ink::Faint));
                 });
-                if response.clicked() {
-                    self.select(run.id.clone());
-                }
-            }
-        });
+            });
+            return;
+        };
+        page_head(ui, Title::Typed(first_line(&run.line)), None, |ui| head_actions(ui, desk, &run));
+        page_body(ui, |ui| self.body(ui, desk, &run));
     }
 
-    fn detail(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
-        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if run.status == RunStatus::Stopping {
-                if button(ui, "Force stop").clicked() {
-                    desk.close(&run.id);
-                }
-            } else if run.is_busy() || run.needs_user() {
-                if danger_button(ui, "Stop run").clicked() {
-                    desk.stop(&run.id);
-                }
-            } else if run.status == RunStatus::AwaitingReply && button(ui, "End session").clicked() {
-                desk.close(&run.id);
-            }
-            tag(ui, status_label(run), status_tone(run));
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::COMMAND, Ink::Text)).truncate());
-            });
-        });
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
         if let Some(steps) = &run.steps {
-            ui.add_space(4.0);
             step_rail(ui, steps.labels, steps.current, run.is_busy() || run.needs_user());
+            ui.add_space(SCREEN_GAP);
         }
-        ui.add_space(8.0);
+        side_column("run_facts", SPLIT_SIDE_BASIS + GUTTER as f32).show(ui, |ui| self.facts(ui, desk, run));
+        let gap = Margin { right: (SPLIT_GAP - GUTTER as f32) as i8, bottom: 1, ..Default::default() };
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| self.detail(ui, desk, run));
+    }
 
-        self.prompt_or_reply(ui, desk, run);
+    /// The activity, then the prompt. The prompt's height is kept from the frame before,
+    /// so the activity scrolls in what is left and the prompt never leaves the window.
+    fn detail(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+        let reserved_id = ui.scope_id().with("prompt_height");
+        let reserved = ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or_default();
         panel(ui, |ui| {
-            ui.set_min_height(ui.available_height() - 1.0);
-            panel_header(ui, "Activity", None);
-            ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+            panel_header(ui, "Activity", run.is_busy().then_some("live"));
+            let room = (ui.available_height() - reserved).max(0.0);
+            ScrollArea::vertical().id_salt("run_activity").max_height(room).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let skipped = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
                 if skipped > 0 {
                     panel_body(ui, |ui| muted(ui, format!("{skipped} earlier items are in the run log.")));
                 }
-                for item in &run.activity[skipped..] {
+                for (index, item) in run.activity[skipped..].iter().enumerate() {
+                    if index > 0 || skipped > 0 {
+                        divider(ui);
+                    }
                     self.activity_row(ui, item);
                 }
                 if !run.streaming_text.is_empty() {
+                    divider(ui);
                     panel_body(ui, |ui| ui.label(run.streaming_text.as_str()));
                 }
             });
         });
+        let top = ui.cursor().top();
+        self.prompt_or_reply(ui, desk, run);
+        let used = ui.cursor().top() - top;
+        if (used - reserved).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(reserved_id, used));
+            ui.ctx().request_discard("the prompt under the activity changed height");
+        }
     }
 
     fn activity_row(&mut self, ui: &mut Ui, item: &Activity) {
-        let indent = if item.nested { 36 } else { 14 };
-        Frame::new().inner_margin(Margin { left: indent, right: 14, top: 8, bottom: 8 }).show(ui, |ui| match &item.kind {
+        let indent = INSET as f32 + if item.nested { EVENT_NESTED } else { 0.0 };
+        let padding = Margin { left: indent as i8, right: INSET, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 };
+        Frame::new().inner_margin(padding).show(ui, |ui| match &item.kind {
             ActivityKind::You(text) => {
-                ui.horizontal_wrapped(|ui| {
-                    strong(ui, "You");
-                    ui.label(rich(ui, text, Type::MONO, Ink::Text));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = EVENT_GAP;
+                    who(ui, "You");
+                    ui.add(egui::Label::new(rich(ui, text, Type::MONO, Ink::Text)).wrap());
                 });
             }
             ActivityKind::Claude(text) => {
@@ -152,7 +132,8 @@ impl RunScreen {
             }
             ActivityKind::Tool { name, summary, state, .. } => {
                 ui.horizontal(|ui| {
-                    ui.add_sized([56.0, 16.0], egui::Label::new(rich(ui, name, Type::SMALL, Ink::Faint)).truncate());
+                    ui.spacing_mut().item_spacing.x = EVENT_GAP;
+                    who(ui, name);
                     let (text, tone) = match state {
                         ToolState::Running => ("Running", Tone::Active),
                         ToolState::Done => ("Done", Tone::Hired),
@@ -169,30 +150,32 @@ impl RunScreen {
         });
     }
 
-    /// Shown under the activity, at the bottom of the screen.
+    /// Shown under the activity, outside its scroll area.
     fn prompt_or_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
         let prompt = run.current_prompt().cloned();
         let can_reply = run.session_id.is_some() && !run.is_busy() && prompt.is_none();
-        input_strip("run_input").show(ui, |ui| {
-            if let Some(prompt) = prompt {
-                self.prompt(ui, desk, run, &prompt);
-            } else if can_reply {
-                self.reply_box(ui, desk, run);
-            }
-        });
+        if let Some(prompt) = prompt {
+            ui.add_space(PROMPT_MARGIN.0);
+            self.prompt(ui, desk, run, &prompt);
+        } else if can_reply {
+            divider(ui);
+            Frame::new().inner_margin(Margin { left: INSET, right: INSET, top: ROW_GAP as i8, bottom: 0 }).show(ui, |ui| self.reply_box(ui, desk, run));
+        }
     }
 
     fn reply_box(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
         let blocked = desk.is_busy();
         ui.horizontal(|ui| {
-            let send = ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked();
-            let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
-            let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(ui.available_width() - 8.0));
-            let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if (send || entered) && !self.reply.trim().is_empty() && !blocked {
-                let text = std::mem::take(&mut self.reply);
-                let _ = desk.reply(&run.id, text.trim());
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let send = ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked();
+                let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
+                let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(ui.available_width()));
+                let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if (send || entered) && !self.reply.trim().is_empty() && !blocked {
+                    let text = std::mem::take(&mut self.reply);
+                    let _ = desk.reply(&run.id, text.trim());
+                }
+            });
         });
     }
 
@@ -206,7 +189,7 @@ impl RunScreen {
     }
 
     fn questions(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, questions: &[Question]) {
-        ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("run_questions").max_height(260.0).show(ui, |ui| {
             for question in questions {
                 strong(ui, &question.text);
                 let picked = self.picks.entry(question.text.clone()).or_default();
@@ -256,13 +239,99 @@ impl RunScreen {
             }
         });
     }
+
+    fn facts(&mut self, ui: &mut Ui, desk: &RunDesk, run: &Run) {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            slip(ui, |ui| {
+                panel_header(ui, "This run", None);
+                panel_body(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = ROW_GAP;
+                    fact(ui, "Cost", &format!("${:.2} of ${:.2}", run.cost_usd, run.budget_usd));
+                    slip_bar(ui, (run.cost_usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
+                    fact(ui, "Elapsed", &elapsed(run.duration_ms));
+                    if let Some(model) = &run.model {
+                        fact(ui, "Model", model);
+                    }
+                    if let Some(session) = &run.session_id {
+                        fact(ui, "Session", &session.chars().take(8).collect::<String>());
+                    }
+                    if let Some(usage) = run.usage.five_hour {
+                        fact(ui, "5-hour usage", &format!("{:.0}%", usage * 100.0));
+                    }
+                    if let Some(usage) = run.usage.seven_day {
+                        fact(ui, "7-day usage", &format!("{:.0}%", usage * 100.0));
+                    }
+                });
+            });
+            for (title, items) in [("Agents", &run.agents), ("Files changed", &run.files_changed)] {
+                if items.is_empty() {
+                    continue;
+                }
+                ui.add_space(ROW_GAP);
+                slip(ui, |ui| {
+                    panel_header(ui, title, None);
+                    for (index, item) in items.iter().enumerate() {
+                        list_row(ui, index == 0, |ui| {
+                            ui.add(egui::Label::new(rich(ui, item, Type::MONO, Ink::Text)).truncate()).on_hover_text(item);
+                        });
+                    }
+                });
+            }
+            ui.add_space(ROW_GAP);
+            slip(ui, |ui| {
+                panel_header(ui, "Recent runs", None);
+                for (index, other) in desk.runs().iter().enumerate() {
+                    if index > 0 {
+                        divider(ui);
+                    }
+                    if self.recent_row(ui, other, other.id == run.id) {
+                        self.select(other.id.clone());
+                    }
+                }
+            });
+        });
+    }
+
+    /// One run in the recent list. The picked run reads in full ink, the others muted.
+    fn recent_row(&self, ui: &mut Ui, run: &Run, on: bool) -> bool {
+        let response = pick_row(ui, on, |ui| {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint));
+                    tag(ui, status_label(run), status_tone(run));
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let ink = if on { Ink::Text } else { Ink::Muted };
+                        ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());
+                    });
+                });
+            });
+        });
+        response.clicked()
+    }
+}
+
+/// Stop, force or end, by the run's state. Added right to left, so the button comes before the tag.
+fn head_actions(ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+    if run.status == RunStatus::Stopping {
+        if button(ui, "Force stop").clicked() {
+            desk.close(&run.id);
+        }
+    } else if run.is_busy() || run.needs_user() {
+        if danger_button(ui, "Stop run").clicked() {
+            desk.stop(&run.id);
+        }
+    } else if run.status == RunStatus::AwaitingReply && button(ui, "End session").clicked() {
+        desk.close(&run.id);
+    }
+    tag(ui, status_label(run), status_tone(run));
 }
 
 fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool: &str, detail: &str, can_remember: bool) {
     strong(ui, format!("Claude wants to use {tool}"));
     muted(ui, "Not on the allow list in .claude/settings.json.");
     code_box(ui, |ui| {
-        ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("run_permission").max_height(180.0).show(ui, |ui| {
             ui.add(egui::Label::new(rich(ui, detail, Type::MONO, Ink::Text)).wrap());
         });
     });
@@ -280,63 +349,25 @@ fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool:
     });
 }
 
-fn facts(ui: &mut Ui, run: &Run) {
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        slip(ui, |ui| {
-            panel_header(ui, "This run", None);
-            panel_body(ui, |ui| {
-                ui.set_width(ui.available_width());
-                fact(ui, "Cost", &format!("${:.2} of ${:.2}", run.cost_usd, run.budget_usd));
-                slip_bar(ui, (run.cost_usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
-                ui.add_space(4.0);
-                fact(ui, "Duration", &format!("{}s", run.duration_ms / 1000));
-                if let Some(model) = &run.model {
-                    fact(ui, "Model", model);
-                }
-                fact(ui, "Started", &run.started_at);
-            });
-        });
-        for (title, items) in [("Agents", &run.agents), ("Files changed", &run.files_changed)] {
-            if items.is_empty() {
-                continue;
-            }
-            ui.add_space(10.0);
-            slip(ui, |ui| {
-                panel_header(ui, title, None);
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        divider(ui);
-                    }
-                    panel_body(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.add(egui::Label::new(rich(ui, item, Type::MONO, Ink::Text)).truncate()).on_hover_text(item);
-                    });
-                }
-            });
-        }
-        ui.add_space(10.0);
-        slip(ui, |ui| {
-            panel_body(ui, |ui| {
-                ui.set_width(ui.available_width());
-                if let Some(usage) = run.usage.five_hour {
-                    fact(ui, "5-hour usage", &format!("{:.0}%", usage * 100.0));
-                }
-                if let Some(usage) = run.usage.seven_day {
-                    fact(ui, "7-day usage", &format!("{:.0}%", usage * 100.0));
-                }
-                if let Some(session) = &run.session_id {
-                    faint_mono(ui, session.chars().take(8).collect::<String>());
-                }
-            });
-        });
-    });
+fn who(ui: &mut Ui, name: &str) {
+    ui.add_sized([EVENT_WHO_WIDTH, 16.0], egui::Label::new(rich(ui, name, Type::SMALL, Ink::Muted)).truncate());
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         muted(ui, label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.monospace(value));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(rich(ui, value, Type::BODY, Ink::Text)).truncate());
+        });
     });
+}
+
+fn elapsed(duration_ms: u64) -> String {
+    let seconds = duration_ms / 1000;
+    match seconds / 60 {
+        0 => format!("{seconds}s"),
+        minutes => format!("{minutes}m {}s", seconds % 60),
+    }
 }
 
 fn first_line(text: &str) -> &str {

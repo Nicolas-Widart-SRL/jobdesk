@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
-use egui::{ComboBox, ScrollArea, TextEdit, Ui};
+use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, faint_mono, muted, page_body, page_head, panel, panel_body, panel_header, primary_button, rich, select_row, side_column, slip, strong};
+use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, GUTTER, HEADER_PADDING, INSET, ROW_GAP, SPLIT_GAP};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, muted, page_body, page_head, panel, panel_body, primary_button, rich, side_column, slip, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
+
+/// The form's width, as on the canvas.
+const FORM_WIDTH: f32 = 400.0;
 
 pub struct Launcher {
     command: &'static CommandSpec,
@@ -47,71 +51,83 @@ impl Launcher {
     /// Returns the id of a run the user just started.
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let subtitle = Subtitle::Text("Every action is the unchanged slash command. Forms only build its arguments.");
-        page_head(ui, Title::Slab("Run a command"), Some(subtitle), |_| {});
+        page_head(ui, Title::Slab("All commands"), Some(subtitle), |_| {});
         page_body(ui, |ui| self.body(ui, desk))
     }
 
     fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let mut started = None;
-        side_column("command_form", 420.0).show(ui, |ui| {
+        side_column("command_form", FORM_WIDTH + GUTTER as f32).show(ui, |ui| {
             slip(ui, |ui| {
                 ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| started = self.form(ui, desk));
             });
         });
-        egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.list(ui));
+        let gap = Margin { right: (SPLIT_GAP - GUTTER as f32) as i8, ..Default::default() };
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(gap)).show(ui, |ui| {
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panel(ui, |ui| self.list(ui)));
         });
         started
     }
 
+    /// Each group's heading stands on the hairline of its first row.
     fn list(&mut self, ui: &mut Ui) {
         for group in CommandGroup::ALL {
-            panel(ui, |ui| {
-                panel_header(ui, group.label(), None);
-                for command in CATALOG.iter().filter(|command| command.group == group) {
-                    let on = command.name == self.command.name;
-                    let label = format!("{:<14}{}", command.name, command.summary);
-                    if select_row(ui, &label, Type::MONO, on).clicked() {
-                        *self = Self::for_command(command);
-                    }
-                }
+            Frame::new().inner_margin(Margin::symmetric(0, HEADER_PADDING)).show(ui, |ui| {
+                ui.label(rich(ui, group.label(), Type::SECTION, Ink::Text));
             });
-            ui.add_space(8.0);
+            for command in CATALOG.iter().filter(|command| command.group == group) {
+                let on = command.name == self.command.name;
+                if command_row(ui, command.name, command.summary, command.writes, on).clicked() {
+                    *self = Self::for_command(command);
+                }
+            }
         }
     }
 
     fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
         let mut started = None;
-        panel_body(ui, |ui| {
+        Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(rich(ui, self.command.name, Type::COMMAND, Ink::Text));
+        });
+        divider(ui);
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = ROW_GAP;
             muted(ui, self.command.summary);
-            faint_mono(ui, format!("Changes: {}", self.command.writes));
-            ui.add_space(6.0);
             for field in self.command.fields {
-                let label = muted(ui, field.label);
                 let mut value = self.value_of(field);
-                let edit = if field.multiline { TextEdit::multiline(&mut value).desired_rows(5) } else { TextEdit::singleline(&mut value) };
-                if ui.add(edit.desired_width(f32::INFINITY)).labelled_by(label.id).changed() {
+                let changed = labelled(ui, field.label, |ui, label| {
+                    let edit = if field.multiline {
+                        TextEdit::multiline(&mut value).desired_rows(3).min_size(vec2(0.0, FIELD_AREA_HEIGHT))
+                    } else {
+                        TextEdit::singleline(&mut value).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER)
+                    };
+                    let edit = edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY);
+                    ui.add(edit).labelled_by(label).changed()
+                });
+                if changed {
                     self.values.insert(field.key, value);
                 }
             }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    let label = muted(ui, "Model");
-                    ComboBox::from_id_salt("run_model").selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0).labelled_by(label.id);
+            ui.columns_const(|[model, budget]| {
+                labelled(model, "Model", |ui, label| {
+                    ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
+                    let width = ui.available_width();
+                    ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0).labelled_by(label);
                 });
-                ui.vertical(|ui| {
-                    let label = muted(ui, "Budget cap, USD");
-                    ui.add(TextEdit::singleline(&mut self.budget).desired_width(100.0)).labelled_by(label.id);
+                labelled(budget, "Budget cap, USD", |ui, label| {
+                    let edit = TextEdit::singleline(&mut self.budget).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
+                    ui.add(edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY)).labelled_by(label);
                 });
             });
-            ui.add_space(6.0);
-            muted(ui, "Sent to Claude");
             let line = self.line();
-            ui.label(rich(ui, &line, Type::MONO, Ink::Text));
-            ui.add_space(6.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = FIELD_GAP;
+                ui.label(rich(ui, "Sent to Claude", Type::SMALL, Ink::Muted));
+                code_box(ui, |ui| ui.add(egui::Label::new(rich(ui, &line, Type::MONO, Ink::Text)).wrap()));
+            });
+            muted(ui, "Runs in your repo checkout, with your project settings and permissions.");
             if self.command.destructive {
                 ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");
@@ -134,4 +150,14 @@ impl Launcher {
         });
         started
     }
+}
+
+/// A form field: its label above the input.
+fn labelled<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, egui::Id) -> R) -> R {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = FIELD_GAP;
+        let label = ui.label(rich(ui, label, Type::NOTE, Ink::Muted));
+        add(ui, label.id)
+    })
+    .inner
 }

@@ -377,7 +377,7 @@ class Component extends DCLogic {
       lumen: {
         id: 'lumen', short: 'Lumen Telecom', kind: 'Follow-up', tone: 'c-active', when: 'Quiet 12 days', est: 1, title: 'Lumen Telecom, Technical Lead', sub: '0 of 2 follow-ups sent',
         take: 'Claude drafted a short note. Copy it, send it yourself, then mark it sent.', codeLabel: 'followup_2026-10-31.md', codeCls: 'text',
-        code: 'Hello,\nI applied for the Technical Lead role on 19 October. Is the role still open, and what is the next step?\nKind regards,\nNicolas Widart',
+        code: 'Hello,\nI applied for the Technical Lead role on 19 October. Is the role still open, and what is the next step?\nKind regards,\nRobin Vasquez',
         act: 'Copied and sent', alt: this.state.copied ? 'Copied' : 'Copy draft', altGo: () => this.setState({ copied: true }), canSkip: true, note: 'The app never sends for you',
         runs: 'Logged by /outcome followup lumen', yes: () => this.decide('lumen', 'Follow-up sent'),
       },

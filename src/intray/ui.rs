@@ -1,12 +1,12 @@
 use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
 
-use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
+use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_day, horizon_mark as strip_mark,
+    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
+    horizon_mark as strip_mark, horizon_return,
     key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_bar as undo_strip, undo_button,
 };
 
-const HORIZON_DAYS: u64 = 14;
 const GATE_COLUMNS: usize = 3;
 const CODE_HEIGHT: f32 = 150.0;
 
@@ -79,7 +79,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         if let Some(issue) = tray.issue() {
             alert(ui, issue);
         }
-        horizon(ui, queue, &mut pressed);
+        horizon(ui, queue, keys, &mut pressed);
         ui.add_space(12.0);
 
         let offer = tray.undo_offer();
@@ -116,14 +116,43 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
     None
 }
 
-fn horizon(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
-    let days: Vec<_> = (0..HORIZON_DAYS).map(|offset| queue.today + chrono::Days::new(offset)).collect();
-    horizon_strip(ui, &days, |ui, day, today| {
+/// `active` is off while a dialog covers the tray, so a focused chip keeps its tip to itself.
+fn horizon(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+    let days: Vec<_> = (0..HORIZON_DAYS as u64).map(|offset| queue.today + chrono::Days::new(offset)).collect();
+    let note = queue.horizon_note();
+    let tomorrow = queue.today + chrono::Days::new(1);
+    horizon_strip(ui, &days, note.as_deref(), |ui, day, today| {
         horizon_day(ui, &day.format("%a %-d").to_string(), today);
         for mark in queue.marks.iter().filter(|mark| mark.on == *day) {
             horizon_mark(ui, mark, pressed);
         }
+        if today {
+            let kinds: Vec<(usize, String)> = queue.by_kind().into_iter().map(|(n, kind)| (n, kind.map_or("other".to_owned(), |kind| kind_tag(kind).0.to_lowercase()))).collect();
+            let kinds: Vec<(usize, &str)> = kinds.iter().map(|(n, kind)| (*n, kind.as_str())).collect();
+            horizon_count(ui, queue.cards.len(), queue.overdue(), &kinds);
+        } else if *day == tomorrow && !queue.set_aside.is_empty() {
+            return_chip(ui, queue, active, pressed);
+        }
     });
+}
+
+/// Names come from postings, so they show as plain labels only.
+fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+    let n = queue.set_aside.len();
+    let names = queue.set_aside_distinct();
+    let pronoun = if n == 1 { "it" } else { "them" };
+    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", names.join(", "));
+    let chip = horizon_return(ui, &format!("{n} back"), &label, active, |ui| {
+        strong(ui, "Set aside with Later");
+        for name in &names {
+            ui.label(*name);
+        }
+        ui.add_space(4.0);
+        ui.label(rich(ui, format!("Back in the tray tomorrow. Click to bring {pronoun} back now."), Type::NOTE, Ink::Muted));
+    });
+    if chip.clicked() {
+        *pressed = Some(Pressed::BringAll);
+    }
 }
 
 fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
@@ -290,8 +319,10 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
+/// An offer that still asks for a reason scrolls into view once per decision, so the reasons show right after N.
+/// Other offers, a skip that came with its reason, and picking a reason leave the scroll alone, so the next card's head stays in view.
 fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
-    undo_strip(ui, |ui| {
+    let shown = ui.scope(|ui| undo_strip(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label(offer.text.as_str());
             if offer.asks_reason {
@@ -305,7 +336,16 @@ fn undo_bar(ui: &mut Ui, offer: &UndoOffer, pressed: &mut Option<Pressed>) {
                 *pressed = Some(Pressed::Undo);
             }
         });
-    });
+    }));
+    let seen = ui.ctx().data_mut(|data| data.get_temp::<usize>(undo_seen_id()));
+    if offer.asks_reason && offer.reason.is_none() && seen != Some(offer.id) {
+        shown.response.scroll_to_me(None);
+        ui.ctx().data_mut(|data| data.insert_temp(undo_seen_id(), offer.id));
+    }
+}
+
+fn undo_seen_id() -> egui::Id {
+    egui::Id::NULL.with("tray_undo_seen")
 }
 
 fn cleared(ui: &mut Ui, queue: &Queue) {

@@ -6,10 +6,10 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::BRAND_GAP;
 use jobdesk::ui_kit::{
     FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
-    divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_day, horizon_mark, index_card, key_button, key_hint, lane, lane_title, list_row, measure,
-    muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box, rich, score, segmented,
-    select_row, shortcut_button, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally, tally_strip,
-    undo_bar, undo_button,
+    divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, lane,
+    lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box,
+    rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally,
+    tally_strip, undo_bar, undo_button,
 };
 
 const TONES: [(&str, Tone); 7] = [
@@ -260,12 +260,24 @@ fn board(ui: &mut Ui) {
 
 fn tray(ui: &mut Ui) {
     let days = ["Sat 31", "Sun 1", "Mon 2", "Tue 3", "Wed 4", "Thu 5", "Fri 6"];
-    horizon(ui, &days, |ui, day, today| {
+    horizon(ui, &days, None, |ui, day, today| {
         horizon_day(ui, day, today);
         if today {
             horizon_mark(ui, "Harbor deadline", Some(Tone::Drafted));
+            horizon_count(ui, 0, 0, &[]);
         } else if *day == "Mon 2" {
             horizon_mark(ui, "Set aside", None);
+        }
+    });
+    ui.add_space(10.0);
+    horizon(ui, &days, Some("No other deadlines in the next 14 days"), |ui, day, today| {
+        horizon_day(ui, day, today);
+        if today {
+            horizon_count(ui, 7, 1, &[(5, "triage"), (2, "send")]);
+        } else if *day == "Sun 1" {
+            horizon_return(ui, "1 back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
+                ui.label("Juniper Retail");
+            });
         }
     });
     ui.add_space(10.0);
@@ -319,7 +331,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 3700.0])
+        .with_size([1000.0, 3900.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
         .with_context_setup(install_look)

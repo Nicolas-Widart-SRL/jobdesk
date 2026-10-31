@@ -301,6 +301,10 @@ fn send_card(card: &ApplicationCard, archive: &ArchiveContents, today: NaiveDate
     })
 }
 
+fn reply_text(on: NaiveDate, today: NaiveDate) -> String {
+    if on < today { "Reply date passed".to_owned() } else { format!("Reply by {}", on.format("%-d %b")) }
+}
+
 fn offer_card(card: &ApplicationCard, today: NaiveDate) -> Card {
     let mut lines = Vec::new();
     lines.extend(card.fit_rating.map(|fit| ("Fit", fit.to_string())));
@@ -310,7 +314,7 @@ fn offer_card(card: &ApplicationCard, today: NaiveDate) -> Card {
     Card {
         subtitle: card.fit_rating.map_or_else(|| "Offer received".to_owned(), |fit| format!("Offer received, fit {fit}")),
         take: "Compare it with your other open rounds before you answer.".into(),
-        when: card.deadline.filter(|on| *on >= today).map_or_else(|| "No reply date".to_owned(), |on| format!("Reply by {}", on.format("%-d %b"))),
+        when: card.deadline.map_or_else(|| "No reply date".to_owned(), |on| reply_text(on, today)),
         due: card.deadline.map(|on| Due { on, label: format!("{} reply", first_word(&card.company)) }),
         body: Body::Lines(lines),
         primary: card.archive_folder.clone().map(|folder| Action::new("Open dossier", Effect::Dossier(folder))),
@@ -531,6 +535,15 @@ mod tests {
         assert_eq!(card.primary.as_ref().unwrap().effect, Effect::Dossier("acme_corp_lead".into()));
         assert_eq!(card.when, "Reply by 6 Nov");
         assert_eq!(card.due.as_ref().unwrap().label, "Acme reply");
+    }
+
+    #[test]
+    fn a_passed_reply_date_reads_as_passed() {
+        let on = today() - chrono::Days::new(1);
+        let card = &one_app(ApplicationCard { deadline: Some(on), ..application(StatusBucket::Offer) }, ArchiveContents::default())[0];
+        assert_eq!(card.when, "Reply date passed");
+        let undated = &one_app(application(StatusBucket::Offer), ArchiveContents::default())[0];
+        assert_eq!(undated.when, "No reply date");
     }
 
     #[test]

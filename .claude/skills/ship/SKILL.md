@@ -1,13 +1,14 @@
 ---
 name: ship
-description: The lead's workflow for a change of more than one step, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or any change that spans several steps or layers. For a one-step fix, do it directly.
+description: The lead's workflow for every code change, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or a fix, even a one-line one.
 argument-hint: "<feature or task>"
 ---
 
 # Ship a change with the subagent team
 
-The main session is the lead. It runs on Opus at medium effort.
-It reads the notes, writes each subagent's brief and merges steps into the change's branch. It writes no code itself.
+The main session is the lead, defined in `.claude/agents/lead.md`.
+It reads the notes, writes each subagent's brief and merges steps into the change's branch.
+It writes no code itself, not even a one-line fix: a builder writes every line.
 Each subagent's model and effort live in its file in `.claude/agents/`, so do not override them in the call.
 The user's words in the task win over this workflow, for example "do it yourself" or "skip the planner".
 
@@ -30,6 +31,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    Name the change's branch, such as `feat/standing-orders`, when the user did not.
    Write the plan to `.claude/plans/<change-branch>.md`.
    Show the user the plan and stop, unless the user said to go on without it.
+   For a one-step fix, skip the planner: write the one step yourself, with its files and its check, and go on.
 2. **Build.** A builder builds one step in its own git worktree and commits it.
    Use `builder-sonnet` only when the planner marked the step written down. Use `builder` for every other step.
    Steps that do not depend on each other build in parallel.

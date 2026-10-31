@@ -37,6 +37,10 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - The UI reads the `Snapshot`, never the disk.
 - `tests/sample_workspace` holds fictional data only, because snapshots are committed.
 
+## Team
+
+- The main session runs as the `lead` agent in `.claude/agents/lead.md`, and it writes no code. Every code change, even a one-line fix, goes to a builder through the `ship` skill.
+
 ## Details
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers, runs or trust handling.

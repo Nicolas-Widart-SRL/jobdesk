@@ -3,14 +3,14 @@
 use egui::{CornerRadius, Frame, Label, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::marks::paint_key;
+use crate::ui_kit::controls::{small_key_button, small_toggle};
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{offset_shadow, paint_outlined};
+use crate::ui_kit::surfaces::{inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
-    HORIZON_CHIP_HEIGHT, HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, KEY_SIZE, OFFSET_SHADOW, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
-    STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, Type, UNDO_GAP, UNDO_PADDING,
+    CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT, HORIZON_CHIP_HEIGHT,
+    HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
+    STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
 /// A strip of day cells, one column each. The first cell is today. `note` reads across the third to the last day.
@@ -157,45 +157,109 @@ pub fn stack_edges(ui: &mut Ui, left: usize) {
     ui.spacing_mut().item_spacing.y = ITEM_GAP;
 }
 
-/// The inverted strip that confirms what just happened.
-pub fn undo_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let p = Palette::of(ui);
-    let (x, y) = UNDO_PADDING;
-    ui.add_space(UNDO_GAP - ITEM_GAP);
-    Frame::new()
-        .fill(p.text)
-        .corner_radius(RADIUS_PANEL)
-        .inner_margin(Margin::symmetric(x, y))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.visuals_mut().override_text_color = Some(p.sheet);
-            ui.spacing_mut().interact_size.y = BUTTON_HEIGHT;
-            add(ui)
-        })
-        .inner
+/// What was pressed on an undo row: the Undo button, or the toggle at that index.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UndoPress {
+    pub undo: bool,
+    pub toggle: Option<usize>,
 }
 
-/// A button on the undo strip: outlined in the strip's own ink, filled when `on` or hovered.
-pub fn undo_button(ui: &mut Ui, text: &str, on: bool, key: Option<&str>) -> Response {
+/// The raised head row of a slip's list. `name` comes from a posting, so it shows as a plain label.
+/// `label` is what a screen reader hears for the row. `last` rounds the foot when nothing follows the row.
+pub fn undo_row(ui: &mut Ui, name: &str, note: &str, label: &str, toggles: &[(&str, bool)], last: bool) -> UndoPress {
     let p = Palette::of(ui);
-    let keys = key.map_or(0.0, |_| KEY_SIZE + BUTTON_GAP);
-    let measured = line(ui, text, Type::BUTTON, p.sheet, f32::INFINITY);
-    let size = vec2(measured.size().x + BUTTON_PADDING * 2.0 + keys, BUTTON_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let lit = on || response.hovered();
-    let ink = if lit { p.text } else { p.sheet };
-    if lit {
-        ui.painter().rect_filled(rect, RADIUS_BUTTON, p.sheet);
+    let (top, bottom) = UNDO_ROW_PADDING;
+    let corners = if last { FOOT_CORNERS } else { CornerRadius::ZERO };
+    let x = inset(ui);
+    let mut pressed = UndoPress::default();
+    let shown = Frame::new().fill(p.raised).corner_radius(corners).inner_margin(Margin { left: x, right: x, top, bottom }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = ITEM_GAP;
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                pressed.undo = small_key_button(ui, "Undo", "U").clicked();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(Label::new(rich(ui, name, Type::STRONG, Ink::Text)).truncate());
+                });
+            });
+        });
+        ui.label(rich(ui, note, Type::BODY, Ink::Muted));
+        if !toggles.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(TOGGLE_GAP, TOGGLE_GAP);
+                for (index, (text, on)) in toggles.iter().enumerate() {
+                    if small_toggle(ui, text, *on).clicked() {
+                        pressed.toggle = Some(index);
+                    }
+                }
+            });
+        }
+    });
+    // A hover-only interact leaves the buttons' own hover alone.
+    ui.interact(shown.response.rect, ui.scope_id().with("undo_row"), Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Status, true, label));
+    pressed
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    use super::*;
+    use crate::ui_kit::{panel_body, slip};
+
+    const SLIP: f32 = crate::ui_kit::tokens::TRAY_RAIL - crate::ui_kit::tokens::GUTTER as f32;
+    const LABEL: &str = "Last decision: Skipped, Quarry Labs. Press U to undo.";
+
+    fn harness(presses: Rc<RefCell<UndoPress>>) -> Harness<'static> {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        Harness::builder().with_size([400.0, 300.0]).with_context_setup(setup).build_ui(move |ui| {
+            ui.set_max_width(SLIP);
+            slip(ui, |ui| {
+                let toggles = [("Rate", false), ("Scope", true), ("Domain", false), ("Location", false)];
+                let pressed = undo_row(ui, "Quarry Labs", "Skipped. Why? Optional.", LABEL, &toggles, true);
+                if pressed != UndoPress::default() {
+                    *presses.borrow_mut() = pressed;
+                }
+                panel_body(ui, |_| {});
+            });
+        })
     }
-    ui.painter().rect_stroke(rect, RADIUS_BUTTON, Stroke::new(HAIRLINE, p.sheet), StrokeKind::Inside);
-    let galley = line(ui, text, Type::BUTTON, ink, f32::INFINITY);
-    let at = egui::pos2(rect.left() + BUTTON_PADDING, rect.center().y - galley.size().y / 2.0);
-    let right = at.x + galley.size().x;
-    ui.painter().galley(at, galley, ink);
-    if let Some(key) = key {
-        let hint = egui::Rect::from_center_size(egui::pos2(right + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
-        paint_key(ui, hint, key, ink);
+
+    #[test]
+    fn a_picked_toggle_comes_back_by_index() {
+        let presses = Rc::new(RefCell::new(UndoPress::default()));
+        let mut harness = harness(presses.clone());
+        harness.step();
+        harness.get_by_label("Scope").click();
+        harness.run();
+        assert_eq!(*presses.borrow(), UndoPress { undo: false, toggle: Some(1) });
+        *presses.borrow_mut() = UndoPress::default();
+        harness.get_by_label("Undo").click();
+        harness.run();
+        assert_eq!(*presses.borrow(), UndoPress { undo: true, toggle: None });
     }
-    response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, text));
-    response
+
+    #[test]
+    fn the_row_reads_as_one_label_and_a_toggle_says_it_is_on() {
+        let mut harness = harness(Rc::default());
+        harness.step();
+        harness.get_by_label(LABEL);
+        // egui reports a selected button to a screen reader as toggled.
+        assert_eq!(harness.get_by_label("Scope").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        assert_eq!(harness.get_by_label("Rate").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    }
+
+    #[test]
+    fn four_reasons_fit_one_line_in_the_rail() {
+        let mut harness = harness(Rc::default());
+        harness.step();
+        assert_eq!(harness.get_by_label("Rate").rect().top(), harness.get_by_label("Location").rect().top());
+    }
 }

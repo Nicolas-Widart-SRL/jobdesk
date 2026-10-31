@@ -3,14 +3,17 @@
 use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::BRAND_GAP;
+use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, TRAY_RAIL};
 use jobdesk::ui_kit::{
     FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
     divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, lane,
     lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box,
-    rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally,
-    tally_strip, undo_bar, undo_button,
+    rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_key_button, small_toggle, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally,
+    tally_strip, undo_row,
 };
+
+/// The width of a side slip in the in-tray's rail.
+const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
 
 const TONES: [(&str, Tone); 7] = [
     ("Plain", Tone::Plain),
@@ -293,13 +296,23 @@ fn tray(ui: &mut Ui) {
         ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
     });
     stack_edges(ui, 9);
-    undo_bar(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Skipped");
-            undo_button(ui, "Domain", true, None);
-            undo_button(ui, "Rate", false, None);
-            undo_button(ui, "Undo", false, Some("U"));
+    ui.add_space(10.0);
+    ui.scope(|ui| {
+        ui.set_max_width(SLIP);
+        slip(ui, |ui| {
+            panel_header(ui, "Cleared today", Some("2"));
+            let toggles = [("Rate", false), ("Scope", true), ("Domain", false), ("Location", false)];
+            undo_row(ui, "Quarry Labs", "Skipped. Why? Optional.", "Last decision: Skipped, Quarry Labs. Press U to undo.", &toggles, false);
+            panel_body(ui, |ui| {
+                ui.label("Saltmarsh Energy");
+            });
         });
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        small_key_button(ui, "Undo", "U");
+        small_toggle(ui, "Scope", true);
+        small_toggle(ui, "Rate", false);
     });
 }
 
@@ -331,7 +344,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 3900.0])
+        .with_size([1000.0, 4100.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
         .with_context_setup(install_look)

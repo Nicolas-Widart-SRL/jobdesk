@@ -159,7 +159,7 @@ fn inset_id() -> egui::Id {
     egui::Id::NULL.with("section_inset")
 }
 
-fn inset(ui: &Ui) -> i8 {
+pub(in crate::ui_kit) fn inset(ui: &Ui) -> i8 {
     ui.data(|data| data.get_temp(inset_id())).unwrap_or(INSET)
 }
 

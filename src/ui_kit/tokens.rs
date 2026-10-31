@@ -27,6 +27,7 @@ pub const BUTTON_PADDING: f32 = 12.0;
 pub const BUTTON_GAP: f32 = 6.0;
 pub const SMALL_BUTTON_HEIGHT: f32 = 28.0;
 pub const SMALL_BUTTON_PADDING: f32 = 8.0;
+pub const TOGGLE_GAP: f32 = 4.0;
 pub const FOCUS_RING: f32 = 2.0;
 pub const FOCUS_OFFSET: f32 = 1.0;
 
@@ -72,8 +73,8 @@ pub const WINDOW_SHADOW: i8 = 6;
 pub const STACK_EDGE_HEIGHT: f32 = 5.0;
 pub const STACK_EDGE_STEP: f32 = 5.0;
 pub const STACK_EDGES_SHOWN: usize = 6;
-pub const UNDO_PADDING: (i8, i8) = (14, 8);
-pub const UNDO_GAP: f32 = 12.0;
+/// Top and bottom padding of the undo row.
+pub const UNDO_ROW_PADDING: (i8, i8) = (10, 12);
 
 pub const STEP_HEIGHT: f32 = 34.0;
 pub const STEP_PADDING: f32 = 14.0;
@@ -105,6 +106,8 @@ pub const TABLE_CELL_PADDING: (f32, f32) = (12.0, 9.0);
 pub const SPLIT_GAP: f32 = 28.0;
 pub const SPLIT_MAIN_BASIS: f32 = 520.0;
 pub const SPLIT_SIDE_BASIS: f32 = 340.0;
+/// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
+pub const TRAY_RAIL: f32 = 292.0;
 pub const CARD_GRID_MIN: f32 = 150.0;
 pub const FLOW_MIN: f32 = 170.0;
 pub const NODE_PADDING: (f32, f32, f32) = (16.0, 12.0, 14.0);
@@ -158,6 +161,7 @@ pub const TAB_TOP: CornerRadius = CornerRadius { nw: RADIUS_TAB, ne: RADIUS_TAB,
 pub const SEGMENT_TOP: CornerRadius = CornerRadius { nw: RADIUS_PANEL, ne: RADIUS_PANEL, sw: 0, se: 0 };
 pub const DEAL_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: RADIUS_PANEL, sw: RADIUS_PANEL, se: RADIUS_PANEL };
 pub const EDGE_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: 0, sw: RADIUS_BUTTON, se: RADIUS_BUTTON };
+pub const FOOT_CORNERS: CornerRadius = CornerRadius { nw: 0, ne: 0, sw: RADIUS_PANEL, se: RADIUS_PANEL };
 
 /// One mark in a tally.
 #[derive(Debug, Clone, Copy, PartialEq)]

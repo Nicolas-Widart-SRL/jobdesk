@@ -38,7 +38,10 @@ pub struct Queue {
     pub cards: Vec<Card>,
     /// One name per card set aside. These cards are neither pending nor cleared.
     pub set_aside: Vec<String>,
+    /// Today's log, newest first.
     pub cleared: Vec<Cleared>,
+    /// Today's last decision, while it can be undone. Dealt with the log, so a logged one is always its newest entry.
+    pub undo: Option<UndoOffer>,
     pub marks: Vec<Mark>,
     pub unranked: usize,
     pub today: NaiveDate,
@@ -94,6 +97,12 @@ impl Queue {
         Some(format!("No {other}deadlines in the next {HORIZON_DAYS} days"))
     }
 
+    /// Today's log under the undo offer. A logged offer already stands for the newest entry, so that entry is left out.
+    pub fn log_under(&self) -> &[Cleared] {
+        let logged = self.undo.as_ref().is_some_and(|undo| undo.logged);
+        self.cleared.get(usize::from(logged)..).unwrap_or(&[])
+    }
+
     pub fn headline(&self) -> String {
         let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
         match self.cards.len() {
@@ -105,12 +114,15 @@ impl Queue {
     }
 }
 
-/// The last decision, for as long as it can be taken back.
+/// The last decision, for as long as it can be taken back: until the next one, and only on the day it was made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoOffer {
-    /// Changes with each decision recorded, and only then. Giving a reason keeps it.
-    pub id: usize,
-    pub text: String,
+    pub name: String,
+    pub note: String,
+    /// The whole offer in one sentence, for screen readers.
+    pub spoken: String,
+    /// Whether the decision is also in today's log. Later never is.
+    pub logged: bool,
     pub asks_reason: bool,
     pub reason: Option<SkipReason>,
 }
@@ -120,7 +132,6 @@ pub struct InTray {
     store: Option<Box<dyn DecisionStore>>,
     decisions: Vec<Decision>,
     can_undo: bool,
-    recorded: usize,
     reading: Option<String>,
     /// Cards brought back together. They deal ahead of the rest until each is decided, for this session and day only.
     returned: Vec<String>,
@@ -141,7 +152,7 @@ impl InTray {
 
     /// Decisions last until the window closes. For a machine with no app data folder, and tests.
     pub fn unsaved() -> Self {
-        Self { store: None, decisions: Vec::new(), can_undo: false, recorded: 0, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
+        Self { store: None, decisions: Vec::new(), can_undo: false, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
     }
 
     pub fn issue(&self) -> Option<&str> {
@@ -194,7 +205,7 @@ impl InTray {
             cards[..=at].rotate_right(1);
         }
         let cleared = self.decisions.iter().rev().filter(|decision| decision.is_logged_on(today)).map(|decision| Cleared { name: decision.name.clone(), label: decision.label() }).collect();
-        Queue { cards, set_aside, cleared, marks, unranked: sources.board.count(Lane::New), today }
+        Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked: sources.board.count(Lane::New), today }
     }
 
     /// Puts this card on top and keeps it there until it is decided.
@@ -212,7 +223,6 @@ impl InTray {
     fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, today: NaiveDate) {
         self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, on: today });
         self.can_undo = true;
-        self.recorded += 1;
         self.reading = None;
         self.forget_returns_before(today);
         self.undo_returned = self.returned(today).contains(&card.key);
@@ -286,14 +296,26 @@ impl InTray {
         }
     }
 
-    pub fn undo_offer(&self) -> Option<UndoOffer> {
-        let last = self.decisions.last().filter(|_| self.can_undo)?;
-        Some(UndoOffer { id: self.recorded, text: format!("{}: {}", last.label(), last.name), asks_reason: last.outcome == Outcome::Skipped, reason: last.reason })
+    /// The decision undo would take back. One made on another day stays, so undo never reaches past midnight.
+    fn undoable(&self, today: NaiveDate) -> Option<&Decision> {
+        self.decisions.last().filter(|last| self.can_undo && last.on == today)
+    }
+
+    fn undo_offer(&self, today: NaiveDate) -> Option<UndoOffer> {
+        let last = self.undoable(today)?;
+        let asks_reason = last.outcome == Outcome::Skipped;
+        let note = match last.outcome {
+            Outcome::Later => "Set aside until tomorrow".to_owned(),
+            _ if asks_reason && last.reason.is_none() => "Skipped. Why? Optional.".to_owned(),
+            _ => last.label(),
+        };
+        let spoken = format!("Last decision: {}, {}. Press U to undo.", last.outcome.verb(), last.name);
+        Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
     /// The card returns to the top, the way it was before the decision.
-    pub fn undo(&mut self) {
-        if !self.can_undo {
+    pub fn undo(&mut self, today: NaiveDate) {
+        if self.undoable(today).is_none() {
             return;
         }
         self.can_undo = false;
@@ -305,8 +327,12 @@ impl InTray {
         self.save();
     }
 
-    pub fn give_reason(&mut self, reason: SkipReason) {
-        if let Some(last) = self.decisions.last_mut().filter(|last| last.outcome == Outcome::Skipped) {
+    /// Names why the last skip was made, while undo still offers it.
+    pub fn give_reason(&mut self, reason: SkipReason, today: NaiveDate) {
+        if self.undoable(today).is_none_or(|last| last.outcome != Outcome::Skipped) {
+            return;
+        }
+        if let Some(last) = self.decisions.last_mut() {
             last.reason = Some(reason);
             self.save();
         }
@@ -399,10 +425,10 @@ mod tests {
         assert_eq!(dealt(&tray, &jobs), ["Beta"]);
 
         tray.read("triage:beta");
-        tray.undo();
+        tray.undo(today());
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Beta"]);
-        assert_eq!(tray.undo_offer(), None);
+        assert_eq!(tray.undo_offer(today()), None);
     }
 
     #[test]
@@ -411,8 +437,8 @@ mod tests {
         let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
         tray.skip(&top(&tray, &jobs), today());
         tray.skip(&top(&tray, &jobs), today());
-        tray.undo();
-        tray.undo();
+        tray.undo(today());
+        tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Beta"]);
     }
 
@@ -453,8 +479,9 @@ mod tests {
         let request = tray.follow(&card, card.primary.as_ref().unwrap(), today());
         assert_eq!(request, Some(Request::Command("/apply".into())));
         assert!(dealt(&tray, &jobs).is_empty());
-        assert_eq!(tray.undo_offer().unwrap().text, "Command opened: Acme");
-        tray.undo();
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Command opened"));
+        tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
     }
 
@@ -466,7 +493,7 @@ mod tests {
         let action = Action::new("Open dossier", Effect::Dossier("acme".into()));
         assert_eq!(tray.follow(&card, &action, today()), Some(Request::Dossier("acme".into())));
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
-        assert_eq!(tray.undo_offer(), None);
+        assert_eq!(tray.undo_offer(today()), None);
     }
 
     #[test]
@@ -475,8 +502,8 @@ mod tests {
         let jobs = board(vec![job("Acme", 90)]);
         let mut tray = InTray::new(Box::new(memory.clone()));
         tray.skip(&top(&tray, &jobs), today());
-        assert!(tray.undo_offer().unwrap().asks_reason);
-        tray.give_reason(SkipReason::Domain);
+        assert!(tray.undo_offer(today()).unwrap().asks_reason);
+        tray.give_reason(SkipReason::Domain, today());
 
         let reopened = InTray::new(Box::new(memory.clone()));
         assert!(dealt(&reopened, &jobs).is_empty());
@@ -504,7 +531,7 @@ mod tests {
         tray.later(&card, today());
         assert!(queue(&tray, &jobs, today()).marks[0].active);
 
-        tray.undo();
+        tray.undo(today());
         tray.skip(&card, today());
         assert!(!queue(&tray, &jobs, today()).marks[0].active);
     }
@@ -519,7 +546,8 @@ mod tests {
         assert!(aside.cards.is_empty() && aside.cleared.is_empty());
         assert_eq!(aside.set_aside, ["Acme"]);
         assert_eq!(aside.headline(), "1 set aside");
-        assert_eq!(tray.undo_offer().unwrap().text, "Set aside: Acme");
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Set aside until tomorrow"));
     }
 
     #[test]
@@ -533,7 +561,8 @@ mod tests {
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Gamma"]);
         assert_eq!(queue(&tray, &jobs, today()).set_aside, ["Beta"]);
-        assert_eq!(tray.undo_offer().unwrap().text, "Set aside: Beta", "the last decision still stands");
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Beta", "Set aside until tomorrow"), "the last decision still stands");
     }
 
     #[test]
@@ -545,8 +574,8 @@ mod tests {
 
         tray.pull_forward("triage:acme", today());
 
-        assert_eq!(tray.undo_offer(), None);
-        tray.undo();
+        assert_eq!(tray.undo_offer(today()), None);
+        tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
         assert_eq!(queue(&tray, &jobs, today()).cleared.len(), 1, "the older skip stands");
     }
@@ -660,7 +689,7 @@ mod tests {
         tray.skip(&top(&tray, &jobs), today());
         assert_eq!(dealt(&tray, &jobs), ["Top"]);
 
-        tray.undo();
+        tray.undo(today());
         tray.stop_reading();
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Top"]);
@@ -675,7 +704,7 @@ mod tests {
         let plain = queue(&tray, &jobs, today()).cards.into_iter().find(|card| card.key == "triage:top").unwrap();
         tray.skip(&plain, today());
 
-        tray.undo();
+        tray.undo(today());
         tray.stop_reading();
 
         assert_eq!(dealt(&tray, &jobs), ["Beta", "Top", "Acme"]);
@@ -700,19 +729,89 @@ mod tests {
     }
 
     #[test]
-    fn a_new_decision_gets_a_new_offer_and_a_reason_keeps_it() {
+    fn a_reason_updates_the_offer_note() {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Acme", 90)]);
         tray.skip(&top(&tray, &jobs), today());
-        let first = tray.undo_offer().unwrap();
-        tray.give_reason(SkipReason::Domain);
-        assert_eq!(tray.undo_offer().unwrap().id, first.id);
+        assert_eq!(tray.undo_offer(today()).unwrap().note, "Skipped. Why? Optional.");
 
-        tray.undo();
+        tray.give_reason(SkipReason::Scope, today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!(offer.note, "Skipped, scope");
+        assert_eq!(offer.reason, Some(SkipReason::Scope));
+        assert_eq!(offer.spoken, "Last decision: Skipped, Acme. Press U to undo.");
+    }
+
+    #[test]
+    fn later_is_offered_but_not_logged() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90)]);
+        tray.later(&top(&tray, &jobs), today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert!(!offer.logged);
+        assert!(offer.note.contains("until tomorrow"), "{}", offer.note);
+        assert_eq!(offer.spoken, "Last decision: Set aside, Acme. Press U to undo.");
+    }
+
+    #[test]
+    fn a_logged_offer_is_the_first_cleared_row() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90), job("Beta", 80), job("Gamma", 70)]);
         tray.skip(&top(&tray, &jobs), today());
-        let again = tray.undo_offer().unwrap();
-        assert_eq!(again.text, first.text);
-        assert_ne!(again.id, first.id);
+        tray.skip(&top(&tray, &jobs), today());
+        let dealt = queue(&tray, &jobs, today());
+        let offer = dealt.undo.as_ref().unwrap();
+        assert!(offer.logged);
+        assert_eq!(dealt.cleared[0].name, offer.name);
+        let under: Vec<&str> = dealt.log_under().iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(under, ["Acme"], "the offer stands for its own entry");
+
+        tray.undo(today());
+        tray.later(&top(&tray, &jobs), today());
+        let dealt = queue(&tray, &jobs, today());
+        let offer = dealt.undo.as_ref().unwrap();
+        assert!(!offer.logged);
+        assert_eq!(offer.name, "Beta");
+        assert_eq!(dealt.cleared[0].name, "Acme", "the older skip heads the log");
+        assert_eq!(dealt.log_under().len(), 1, "a Later offer hides nothing");
+    }
+
+    #[test]
+    fn yesterdays_decision_cannot_be_undone_today() {
+        let tomorrow = today().succ_opt().unwrap();
+        let jobs = board(vec![job("Acme", 90)]);
+        let decide: [fn(&mut InTray, &Card); 3] = [
+            |tray, card| tray.skip(card, today()),
+            |tray, card| tray.later(card, today()),
+            |tray, card| {
+                tray.follow(card, card.primary.as_ref().unwrap(), today());
+            },
+        ];
+        for decide in decide {
+            let mut tray = InTray::unsaved();
+            let card = top(&tray, &jobs);
+            decide(&mut tray, &card);
+            assert!(queue(&tray, &jobs, today()).undo.is_some());
+            let decided = tray.decisions.clone();
+
+            assert_eq!(queue(&tray, &jobs, tomorrow).undo, None);
+            tray.undo(tomorrow);
+            assert_eq!(tray.decisions, decided, "U leaves yesterday's decision alone");
+        }
+    }
+
+    #[test]
+    fn a_reason_after_undo_leaves_the_older_skip_alone() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
+        tray.skip(&top(&tray, &jobs), today());
+        tray.skip(&top(&tray, &jobs), today());
+        tray.undo(today());
+
+        tray.give_reason(SkipReason::Rate, today());
+        assert_eq!(tray.decisions.len(), 1);
+        assert_eq!(tray.decisions[0].name, "Acme");
+        assert_eq!(tray.decisions[0].reason, None, "undo has moved on, so the reason has nothing to name");
     }
 
     fn paused_run() -> Run {

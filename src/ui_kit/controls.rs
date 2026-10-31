@@ -17,6 +17,7 @@ enum Look {
     Plain,
     Primary,
     Danger,
+    On,
 }
 
 #[derive(Clone, Copy)]
@@ -40,6 +41,7 @@ fn focus_ring(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
 fn look_colors(p: &Palette, look: Look, hovered: bool) -> (Color32, Color32) {
     match look {
         Look::Primary => (p.primary, p.primary),
+        Look::On => (p.text, p.text),
         Look::Plain if hovered => (p.raised, p.line),
         Look::Danger if hovered => (p.raised, p.closed),
         Look::Plain => (Color32::TRANSPARENT, p.line),
@@ -48,11 +50,17 @@ fn look_colors(p: &Palette, look: Look, hovered: bool) -> (Color32, Color32) {
 }
 
 fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Response {
+    press_as(ui, text, look, fit, key, None)
+}
+
+/// `selected` makes a screen reader hear the button as a toggle that is on or off.
+fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, selected: Option<bool>) -> Response {
     let p = Palette::of(ui);
     let ink = match look {
         Look::Plain => p.text,
         Look::Primary => p.on_primary,
         Look::Danger => p.closed,
+        Look::On => p.sheet,
     };
     let keys = key.map_or(0.0, |_| KEY_SIZE + BUTTON_GAP);
     let room = ui.available_width() - fit.padding * 2.0 - keys;
@@ -71,7 +79,10 @@ fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Re
         paint_key(ui, hint, key, ink);
     }
     focus_ring(ui, &response, RADIUS_BUTTON);
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
+    response.widget_info(|| match selected {
+        Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, text),
+        None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), text),
+    });
     response
 }
 
@@ -86,6 +97,16 @@ pub fn button(ui: &mut Ui, text: &str) -> Response {
 
 pub fn small_button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Plain, SMALL, None)
+}
+
+/// A small button that also answers to a single key.
+pub fn small_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
+    press(ui, text, Look::Plain, SMALL, Some(key))
+}
+
+/// A small button that stays pressed while `on`.
+pub fn small_toggle(ui: &mut Ui, text: &str, on: bool) -> Response {
+    press_as(ui, text, if on { Look::On } else { Look::Plain }, SMALL, None, Some(on))
 }
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {

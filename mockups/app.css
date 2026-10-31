@@ -234,6 +234,35 @@ a.panel.card:hover { background: var(--raised); }
 .clear { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 48px 24px; border-radius: 4px; background: var(--panel); }
 .clear h2 { font: 600 34px/1.15 var(--slab); }
 
+/* Window fit, as egui lays out the tray: the head, the strip and the rail stay put,
+   and only the card column scrolls. */
+.app.fit { height: 100vh; min-height: 0; overflow: hidden; }
+.app.fit .main { min-height: 0; }
+.app.fit .body { min-height: 0; gap: 12px; padding-bottom: 0; }
+.app.fit .split { flex: 1 1 auto; min-height: 0; flex-wrap: nowrap; align-items: stretch; }
+.app.fit .split > .a { position: relative; display: flex; flex-direction: column; min-height: 0; }
+.app.fit .split > .b { flex: 0 0 280px; align-self: flex-start; }
+.app.fit .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 7px 24px 0; }
+.tabrow { display: flex; align-items: flex-end; gap: 8px 16px; min-width: 0; }
+.tabrow .ktab { flex: none; }
+.behind { margin-top: 4px; }
+
+/* Undo in the rail: the last decision is the head of the Cleared today log, so its undo lives there.
+   A raised row, with the reasons under it when a skip asks for one. */
+.li.undo-row { flex-direction: column; align-items: stretch; gap: 6px; padding-block: 10px 12px; background: var(--raised); }
+.undo-row .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.reasons { display: flex; flex-wrap: wrap; gap: 4px; }
+.btn.tog.on { background: var(--text); border-color: var(--text); color: var(--sheet); }
+.btn.sm .kb { min-width: 16px; height: 16px; font-size: 11px; }
+
+/* Alternative 1: a slim line beside the card tab, pinned above the scrolling card. */
+.undo-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; margin-left: auto; padding-bottom: 3px; font-size: 13px; color: var(--muted); }
+.undo-line b { font-weight: 600; color: var(--text); }
+
+/* Alternative 2: a pill pinned to the bottom of the card column, over the scrolling card. */
+.undo-pill { position: absolute; left: 0; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: calc(100% - 20px); padding: 6px 8px 6px 12px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 5px 5px 0 var(--line); font-size: 13px; }
+.app.fit .a.pilled .scroll { padding-bottom: 64px; }
+
 /* Ask or run: an overlay, so the card underneath stays where it was */
 .scrim { position: fixed; inset: 0; z-index: 5; display: flex; justify-content: center; align-items: flex-start; padding: 110px 16px 16px; overflow-y: auto; }
 .scrim-hit { position: fixed; inset: 0; padding: 0; border: 0; background: var(--bg); opacity: .72; cursor: default; }

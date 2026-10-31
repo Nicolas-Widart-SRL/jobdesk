@@ -1,14 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Frame, Margin, ScrollArea, TextEdit, Ui};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
 use crate::ui_kit::tokens::{
-    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, PROMPT_MARGIN, ROW_GAP, SCREEN_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS,
+    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, GUTTER, INSET, OFFSET_SHADOW, PROMPT_MARGIN, PROMPT_PADDING, ROW_GAP, SCREEN_GAP, SPLIT_GAP,
+    SPLIT_SIDE_BASIS,
 };
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, button, code_box, danger_button, divider, list_row, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
+    Ink, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, list_row, markdown, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
     side_column, slip, slip_bar, step_rail, strong, tag,
 };
 
@@ -19,14 +20,15 @@ const CHOICES_MAX_HEIGHT: f32 = 260.0;
 const DETAIL_MIN_HEIGHT: f32 = 40.0;
 const DETAIL_MAX_HEIGHT: f32 = 180.0;
 const DETAIL_GAP: f32 = 4.0;
-/// Kept beside the reply field for its Send button, which is laid out after the field.
-const SEND_ROOM: f32 = 64.0;
 
 #[derive(Default)]
 pub struct RunScreen {
     selected: Option<String>,
     reply: String,
-    picks: HashMap<String, HashSet<String>>,
+    /// Choices ticked so far, by request and question.
+    picks: HashMap<(String, String), HashSet<String>>,
+    /// The run and request the picks belong to.
+    picks_for: Option<(String, String)>,
     markdown: CommonMarkCache,
 }
 
@@ -59,12 +61,17 @@ impl RunScreen {
     pub fn select(&mut self, id: String) {
         self.selected = Some(id);
         self.reply.clear();
+        self.picks.clear();
+        self.picks_for = None;
     }
 
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) {
         let known = self.selected.as_ref().is_some_and(|id| desk.run(id).is_some());
         if !known {
-            self.selected = desk.runs().first().map(|run| run.id.clone());
+            match desk.runs().first() {
+                Some(first) => self.select(first.id.clone()),
+                None => self.selected = None,
+            }
         }
         let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
             page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
@@ -94,15 +101,22 @@ impl RunScreen {
     }
 
     /// The activity, then the prompt under it, outside the activity's scroll area.
-    /// The activity takes what the prompt left on the frame before. With no measure yet, the
-    /// prompt gets the whole column, and its own scroll areas shrink to keep its buttons in it.
+    /// The activity takes what the prompt left on the frame before. Each prompt, and the reply box,
+    /// has its own measure: with none yet, it gets the whole column. Its own scroll areas are sized
+    /// from the column, so it fits there and measures the same on the next frame.
     /// A new measure redraws the frame, so a prompt is never left below the window.
     fn detail(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
-        let reserved_id = ui.scope_id().with(("prompt_height", &run.id));
+        let gap = ui.spacing().item_spacing.y;
+        let shown = run.current_prompt().map(|prompt| prompt.request_id.as_str());
+        let reserved_id = ui.scope_id().with(("prompt_height", &run.id, shown));
         let input = takes_input(run);
         let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
+        let mut budget = 0.0;
         panel(ui, |ui| {
             panel_header(ui, "Activity", run.is_busy().then_some("live"));
+            // What a prompt's content may take: the column under the heading, less the prompt's frame and gaps.
+            let (_, padding) = PROMPT_PADDING;
+            budget = ui.available_height() - gap * 2.0 - PROMPT_MARGIN.0 - padding as f32 * 2.0 - OFFSET_SHADOW as f32;
             let room = (ui.available_height() - reserved).max(0.0);
             ScrollArea::vertical().id_salt(("run_activity", &run.id)).max_height(room).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -128,7 +142,7 @@ impl RunScreen {
         // The cursor moves past a gap after each item, so this counts the gap below the prompt.
         // The gap above it, between the activity and the cursor, is added.
         let start = ui.cursor().top();
-        self.prompt_or_reply(ui, desk, run);
+        self.prompt_or_reply(ui, desk, run, budget);
         let used = ui.cursor().top() - start + ui.spacing().item_spacing.y;
         if (used - reserved).abs() > 0.5 {
             ui.data_mut(|data| data.insert_temp(reserved_id, used));
@@ -151,7 +165,7 @@ impl RunScreen {
                 });
             }
             ActivityKind::Claude(text) => {
-                CommonMarkViewer::new().show(ui, &mut self.markdown, text);
+                markdown(ui, &mut self.markdown, text);
             }
             ActivityKind::Notice(text) => {
                 muted(ui, text);
@@ -177,10 +191,11 @@ impl RunScreen {
     }
 
     /// Shown under the activity, outside its scroll area.
-    fn prompt_or_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+    /// `budget` is the height the prompt's content may take, buttons included.
+    fn prompt_or_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, budget: f32) {
         if let Some(prompt) = run.current_prompt().cloned() {
             ui.add_space(PROMPT_MARGIN.0);
-            self.prompt(ui, desk, run, &prompt);
+            self.prompt(ui, desk, run, &prompt, budget);
         } else if takes_input(run) {
             divider(ui);
             Frame::new().inner_margin(Margin { left: INSET, right: INSET, top: ROW_GAP as i8, bottom: 0 }).show(ui, |ui| self.reply_box(ui, desk, run));
@@ -192,7 +207,7 @@ impl RunScreen {
         let blocked = desk.is_busy();
         ui.horizontal(|ui| {
             let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
-            let room = ui.available_width() - SEND_ROOM - ui.spacing().item_spacing.x;
+            let room = ui.available_width() - button_width(ui, "Send") - ui.spacing().item_spacing.x;
             let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(room));
             let send = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked())
@@ -205,23 +220,29 @@ impl RunScreen {
         });
     }
 
-    fn prompt(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt) {
+    fn prompt(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, budget: f32) {
         prompt_box(ui, |ui| {
             match &prompt.kind {
-                PromptKind::Permission { tool, detail, can_remember } => permission(ui, desk, run, prompt, tool, detail, *can_remember),
-                PromptKind::Questions(questions) => self.questions(ui, desk, run, prompt, questions),
+                PromptKind::Permission { tool, detail, can_remember } => permission(ui, desk, run, prompt, tool, detail, *can_remember, budget),
+                PromptKind::Questions(questions) => self.questions(ui, desk, run, prompt, questions, budget),
             }
         });
     }
 
-    fn questions(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, questions: &[Question]) {
-        // The choices scroll in what the column leaves above the buttons.
-        let room = ui.available_height() - ui.spacing().item_spacing.y - BUTTON_HEIGHT;
+    fn questions(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, questions: &[Question], budget: f32) {
+        // Picks belong to one request: a later prompt asking the same question starts blank.
+        let owner = (run.id.clone(), prompt.request_id.clone());
+        if self.picks_for.as_ref() != Some(&owner) {
+            self.picks.clear();
+            self.picks_for = Some(owner);
+        }
+        // The choices scroll in what the budget leaves above the gap and the buttons.
+        let room = budget - ui.spacing().item_spacing.y - BUTTON_HEIGHT;
         let height = room.clamp(CHOICES_MIN_HEIGHT, CHOICES_MAX_HEIGHT);
         ScrollArea::vertical().id_salt(("run_questions", &run.id, &prompt.request_id)).max_height(height).show(ui, |ui| {
             for question in questions {
                 strong(ui, &question.text);
-                let picked = self.picks.entry(question.text.clone()).or_default();
+                let picked = self.picks.entry((prompt.request_id.clone(), question.text.clone())).or_default();
                 for option in &question.options {
                     let mut on = picked.contains(&option.label);
                     let changed = if question.multi_select {
@@ -251,7 +272,7 @@ impl RunScreen {
         let answers: Vec<(String, String)> = questions
             .iter()
             .filter_map(|question| {
-                let picked = self.picks.get(&question.text)?;
+                let picked = self.picks.get(&(prompt.request_id.clone(), question.text.clone()))?;
                 let chosen: Vec<&str> = question.options.iter().map(|option| option.label.as_str()).filter(|label| picked.contains(*label)).collect();
                 (!chosen.is_empty()).then(|| (question.text.clone(), chosen.join(", ")))
             })
@@ -358,12 +379,15 @@ fn head_actions(ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
     tag(ui, status_label(run), status_tone(run));
 }
 
-fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool: &str, detail: &str, can_remember: bool) {
+/// `budget` is the height the prompt's content may take, buttons included.
+fn permission(ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, tool: &str, detail: &str, can_remember: bool, budget: f32) {
+    let top = ui.cursor().top();
     strong(ui, format!("Claude wants to use {tool}"));
     muted(ui, "Not on the allow list in .claude/settings.json.");
-    // The command scrolls in what the column leaves above the buttons.
-    let spacing = ui.spacing().item_spacing.y;
-    let room = ui.available_height() - CODE_PADDING.1 as f32 * 2.0 - spacing * 2.0 - DETAIL_GAP - BUTTON_HEIGHT;
+    // The command scrolls in what the budget leaves after the lines above it, the code box's padding,
+    // the one gap after the box, the extra space and the buttons.
+    let above = ui.cursor().top() - top;
+    let room = budget - above - CODE_PADDING.1 as f32 * 2.0 - ui.spacing().item_spacing.y - DETAIL_GAP - BUTTON_HEIGHT;
     let height = room.clamp(DETAIL_MIN_HEIGHT, DETAIL_MAX_HEIGHT);
     code_box(ui, |ui| {
         ScrollArea::vertical().id_salt(("run_permission", &run.id, &prompt.request_id)).max_height(height).show(ui, |ui| {

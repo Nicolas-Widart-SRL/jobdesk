@@ -74,6 +74,11 @@ fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Re
     response
 }
 
+/// The width a `button`, `primary_button` or `danger_button` with `text` takes, to keep room for one laid out later.
+pub fn button_width(ui: &Ui, text: &str) -> f32 {
+    line(ui, text, NORMAL.font, Palette::of(ui).text, f32::INFINITY).size().x + NORMAL.padding * 2.0
+}
+
 pub fn button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Plain, NORMAL, None)
 }

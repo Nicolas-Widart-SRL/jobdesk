@@ -247,20 +247,40 @@ fn a_permission_prompt_fits_the_smallest_window() {
 
 #[test]
 fn a_question_with_many_choices_fits_the_smallest_window() {
-    let choices = (1..=8).map(|index| QuestionOption { label: format!("Choice {index}"), description: "Keeps the CV on two pages.".into() }).collect();
-    let question = Question { text: "Layout check found a hole on page 1. How should the CV be fixed?".into(), header: "Layout".into(), options: choices, multi_select: false };
-    let prompt = Prompt { request_id: "q".into(), kind: PromptKind::Questions(vec![question]), input_json: "{}".into(), suggestions_json: None };
-    let harness = smallest_window(AgentEvent::PromptRaised(prompt), "smallest_question");
+    let harness = smallest_window(many_choices("q"), "smallest_question");
     assert_in_window(&harness, [1040.0, 640.0], &["Send answer", "Decline"]);
 }
 
+fn many_choices(request_id: &str) -> AgentEvent {
+    let choices = (1..=8).map(|index| QuestionOption { label: format!("Choice {index}"), description: "Keeps the CV on two pages.".into() }).collect();
+    let question = Question { text: "Layout check found a hole on page 1. How should the CV be fixed?".into(), header: "Layout".into(), options: choices, multi_select: false };
+    AgentEvent::PromptRaised(Prompt { request_id: request_id.into(), kind: PromptKind::Questions(vec![question]), input_json: "{}".into(), suggestions_json: None })
+}
+
+/// Claude's replies are untrusted: an image in one shows as its alt text and loads nothing.
+#[test]
+fn a_reply_shows_an_image_as_its_alt_text() {
+    let mut shell = shell(Screen::Runs, "reply_image");
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    let text = "![Tracking pixel](https://tracker.example/p.png)";
+    sink.lock().unwrap().as_ref().unwrap()(AgentEvent::AssistantText { text: text.into(), nested: false });
+    *shell.desk_slot() = Some(desk);
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Tracking pixel"));
+}
+
 /// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.
+/// A taller prompt after a measured one in the same run starts from no measure too.
 #[test]
 fn the_first_frame_shows_the_prompt_in_one_pass() {
     let mut shell = shell(Screen::Runs, "first_frame");
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    let session = AgentEvent::SessionStarted { session_id: "b7d2e410-93c1".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() };
+    sink.lock().unwrap().as_ref().unwrap()(session);
     for index in 0..60 {
         let id = index.to_string();
         sink.lock().unwrap().as_ref().unwrap()(tool(&id, "Read", &format!("jobs/posting_{index}.md"), false));
@@ -277,6 +297,18 @@ fn the_first_frame_shows_the_prompt_in_one_pass() {
     sink.lock().unwrap().as_ref().unwrap()(permission_prompt());
     harness.run_steps(1);
     assert_in_window(&harness, [1040.0, 640.0], &["Allow once", "Deny"]);
+
+    // The short reply box gets measured, then a tall question takes its place.
+    harness.run_steps(3);
+    harness.get_by_label("Allow once").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Allow once"));
+    sink.lock().unwrap().as_ref().unwrap()(stop_point());
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Send"));
+    sink.lock().unwrap().as_ref().unwrap()(many_choices("q2"));
+    harness.run_steps(1);
+    assert_in_window(&harness, [1040.0, 640.0], &["Send answer", "Decline"]);
 }
 
 fn tray_harness(mut shell: Shell) -> Harness<'static> {

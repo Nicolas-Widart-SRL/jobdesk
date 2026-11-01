@@ -6,11 +6,11 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button,
-    deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
-    knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button, primary_key_button,
-    prompt_box, prompt_box_tone, rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
-    status_dot, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, alert, attention_count, bar, brand, brand_mark, button, card_tab, chrome_status, clear_panel, code_box, command_button,
+    command_row, danger_button, deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card,
+    key_button, key_hint, knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button,
+    primary_key_button, prompt_box, prompt_box_tone, rich, score, segmented, select_row, shell_top_frame, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle,
+    solid_tag, stack_edges, stamp, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -136,8 +136,21 @@ fn shell(ui: &mut Ui) {
             brand_mark(ui);
             ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
             ui.add_space(24.0);
-            shortcut_button(ui, "Ask or run", &["Cmd", "K"]);
             status_dot(ui, Tone::Hired);
+        });
+    });
+    shell_top_frame(ui).inner_margin(12).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            brand(ui);
+            ui.add_space(24.0);
+            shortcut_button(ui, "New task", &["Cmd", "K"]);
+            attention_count(ui, 8, true);
+        });
+    });
+    status_frame(ui).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            chrome_status(ui, true, "Claude is ready");
+            chrome_status(ui, false, "Claude Code is not installed");
         });
     });
     page_head(ui, Title::Slab("All commands"), Some(Subtitle::Text("Every action is the unchanged slash command.")), |ui| {
@@ -178,17 +191,20 @@ fn marks(ui: &mut Ui) {
 }
 
 fn tabs(ui: &mut Ui) {
-    desk_frame(ui).inner_margin(12).show(ui, |ui| {
+    shell_top_frame(ui).inner_margin(12).show(ui, |ui| {
         ui.horizontal(|ui| {
-            folder_tab(ui, "In-tray", Some("3"), true, None);
-            folder_tab(ui, "Jobs", None, false, None);
-            folder_tab(ui, "Runs", Some("1"), false, Some("Runs, 1 run waits for you"));
+            folder_tab(ui, "Today", TabMark::Count(8), true);
+            folder_tab(ui, "Jobs", TabMark::None, false);
+            folder_tab(ui, "Applications", TabMark::Failed, false);
+            folder_tab(ui, "Tasks", TabMark::Count(1), false);
         });
     });
     ui.add_space(10.0);
     segmented(ui, 1, &[(0, "Documents".to_owned()), (1, "Evaluation".to_owned()), (2, "Posting".to_owned())]);
     ui.add_space(8.0);
-    status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
+    status_frame(ui).show(ui, |ui| {
+        status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
+    });
 }
 
 fn sections(ui: &mut Ui) {

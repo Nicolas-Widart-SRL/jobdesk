@@ -29,15 +29,15 @@ pub fn sheet_frame(ui: &Ui) -> Frame {
     Frame::new().fill(Palette::of(ui).sheet)
 }
 
-/// The desk strip above the sheet, where the brand and the folder tabs stand.
+/// The navy strip above the sheet, where the brand and the folder tabs stand.
 pub fn shell_top_frame(ui: &Ui) -> Frame {
     let (x, top, bottom) = SHELL_PADDING;
-    Frame::new().fill(Palette::of(ui).bg).inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
+    Frame::new().fill(Palette::of(ui).chrome).inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
 }
 
-/// The desk strip under the sheet, for the status line.
+/// The navy strip under the sheet, for the status line.
 pub fn status_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).bg).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
+    Frame::new().fill(Palette::of(ui).chrome).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
 }
 
 /// The big line at the top of a screen. The voice says what the line is.

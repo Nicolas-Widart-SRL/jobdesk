@@ -17,10 +17,10 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
 use crate::shell::{Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
-use crate::ui_kit::tokens::{BRAND_GAP, BUTTON_HEIGHT, NAV_TAB_GAP, NAV_TOP, ROW_GAP, SHELL_GAP, STATUS_GAP};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP};
 use crate::ui_kit::{
-    Ink, Tone, Type, alert, brand_mark, button, folder_tab, install_fonts, install_theme, muted, page_body, panel_body, primary_button, rich, sheet_frame, shell_top_frame, shortcut_button, slip,
-    status_dot, status_frame, status_segmented, strong, tag, take_command_request,
+    TabMark, alert, brand, button, chrome_note, chrome_status, folder_tab, install_fonts, install_theme, muted, page_body, panel_body, primary_button, sheet_frame, shell_top_frame,
+    shortcut_button, slip, status_frame, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
 use crate::workspace::application::{AuthMode, EnvironmentChecks, WorkspaceRoot, auth_mode};
@@ -296,9 +296,7 @@ impl Shell {
         ui.spacing_mut().item_spacing.y = 0.0;
         let open = self.workspace.is_some();
         ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = BRAND_GAP;
-            brand_mark(ui);
-            ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
+            brand(ui);
             if open {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if shortcut_button(ui, "New task", &ASK_KEYS).clicked() {
@@ -318,18 +316,12 @@ impl Shell {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
-                let count = match screen {
-                    Screen::InTray => pending,
-                    Screen::Runs => waiting,
-                    _ => 0,
+                let mark = match screen {
+                    Screen::InTray => TabMark::Count(pending),
+                    Screen::Runs => TabMark::Count(waiting),
+                    _ => TabMark::None,
                 };
-                let count = (count > 0).then(|| count.to_string());
-                // The Tasks count is tasks waiting for you, so it carries the turn mark.
-                let mark = (screen == Screen::Runs && waiting > 0).then(|| match waiting {
-                    1 => "Tasks, 1 task waits for you".to_owned(),
-                    _ => format!("Tasks, {waiting} tasks wait for you"),
-                });
-                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit, mark.as_deref()).clicked() {
+                if folder_tab(ui, screen.title(), mark, screen == lit).clicked() {
                     picked = Some(screen);
                 }
             }
@@ -358,34 +350,23 @@ impl Shell {
         }
     }
 
+    /// The status line on the navy frame. What waits on the user shows on the tabs, not here.
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = STATUS_GAP.0;
             // Nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
             if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
-                let (tone, text) = match environment.version_of("claude") {
-                    Some(_) => (Tone::Hired, "Claude is ready"),
-                    None => (Tone::Closed, "Claude Code is not installed"),
-                };
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = ROW_GAP;
-                    status_dot(ui, tone);
-                    ui.label(rich(ui, text, Type::NOTE, Ink::Muted));
-                });
-            }
-            let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
-            if waiting > 0 {
-                let text = if waiting == 1 { "1 task needs you".to_owned() } else { format!("{waiting} tasks need you") };
-                tag(ui, text, Tone::Turn);
+                let ready = environment.version_of("claude").is_some();
+                chrome_status(ui, ready, if ready { "Claude is ready" } else { "Claude Code is not installed" });
             }
             let issues = self.snapshot.issues.len();
             if issues > 0 {
-                alert(ui, format!("{issues} source could not be read"));
+                chrome_note(ui, &format!("{issues} source could not be read"), true);
             }
             // Setup always says how tasks sign in, as docs/auth-review.md promises.
             let note = self.screen_note().filter(|_| issues == 0 || self.screen == Screen::Workspace);
             if let Some(note) = note {
-                ui.label(rich(ui, note, Type::NOTE, Ink::Muted));
+                chrome_note(ui, &note, false);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let current = ui.ctx().options(|options| options.theme_preference);

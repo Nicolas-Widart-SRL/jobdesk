@@ -4,11 +4,11 @@ use egui::{Color32, CornerRadius, Galley, Rect, Response, Role, Sense, Stroke, S
 
 use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
-use crate::ui_kit::marks::paint_key;
+use crate::ui_kit::marks::{CountChip, paint_key};
 use crate::ui_kit::surfaces::hairline;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
 };
 
@@ -130,19 +130,18 @@ pub fn primary_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, Some(key))
 }
 
-/// A primary button that names its keyboard shortcut. The keys are plain glyphs, with no box.
+/// A button on the navy frame that names its keyboard shortcut. The keys are plain glyphs, with no box.
 pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let p = Palette::of(ui);
-    let ink = p.on_primary;
+    let ink = p.chrome_ink;
     let label = line(ui, text, NORMAL.font, ink, f32::INFINITY);
-    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect();
+    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, p.chrome_muted, f32::INFINITY)).collect();
     let glyphs_width = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
     // The keys sit 2px further out than a button's own gap.
     let lead = if glyphs.is_empty() { 0.0 } else { BUTTON_GAP + 2.0 };
     let size = vec2(NORMAL.padding * 2.0 + label.size().x + lead + glyphs_width, NORMAL.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = look_colors(&p, Look::Primary, response.hovered());
-    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    ui.painter().rect(rect, RADIUS_BUTTON, p.chrome_tab, Stroke::new(HAIRLINE, p.chrome_line), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(NORMAL.padding, (NORMAL.height - label.size().y) / 2.0), label.size());
     if response.hovered() {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
@@ -152,7 +151,7 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     for glyph in glyphs {
         let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
         x += glyph.size().x + KEYS_GAP;
-        ui.painter().galley(at, glyph, ink);
+        ui.painter().galley(at, glyph, p.chrome_muted);
     }
     focus_ring(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
@@ -219,70 +218,66 @@ pub fn open_link_button(ui: &mut Ui, label: &str, url: Option<&WebUrl>) {
     open_link_with(ui, label, url, NORMAL);
 }
 
-/// The label of a tab, with its count in a quieter voice. A mark says a run waits for you.
-struct TabText {
-    label: Arc<Galley>,
-    count: Option<Arc<Galley>>,
-    mark: bool,
-}
-
-impl TabText {
-    fn layout(ui: &Ui, label: &str, count: Option<&str>, mark: bool, on: bool, ink: Color32, room: f32) -> Self {
-        let label = line(ui, label, if on { Type::TAB_ON } else { Type::TAB }, ink, room);
-        let faint = Palette::of(ui).faint;
-        let count = count.map(|count| line(ui, count, Type::SMALL, faint, room - label.size().x - BUTTON_GAP));
-        Self { label, count, mark }
-    }
-
-    fn width(&self) -> f32 {
-        let mark = if self.mark { STATUS_DOT + BUTTON_GAP } else { 0.0 };
-        self.label.size().x + mark + self.count.as_ref().map_or(0.0, |count| count.size().x + BUTTON_GAP)
-    }
-
-    fn paint(self, ui: &Ui, left: f32, centre: f32, ink: Color32) {
-        let mut right = left + self.label.size().x;
-        ui.painter().galley(egui::pos2(left, centre - self.label.size().y / 2.0), self.label, ink);
-        if self.mark {
-            let at = egui::pos2(right + BUTTON_GAP, centre - STATUS_DOT / 2.0);
-            ui.painter().rect_filled(Rect::from_min_size(at, vec2(STATUS_DOT, STATUS_DOT)), 0.0, Palette::of(ui).turn);
-            right += STATUS_DOT + BUTTON_GAP;
-        }
-        if let Some(count) = self.count {
-            ui.painter().galley(egui::pos2(right + BUTTON_GAP, centre - count.size().y / 2.0), count, ink);
-        }
-    }
+/// What a folder tab shows after its label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabMark {
+    None,
+    /// How many things there wait on the user. Zero shows nothing.
+    Count(usize),
+    /// The feature behind the tab could not be read.
+    Failed,
 }
 
 fn tab_look(ui: &Ui, response: &Response, on: bool) -> (Color32, Color32) {
     let p = Palette::of(ui);
     match (on, response.hovered()) {
         (true, _) => (p.sheet, p.text),
-        (false, true) => (p.raised, p.text),
-        (false, false) => (p.panel, p.muted),
+        (false, true) => (p.chrome_tab, p.chrome_ink),
+        (false, false) => (Color32::TRANSPARENT, p.chrome_muted),
     }
 }
 
-fn tab_info(label: &str, count: Option<&str>, mark: Option<&str>, on: bool) -> WidgetInfo {
-    let title = match (mark, count) {
-        (Some(spoken), _) => spoken.to_owned(),
-        (None, Some(count)) => format!("{label}  {count}"),
-        (None, None) => label.to_owned(),
+fn tab_info(label: &str, mark: TabMark, on: bool) -> WidgetInfo {
+    let title = match mark {
+        TabMark::Count(n) if n > 0 => format!("{label}, {n} need you"),
+        TabMark::Failed => format!("{label}, could not be read"),
+        _ => label.to_owned(),
     };
     WidgetInfo::selected(Role::Tab, true, on, title)
 }
 
-/// A folder tab standing on the desk. The active tab takes the sheet's fill.
-/// `mark` paints the turn square before the count and is what a screen reader says instead of the label.
-pub fn folder_tab(ui: &mut Ui, label: &str, count: Option<&str>, on: bool, mark: Option<&str>) -> Response {
-    let muted = Palette::of(ui).muted;
-    let measured = TabText::layout(ui, label, count, mark.is_some(), on, muted, f32::INFINITY);
-    let size = vec2(measured.width() + NAV_TAB_PADDING * 2.0, NAV_TAB_HEIGHT);
+/// A folder tab on the navy frame. The active tab takes the sheet's fill, and its mark the darker stamp.
+pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response {
+    let p = Palette::of(ui);
+    let font = if on { Type::TAB_ON } else { Type::TAB };
+    let width = line(ui, label, font, p.chrome_muted, f32::INFINITY).size().x;
+    let chip = match mark {
+        TabMark::Count(n) if n > 0 => Some(CountChip::layout(ui, n, !on)),
+        _ => None,
+    };
+    let mark_width = match (&chip, mark) {
+        (Some(chip), _) => chip.size().x,
+        (None, TabMark::Failed) => STATUS_DOT,
+        _ => 0.0,
+    };
+    let lead = if mark_width > 0.0 { BUTTON_GAP } else { 0.0 };
+    let size = vec2(width + lead + mark_width + NAV_TAB_PADDING * 2.0, NAV_TAB_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let (fill, ink) = tab_look(ui, &response, on);
     ui.painter().rect_filled(rect, TAB_TOP, fill);
-    TabText::layout(ui, label, count, mark.is_some(), on, ink, f32::INFINITY).paint(ui, rect.left() + NAV_TAB_PADDING, rect.center().y, ink);
+    let text = line(ui, label, font, ink, f32::INFINITY);
+    let left = rect.left() + NAV_TAB_PADDING;
+    let mark_left = left + width + lead;
+    ui.painter().galley(egui::pos2(left, rect.center().y - text.size().y / 2.0), text, ink);
+    if let Some(chip) = chip {
+        let chip_rect = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - CHIP_HEIGHT / 2.0), chip.size());
+        chip.paint(ui, chip_rect);
+    } else if mark == TabMark::Failed {
+        let square = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - STATUS_DOT / 2.0), vec2(STATUS_DOT, STATUS_DOT));
+        ui.painter().rect_filled(square, 0.0, if on { p.closed } else { p.chrome_alert });
+    }
     focus_ring(ui, &response, TAB_TOP);
-    response.widget_info(|| tab_info(label, count, mark, on));
+    response.widget_info(|| tab_info(label, mark, on));
     response
 }
 
@@ -295,17 +290,24 @@ struct SegmentLook {
     font_on: Type,
 }
 
-fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, on_colors: (Color32, Color32)) -> Response {
-    let p = Palette::of(ui);
+/// A segment's colours: fill and ink when on, ink when off, and the fill under the pointer.
+#[derive(Clone, Copy)]
+struct SegmentInks {
+    on: (Color32, Color32),
+    off: Color32,
+    hover: Color32,
+}
+
+fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentInks) -> Response {
     let font = if on { look.font_on } else { look.font };
-    let ink = if on { on_colors.1 } else { p.muted };
+    let ink = if on { inks.on.1 } else { inks.off };
     let galley = line(ui, label, font, ink, ui.available_width() - look.padding * 2.0);
     let size = vec2(galley.size().x + look.padding * 2.0, look.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if on {
-        ui.painter().rect_filled(rect, look.radius, on_colors.0);
+        ui.painter().rect_filled(rect, look.radius, inks.on.0);
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, look.radius, p.panel);
+        ui.painter().rect_filled(rect, look.radius, inks.hover);
     }
     paint_centred(ui, rect, galley, ink);
     focus_ring(ui, &response, look.radius);
@@ -322,7 +324,7 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
         ui.spacing_mut().item_spacing = vec2(NAV_TAB_GAP, 0.0);
         ui.horizontal_wrapped(|ui| {
             for (value, label) in options {
-                if segment(ui, label, *value == current, look, (p.text, p.sheet)).clicked() {
+                if segment(ui, label, *value == current, look, SegmentInks { on: (p.text, p.sheet), off: p.muted, hover: p.panel }).clicked() {
                     picked = Some(*value);
                 }
             }
@@ -332,15 +334,16 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
     picked
 }
 
-/// The small switch that lives in the status bar.
+/// The small switch that lives in the status bar, on the navy frame.
 pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, String)]) -> Option<T> {
     let p = Palette::of(ui);
     let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::SMALL };
+    let inks = SegmentInks { on: (p.chrome_tab, p.chrome_ink), off: p.chrome_muted, hover: p.chrome_tab };
     let mut picked = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
         for (value, label) in options {
-            if segment(ui, label, *value == current, look, (p.sheet, p.text)).clicked() {
+            if segment(ui, label, *value == current, look, inks).clicked() {
                 picked = Some(*value);
             }
         }
@@ -387,4 +390,33 @@ pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: boo
     focus_ring(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, format!("{name} {summary}")));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    #[test]
+    fn a_tab_reads_its_count_as_need_you() {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([600.0, 80.0]).with_context_setup(setup).build_ui(|ui| {
+            ui.horizontal(|ui| {
+                folder_tab(ui, "Today", TabMark::Count(8), true);
+                folder_tab(ui, "Jobs", TabMark::Count(0), false);
+                folder_tab(ui, "Applications", TabMark::Failed, false);
+                folder_tab(ui, "Tasks", TabMark::Count(1), false);
+            });
+        });
+        harness.run();
+        harness.get_by_label("Today, 8 need you");
+        harness.get_by_label("Jobs");
+        harness.get_by_label("Applications, could not be read");
+        harness.get_by_label("Tasks, 1 need you");
+    }
 }

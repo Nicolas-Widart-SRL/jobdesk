@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, CornerRadius, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
+use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BAR_HEIGHT, BRAND_MARK_WIDTH, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
+    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING,
+    STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
     TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
@@ -177,28 +180,45 @@ pub fn path_label(ui: &mut Ui, dir: &str, file: &str) -> Response {
 }
 
 /// The Jobdesk mark: a folder with a J hooked into it, drawn from the logo's 652 by 600 view box.
-pub fn brand_mark(ui: &mut Ui) -> Response {
+/// The J is stroked in `cut`, the colour the mark stands on.
+fn paint_brand_mark(ui: &mut Ui, ink: Color32, cut: Color32) -> Response {
     const ORIGIN: (f32, f32) = (186.0, 216.0);
     const VIEW: (f32, f32) = (652.0, 600.0);
     const ARC_SEGMENTS: usize = 12;
-    let p = Palette::of(ui);
     let scale = BRAND_MARK_WIDTH / VIEW.0;
     let (rect, response) = ui.allocate_exact_size(vec2(BRAND_MARK_WIDTH, VIEW.1 * scale), Sense::hover());
     let at = |x: f32, y: f32| pos2(rect.left() + (x - ORIGIN.0) * scale, rect.top() + (y - ORIGIN.1) * scale);
     let radius = (36.0 * scale).round().max(1.0) as u8;
     let tab = CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 };
     let body = CornerRadius { nw: 0, ne: radius, sw: radius, se: radius };
-    ui.painter().rect_filled(Rect::from_min_max(at(206.0, 236.0), at(506.0, 340.0)), tab, p.text);
-    ui.painter().rect_filled(Rect::from_min_max(at(206.0, 300.0), at(818.0, 796.0)), body, p.text);
+    ui.painter().rect_filled(Rect::from_min_max(at(206.0, 236.0), at(506.0, 340.0)), tab, ink);
+    ui.painter().rect_filled(Rect::from_min_max(at(206.0, 300.0), at(818.0, 796.0)), body, ink);
     let mut hook = vec![at(596.0, 408.0)];
     for step in 0..=ARC_SEGMENTS {
         let angle = std::f32::consts::FRAC_PI_2 * step as f32 / ARC_SEGMENTS as f32;
         hook.push(at(500.0 + 96.0 * angle.cos(), 596.0 + 96.0 * angle.sin()));
     }
     hook.push(at(392.0, 692.0));
-    ui.painter().add(Shape::line(hook, Stroke::new(86.0 * scale, p.bg)));
+    ui.painter().add(Shape::line(hook, Stroke::new(86.0 * scale, cut)));
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "Jobdesk mark"));
     response
+}
+
+/// The mark on the desk plane.
+pub fn brand_mark(ui: &mut Ui) -> Response {
+    let p = Palette::of(ui);
+    paint_brand_mark(ui, p.text, p.bg)
+}
+
+/// The mark and the name, on the navy frame.
+pub fn brand(ui: &mut Ui) -> Response {
+    let p = Palette::of(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = BRAND_GAP;
+        paint_brand_mark(ui, p.chrome_ink, p.chrome);
+        ui.label(line(ui, "Jobdesk", Type::BRAND, p.chrome_ink, f32::INFINITY));
+    })
+    .response
 }
 
 /// A square of the status colour, such as the one that says the CLI is found.
@@ -206,6 +226,58 @@ pub fn status_dot(ui: &mut Ui, tone: Tone) -> Response {
     let color = tone.color(&Palette::of(ui));
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, color);
+    response
+}
+
+/// The status line on the navy frame: a square that says whether all is well, then the words.
+pub fn chrome_status(ui: &mut Ui, ok: bool, text: &str) -> Response {
+    let p = Palette::of(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ROW_GAP;
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, if ok { p.hired } else { p.chrome_alert });
+        ui.label(line(ui, text, Type::NOTE, p.chrome_muted, f32::INFINITY));
+    })
+    .response
+}
+
+/// A note on the navy frame. `alert` says something could not be read.
+pub fn chrome_note(ui: &mut Ui, text: &str, alert: bool) -> Response {
+    let p = Palette::of(ui);
+    ui.label(line(ui, text, Type::NOTE, if alert { p.chrome_alert } else { p.chrome_muted }, f32::INFINITY))
+}
+
+/// The stamp-ink chip that counts what waits on the user, laid out but not yet placed.
+pub(in crate::ui_kit) struct CountChip {
+    galley: Arc<Galley>,
+    fill: Color32,
+    ink: Color32,
+}
+
+impl CountChip {
+    /// `on_chrome` takes the lighter stamp that reads on the navy frame.
+    pub(in crate::ui_kit) fn layout(ui: &Ui, n: usize, on_chrome: bool) -> Self {
+        let p = Palette::of(ui);
+        let (fill, ink) = if on_chrome { (p.stamp_on_chrome, p.on_stamp_chrome) } else { (p.stamp, p.on_stamp) };
+        Self { galley: line(ui, &n.to_string(), Type::TAG, ink, f32::INFINITY), fill, ink }
+    }
+
+    pub(in crate::ui_kit) fn size(&self) -> Vec2 {
+        vec2((self.galley.size().x + CHIP_PADDING * 2.0).max(CHIP_HEIGHT), CHIP_HEIGHT)
+    }
+
+    pub(in crate::ui_kit) fn paint(self, ui: &Ui, rect: Rect) {
+        ui.painter().rect_filled(rect, RADIUS_CARD, self.fill);
+        paint_centred(ui, rect, self.galley, self.ink);
+    }
+}
+
+/// How many things wait on the user, in the stamp ink.
+pub fn attention_count(ui: &mut Ui, n: usize, on_chrome: bool) -> Response {
+    let chip = CountChip::layout(ui, n, on_chrome);
+    let (rect, response) = ui.allocate_exact_size(chip.size(), Sense::hover());
+    chip.paint(ui, rect);
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{n} need you")));
     response
 }
 

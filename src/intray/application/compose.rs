@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(card.key, "turn:r1:1");
         assert_eq!(card.primary, None);
         assert!(!card.can_skip);
-        assert_eq!(card.others, [Action::new("Open run", Effect::Run("r1".into()))]);
+        assert_eq!(card.others, [Action::new("Open task", Effect::Run("r1".into()))]);
     }
 
     fn run_of(id: &str, line: &str) -> Run {

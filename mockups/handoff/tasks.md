@@ -54,7 +54,7 @@ It appears only on the user's turn, under the band, as `prompt_box_tone` in stam
 Under "The run so far" ("The run" once the session is closed), on paper, in reading order.
 
 - **Step lines** (`step_line`): one per started step. A `knot` (done, working, or stamp ink when waiting), the step name, one plain sentence, and a "Show N actions" toggle, "so far" while live. The sentence comes from the phrase table in the command catalog, never from Claude's text or a posting's. Open, the toggle shows the rows with short paths (`path_label`) and Done, Running or Failed tags.
-- **Claude's messages** read as documents (`document`): headings held to the section size, the body in `Type::TAKE`, no wider than `DOC_MEASURE`, so a line stays readable on a wide screen.
+- **Claude's messages** read as documents (`document`): headings held to the section size, the body in `Type::TAKE`, prose no wider than `DOC_MEASURE`, so a line stays readable on a wide screen, while top-level tables span the full width. A footnote that points across a table keeps the whole message at `DOC_MEASURE`.
 - **A You line** shows each reply in the user's words, between the step it ended and the step it started.
 - **Scroll**: stopped or finished, the story opens at the top of the newest message. While Claude works, it follows the bottom. Once the user scrolls, their position wins.
 

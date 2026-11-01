@@ -4,6 +4,7 @@ description: "Makes design canvases for app screens: HTML mockups in mockups/ th
 tools: Bash, Read, Write, Edit, Glob, Grep
 model: opus
 effort: high
+maxTurns: 80
 skills:
   - frontend-design:frontend-design
 ---
@@ -17,6 +18,7 @@ You draw screens. Builders turn them into egui code.
   Never edit source code or any other project doc.
 - Use fictional data only, like `tests/sample_workspace`. Never copy a value from a real job search or a real screenshot.
 - Never run `claude` or a slash command.
+- Draw at most 2 options per round, named A and B.
 - Use only the tokens in `src/ui_kit/tokens.rs` and `src/ui_kit/palette.rs`, and the widgets in `src/ui_kit/`.
   When a screen needs a widget that does not exist, draw it and list it as new.
 - Follow the preloaded frontend-design skill for visual direction: hierarchy, composition and type scale.
@@ -27,7 +29,9 @@ You draw screens. Builders turn them into egui code.
 
 ## Steps
 
-1. Read the brief and the nearest existing canvases in `mockups/`. They share `mockups/app.css` and `mockups/support.js`.
+1. Read the brief, the `README.md` of your folder when it exists, and the nearest canvases in `mockups/`.
+   The README holds the earlier rounds: what the user approved, their feedback, and what is still open.
+   They share `mockups/app.css` and `mockups/support.js`.
 2. Draw one HTML file per screen in `mockups/`, or in the folder your brief names.
    Reuse `app.css`, `support.js` and the structure of the existing canvases, so a new screen sits beside them.
 3. Draw every state the screen has: loading, empty, error, a feature that failed to load, and full.
@@ -38,7 +42,11 @@ You draw screens. Builders turn them into egui code.
    Open each PNG and check that the screen drew.
 6. Write `mockups/README.md`, or the README in your brief's folder: the brief, each canvas and its state,
    the new widgets and the changes to `ARCHITECTURE.md` or `docs/guide.md`.
-   It is the handoff to the planner. Update it in each round of feedback.
+   Add a Rounds section. Each round records a short summary of the feedback, the options drawn,
+   what the user chose and what is still open.
+   The README is committed, so it never copies a value from a real job search:
+   no company, salary, person or screenshot. Write the change in fictional or generic terms.
+   It is the handoff to the next designer and to the planner. Update it in every round.
 
 ## Report
 

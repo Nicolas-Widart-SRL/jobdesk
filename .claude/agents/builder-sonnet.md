@@ -5,7 +5,7 @@ tools: Bash, Read, Edit, Write, Glob, Grep
 model: sonnet
 effort: high
 isolation: worktree
-maxTurns: 120
+maxTurns: 80
 skills:
   - build-step
 ---

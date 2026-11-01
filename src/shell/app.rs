@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -431,7 +431,8 @@ impl Shell {
         }
     }
 
-    /// A source that could not be read frames an alert over every screen. Today draws it under its head.
+    /// A source that could not be read frames an alert on every screen. The screens with a head of their own draw it under the head,
+    /// and a screen whose source failed hides its content instead of showing it empty.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
         // The tray reports its own file. It is copied only while it fails, so the tray stays free to take decisions.
         let decisions = self.tray.as_ref().and_then(InTray::issue).cloned();
@@ -444,7 +445,19 @@ impl Shell {
                 open_setup.set(true);
             }
         };
-        if !failures.is_empty() && self.screen != Screen::InTray {
+        let loaded = self.loaded;
+        let load = |source: Source| {
+            if failures.iter().any(|(failed, _)| *failed == source) {
+                Load::Failed
+            } else if loaded {
+                Load::Ready
+            } else {
+                Load::Reading
+            }
+        };
+        let state = |load: Load| ScreenState { load, alerts: &alerts };
+        // These screens keep the alert over their head until they take a `ScreenState` too.
+        if !failures.is_empty() && matches!(self.screen, Screen::Runs | Screen::Launcher | Screen::Dossier) {
             page_body(ui, alerts);
         }
         let snapshot = &self.snapshot;
@@ -470,10 +483,10 @@ impl Shell {
             }
             Screen::Jobs => {
                 let kept = self.tray.as_ref().map(InTray::kept_jobs).unwrap_or_default();
-                self.jobs.show(ui, &snapshot.board, &queue.waiting().jobs, &kept);
+                self.jobs.show(ui, &state(load(Source::Jobs)), &snapshot.board, &queue.waiting().jobs, &kept);
             }
             Screen::Tracker => {
-                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline, &queue.waiting().applications) {
+                if let Some(folder) = self.tracker.show(ui, &state(load(Source::Applications)), &snapshot.pipeline, &queue.waiting().applications) {
                     self.show_dossier(folder);
                 }
             }
@@ -489,7 +502,12 @@ impl Shell {
                     }
                 }
             }
-            Screen::Insights => insights::ui::show(ui, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref()),
+            Screen::Insights => {
+                // Each failed source hides only the parts it feeds, so the screen as a whole never fails.
+                let sources = insights::ui::Sources { tracker: load(Source::Applications), jobs: load(Source::Jobs), skill_gaps: load(Source::SkillGaps) };
+                let whole = if loaded { Load::Ready } else { Load::Reading };
+                insights::ui::show(ui, &state(whole), &sources, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref());
+            }
             Screen::Runs => {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
                 let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
@@ -499,7 +517,15 @@ impl Shell {
             }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
-                let action = self.environment.as_mut().and_then(|environment| workspace::ui::show(ui, &name, &snapshot.workspace, environment));
+                let whole = if loaded { Load::Ready } else { Load::Reading };
+                // Only previews lack the tool check. They draw no Setup, but still the alert.
+                let action = match self.environment.as_mut() {
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
+                    None => {
+                        page_body(ui, alerts);
+                        None
+                    }
+                };
                 if action == Some(WorkspaceAction::ChangeFolder) {
                     let ctx = ui.ctx().clone();
                     self.choose_folder(&ctx);

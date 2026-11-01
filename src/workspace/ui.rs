@@ -3,7 +3,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
+    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
     rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
@@ -39,7 +39,8 @@ pub enum WorkspaceAction {
 }
 
 /// `name` is the checkout's folder name, never its full path.
-pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
+/// Setup reads no source that can fail, so it only draws the alert for the others.
+pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
     page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
@@ -48,6 +49,7 @@ pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut Env
         }
     });
     page_body(ui, |ui| {
+        (state.alerts)(ui);
         muted(ui, "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.");
         ui.add_space(SPLIT_GAP);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

@@ -193,6 +193,30 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
     });
 }
 
+/// Where a screen's source stands. A failed source loads as nothing, so the screen must not read it as empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Load {
+    /// Not read yet.
+    Reading,
+    /// Could not be read: the screen hides what it would show and says so.
+    Failed,
+    Ready,
+}
+
+/// What the shell tells a screen beside its data: whether its source loaded, and the alert to draw under its head.
+/// Every screen draws `page_head`, then `alerts`, then its body, so the alert sits in the same place on each.
+#[derive(Clone, Copy)]
+pub struct ScreenState<'a> {
+    pub load: Load,
+    pub alerts: &'a dyn Fn(&mut Ui),
+}
+
+impl ScreenState<'_> {
+    pub fn failed(&self) -> bool {
+        self.load == Load::Failed
+    }
+}
+
 /// The content of a screen, under its head.
 pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let (x, top, bottom) = SCREEN_PADDING;
@@ -822,6 +846,8 @@ pub struct FlowNode<'a> {
     pub figure: String,
     pub marks: Vec<(usize, Option<Ink>)>,
     pub note: String,
+    /// Why the stage's counts are hidden. It shows in place of the figure, tally and note, so no zero reads as a real count.
+    pub hidden: Option<&'a str>,
 }
 
 /// A folder strip of counts, read left to right. Columns are equal, with a hairline between them.
@@ -841,6 +867,11 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = NODE_GAP;
                     add_text(ui, node.label, Type::TAB, Ink::Muted);
+                    if let Some(hidden) = node.hidden {
+                        // Left aligned: the column's justified layout would stretch the wrapped words apart.
+                        ui.with_layout(Layout::top_down(Align::Min), |ui| add_text(ui, hidden, Type::BODY, Ink::Muted));
+                        return;
+                    }
                     add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
                     let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);

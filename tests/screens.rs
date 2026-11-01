@@ -11,7 +11,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
-use jobdesk::shell::{Screen, Shell, Snapshot, install_look};
+use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
@@ -1817,20 +1817,142 @@ fn intray_clear_dark() {
 /// The sample workspace with a tracker saved in Latin-1, as a spreadsheet's plain CSV export does.
 /// With `jobs_too`, the saved jobs file is cut off as well.
 fn failed_shell(name: &str, jobs_too: bool) -> Shell {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
-    let _ = fs::remove_dir_all(&root);
-    sample_workspace(&root);
-    fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap();
-    if jobs_too {
-        fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap();
-    }
-    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    assert_eq!(snapshot.issues.len(), 1 + usize::from(jobs_too), "{:?}", snapshot.issues);
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+    let broken: &[Source] = if jobs_too { &[Source::Applications, Source::Jobs] } else { &[Source::Applications] };
+    broken_shell(Screen::InTray, name, broken)
 }
 
 fn failed_tracker_shell(name: &str) -> Shell {
     failed_shell(name, false)
+}
+
+/// The sample workspace with each of `broken`'s files made unreadable, opened on `screen`.
+fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    for source in broken {
+        match source {
+            Source::Applications => fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap(),
+            Source::Jobs => fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap(),
+            Source::SkillGaps => fs::write(root.join("upskill/report-2026-10-28.md"), b"# Skill gaps\n\nCaf\xe9\n").unwrap(),
+            Source::Decisions => unreachable!("the tray reports its own file"),
+        }
+    }
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), broken.len(), "{:?}", snapshot.issues);
+    Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
+const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+
+/// Each screen a failed source reaches draws its head, then the alert, then hides what the source feeds instead of calling it empty.
+/// A screen that forgot its alert would still pass every snapshot, so this walks them all.
+#[test]
+fn every_failed_screen_shows_its_alert_under_its_head() {
+    struct Case {
+        screen: Screen,
+        broken: &'static [Source],
+        subtitle: &'static str,
+        alert: &'static str,
+        shown: &'static [&'static str],
+        not_shown: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            screen: Screen::Tracker,
+            broken: &[Source::Applications],
+            subtitle: "Not shown while the tracker cannot be read.",
+            alert: "Your applications could not be read.",
+            shown: &["Your applications are hidden, not gone", "Record a result…", "Check mail for replies…"],
+            not_shown: &["No applications yet", "Draft an application…", "Not sent yet"],
+        },
+        Case {
+            screen: Screen::Jobs,
+            broken: &[Source::Jobs],
+            subtitle: "Not shown while your saved jobs cannot be read.",
+            alert: "Your saved jobs could not be read.",
+            shown: &["Your saved jobs are hidden, not gone", "Find new jobs…"],
+            not_shown: &["No jobs wait here.", "Shortlist  0", "New  0"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::Applications],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your applications could not be read.",
+            shown: &[],
+            not_shown: &["No applications sent yet.", "0 sent", "drafted, not sent", "0 applied, 0 interview, 0 offer", "0 hired, 0 closed", "Tune scoring"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::Jobs],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your saved jobs could not be read.",
+            shown: &[],
+            not_shown: &["0 new of 0 found", "on shortlist"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::SkillGaps],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your skill gap reports could not be read.",
+            shown: &["Skill gap report", "Your skill gap reports are hidden, not gone. They come back by themselves once the report file is fixed."],
+            not_shown: &["No skill gap report yet", "Find skill gaps…"],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Applications],
+            subtitle: "ai-job-search",
+            alert: "Your applications could not be read.",
+            shown: &[],
+            not_shown: &[],
+        },
+    ];
+    for (index, case) in cases.iter().enumerate() {
+        let mut shell = broken_shell(case.screen, &format!("failed_screen_{index}"), case.broken);
+        let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+        checks.ensure_started();
+        *shell.environment_slot() = Some(checks);
+        let harness = tray_harness(shell);
+        let subtitle = harness.get_by_label(case.subtitle).rect();
+        let alert = harness.get_by_label(case.alert).rect();
+        assert!(alert.top() > subtitle.bottom(), "{:?}: the alert {alert:?} sits under the subtitle {subtitle:?}", case.screen);
+        for text in case.shown {
+            assert!(is_shown(&harness, text), "{:?} shows {text}", case.screen);
+        }
+        for text in case.not_shown {
+            assert!(!is_shown(&harness, text), "{:?} hides {text}", case.screen);
+        }
+    }
+}
+
+/// Insights hides only what the failed sources feed: each panel and band cell they feed says so, and the rest still counts.
+#[test]
+fn insights_hides_only_what_a_failed_source_feeds() {
+    let harness = tray_harness(broken_shell(Screen::Insights, "insights_hidden_parts", &[Source::Applications, Source::Jobs]));
+    assert_eq!(harness.query_all_by_label(TRACKER_HIDDEN).count(), 7, "Status, Funnel, By channel, By sector, Apply, In progress and Result");
+    assert_eq!(harness.query_all_by_label(JOBS_HIDDEN).count(), 2, "Find and Score");
+    assert!(harness.query_by_label_contains("profile parts filled").is_some(), "the profile still counts");
+    assert!(is_shown(&harness, "Skill gaps"), "the skill gap report still shows");
+
+    let harness = tray_harness(shell(Screen::Insights, "insights_nothing_hidden"));
+    assert!(harness.query_by_label(TRACKER_HIDDEN).is_none());
+    assert!(harness.query_by_label(JOBS_HIDDEN).is_none());
+}
+
+#[test]
+fn tracker_failed_light() {
+    tray_after(wgpu_tray(broken_shell(Screen::Tracker, "tracker_failed_light", &[Source::Applications]), Theme::Light), &[], "tracker_failed_light");
+}
+
+#[test]
+fn jobs_failed_dark() {
+    tray_after(wgpu_tray(broken_shell(Screen::Jobs, "jobs_failed_dark", &[Source::Jobs]), Theme::Dark), &[], "jobs_failed_dark");
+}
+
+#[test]
+fn insights_failed_light() {
+    tray_after(wgpu_tray(broken_shell(Screen::Insights, "insights_failed_light", &[Source::Applications]), Theme::Light), &[], "insights_failed_light");
 }
 
 #[test]

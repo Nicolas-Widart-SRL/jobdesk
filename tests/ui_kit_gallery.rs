@@ -249,7 +249,7 @@ fn sections(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     let stages = [("Scrape", "15", vec![(9, Some(Ink::Text)), (6, None)], "new of 64 seen"), ("Rank", "5", vec![(5, Some(Ink::Text))], "on shortlist"), ("Apply", "2", vec![(2, Some(Ink::Text))], "drafted, not sent")];
-    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned() }).collect();
+    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned(), hidden: None }).collect();
     flow_band(ui, &nodes);
     ui.add_space(10.0);
     code_box(ui, |ui| {

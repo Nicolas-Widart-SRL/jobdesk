@@ -5,7 +5,7 @@ use egui::Ui;
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP};
 use crate::ui_kit::{
-    CheckMark, ColumnWidth, Ink, PickTable, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel, panel_body,
+    CheckMark, ColumnWidth, Ink, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel, panel_body,
     paper_with_footer, pick_table, primary_command_action, rich, score, segmented, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
@@ -98,14 +98,23 @@ fn score_jobs_label(new: usize) -> String {
 
 impl JobsScreen {
     /// `waiting` holds the key of every job with a card in Today, and `kept` every job whose flagged ad the user kept there.
-    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
-        let subtitle = Subtitle::Text("Scored from the job ad alone. Drafting an application also checks the company.");
+    /// While the saved jobs cannot be read, the list and its segments are hidden, never shown as empty.
+    pub fn show(&mut self, ui: &mut Ui, state: &ScreenState, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
+        let subtitle = if state.failed() { "Not shown while your saved jobs cannot be read." } else { "Scored from the job ad alone. Drafting an application also checks the company." };
         let new = board.count(Lane::New);
-        page_head(ui, Title::Slab("Jobs"), Some(subtitle), |ui| {
+        page_head(ui, Title::Slab("Jobs"), Some(Subtitle::Text(subtitle)), |ui| {
             primary_command_action(ui, &score_jobs_label(new), "/rank");
             command_action(ui, "Find new jobs…", "/scrape");
         });
-        page_body(ui, |ui| self.body(ui, board, waiting, kept));
+        page_body(ui, |ui| {
+            (state.alerts)(ui);
+            if state.failed() {
+                let body = "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
+                empty_note(ui, "Your saved jobs are hidden, not gone", body);
+                return;
+            }
+            self.body(ui, board, waiting, kept);
+        });
     }
 
     fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {

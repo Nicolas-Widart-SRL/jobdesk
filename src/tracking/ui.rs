@@ -5,7 +5,7 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, divider, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel_body,
+    CardLook, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel_body,
     paper_with_footer, primary_button, primary_command_action, rich, side_column, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
@@ -98,19 +98,28 @@ fn card_waits(card: &ApplicationCard, waiting: &Waiting) -> bool {
 impl TrackerScreen {
     /// `waiting` holds the company and role of every application with a card in Today.
     /// Returns the archive folder of a dossier the user asked to open.
-    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
+    /// While the tracker cannot be read, the board is hidden, never shown as empty.
+    pub fn show(&mut self, ui: &mut Ui, state: &ScreenState, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let open = pipeline.open_count();
         let waits = pipeline.cards().filter(|card| card_waits(card, waiting)).count();
         let mut subtitle = format!("{open} open, {} closed.", pipeline.cards().count() - open);
         if waits > 0 {
             subtitle.push_str(&format!(" {waits} of them wait for you in Today."));
         }
-        let subtitle = (!pipeline.is_empty()).then_some(subtitle);
-        page_head(ui, Title::Slab("Applications"), subtitle.as_deref().map(Subtitle::Text), |ui| {
+        let subtitle = if state.failed() { Some("Not shown while the tracker cannot be read.") } else { (!pipeline.is_empty()).then_some(subtitle.as_str()) };
+        page_head(ui, Title::Slab("Applications"), subtitle.map(Subtitle::Text), |ui| {
             primary_command_action(ui, "Record a result…", "/outcome");
             command_action(ui, "Check mail for replies…", "/gmail-sync");
         });
-        page_body(ui, |ui| self.body(ui, pipeline, waiting))
+        page_body(ui, |ui| {
+            (state.alerts)(ui);
+            if state.failed() {
+                let body = "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
+                empty_note(ui, "Your applications are hidden, not gone", body);
+                return None;
+            }
+            self.body(ui, pipeline, waiting)
+        })
     }
 
     fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {

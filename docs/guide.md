@@ -34,7 +34,7 @@ End session asks first, and Keep it open is the default. New task (Cmd+K, Ctrl+K
 
 ## One run at a time
 
-Only one run works at a time, because two commands could overwrite each other's files. A session waiting for your reply does not block a new run.
+Only one run works at a time, because two commands could overwrite each other's files. A session waiting for your reply lets a new run start only once its turn has ended and all its background agents have finished.
 
 ## Setup and the status bar
 

@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_text_focus, page_body, paper,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_focus, page_body, paper,
     primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
@@ -167,6 +167,13 @@ impl Shell {
         &mut self.environment
     }
 
+    /// Hands the shell snapshots as the folder watcher does, for tests.
+    pub fn snapshot_feed(&mut self) -> std::sync::mpsc::Sender<Snapshot> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.updates = Some(receiver);
+        sender
+    }
+
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
         self.pages = Some(pages);
         self.show_dossier(folder.to_owned());
@@ -275,7 +282,7 @@ impl Shell {
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
         }
-        note_text_focus(ui.ctx());
+        note_focus(ui.ctx());
     }
 
     /// Runs change between snapshots, so the queue is dealt again each frame.
@@ -313,20 +320,15 @@ impl Shell {
         self.screen = Screen::Launcher;
     }
 
-    /// Where Esc leaves the launcher for. A dossier that has gone falls back to its tab.
-    fn launcher_return(&self) -> Screen {
-        let shown = |folder: &str| self.snapshot.pipeline.card_in_folder(folder).is_some();
-        match self.launcher_from {
-            Screen::Dossier if !self.open_dossier.as_ref().is_some_and(|open| shown(&open.folder)) => Screen::Dossier.tab(),
-            screen => screen,
-        }
-    }
-
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
-        // While the quit dialog asks, Esc means Keep working, and the launcher's Cmd Enter starts nothing.
+        // While the quit dialog asks, the first Esc means Keep working, whatever is open or focused behind it,
+        // and the launcher's Cmd Enter starts nothing.
         if self.confirm_quit {
-            ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
-            if back_pressed(ctx) {
+            let keep = ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            });
+            if keep {
                 self.confirm_quit = false;
             }
         }
@@ -551,8 +553,13 @@ impl Shell {
                     _ if tracker_failed => {
                         page_body(ui, |ui| hidden_note(ui, insights::ui::TRACKER_HIDDEN));
                     }
+                    _ if !self.loaded => {
+                        page_body(ui, |ui| muted(ui, "Reading your applications…"));
+                    }
+                    // The one place that decides a dossier has gone, whichever way it was reached: back to Applications.
                     _ => {
-                        page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));
+                        self.screen = Screen::Dossier.tab();
+                        ui.ctx().request_repaint();
                     }
                 }
             }
@@ -584,7 +591,7 @@ impl Shell {
             }
             Screen::Launcher => {
                 if back_pressed(ui.ctx()) {
-                    self.screen = self.launcher_return();
+                    self.screen = self.launcher_from;
                     ui.ctx().request_repaint();
                 } else if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
                     self.run_screen.select(id);

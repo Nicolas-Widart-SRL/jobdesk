@@ -1021,7 +1021,7 @@ fn esc_leaves_the_launcher_for_where_it_came_from() {
 
     press(&mut harness, Key::Escape);
     assert!(!is_shown(&harness, LAUNCHER));
-    harness.get_by_label("Tune scoring");
+    harness.get_by_label("Tune scoring…");
 }
 
 /// In a text field Esc only leaves the field, and keeps what was typed. A second Esc leaves the launcher.
@@ -1043,7 +1043,7 @@ fn esc_in_a_field_leaves_the_field_first() {
 
     press(&mut harness, Key::Escape);
     assert!(!is_shown(&harness, LAUNCHER));
-    harness.get_by_label("Tune scoring");
+    harness.get_by_label("Tune scoring…");
 }
 
 const GRANITE_CARD: &str = "Granite Cloud, Platform Lead, No reply in 15 days, waits for you in Today";
@@ -1063,6 +1063,123 @@ fn a_second_click_closes_the_application() {
     harness.run_steps(3);
     press(&mut harness, Key::Escape);
     assert!(!open(&harness), "Esc closes them too");
+}
+
+/// The snapshot a command leaves when it drops `company` from the sample tracker. The file is put back after.
+fn tracker_without(name: &str, company: &str) -> Snapshot {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let tracker = root.join("job_search_tracker.csv");
+    let full = fs::read_to_string(&tracker).unwrap();
+    let kept: Vec<&str> = full.lines().filter(|row| !row.contains(company)).collect();
+    fs::write(&tracker, kept.join("\n") + "\n").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    fs::write(&tracker, full).unwrap();
+    snapshot
+}
+
+fn tracker_again(name: &str) -> Snapshot {
+    Snapshot::load(&Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search"), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+/// A snapshot that misses the picked card hides its details, and they come back with the card. Esc stays free meanwhile.
+#[test]
+fn a_picked_application_comes_back_with_its_card() {
+    let name = "application_vanishes";
+    let mut shell = shell(Screen::Tracker, name);
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    let open = |harness: &Harness| harness.query_all_by_label("Granite Cloud").count() == 2;
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(open(&harness));
+
+    feed.send(tracker_without(name, "Granite Cloud")).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Granite Cloud"), "the card and its details are gone");
+    press(&mut harness, Key::Escape);
+
+    feed.send(tracker_again(name)).unwrap();
+    harness.run_steps(3);
+    assert!(open(&harness), "the details came back with the card");
+}
+
+/// However the user comes back to a dossier whose application has gone, Applications shows instead.
+#[test]
+fn a_gone_dossier_falls_back_to_applications() {
+    let name = "dossier_gone";
+    let mut shell = shell(Screen::Tracker, name);
+    let feed = shell.snapshot_feed();
+    shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    let applications = "Pick an application for its details and dossier.";
+    assert!(!is_shown(&harness, applications), "the dossier shows");
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label(LAUNCHER);
+
+    feed.send(tracker_without(name, "Tessel Group")).unwrap();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, applications), "Esc led to the dossier, which fell back");
+    assert!(!is_shown(&harness, "Tessel Group"));
+}
+
+fn request_close(harness: &mut Harness) {
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+    assert!(is_shown(harness, "Keep working"));
+}
+
+/// The quit dialog takes the first Esc, even from a field that had the focus when it opened.
+#[test]
+fn esc_keeps_working_from_a_focused_field() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "quit_from_field");
+    let reply = harness.get_by_role(egui::accesskit::Role::TextInput);
+    reply.focus();
+    reply.type_text("one more thing");
+    harness.run_steps(2);
+    request_close(&mut harness);
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+}
+
+/// And over an open popup: one Esc keeps working. The model list is a popup egui tracks, as Run details is not.
+#[test]
+fn esc_keeps_working_over_an_open_popup() {
+    let mut shell = shell(Screen::Launcher, "quit_over_popup");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Haiku"), "the model list is open");
+    request_close(&mut harness);
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+}
+
+/// Cmd K from a focused reply leaves the field behind, so the next Esc already leaves the launcher.
+#[test]
+fn esc_leaves_a_launcher_opened_from_a_field() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "launcher_from_field");
+    let reply = harness.get_by_role(egui::accesskit::Role::TextInput);
+    reply.focus();
+    reply.type_text("one more thing");
+    harness.run_steps(2);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.step();
+    assert!(is_shown(&harness, LAUNCHER));
+
+    harness.key_press(Key::Escape);
+    harness.step();
+    harness.run_steps(2);
+
+    assert!(!is_shown(&harness, LAUNCHER));
+    assert!(is_shown(&harness, "Send"));
 }
 
 #[test]

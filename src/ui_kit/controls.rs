@@ -166,15 +166,9 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
     let enabled = ui.is_enabled();
     // A filled button keeps its ink: its fill is what goes pale.
     let ink = if enabled || matches!(look, Look::Primary | Look::On) { ink } else { dimmed(ink) };
-    let (chord, keys) = match hint {
-        Hint::None => (None, 0.0),
-        Hint::Key(_) => (None, KEY_SIZE + BUTTON_GAP),
-        Hint::Keys(keys) => {
-            let chord = Chord::new(ui, keys, ink);
-            let width = chord.width;
-            (Some(chord), width)
-        }
-    };
+    // A chord with no keys takes no room and paints nothing.
+    let chord = Chord::new(ui, if let Hint::Keys(keys) = hint { keys } else { &[] }, ink);
+    let keys = if let Hint::Key(_) = hint { KEY_SIZE + BUTTON_GAP } else { chord.width };
     let room = ui.available_width() - fit.padding * 2.0 - keys;
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
@@ -190,9 +184,7 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
         let hint = Rect::from_center_size(egui::pos2(text_rect.right() + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
         paint_key(ui, hint, key, ink, fill);
     }
-    if let Some(chord) = chord {
-        chord.paint(ui, text_rect.right(), rect.center().y, ink, fill);
-    }
+    chord.paint(ui, text_rect.right(), rect.center().y, ink, fill);
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
         Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, text),
@@ -265,9 +257,8 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     if pointer_over(&response) && !pressed(&response) {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
-    let text_right = text_rect.right();
     paint_text(ui, text_rect.min, label, ink, fill);
-    chord.paint(ui, text_right, rect.center().y, key_ink, fill);
+    chord.paint(ui, text_rect.right(), rect.center().y, key_ink, fill);
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, text));
     response
@@ -305,22 +296,29 @@ impl Chord {
     }
 }
 
-fn text_focus_id() -> egui::Id {
-    egui::Id::NULL.with("text_field_had_focus")
+fn focus_note_id() -> egui::Id {
+    egui::Id::NULL.with("focused_widget")
 }
 
-/// Notes, at the end of each frame, whether a text field has the focus. egui drops the focus on Esc before the next
-/// frame's widgets run, so `back_pressed` reads this note to tell leaving a field from going back.
-pub fn note_text_focus(ctx: &egui::Context) {
-    let typing = ctx.memory(|memory| memory.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
-    ctx.data_mut(|data| data.insert_temp(text_focus_id(), typing));
+/// Notes, at the end of each frame, which widget has the focus. egui drops the focus on Esc before the next frame's
+/// widgets run, so `back_pressed` needs the note to tell leaving a field from going back.
+pub fn note_focus(ctx: &egui::Context) {
+    let focused = ctx.memory(|memory| memory.focused());
+    ctx.data_mut(|data| data.insert_temp(focus_note_id(), focused));
 }
 
-/// Esc as back, for every dismisser. An open popup takes Esc first and closes, and in a text field Esc only leaves
-/// the field: a second Esc goes back. The key is taken only when it goes back.
+/// Whether Esc in this frame leaves a text field. The note counts only if egui agrees the widget held the focus as
+/// this frame began, so a note left by a field that has since gone, as when Cmd K leaves the screen, never counts.
+fn leaves_a_field(ctx: &egui::Context) -> bool {
+    let noted: Option<egui::Id> = ctx.data(|data| data.get_temp(focus_note_id())).flatten();
+    noted.is_some_and(|id| ctx.memory(|memory| memory.had_focus_last_frame(id)) && egui::text_edit::TextEditState::load(ctx, id).is_some())
+}
+
+/// Esc as back, for the launcher and the application details. An open popup takes Esc first and closes, and in a
+/// text field Esc only leaves the field: a second Esc goes back. The key is taken only when it goes back.
 pub fn back_pressed(ctx: &egui::Context) -> bool {
-    let typing = ctx.data(|data| data.get_temp(text_focus_id())).unwrap_or(false);
-    !typing && !egui::Popup::is_any_open(ctx) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    let esc = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    esc && !egui::Popup::is_any_open(ctx) && !leaves_a_field(ctx) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
 fn command_request_id() -> egui::Id {

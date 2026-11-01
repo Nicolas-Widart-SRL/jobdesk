@@ -141,9 +141,10 @@ impl TrackerScreen {
             return None;
         }
         action_bar(ui, pipeline);
+        // The pick outlives a snapshot that misses its card: the details hide, and come back with the card.
+        // Esc closes only details on show, so a hidden pick leaves it free.
         let mut selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
-        // A card gone from the tracker closes without taking Esc, which stays free for whatever else listens.
-        if selected.is_none() || back_pressed(ui.ctx()) {
+        if selected.is_some() && back_pressed(ui.ctx()) {
             selected = None;
             self.selected = None;
         }

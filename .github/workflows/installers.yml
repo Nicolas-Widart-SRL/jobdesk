@@ -3,7 +3,7 @@
 # Run it from the Actions tab to build the installers of a branch without a release.
 # A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
 # tag-release.yml has no `quick` input, so a release always tests.
-# The installers are not signed: see README.md.
+# The installers are not signed: see the Install section of README.md and the Package section of CONTRIBUTING.md.
 name: Installers
 
 on:

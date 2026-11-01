@@ -1,6 +1,51 @@
 # Mockups handoff
 
-Two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+One social preview, two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+
+## Social preview
+
+### Brief
+
+The user asked: "Update the github repository to make it marketable for the app. We need a github social media preview. Use it also on the readme." The repository goes public soon.
+Redraw `Social.html`, which still had the old Ledger look, in the Postmark look, at GitHub's 1280x640. The same image is the README hero, about 830px wide on github.com in both page themes, and it can show as small as 400px wide.
+Out of scope: code, tests, snapshots, `assets/brand/`, README.md and the other canvases. The lead has a builder copy the PNG to `assets/brand/jobdesk-social.png`.
+
+### Canvas
+
+`Social.html` keeps the `support.js` / `<x-dc>` structure. Its rules are scoped to `.so`. It loads Zilla Slab and Schibsted Grotesk from `assets/fonts`, so it renders offline. It has one state and one theme.
+
+| PNG (1280x640) | State |
+| --- | --- |
+| `Social.png` | Light grid paper. Left: the app icon and name, the headline, one line saying what it is, and four labels. Right: the Today desk at 1.25x, drawn from `intray_light.png`: the Harbor Bank deal card with its tab and stack edges, the Coming up slip behind it, and the day stamp across the card's corner. 150 KB. |
+
+Render with `--window-size=1280,640 --hide-scrollbars --allow-file-access-from-files`, so the local fonts load.
+
+### Copy
+
+- **Headline**: "Your job search, one decision at a time.", broken after "search," and "decision" so each line holds one idea. I kept the brief's line because the card beside it shows exactly that: one decision on top of a stack. I tried "dealt one decision at a time", but it was longer and no clearer.
+- **Line**: "A desktop app for the ai-job-search commands. Nothing runs until you start it." The first sentence says what it is. The second is the promise that matters most to someone handing their job search to an agent, and it is the hard rule behind Y.
+- **Labels**: macOS, Windows, Built in Rust, Uses your Claude Code. They are facts, not features. "Uses your Claude Code" says it runs on the user's own install, with no Anthropic or Claude logo and no hint of endorsement.
+- The card keeps its own footnote, shortened to "The app never sends for you."
+
+### Decisions
+
+- **Light only, on its own grid.** The image is fully opaque, so it needs no dark twin. Light navy-on-paper sits well on both GitHub page themes, and the light screen is the one most people meet first. A `<picture>` swap would also not work for the social preview itself.
+- **The app's objects on the desk, not a window screenshot.** A tilted window with a soft shadow is the stock SaaS hero. Here the card, the slip and the stamp lie on the same grid the app paints. They are tilted 1 to 2 degrees, like papers dealt onto a desk, and they use the app's solid offset shadow (`raised`), not a grey blur. The menu is left out, so the only mark on the card is the app icon, the same icon as in the Dock.
+- **The stamp is struck across the card's top-right corner, like a postmark**, rotated -12 degrees. Its rim catches the slip's lower edge. It is the one bold move, and it names the look: Postmark. Two of its ten ticks are done.
+- **One magenta**: the Now chip on "Harbor Bank deadline" in Coming up. It is `turn`, meaning "this needs you", and it points at the same job as the card. Nothing else uses `turn` or `mark`. The highlighter was left off the headline, because a highlighted word is the stock headline trick.
+- **Sizes for 400px**: headline 78px (24px at 400 wide), line 25px, labels 18px, card title 27px x 1.25. Everything stays inside the 40px safe margin. The slip's top-right corner reaches x 1236, and the stack edges end at y 588.
+- **Tokens**: `sheet`, `grid`, `panel`, `raised`, `line`, `off`, `card`, `text`, `muted`, `drafted`, `turn`, `on_turn`, all LIGHT from `palette.rs`. The icon's `#7f98b3` bars are the brand file's own colour. The labels use `panel` with no border, so they do not read as buttons.
+- **Data** is from `intray_light.png`: Harbor Bank, Lead Java Engineer, Tessel Group, Meridian Rail Systems, Sat 31 Oct. Only the tick count differs from the snapshot.
+
+### New widgets
+
+None. The canvas is not a screen.
+
+### Doc changes
+
+For the lead, once the PNG is in `assets/brand/jobdesk-social.png`:
+- README.md: replace the banner `<picture>` in the `<h1>` with this image, `alt="Jobdesk: your job search, one decision at a time. A desktop app for the ai-job-search commands."`, at `width="830"` or no width. Keep `<h1>Jobdesk</h1>` as text above or below it, so the page still has a heading for screen readers and search. The banner PNGs can stay in `assets/brand/` for other uses.
+- Repository settings: upload the same PNG under Settings, General, Social preview. That is a manual step on github.com, because no file in the repo sets it.
 
 ## Refresh, grid and highlighter
 

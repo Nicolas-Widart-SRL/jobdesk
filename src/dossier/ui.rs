@@ -10,7 +10,7 @@ use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, P
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
     panel_header, rich, segmented, slip, small_button, split, table_cell, table_head, tag, wrapped_height,
 };
 
@@ -76,7 +76,7 @@ impl DossierScreen {
             command_action(ui, "Prepare interview", &format!("/interview {company}"));
             command_action(ui, "Record a result", &format!("/outcome {company}"));
             if let Some(fit) = card.fit_rating {
-                label(ui, format!("Fit {fit}"), Type::BODY, Ink::Text);
+                desk_label(ui, format!("Fit {fit}"), Type::BODY, Ink::Text);
             }
             tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
         });

@@ -8,7 +8,7 @@ use egui::{
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_text, line, paint_centred, rich};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
@@ -29,14 +29,22 @@ pub fn desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.scope_builder(UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(DESK)), add).inner
 }
 
-/// Whether `ui` stands straight on the desk: inside `desk`, with no filled frame, such as paper or a slip, in between.
-/// Popups and windows stand on their own fill, so they are never on the desk.
+/// Marks a `Ui` whose owner paints its own fill under it with the painter, not with a `Frame`, such as a row that lights up.
+const SURFACE: &str = "jobdesk_surface";
+
+/// A child `Ui` that counts as a surface for `on_desk`, for a widget that paints its own fill under what it holds.
+pub(in crate::ui_kit) fn surface() -> UiBuilder {
+    UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(SURFACE))
+}
+
+/// Whether `ui` stands straight on the desk: inside `desk`, with no filled frame, such as paper or a slip, in between,
+/// and no `surface` either. Popups and windows stand on their own fill, so they are never on the desk.
 pub(in crate::ui_kit) fn on_desk(ui: &Ui) -> bool {
     for node in ui.stack().iter() {
         if node.tags().contains(DESK) {
             return true;
         }
-        if node.frame().fill != Color32::TRANSPARENT {
+        if node.frame().fill != Color32::TRANSPARENT || node.tags().contains(SURFACE) {
             return false;
         }
     }
@@ -134,12 +142,12 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
                 Subtitle::Text(text) => (text, Type::BODY),
                 Subtitle::Typed(text) => (text, Type::MONO),
             };
-            (line(ui, text, style, Palette::of(ui).muted, room), style)
+            line(ui, text, style, Palette::of(ui).muted, room)
         });
         let line_gap = ITEM_GAP - 2.0;
         // A one-line head centres its actions on the title. A two-line one ends both on one line.
         let centred = subtitle.is_none();
-        let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |(subtitle, _)| line_gap + subtitle.size().y);
+        let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |subtitle| line_gap + subtitle.size().y);
         let overhang = if inline { (used.y - text_height).max(0.0) } else { 0.0 };
         if overhang > 0.0 {
             ui.add_space(if centred { overhang / 2.0 } else { overhang });
@@ -147,9 +155,9 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
         let text = ui
             .vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = line_gap;
-                ui.add(egui::Label::new(title));
-                if let Some((subtitle, style)) = subtitle {
-                    add_text(ui, egui::Label::new(subtitle), style);
+                add_galley(ui, title);
+                if let Some(subtitle) = subtitle {
+                    add_galley(ui, subtitle);
                 }
             })
             .response
@@ -255,12 +263,10 @@ pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
     Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let heading = rich(ui, title, Type::SECTION, ink);
-            ui.label(heading);
+            add_text(ui, title, Type::SECTION, ink);
             if let Some(note) = note {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let note = rich(ui, note, Type::NOTE, Ink::Muted);
-                    ui.add(egui::Label::new(note).truncate());
+                    add_cut_text(ui, note, Type::NOTE, Ink::Muted);
                 });
             }
         });
@@ -271,7 +277,7 @@ fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
 /// The title of a group of rows inside a section, set in as the section's header is, with no rule of its own.
 pub fn group_title(ui: &mut Ui, title: &str) {
     Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
-        ui.label(rich(ui, title, Type::SECTION, Ink::Text));
+        add_text(ui, title, Type::SECTION, Ink::Text);
     });
 }
 
@@ -329,6 +335,7 @@ pub enum CellRule {
 }
 
 /// One cell of a table, padded inline and ruled underneath. Lay the table out with no item spacing, so rules meet.
+/// A table is read in rows, so it sits on paper, and egui_extras paints a picked row's fill under its cells: each cell is a `surface`.
 pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     let rect = ui.max_rect();
@@ -341,7 +348,7 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
         ui.painter().rect_filled(Rect::from_min_max(pos2(rect.left(), rect.bottom() - HAIRLINE), rect.right_bottom()), 0.0, color);
     }
     let inner = rect.shrink2(vec2(TABLE_CELL_PADDING.0, 0.0));
-    ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)), |ui| {
+    ui.scope_builder(surface().max_rect(inner).layout(Layout::left_to_right(Align::Center)), |ui| {
         ui.spacing_mut().item_spacing = vec2(ITEM_GAP, 0.0);
         add(ui)
     })
@@ -494,8 +501,8 @@ pub fn stamped_head(ui: &mut Ui, stamp: impl FnOnce(&mut Ui), title: &str, subti
             stamp(ui);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
-                ui.add(egui::Label::new(rich(ui, title, Type::LEAD, Ink::Text)).truncate());
-                add_text(ui, egui::Label::new(rich(ui, subtitle, Type::TAKE, Ink::Muted)).truncate(), Type::TAKE);
+                add_cut_text(ui, title, Type::LEAD, Ink::Text);
+                add_cut_text(ui, subtitle, Type::TAKE, Ink::Muted);
             });
         });
     });
@@ -587,12 +594,12 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                 Frame::new().inner_margin(padding).show(column, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = NODE_GAP;
-                    ui.label(rich(ui, node.label, Type::TAB, Ink::Muted));
-                    ui.label(rich(ui, node.figure.as_str(), Type::FIGURE, Ink::Text));
+                    add_text(ui, node.label, Type::TAB, Ink::Muted);
+                    add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
                     let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
                     ui.add_space((NODE_TALLY_HEIGHT - tally.rect.height()).max(0.0) + NODE_TALLY_MARGIN.1);
-                    ui.label(rich(ui, node.note.as_str(), Type::BODY, Ink::Muted));
+                    add_text(ui, node.note.as_str(), Type::BODY, Ink::Muted);
                 });
             }
         });
@@ -609,7 +616,7 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
         let patch = Rect::from_center_size(centre, Vec2::splat(NODE_ARROW.1 * 2.0));
         ui.painter().rect_filled(patch, 0.0, p.panel);
         let arrow = line(ui, "\u{2192}", Type::BODY, p.faint, f32::INFINITY);
-        paint_centred(ui, patch, arrow, p.faint);
+        paint_centred(ui, patch, arrow, p.faint, p.panel);
     }
 }
 
@@ -642,10 +649,10 @@ fn baseline(galley: &Galley) -> f32 {
     galley.rows.first().map_or(galley.size().y, |row| row.pos.y + row.glyphs.first().map_or(row.size.y, |glyph| glyph.pos.y))
 }
 
-/// Paints `galley` at `at` and names it for screen readers and tests.
-fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, color: Color32, text: &str) {
+/// Paints `galley` at `at`, over the `under` fill, and names it for screen readers and tests.
+fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, under: Color32, text: &str) {
     let rect = Rect::from_min_size(at, galley.size());
-    ui.painter().galley(at, galley, color);
+    paint_text(ui, at, galley, Palette::of(ui).text, under);
     ui.interact(rect, id, Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
 }
 
@@ -712,12 +719,13 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
         }
         let id = response.id.with(index);
         let cell_text = &cells[index];
+        let under = cell.fill.unwrap_or(p.panel);
         let at = pos2(cell_rect.left() + x, rect.top() + top);
         // The label's line: centred in its row, or on the value's baseline when compact.
         let label_top = if compact { at.y + baseline(&cell.value) - baseline(&cell.label) } else { at.y + (BAND_LABEL_HEIGHT - cell.label.size().y) / 2.0 };
         let label_width = cell.label.size().x;
         let label_centre = label_top + cell.label.size().y / 2.0;
-        painted(ui, id.with("label"), pos2(at.x, label_top), cell.label, p.text, cell_text.label);
+        painted(ui, id.with("label"), pos2(at.x, label_top), cell.label, under, cell_text.label);
         let mut after = at.x + label_width + BAND_GAP;
         if !cell.marks.is_empty() {
             let tally = crate::ui_kit::marks::paint_mark_row(ui, pos2(after, label_centre - TALLY_BAND.height / 2.0), &cell.marks, TALLY_BAND);
@@ -725,13 +733,13 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
             after = tally.right() + BAND_GAP;
         }
         if compact {
-            painted(ui, id.with("value"), pos2(after, at.y), cell.value, p.text, cell_text.value);
+            painted(ui, id.with("value"), pos2(after, at.y), cell.value, under, cell_text.value);
         } else {
             let value_top = at.y + BAND_LABEL_HEIGHT + BAND_ROW_GAP;
             let value_bottom = value_top + cell.value.size().y;
-            painted(ui, id.with("value"), pos2(at.x, value_top), cell.value, p.text, cell_text.value);
+            painted(ui, id.with("value"), pos2(at.x, value_top), cell.value, under, cell_text.value);
             if let Some(note) = cell.note {
-                painted(ui, id.with("note"), pos2(at.x, value_bottom + BAND_ROW_GAP), note, p.text, cell_text.note);
+                painted(ui, id.with("note"), pos2(at.x, value_bottom + BAND_ROW_GAP), note, under, cell_text.note);
             }
         }
         if index > 0 {
@@ -761,9 +769,9 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
             }
             ui.allocate_ui_with_layout(vec2(STEP_NAME_WIDTH, KNOT_SIZE_SMALL), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_min_width(STEP_NAME_WIDTH);
-                ui.add(egui::Label::new(rich(ui, name, Type::STRONG, name_ink)).truncate());
+                add_cut_text(ui, name, Type::STRONG, name_ink);
             });
-            ui.add(egui::Label::new(rich(ui, sentence, Type::BODY, Ink::Text)).truncate());
+            add_cut_text(ui, sentence, Type::BODY, Ink::Text);
         });
         toggled
     })

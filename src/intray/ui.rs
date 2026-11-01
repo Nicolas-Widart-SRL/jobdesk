@@ -4,7 +4,7 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
-    deal, divider, fat_tally, key_button, label, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    deal, divider, fat_tally, desk_label, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
@@ -261,7 +261,7 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
         .horizontal(|ui| {
             let tab = card_tab(ui, kind, ink, card.when.as_str());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                label(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted).on_hover_ui(|ui| {
+                desk_label(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted).on_hover_ui(|ui| {
                     ui.label(format!("Claude's questions come first, then deadlines in the next {}, then the rest.", HORIZON_WORDS.1));
                 });
             });

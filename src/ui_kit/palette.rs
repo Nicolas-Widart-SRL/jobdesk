@@ -207,6 +207,9 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
+    // egui's own controls rest clear. None stands on the desk: the kit's buttons take the desk fill themselves,
+    // and egui's are used only on a surface, the launcher form's model list and checkbox on its slip,
+    // and a question's choices in the turn bar's prompt box. A screen that puts one on the desk needs the kit's button instead.
     for (state, fill, control) in [
         (&mut visuals.widgets.inactive, Color32::TRANSPARENT, p.field),
         (&mut visuals.widgets.hovered, p.raised, p.raised),

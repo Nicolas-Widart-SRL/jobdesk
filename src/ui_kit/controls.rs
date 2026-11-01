@@ -7,7 +7,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::marks::{CountChip, paint_key};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
-use crate::ui_kit::text::{line, paint_centred, rich};
+use crate::ui_kit::text::{add_text, line, paint_centred, paint_text, rich};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
@@ -76,10 +76,10 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
     if matches!(look, Look::Primary) && response.hovered() {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
-    ui.painter().galley(text_rect.min, galley, ink);
+    paint_text(ui, text_rect.min, galley, ink, fill);
     if let Some(key) = key {
         let hint = Rect::from_center_size(egui::pos2(text_rect.right() + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
-        paint_key(ui, hint, key, ink);
+        paint_key(ui, hint, key, ink, fill);
     }
     focus_ring(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
@@ -150,11 +150,11 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
     let mut x = text_rect.right() + lead;
-    ui.painter().galley(text_rect.min, label, ink);
+    paint_text(ui, text_rect.min, label, ink, p.card);
     for glyph in glyphs {
         let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
         x += glyph.size().x + KEYS_GAP;
-        ui.painter().galley(at, glyph, p.muted);
+        paint_text(ui, at, glyph, p.muted, p.card);
     }
     focus_ring(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
@@ -218,8 +218,7 @@ pub fn reveal_command(ui: &mut Ui, line: &str, open: &mut bool) -> Response {
         code_box(ui, |ui| {
             // A command reads from its start, wherever the link sits.
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                let line = rich(ui, line, Type::MONO, Ink::Text);
-                ui.add(egui::Label::new(line).halign(egui::Align::Min).wrap());
+                add_text(ui, line, Type::MONO, Ink::Text);
             });
         });
     }
@@ -297,7 +296,8 @@ pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response
     let left = rect.left() + NAV_TAB_PADDING;
     let mark_left = left + width + lead;
     let at = egui::pos2(left, rect.center().y - text.size().y / 2.0);
-    if let Some((fill, rule)) = tab_swipe(ui, &response, on) {
+    let swipe = tab_swipe(ui, &response, on);
+    if let Some((fill, rule)) = swipe {
         // The swipe runs under the lower part of the label, its bottom 1px under the label's line box.
         let bottom = rect.center().y + MARK_LINE / 2.0 + 1.0;
         let swipe = Rect::from_min_max(egui::pos2(left - MARK_OVERHANG, bottom - MARK_HEIGHT), egui::pos2(left + width + MARK_OVERHANG, bottom));
@@ -306,7 +306,8 @@ pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response
             ui.painter().rect_filled(Rect::from_min_max(egui::pos2(swipe.left(), swipe.bottom() - MARK_RULE), swipe.max), 0.0, rule);
         }
     }
-    ui.painter().galley(at, text, ink);
+    // A resting tab's label stands on the bare grid, so it takes the desk's base. The swipe keeps it under a highlighted one.
+    paint_text(ui, at, text, ink, swipe.map_or(Color32::TRANSPARENT, |(fill, _)| fill));
     if let Some(chip) = chip {
         let chip_rect = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - CHIP_HEIGHT / 2.0), chip.size());
         chip.paint(ui, chip_rect);
@@ -342,15 +343,16 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
     let ink = if on { inks.on.1 } else { inks.off };
     let room = ui.available_width() - look.padding * 2.0;
     let galley = line(ui, label, font, ink, room);
-    let widest = line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x);
+    let widest = if on { galley.size().x } else { line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x) };
     let size = vec2(widest + look.padding * 2.0, look.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    if on {
-        ui.painter().rect_filled(rect, look.radius, inks.on.0);
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, look.radius, inks.hover);
-    }
-    paint_centred(ui, rect, galley, ink);
+    let fill = match (on, response.hovered()) {
+        (true, _) => inks.on.0,
+        (false, true) => inks.hover,
+        (false, false) => Color32::TRANSPARENT,
+    };
+    ui.painter().rect_filled(rect, look.radius, fill);
+    paint_centred(ui, rect, galley, ink, fill);
     focus_ring(ui, &response, look.radius);
     response.widget_info(|| WidgetInfo::selected(Role::Tab, true, on, label));
     response
@@ -396,13 +398,12 @@ pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &
 pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
     let p = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), Sense::click());
-    if on || response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, p.panel);
-    }
+    let fill = if on || response.hovered() { p.panel } else { Color32::TRANSPARENT };
+    ui.painter().rect_filled(rect, 0.0, fill);
     let ink = if on { p.text } else { p.muted };
     let galley = line(ui, text, style, ink, rect.width() - crate::ui_kit::tokens::INSET as f32 * 2.0);
     let at = egui::pos2(rect.left() + crate::ui_kit::tokens::INSET as f32, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(at, galley, ink);
+    paint_text(ui, at, galley, ink, fill);
     focus_ring(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, text));
     response
@@ -412,9 +413,8 @@ pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
 pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: bool) -> Response {
     let p = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), Sense::click());
-    if on || response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, p.panel);
-    }
+    let fill = if on || response.hovered() { p.panel } else { Color32::TRANSPARENT };
+    ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), HAIRLINE)), 0.0, p.line);
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;
@@ -425,9 +425,9 @@ pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: boo
     let summed = line(ui, summary, Type::BODY, p.text, room);
     let centred = |galley: &Arc<Galley>, x: f32| egui::pos2(x, rect.center().y - galley.size().y / 2.0);
     let (named_at, summed_at, written_at) = (centred(&named, left), centred(&summed, summary_left), centred(&written, right - written.size().x));
-    ui.painter().galley(named_at, named, p.text);
-    ui.painter().galley(summed_at, summed, p.text);
-    ui.painter().galley(written_at, written, p.faint);
+    paint_text(ui, named_at, named, p.text, fill);
+    paint_text(ui, summed_at, summed, p.text, fill);
+    paint_text(ui, written_at, written, p.faint, fill);
     focus_ring(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, format!("{name} {summary}")));
     response

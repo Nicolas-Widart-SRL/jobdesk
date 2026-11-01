@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use egui::emath::TSTransform;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
+use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, Vec2, WidgetInfo, pos2, vec2};
 
 use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::on_desk;
-use crate::ui_kit::text::{line, paint_centred};
+use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
     KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, MOTION_TIME, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
@@ -26,7 +26,7 @@ pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     let fill = if on_desk(ui) { p.sheet } else { Color32::TRANSPARENT };
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect(rect, RADIUS_CARD, fill, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
-    paint_centred(ui, rect, galley, color);
+    paint_centred(ui, rect, galley, color, fill);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &text));
     response
 }
@@ -41,7 +41,7 @@ pub fn solid_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     let size = vec2(galley.size().x + TAG_PADDING * 2.0, TAG_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect_filled(rect, RADIUS_CARD, fill);
-    paint_centred(ui, rect, galley, ink);
+    paint_centred(ui, rect, galley, ink, fill);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &text));
     response
 }
@@ -52,7 +52,7 @@ pub fn lane_title(ui: &mut Ui, text: &str, tone: Tone) -> Response {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
         ui.painter().rect_filled(rect, 0.0, color);
-        ui.label(crate::ui_kit::rich(ui, text, Type::SECTION, Ink::Text))
+        add_text(ui, text, Type::SECTION, Ink::Text)
     })
     .inner
 }
@@ -68,23 +68,23 @@ pub fn stamp(ui: &mut Ui, text: &str, tone: Tone) -> Response {
         ui.painter().rect_stroke(rect.shrink(inset), RADIUS_STAMP, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
     }
     // Centred on the ink: a score has no descenders to balance the line box.
-    ui.painter().galley(rect.center() - galley.mesh_bounds.center().to_vec2(), galley, color);
+    paint_text(ui, rect.center() - galley.mesh_bounds.center().to_vec2(), galley, color, Color32::TRANSPARENT);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
     response
 }
 
-/// A key on the keyboard, in the colour of whatever it sits on.
-pub(in crate::ui_kit) fn paint_key(ui: &Ui, rect: Rect, key: &str, color: Color32) {
+/// A key on the keyboard, in the colour of whatever it sits on. `under` is the fill of the widget it sits in, if any.
+pub(in crate::ui_kit) fn paint_key(ui: &Ui, rect: Rect, key: &str, color: Color32, under: Color32) {
     ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
     let galley = line(ui, key, Type::KEY, color, f32::INFINITY);
-    paint_centred(ui, rect, galley, color);
+    paint_centred(ui, rect, galley, color, under);
 }
 
 pub fn key_hint(ui: &mut Ui, key: &str) -> Response {
     let color = Palette::of(ui).muted;
     let width = line(ui, key, Type::KEY, color, f32::INFINITY).size().x + KEY_PADDING * 2.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width.max(KEY_SIZE), KEY_SIZE), Sense::hover());
-    paint_key(ui, rect, key, color);
+    paint_key(ui, rect, key, color, Color32::TRANSPARENT);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, key));
     response
 }
@@ -175,7 +175,7 @@ pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
         ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
     }
     // Centred on the ink, as a stamp is: digits have no descenders to balance the line box.
-    ui.painter().galley(rect.center() - galley.mesh_bounds.center().to_vec2(), galley, ink);
+    paint_text(ui, rect.center() - galley.mesh_bounds.center().to_vec2(), galley, ink, fill);
     let said = match state {
         KnotState::Done => "done",
         KnotState::Working => "working",
@@ -195,7 +195,7 @@ pub fn path_label(ui: &mut Ui, dir: &str, file: &str) -> Response {
     let mut job = LayoutJob::default();
     job.append(dir, 0.0, TextFormat::simple(Type::MONO.font(), p.faint));
     job.append(file, 0.0, TextFormat::simple(Type::MONO.font(), p.text));
-    ui.add(egui::Label::new(job).truncate())
+    add_job(ui, job, TextWrapMode::Truncate)
 }
 
 /// The centres of the weekday, day and month lines, below the stamp's centre, from the canvas's 80px view box.
@@ -295,10 +295,9 @@ pub fn check_tag(ui: &mut Ui, check: CheckMark) -> Response {
 }
 
 /// The Jobdesk mark: a folder with a J hooked into it, drawn from the logo's 652 by 600 view box.
-/// It is drawn in `text`, and the J is stroked in `sheet`, the desk it stands on.
-fn paint_brand_mark(ui: &mut Ui) -> Response {
-    let p = Palette::of(ui);
-    let (ink, cut) = (p.text, p.sheet);
+/// It is drawn in `text`, and the J is stroked in `ground`, the colour the mark stands on.
+fn paint_brand_mark(ui: &mut Ui, ground: Color32) -> Response {
+    let (ink, cut) = (Palette::of(ui).text, ground);
     const ORIGIN: (f32, f32) = (186.0, 216.0);
     const VIEW: (f32, f32) = (652.0, 600.0);
     const ARC_SEGMENTS: usize = 12;
@@ -326,8 +325,8 @@ pub fn brand(ui: &mut Ui) -> Response {
     let p = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BRAND_GAP;
-        paint_brand_mark(ui);
-        ui.label(line(ui, "Jobdesk", Type::BRAND, p.text, f32::INFINITY));
+        paint_brand_mark(ui, p.sheet);
+        add_galley(ui, line(ui, "Jobdesk", Type::BRAND, p.text, f32::INFINITY));
     })
     .response
 }
@@ -347,7 +346,7 @@ pub fn status_line(ui: &mut Ui, ok: bool, text: &str) -> Response {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
         ui.painter().rect_filled(rect, 0.0, if ok { p.hired } else { p.closed });
-        ui.label(line(ui, text, Type::NOTE, p.muted, f32::INFINITY));
+        add_galley(ui, line(ui, text, Type::NOTE, p.muted, f32::INFINITY));
     })
     .response
 }
@@ -355,7 +354,7 @@ pub fn status_line(ui: &mut Ui, ok: bool, text: &str) -> Response {
 /// A note in the status strip. `alert` says something could not be read.
 pub fn status_note(ui: &mut Ui, text: &str, alert: bool) -> Response {
     let p = Palette::of(ui);
-    ui.label(line(ui, text, Type::NOTE, if alert { p.closed } else { p.muted }, f32::INFINITY))
+    add_galley(ui, line(ui, text, Type::NOTE, if alert { p.closed } else { p.muted }, f32::INFINITY))
 }
 
 /// The stamp-ink chip that counts what waits on the user, laid out but not yet placed.
@@ -378,7 +377,7 @@ impl CountChip {
 
     pub(in crate::ui_kit) fn paint(self, ui: &Ui, rect: Rect) {
         ui.painter().rect_filled(rect, RADIUS_CARD, self.fill);
-        paint_centred(ui, rect, self.galley, self.ink);
+        paint_centred(ui, rect, self.galley, self.ink, self.fill);
     }
 }
 
@@ -414,8 +413,8 @@ pub fn slip_bar(ui: &mut Ui, fraction: f32, ink: impl Into<Ink>) {
 /// A labelled measure: name and value above a bar.
 pub fn measure(ui: &mut Ui, label: &str, value: usize, of: usize, ink: impl Into<Ink>) {
     ui.horizontal(|ui| {
-        ui.label(label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.monospace(value.to_string()));
+        add_text(ui, label, Type::BODY, Ink::Text);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| add_text(ui, value.to_string(), Type::MONO, Ink::Text));
     });
     bar(ui, if of == 0 { 0.0 } else { value as f32 / of as f32 }, ink);
     ui.add_space(ITEM_GAP - 2.0);

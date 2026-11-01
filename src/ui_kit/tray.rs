@@ -1,13 +1,13 @@
 //! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Align, Area, Color32, CornerRadius, Frame, Label, Layout, Margin, Order, Rect, Response, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined};
-use crate::ui_kit::text::{line, rich};
+use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined, surface};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_text};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
     ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
@@ -34,8 +34,8 @@ pub fn card_tab(ui: &mut Ui, title: &str, tone: Tone, when: &str) -> CardTab {
         ui.spacing_mut().item_spacing.x = CARD_TAB_GAP;
         ui.set_min_height(CARD_TAB_HEIGHT - 2.0 * y as f32);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).font(Type::STRONG.font()).color(title_ink));
-            ui.label(RichText::new(when).font(Type::BODY.font()).color(when_ink));
+            add_galley(ui, line(ui, title, Type::STRONG, title_ink, f32::INFINITY));
+            add_galley(ui, line(ui, when, Type::BODY, when_ink, f32::INFINITY));
         });
     });
     let rect = shown.response.rect;
@@ -210,12 +210,12 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let done = end == AgendaEnd::Done;
     let sense = if done { Sense::hover() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
-    if !done && response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, p.raised);
-    }
+    let fill = if !done && response.hovered() { p.raised } else { Color32::TRANSPARENT };
+    ui.painter().rect_filled(rect, 0.0, fill);
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;
-    let mut end_ui = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_x_y_ranges(left..=right, rect.y_range())).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    // The row lights up under its end, so the end stands on a surface, never on the desk.
+    let mut end_ui = ui.new_child(surface().max_rect(Rect::from_x_y_ranges(left..=right, rect.y_range())).layout(egui::Layout::right_to_left(egui::Align::Center)));
     let mut pressed = AgendaPress::default();
     match end {
         AgendaEnd::Nothing => {}
@@ -223,10 +223,10 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
             solid_tag(&mut end_ui, "Now", Tone::Turn);
         }
         AgendaEnd::Done => {
-            end_ui.label(rich(ui, "Done", Type::SMALL, Ink::Faint));
+            add_text(&mut end_ui, "Done", Type::SMALL, Ink::Faint);
         }
         AgendaEnd::Late(late) => {
-            end_ui.label(rich(ui, late, Type::TAG, Tone::Interview));
+            add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
         }
         AgendaEnd::Button(label) => pressed.button = small_button(&mut end_ui, label).clicked(),
     }
@@ -238,8 +238,8 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let said = line(ui, text, Type::BODY, ink, room);
     let centred = |height: f32| rect.center().y - height / 2.0;
     let (dated_at, said_at) = (pos2(left, centred(dated.size().y)), pos2(text_left, centred(said.size().y)));
-    ui.painter().galley(dated_at, dated, day_ink);
-    ui.painter().galley(said_at, said, ink);
+    paint_text(ui, dated_at, dated, day_ink, fill);
+    paint_text(ui, said_at, said, ink, fill);
     if !done {
         focus_ring(ui, &response, 0);
     }
@@ -279,11 +279,11 @@ pub fn undo_row(ui: &mut Ui, name: &str, note: &str, label: &str, toggles: &[(&s
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 pressed.undo = small_key_button(ui, "Undo", "U").clicked();
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(Label::new(rich(ui, name, Type::STRONG, Ink::Text)).truncate());
+                    add_cut_text(ui, name, Type::STRONG, Ink::Text);
                 });
             });
         });
-        ui.label(rich(ui, note, Type::BODY, Ink::Muted));
+        add_text(ui, note, Type::BODY, Ink::Muted);
         if !toggles.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(TOGGLE_GAP, TOGGLE_GAP);

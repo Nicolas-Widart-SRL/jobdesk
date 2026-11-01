@@ -5,7 +5,7 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, index_card, label, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
+    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
     primary_button, primary_command_action, rich, side_column, slip, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
@@ -137,7 +137,7 @@ impl TrackerScreen {
             egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     stamp_square(ui, "Pink edge");
-                    label(ui, "A pink edge means the application waits for you in Today.", Type::NOTE, Ink::Muted);
+                    desk_label(ui, "A pink edge means the application waits for you in Today.", Type::NOTE, Ink::Muted);
                 });
             });
         }

@@ -31,4 +31,3 @@ At the start of a session, when the user says a pull request merged, and when a 
 2. For each branch, run `gh pr view <branch> --json state -q .state`.
 3. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.
 4. Tell the user in one line what it removed.
-5. At the start of a session only, when a plan file's branch is `OPEN`, call `watch_pull_request` on its pull request once, when the tool exists. A new session is not a wake, as the `ship` skill says.

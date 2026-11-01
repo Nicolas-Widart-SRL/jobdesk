@@ -25,8 +25,8 @@ Once the pull request opens, it also holds the pull request's number and URL, th
 and the count of Answer CodeRabbit rounds (see step 8).
 Update the file after each step merges and after each review. A new session reads it and goes on from there.
 The session stays open after the pull request opens, to watch it.
-A new session is not a wake. When it resumes a plan file with an open pull request,
-it calls `watch_pull_request` on it once, when the tool exists.
+A new session is not a wake. A new session that resumes the change's plan file with an open pull request
+calls `watch_pull_request` on it once, when the tool exists.
 Tell the user to start the next change in a new session.
 
 Keep command output out of your context. Run checks only through `scripts/check.sh` and `scripts/merge-step.sh`,

@@ -301,9 +301,9 @@ a.panel.card:hover { background: var(--raised); }
   .node .arrow { display: none; }
 }
 
-/* Runs: where am I, and is it my turn (RunTurn.html).
-   Your turn takes the warning ink as a fill, so it never reads like running. Claude's turn stays active ink. */
-.tag.turn { background: var(--interview); border-color: var(--interview); color: var(--sheet); }
+/* Runs: where am I, and is it my turn.
+   Your turn takes the magenta stamp ink (`turn`) as a fill, so it never reads like running. Claude's turn stays active ink. */
+.tag.turn { background: var(--turn); border-color: var(--turn); color: var(--on-turn); }
 .nav a.wait .count { color: var(--interview); font-weight: 600; }
 .nav a.wait .count::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: var(--interview); vertical-align: 1px; }
 .step.hold { background: var(--interview); color: var(--sheet); font-weight: 600; }

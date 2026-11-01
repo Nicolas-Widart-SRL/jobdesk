@@ -9,6 +9,7 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - **Untrusted text**: posting, note, report and tool text shown without stripping control, escape, bidi and zero-width characters, or split on fewer line breaks than it holds.
 - **Copy claims more than the data**: a label or sentence that says more than the data behind it, in the empty, one or many case.
 - **Hover/focus/keyboard**: hover, focus and selected states that look the same, or a control or tooltip that the keyboard cannot reach.
+- **Contradiction between steps**: two steps or rules in one instruction file that cannot both be followed, such as a read limit against a step that needs the file.
 
 ## Escapes
 
@@ -26,3 +27,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 11 `.claude/agents/designer.md`: Rounds section could copy real job-search values from feedback into a committed README. Class: untrusted text.
 - PR 11 `.claude/skills/ship/SKILL.md`: an interrupted CodeRabbit answer reran the builder or posted duplicate replies; a review id counted as handled after one of its findings. Class: state over time.
 - PR 11 `scripts/pr-feedback.sh`: output and count silently cut at 100 threads, 100 reviews and 20 comments. Class: copy claims more than the data.
+- PR 18 `.claude/agents/designer.md`: step 1 limited reads to "only" handoff files and touched canvases while step 2 required `Grid.html`, `app.css` and `support.js`. Class: contradiction between steps.

@@ -445,8 +445,8 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 5900.0])
-        .with_pixels_per_point(1.5)
+        .with_size([1000.0, 5800.0])
+        .with_pixels_per_point(1.25)
         .with_theme(theme)
         .with_context_setup(install_look)
         .wgpu()

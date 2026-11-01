@@ -76,35 +76,115 @@ pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
 }
 
-/// A message as a document: one readable column, headings held to the section size, and the paragraph at `marked`
-/// set off by a turn-coloured rule. A range off a character boundary or out of bounds marks nothing.
-/// Every part goes through `markdown`, so the rules of ARCHITECTURE.md#trust hold for the marked paragraph too.
+/// A message as a document: one readable column, headings held to the section size, and the paragraph around `marked`
+/// set off by a turn-coloured rule. A range that is not inside one top-level paragraph marks nothing, so no list item,
+/// table row or code fence is ever cut. Every part goes through `markdown`, so ARCHITECTURE.md#trust holds for each.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, marked: Option<Range<usize>>) {
     ui.scope(|ui| {
-        ui.set_max_width(DOC_MEASURE);
+        ui.set_max_width(ui.available_width().min(DOC_MEASURE));
         let styles = &mut ui.style_mut().text_styles;
         styles.insert(TextStyle::Heading, Type::SECTION.font());
         styles.insert(TextStyle::Body, Type::TAKE.font());
-        let Some((before, marked, after)) = marked.and_then(|range| split_marked(text, range)) else {
-            markdown(ui, cache, text);
+        let outline = marked.as_ref().map(|_| Outline::of(text));
+        let Some((outline, span)) = outline.and_then(|outline| marked.and_then(|range| outline.paragraph_around(text, range)).map(|span| (outline, span))) else {
+            ui.push_id(("doc_part", 0), |ui| markdown(ui, cache, text));
             return;
         };
-        markdown(ui, cache, before);
-        ui.add_space(ROW_GAP);
-        let rule = Palette::of(ui).turn;
-        let shown = Frame::new().inner_margin(Margin { left: (QUOTE_RULE + f32::from(GUTTER)) as i8, ..Default::default() }).show(ui, |ui| markdown(ui, cache, marked));
-        let edge = shown.response.rect;
-        ui.painter().rect_filled(Rect::from_min_size(edge.left_top(), vec2(QUOTE_RULE, edge.height())), 0.0, rule);
-        markdown(ui, cache, after);
+        let before = outline.part(text, 0..span.start);
+        let marked = outline.part(text, span.clone());
+        let after = outline.part(text, span.end..text.len());
+        if let Some(before) = &before {
+            ui.push_id(("doc_part", 0), |ui| markdown(ui, cache, before));
+            ui.add_space(ROW_GAP);
+        }
+        if let Some(marked) = &marked {
+            let rule = Palette::of(ui).turn;
+            let shown = Frame::new().inner_margin(Margin { left: GUTTER + QUOTE_RULE as i8, ..Default::default() }).show(ui, |ui| {
+                ui.push_id(("doc_part", 1), |ui| markdown(ui, cache, marked));
+            });
+            let edge = shown.response.rect;
+            ui.painter().rect_filled(Rect::from_min_size(edge.left_top(), vec2(QUOTE_RULE, edge.height())), 0.0, rule);
+        }
+        if let Some(after) = &after {
+            ui.add_space(ROW_GAP);
+            ui.push_id(("doc_part", 2), |ui| markdown(ui, cache, after));
+        }
     });
 }
 
-/// The text before, inside and after `range`, or `None` when the range is empty, reversed, out of bounds or off a character boundary.
-fn split_marked(text: &str, range: Range<usize>) -> Option<(&str, &str, &str)> {
-    if range.start >= range.end {
-        return None;
+/// Where a message's top-level paragraphs sit, and what a part cut from it must carry along to read the same.
+#[derive(Default)]
+struct Outline {
+    paragraphs: Vec<Range<usize>>,
+    /// Link reference definitions.
+    links: Vec<Range<usize>>,
+    /// Top-level footnote definitions, by label.
+    notes: Vec<(String, Range<usize>)>,
+    /// Footnote references, by label.
+    mentions: Vec<(String, Range<usize>)>,
+}
+
+impl Outline {
+    fn of(text: &str) -> Self {
+        let mut outline = Self::default();
+        let mut parser = Parser::new_ext(text, markdown::options()).into_offset_iter();
+        let mut depth = 0;
+        for (event, range) in &mut parser {
+            match event {
+                Event::Start(tag) => {
+                    if depth == 0 {
+                        match tag {
+                            Tag::Paragraph => outline.paragraphs.push(range),
+                            Tag::FootnoteDefinition(label) => outline.notes.push((label.to_string(), range)),
+                            _ => {}
+                        }
+                    }
+                    depth += 1;
+                }
+                Event::End(_) => depth -= 1,
+                Event::FootnoteReference(label) => outline.mentions.push((label.to_string(), range)),
+                _ => {}
+            }
+        }
+        outline.links = parser.reference_definitions().iter().map(|(_, definition)| definition.span.clone()).collect();
+        outline.links.sort_by_key(|span| span.start);
+        outline
     }
-    Some((text.get(..range.start)?, text.get(range.clone())?, text.get(range.end..)?))
+
+    /// The whole top-level paragraph `range` lies inside, or `None` when the range is empty, reversed, out of bounds,
+    /// off a character boundary, or not inside a single top-level paragraph.
+    fn paragraph_around(&self, text: &str, range: Range<usize>) -> Option<Range<usize>> {
+        if range.is_empty() || !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
+            return None;
+        }
+        self.paragraphs.iter().find(|paragraph| paragraph.start <= range.start && range.end <= paragraph.end).cloned()
+    }
+
+    /// The text of `span` ready to render alone: its footnote definitions cut out, then the reference definitions
+    /// from elsewhere and the footnote definitions it mentions put after it. `None` when nothing but space is left.
+    fn part(&self, text: &str, span: Range<usize>) -> Option<String> {
+        let inside = |range: &Range<usize>| span.start <= range.start && range.end <= span.end;
+        let (mut body, mut at) = (String::new(), span.start);
+        for (_, note) in self.notes.iter().filter(|(_, note)| inside(note)) {
+            body.push_str(&text[at..note.start]);
+            at = note.end;
+        }
+        body.push_str(&text[at..span.end]);
+        if body.trim().is_empty() {
+            return None;
+        }
+        for link in self.links.iter().filter(|link| !inside(link)) {
+            body.push_str("\n\n");
+            body.push_str(text[link.clone()].trim_end());
+        }
+        for (label, note) in &self.notes {
+            if self.mentions.iter().any(|(mention, at)| mention == label && inside(at)) {
+                body.push_str("\n\n");
+                body.push_str(text[note.clone()].trim_end());
+            }
+        }
+        Some(body)
+    }
 }
 
 #[derive(Default)]
@@ -216,10 +296,6 @@ mod tests {
     type Render = fn(&mut Ui, &mut CommonMarkCache, &'static str);
 
     /// Clicks the link named `label` and returns every url a frame asked to open.
-    fn opened_by_click(source: &'static str, label: &str) -> Vec<String> {
-        opened_through(markdown, source, label)
-    }
-
     fn opened_through(render: Render, source: &'static str, label: &str) -> Vec<String> {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&opened);
@@ -239,9 +315,9 @@ mod tests {
 
     #[test]
     fn markdown_links_open_only_for_the_web() {
-        assert_eq!(opened_by_click("[terminal](file:///Applications/Utilities/Terminal.app)", "terminal"), Vec::<String>::new());
-        assert_eq!(opened_by_click("[script](javascript:alert(1))", "script"), Vec::<String>::new());
-        assert_eq!(opened_by_click("[posting](https://tessel.example/jobs/1)", "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+        assert_eq!(opened_through(markdown, "[terminal](file:///Applications/Utilities/Terminal.app)", "terminal"), Vec::<String>::new());
+        assert_eq!(opened_through(markdown, "[script](javascript:alert(1))", "script"), Vec::<String>::new());
+        assert_eq!(opened_through(markdown, "[posting](https://tessel.example/jobs/1)", "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
     }
 
     #[test]
@@ -314,18 +390,110 @@ mod tests {
         assert!(heading <= *line.borrow() + 2.0, "heading is {heading} px, one section line is {}", line.borrow());
     }
 
+    /// The range of the line that starts at `start`.
+    fn line_from(text: &str, start: &str) -> Option<Range<usize>> {
+        let from = text.find(start)?;
+        Some(from..text[from..].find('\n').map_or(text.len(), |end| from + end))
+    }
+
+    fn marking_the_question(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+        document(ui, cache, text, line_from(text, "Shall"));
+    }
+
+    fn shown(render: Render, source: &'static str, size: [f32; 2]) -> Harness<'static> {
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size(size).build_ui(move |ui| render(ui, &mut cache, source));
+        harness.run();
+        harness
+    }
+
     #[test]
     fn a_bad_range_renders_everything() {
         let text = "Caf\u{e9} first.\n\nSecond paragraph.";
-        // Inside the two-byte `\u{e9}`, past the end, reversed and empty.
-        for range in [4..9, 0..text.len() + 1, Range { start: 12, end: 3 }, 5..5] {
-            assert_eq!(split_marked(text, range.clone()), None, "{range:?}");
+        let outline = Outline::of(text);
+        // Inside the two-byte `\u{e9}`, past the end, reversed, empty, and across two paragraphs.
+        for range in [4..9, 0..text.len() + 1, Range { start: 12, end: 3 }, 5..5, 2..20] {
+            assert_eq!(outline.paragraph_around(text, range.clone()), None, "{range:?}");
         }
-        assert_eq!(split_marked(text, 14..text.len()), Some(("Caf\u{e9} first.\n\n", "Second paragraph.", "")));
+        assert_eq!(outline.paragraph_around(text, 16..20), Some(14..text.len()));
         let mut cache = CommonMarkCache::default();
         let mut harness = Harness::builder().with_size([600.0, 200.0]).build_ui(move |ui| document(ui, &mut cache, text, Some(4..9)));
         harness.run();
         harness.get_by_label_contains("first.");
         harness.get_by_label_contains("Second paragraph.");
+    }
+
+    #[test]
+    fn only_a_top_level_paragraph_is_marked() {
+        let text = "Intro.\n\n- first item\n- second item\n\n```\nlet fence = 1;\n```\n\n> quoted words\n\nShall I apply?";
+        let outline = Outline::of(text);
+        for inside in ["second item", "let fence", "quoted words"] {
+            let at = text.find(inside).unwrap();
+            assert_eq!(outline.paragraph_around(text, at..at + inside.len()), None, "{inside}");
+        }
+        // A range inside a paragraph marks the whole paragraph.
+        let at = text.find("apply").unwrap();
+        assert_eq!(outline.paragraph_around(text, at..at + 5), Some(text.find("Shall").unwrap()..text.len()));
+        // A mark in a list item renders the whole text, once.
+        let in_the_list = |ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str| document(ui, cache, text, line_from(text, "second item"));
+        let harness = shown(in_the_list, text, [600.0, 400.0]);
+        harness.get_by_label_contains("first item");
+        assert_eq!(harness.query_all_by_label_contains("Shall I apply?").count(), 1);
+    }
+
+    #[test]
+    fn a_split_keeps_the_links_the_message_defines() {
+        let source = "See [the posting][p].\n\nShall I apply? [ask][p]\n\nAfter that, [the role][p].\n\n[p]: https://x.example";
+        for label in ["the posting", "ask", "the role"] {
+            assert_eq!(opened_through(marking_the_question, source, label), vec!["https://x.example".to_owned()], "{label}");
+        }
+        let hostile = "See [the posting][p].\n\nShall I apply? [ask][p]\n\nAfter that, [the role][p].\n\n[p]: file:///etc/passwd";
+        for label in ["the posting", "ask", "the role"] {
+            assert_eq!(opened_through(marking_the_question, hostile, label), Vec::<String>::new(), "{label}");
+        }
+    }
+
+    #[test]
+    fn a_split_keeps_the_footnotes_it_mentions() {
+        let source = "Intro.\n\nShall I apply?[^1]\n\nAfter.\n\n[^1]: Because of the rate.";
+        let harness = shown(marking_the_question, source, [600.0, 300.0]);
+        assert_eq!(harness.query_all_by_label_contains("Because of the rate.").count(), 1);
+        harness.get_by_label_contains("After.");
+    }
+
+    /// Whether egui painted an id clash warning in the last frame.
+    fn painted_an_id_clash(harness: &Harness<'_>) -> bool {
+        fn clash(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.text().contains('\u{1f525}'),
+                egui::Shape::Vec(shapes) => shapes.iter().any(clash),
+                _ => false,
+            }
+        }
+        harness.output().shapes.iter().any(|clipped| clash(&clipped.shape))
+    }
+
+    #[test]
+    fn the_parts_of_a_document_share_no_ids() {
+        let source = "| Gate | Result |\n|---|---|\n| Contract | Pass |\n\nShall I apply?\n\n| Gate | Result |\n|---|---|\n| Contract | Pass |";
+        let harness = shown(marking_the_question, source, [600.0, 400.0]);
+        assert_eq!(harness.query_all_by_label_contains("Contract").count(), 2);
+        assert!(!painted_an_id_clash(&harness));
+    }
+
+    #[test]
+    fn a_marked_question_starts_where_an_unmarked_one_does() {
+        let source = "Shall I apply?";
+        let top = |render: Render| shown(render, source, [400.0, 200.0]).get_by_label_contains("Shall").rect().min.y;
+        assert_eq!(top(marking_the_question), top(unmarked));
+    }
+
+    #[test]
+    fn content_after_the_marked_paragraph_still_renders() {
+        let source = "Intro.\n\nShall I apply?\n\nAfter, ![chart](file:///x.png) and [the role](https://x.example/2) and [script](javascript:alert(1)).";
+        let harness = shown(marking_the_question, source, [600.0, 300.0]);
+        harness.get_by_label_contains("chart");
+        assert_eq!(opened_through(marking_the_question, source, "the role"), vec!["https://x.example/2".to_owned()]);
+        assert_eq!(opened_through(marking_the_question, source, "script"), Vec::<String>::new());
     }
 }

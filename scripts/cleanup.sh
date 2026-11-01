@@ -9,7 +9,8 @@
 # it stays until GitHub shows its pull request merged.
 # A plan file in .claude/plans/ names its branch on its first line, as "# <branch>".
 # The plan file goes when this run deletes its branch, or when the branch is gone
-# and GitHub shows its pull request merged. Without gh, it stays.
+# and the file is older than the branch's newest merged pull request on GitHub.
+# Without gh, with an open pull request, or with a first line that names no branch, it stays.
 # It never checks out, resets or pulls in the main checkout.
 #
 #   scripts/cleanup.sh                        after the user merges a pull request
@@ -106,20 +107,29 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads); do
   fi
 done
 
-# True when GitHub shows the branch's pull request merged. Without gh, nothing is.
-pr_state_merged() {
+# True when the plan file is older than the newest merged pull request from its branch.
+# A reused branch name can start a new plan after an old merge, so any doubt keeps the
+# file: no gh, an open pull request, no merged one, or a time that does not parse.
+plan_predates_merge() {
+  local open merged_at mtime
   command -v gh >/dev/null || return 1
-  [ "$(gh pr view "$1" --json state -q .state 2>/dev/null)" = MERGED ]
+  open=$(gh pr list --head "$2" --state open --json number --jq length 2>/dev/null) || return 1
+  [ "$open" = 0 ] || return 1
+  merged_at=$(gh pr list --head "$2" --state merged --json mergedAt --jq 'map(.mergedAt | fromdateiso8601) | max // empty' 2>/dev/null) || return 1
+  # GNU stat first: on macOS -c fails, while on Linux -f would print file system details.
+  mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
+  [[ "$merged_at" =~ ^[0-9]+$ && "$mtime" =~ ^[0-9]+$ ]] || return 1
+  [ "$mtime" -lt "$merged_at" ]
 }
 
 # A dry run deletes no branch, so trust the list of deleted branches over the refs.
 for plan in "$root"/.claude/plans/*.md; do
   [ -f "$plan" ] || continue
   branch=$(head -1 "$plan")
-  case "$branch" in "# "?*) branch=${branch#\# } ;; *) echo "keep $plan: no branch on its first line"; continue ;; esac
+  case "$branch" in "# "?*) branch=${branch#\# } ;; *) echo "keep plan $plan: no branch on first line"; continue ;; esac
   if grep -qxF "$branch" <<<"$deleted"; then
     :
-  elif git rev-parse -q --verify "refs/heads/$branch" >/dev/null || ! pr_state_merged "$branch"; then
+  elif git rev-parse -q --verify "refs/heads/$branch" >/dev/null || ! plan_predates_merge "$plan" "$branch"; then
     continue
   fi
   echo "delete plan $plan"

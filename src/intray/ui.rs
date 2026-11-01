@@ -1,10 +1,11 @@
+use chrono::NaiveDate;
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, button, card_tab, check_tag, code_box, command_action, day_stamp, deal, divider,
-    fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, slip, stamp, stamped_head, strong,
-    undo_row, wrapped_height,
+    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp,
+    deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
 
@@ -16,6 +17,10 @@ const SCORE_SOURCE: &str = "Job ad only";
 const CODE_HEIGHT: f32 = 150.0;
 /// The room above the line that closes Coming up.
 const CLOSING_GAP: f32 = 6.0;
+/// The room between grey lines while Today loads.
+const SKELETON_GAP: f32 = 8.0;
+/// A grey line's height while Today loads.
+const SKELETON_LINE: f32 = 12.0;
 
 enum Pressed {
     Act(Action),
@@ -121,13 +126,91 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 /// The day stamp ticks off today's decisions. Cards set aside with Later count on neither side.
 fn head(ui: &mut Ui, queue: &Queue) {
     let tally = queue.tally();
-    let date = queue.today.format("%A %-d %B").to_string();
-    let spoken = if tally.total == 0 { date } else { format!("{date}. {} of {} decided today.", tally.done, tally.total) };
-    let stamp = |ui: &mut Ui| {
-        let day = |pattern| queue.today.format(pattern).to_string();
-        day_stamp(ui, &day("%a"), &day("%-d"), &day("%b"), tally.total, tally.done, &spoken);
-    };
+    let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
     stamped_head(ui, stamp, &queue.today_headline(), &queue.today_subtitle(&[]));
+}
+
+/// With nothing dealt, the stamp's ring is empty and it reads as the date alone.
+pub fn dated_stamp(ui: &mut Ui, today: NaiveDate, total: usize, done: usize) {
+    let date = today.format("%A %-d %B").to_string();
+    let spoken = if total == 0 { date } else { format!("{date}. {done} of {total} decided today.") };
+    let day = |pattern| today.format(pattern).to_string();
+    day_stamp(ui, &day("%a"), &day("%-d"), &day("%b"), total, done, &spoken);
+}
+
+/// Today while the first snapshot loads: an empty stamp, then grey blocks where the card and the rail will be.
+/// It takes no keys, so nothing can be decided before the cards are known.
+pub fn loading(ui: &mut Ui, today: NaiveDate) {
+    stamped_head(ui, |ui| dated_stamp(ui, today, 0, 0), "Reading your job search…", "Jobs, applications and tasks, from your folder.");
+    page_body(ui, |ui| {
+        side_column("tray_side", TRAY_RAIL).show(ui, loading_rail);
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let tab = blank_card_tab(ui);
+            let look = DealLook { key: "loading", frame: None, behind: 0 };
+            deal(ui, tab, look, loading_face, |ui| {
+                ui.label(rich(ui, "Your first card appears in a moment.", Type::BODY, Ink::Text));
+            });
+        });
+    });
+}
+
+/// Grey lines in a column, `SKELETON_GAP` apart, drawn with `block`.
+fn skeleton_lines(ui: &mut Ui, widths: &[f32], block: fn(&mut Ui, f32, f32)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = SKELETON_GAP;
+        for &width in widths {
+            block(ui, width, SKELETON_LINE);
+        }
+    });
+}
+
+/// The shape of a new match: score and names, the verdict, the checks, then why it fits and what is missing.
+fn loading_face(ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = STAMP_GAP;
+        card_skeleton(ui, 68.0, 56.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = SKELETON_GAP;
+            card_skeleton(ui, 170.0, SKELETON_LINE);
+            card_skeleton(ui, 370.0, 20.0);
+            card_skeleton(ui, 232.0, SKELETON_LINE);
+        });
+    });
+    card_skeleton(ui, 528.0, SKELETON_LINE);
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for _ in 0..2 {
+            ui.columns(GATE_COLUMNS, |columns| {
+                for ui in columns {
+                    divider(ui);
+                    ui.add_space(GATE_CELL_GAP);
+                    skeleton_lines(ui, &[108.0, 189.0], card_skeleton);
+                    ui.add_space(GATE_CELL_GAP);
+                }
+            });
+        }
+    });
+    ui.columns_const(|[left, right]| {
+        skeleton_lines(left, &[125.0, 333.0, 291.0], card_skeleton);
+        skeleton_lines(right, &[125.0, 250.0], card_skeleton);
+    });
+}
+
+/// Done today and Coming up, with grey lines for rows.
+fn loading_rail(ui: &mut Ui) {
+    for (index, (title, widths)) in [("Done today", &[238.0, 158.0][..]), ("Coming up", &[211.0, 185.0, 198.0][..])].into_iter().enumerate() {
+        if index > 0 {
+            ui.add_space(RAIL_GAP);
+        }
+        slip(ui, |ui| {
+            panel_header(ui, title, None);
+            panel_body(ui, |ui| {
+                ui.set_width(ui.available_width());
+                skeleton_lines(ui, widths, skeleton);
+            });
+        });
+    }
 }
 
 fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue) -> Option<Request> {

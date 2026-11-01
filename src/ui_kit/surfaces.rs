@@ -437,8 +437,18 @@ pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
     let p = Palette::of(ui);
     // Only a slip's content sits `INSET` in, so that inset says the block is on a slip.
     let on_slip = ui.data(|data| data.get_temp::<i8>(inset_id())) == Some(INSET);
+    block(ui, width, height, if on_slip { p.raised } else { p.panel });
+}
+
+/// The same block on a card. Where the card already has the panel's fill, as in dark, it takes the raised plane.
+pub fn card_skeleton(ui: &mut Ui, width: f32, height: f32) {
+    let p = Palette::of(ui);
+    block(ui, width, height, if p.card == p.panel { p.raised } else { p.panel });
+}
+
+fn block(ui: &mut Ui, width: f32, height: f32, fill: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()), height), Sense::hover());
-    ui.painter().rect_filled(rect, RADIUS_CARD, if on_slip { p.raised } else { p.panel });
+    ui.painter().rect_filled(rect, RADIUS_CARD, fill);
 }
 
 /// A screen's head led by a stamp: the stamp, then the lead title over a muted subtitle, centred beside it.

@@ -79,11 +79,19 @@ pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 pub const WAITS_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
+/// The room between a step's knot and its words.
+pub const KNOT_GAP: f32 = 20.0;
 pub const WELCOME_WIDTH: f32 = 620.0;
 /// The panel that offers new work when Today is clear: its inset, the width of its text and the gap between its parts.
 pub const OFFER_PADDING: i8 = 32;
 pub const OFFER_WIDTH: f32 = 480.0;
 pub const OFFER_GAP: f32 = 14.0;
+/// The welcome card's room above it, its padding, and the padding above and below each step.
+pub const WELCOME_TOP: f32 = 36.0;
+pub const WELCOME_PADDING: (i8, i8) = (27, 26);
+pub const WELCOME_STEP_PADDING: f32 = 16.0;
+/// The width of the empty tab over a card that is still loading.
+pub const BLANK_TAB_WIDTH: f32 = 180.0;
 pub const OFFSET_SHADOW: i8 = 5;
 pub const WINDOW_SHADOW: i8 = 6;
 pub const STACK_EDGE_HEIGHT: f32 = 5.0;

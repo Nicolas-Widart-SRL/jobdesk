@@ -9,7 +9,7 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
+    AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
     ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
@@ -49,6 +49,15 @@ pub fn card_tab(ui: &mut Ui, title: &str, ink: TabInk, when: &str) -> CardTab {
         ui.painter().rect_stroke(rect, TAB_TOP, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
     }
     CardTab { rect, fill }
+}
+
+/// An empty tab, `BLANK_TAB_WIDTH` wide, over a card that is still loading.
+pub fn blank_card_tab(ui: &mut Ui) -> CardTab {
+    let p = Palette::of(ui);
+    let (rect, _) = ui.allocate_exact_size(vec2(BLANK_TAB_WIDTH, CARD_TAB_HEIGHT), Sense::hover());
+    ui.painter().rect_filled(rect, TAB_TOP, p.card);
+    ui.painter().rect_stroke(rect, TAB_TOP, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
+    CardTab { rect, fill: p.card }
 }
 
 /// How the dealt card sits. `key` names it, so a card that comes on top, new or back, opens its body at the top.

@@ -1523,8 +1523,14 @@ impl ToolProber for FixedTools {
 }
 
 fn render_workspace(theme: Theme, name: &str) {
-    let mut shell = shell(Screen::Workspace, name);
-    *shell.environment_slot() = Some(EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {})));
+    render_probed(shell(Screen::Workspace, name), theme, name);
+}
+
+/// Renders once the tool check is back, so the status bar says whether Claude is installed. It starts as the app's does, at launch.
+fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
     let mut harness = Harness::builder()
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
@@ -1537,6 +1543,46 @@ fn render_workspace(theme: Theme, name: &str) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The sample folder, open but not read yet.
+fn loading_shell(name: &str) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    Shell::loading(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+#[test]
+fn loading_deals_no_card_and_ignores_keys() {
+    let mut shell = loading_shell("tray_loading");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Reading your job search…"));
+    assert!(is_shown(&harness, "Your first card appears in a moment."));
+    assert!(is_shown(&harness, "Saturday 31 October"), "the stamp is empty and reads as the date");
+
+    press(&mut harness, Key::Y);
+    press(&mut harness, Key::L);
+
+    assert!(!is_shown(&harness, "All commands"), "Y opens no launcher");
+    assert!(!is_shown(&harness, "Set aside until tomorrow"), "L sets nothing aside");
+    assert!(is_shown(&harness, "Reading your job search…"));
+}
+
+#[test]
+fn intray_loading_light() {
+    render_probed(loading_shell("intray_loading_light"), Theme::Light, "intray_loading_light");
+}
+
+#[test]
+fn intray_loading_dark() {
+    render_probed(loading_shell("intray_loading_dark"), Theme::Dark, "intray_loading_dark");
+}
+
+#[test]
+fn first_run_light() {
+    render_probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), Theme::Light, "first_run_light");
 }
 
 #[test]

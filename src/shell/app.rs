@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use chrono::Local;
-use egui::{Align, Layout, Panel, ThemePreference, Ui, vec2};
+use chrono::{Local, NaiveDate};
+use egui::{Align, Frame, Layout, Margin, Panel, Rect, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
@@ -18,10 +18,12 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
 use crate::shell::{Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP};
+use crate::ui_kit::tokens::{
+    BUTTON_HEIGHT, HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
+};
 use crate::ui_kit::{
-    TabMark, alert, brand, button, chrome_note, chrome_status, folder_tab, install_fonts, install_theme, muted, page_body, panel_body, primary_button, sheet_frame, shell_top_frame,
-    shortcut_button, slip, status_frame, status_segmented, strong, take_command_request,
+    Ink, KnotState, TabMark, Type, alert, brand, button, chrome_note, chrome_status, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, rich, sheet_frame,
+    shell_top_frame, shortcut_button, status_frame, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
 use crate::workspace::application::{AuthMode, EnvironmentChecks, WorkspaceRoot, auth_mode};
@@ -75,6 +77,8 @@ pub struct Shell {
     screen: Screen,
     workspace: Option<WorkspaceRoot>,
     snapshot: Snapshot,
+    /// False from opening a folder until its first snapshot arrives. Today shows that it is reading.
+    loaded: bool,
     updates: Option<Receiver<Snapshot>>,
     jobs: JobsScreen,
     tracker: TrackerScreen,
@@ -100,11 +104,12 @@ struct OpenDossier {
 }
 
 impl Shell {
-    fn empty(screen: Screen) -> Self {
+    fn empty(screen: Screen, today: NaiveDate) -> Self {
         Self {
             screen,
             workspace: None,
-            snapshot: Snapshot { today: Local::now().date_naive(), ..Snapshot::default() },
+            snapshot: Snapshot { today, ..Snapshot::default() },
+            loaded: false,
             updates: None,
             jobs: JobsScreen::default(),
             tracker: TrackerScreen::default(),
@@ -125,7 +130,18 @@ impl Shell {
 
     /// A shell with fixed data, for tests and previews.
     pub fn with_snapshot(screen: Screen, workspace: WorkspaceRoot, snapshot: Snapshot) -> Self {
-        Self { workspace: Some(workspace), snapshot, tray: Some(InTray::unsaved()), ..Self::empty(screen) }
+        let today = snapshot.today;
+        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+    }
+
+    /// A shell whose folder is open but not read yet, for tests and previews.
+    pub fn loading(screen: Screen, workspace: WorkspaceRoot, today: NaiveDate) -> Self {
+        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+    }
+
+    /// The first run: no folder is open yet.
+    pub fn without_workspace(today: NaiveDate) -> Self {
+        Self::empty(Screen::InTray, today)
     }
 
     pub fn desk_slot(&mut self) -> &mut Option<RunDesk> {
@@ -165,8 +181,13 @@ impl Shell {
         open.view.clone()
     }
 
+    /// The tool check starts at launch, so the first run can say whether Claude Code is installed.
+    /// It only asks each tool for its version, on a worker thread.
     fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
-        let mut shell = Self { data, ..Self::empty(Screen::InTray) };
+        let repaint = ctx.clone();
+        let mut environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+        environment.ensure_started();
+        let mut shell = Self { data, environment: Some(environment), ..Self::empty(Screen::InTray, Local::now().date_naive()) };
         if let Some(path) = path {
             shell.open(ctx, &path);
         }
@@ -186,10 +207,9 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
-                let repaint = ctx.clone();
-                let mut environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
-                environment.ensure_started();
-                self.environment = Some(environment);
+                // The last folder's data stays off screen while this one is read.
+                self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
+                self.loaded = false;
                 self.workspace = Some(root);
                 self.folder_error = None;
             }
@@ -206,6 +226,7 @@ impl Shell {
     pub fn show(&mut self, ui: &mut Ui) {
         if let Some(latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
             self.snapshot = latest;
+            self.loaded = true;
             if let Some(open) = &mut self.open_dossier {
                 open.view = None;
             }
@@ -295,23 +316,18 @@ impl Shell {
     }
 
     /// The desk strip: brand and New task, then the folder tabs. The active tab stands on the sheet.
+    /// Before a folder is open, only the lit Today tab answers: the rest have nothing to show yet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
         let open = self.workspace.is_some();
         ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
             brand(ui);
-            if open {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if shortcut_button(ui, "New task", &ASK_KEYS).clicked() {
-                        self.screen = Screen::Launcher;
-                    }
-                });
-            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add_enabled_ui(open, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).inner.clicked() {
+                    self.screen = Screen::Launcher;
+                }
+            });
         });
-        if !open {
-            ui.add_space(SHELL_GAP.1);
-            return;
-        }
         ui.add_space(SHELL_GAP.1 + NAV_TOP);
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         let lit = self.screen.tab();
@@ -324,7 +340,7 @@ impl Shell {
                     Screen::Runs => TabMark::Count(waiting),
                     _ => TabMark::None,
                 };
-                if folder_tab(ui, screen.title(), mark, screen == lit).clicked() {
+                if ui.add_enabled_ui(open || screen == lit, |ui| folder_tab(ui, screen.title(), mark, screen == lit)).inner.clicked() {
                     picked = Some(screen);
                 }
             }
@@ -354,7 +370,13 @@ impl Shell {
             // Nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
             if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let ready = environment.version_of("claude").is_some();
-                chrome_status(ui, ready, if ready { "Claude is ready" } else { "Claude Code is not installed" });
+                // Before a folder is open, the line also says how Jobdesk signs in: through Claude Code alone.
+                let text = match (ready, self.workspace.is_some()) {
+                    (true, true) => "Claude is ready",
+                    (true, false) => "Claude is installed. Jobdesk uses its sign-in and stores no passwords.",
+                    (false, _) => "Claude Code is not installed",
+                };
+                chrome_status(ui, ready, text);
             }
             let issues = self.snapshot.issues.len();
             if issues > 0 {
@@ -379,24 +401,25 @@ impl Shell {
         });
     }
 
+    /// The first run: a card centred on the sheet with the three steps to a first card. Only the folder can be chosen here.
     fn welcome(&mut self, ui: &mut Ui) {
-        ui.add_space(64.0);
-        ui.vertical_centered(|ui| {
-            ui.set_max_width(420.0);
-            slip(ui, |ui| {
-                panel_body(ui, |ui| {
-                    strong(ui, "Choose your ai-job-search folder");
-                    muted(ui, "Jobdesk reads your checkout and never changes it.");
-                    if let Some(error) = &self.folder_error {
-                        alert(ui, error);
-                    }
-                    if primary_button(ui, "Choose folder").clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.choose_folder(&ctx);
-                    }
-                });
-            });
-        });
+        ui.add_space(WELCOME_TOP);
+        let width = (WELCOME_WIDTH + f32::from(WINDOW_SHADOW)).min(ui.available_width());
+        let rect = Rect::from_min_size(pos2(ui.max_rect().center().x - width / 2.0, ui.cursor().top()), vec2(width, ui.available_height()));
+        let today = self.snapshot.today;
+        let error = self.folder_error.as_deref();
+        let choose = ui
+            .scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Min)), |ui| {
+                paper(ui, true, |ui| {
+                    let (x, y) = WELCOME_PADDING;
+                    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| welcome_card(ui, today, error)).inner
+                })
+            })
+            .inner;
+        if choose {
+            let ctx = ui.ctx().clone();
+            self.choose_folder(&ctx);
+        }
     }
 
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
@@ -409,6 +432,7 @@ impl Shell {
         }
         let snapshot = &self.snapshot;
         match self.screen {
+            Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
                 let keys = !self.confirm_quit;
                 if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, keys)) {
@@ -457,6 +481,54 @@ impl Shell {
             }
         }
     }
+}
+
+/// The welcome's stamp and title, its steps, then the folder promise. Returns whether Choose folder was pressed.
+fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
+    ui.set_width(ui.available_width());
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = HEAD_GAP.0;
+        intray::ui::dated_stamp(ui, today, 0, 0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.label(rich(ui, "Welcome to Jobdesk", Type::CLEAR, Ink::Text));
+            let intro = "Your job search as a short list of decisions, one at a time. Claude does the legwork, and nothing runs until you say so.";
+            ui.add(egui::Label::new(rich(ui, intro, Type::TAKE, Ink::Muted)).wrap());
+        });
+    });
+    ui.add_space(WELCOME_STEP_PADDING);
+    let choose = welcome_step(ui, 1, "Choose your job search folder", "The ai-job-search folder you set up with Claude Code.", true);
+    welcome_step(ui, 2, "Check your profile", "Setup shows which parts are filled in and what is missing.", false);
+    welcome_step(ui, 3, "Find your first jobs", "Opens the search task. You start it, and Today fills in as it works.", false);
+    ui.add_space(WELCOME_STEP_PADDING / 2.0);
+    if let Some(error) = error {
+        alert(ui, error);
+        ui.add_space(WELCOME_STEP_PADDING / 2.0);
+    }
+    let promise = "Jobdesk reads this folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
+    ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
+    choose
+}
+
+/// One first-run step under a hairline. Only the step to do next has a button, and it says whether it was pressed.
+fn welcome_step(ui: &mut Ui, number: usize, title: &str, detail: &str, next: bool) -> bool {
+    divider(ui);
+    ui.add_space(WELCOME_STEP_PADDING);
+    let pressed = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = KNOT_GAP;
+            knot(ui, &number.to_string(), if next { KnotState::Next } else { KnotState::Ahead }, KNOT_SIZE);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                strong(ui, title);
+                ui.label(rich(ui, detail, Type::NOTE, Ink::Muted));
+            });
+            next && ui.with_layout(Layout::right_to_left(Align::Center), |ui| primary_button(ui, "Choose folder…")).inner.clicked()
+        })
+        .inner;
+    ui.add_space(WELCOME_STEP_PADDING);
+    pressed
 }
 
 impl eframe::App for Shell {

@@ -7,11 +7,11 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, button, card_tab,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab,
     check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, faint_mono, fat_tally, figure,
     flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
-    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
+    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
@@ -290,6 +290,7 @@ fn board(ui: &mut Ui) {
                 strong(ui, "Faded card");
                 ui.label(rich(ui, "fit 68", Type::SMALL, Ink::Muted));
             });
+            blank_card(ui, |ui| skeleton_lines(ui, &[150.0, 110.0, 80.0], card_skeleton));
         });
         Grid::new("table").spacing([24.0, 6.0]).show(right, |ui| {
             table_head(ui, "Score");

@@ -5,8 +5,8 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel_body,
-    paper_with_footer, primary_button, primary_command_action, rich, side_column, small_command_action, stamp_square, strong, tag,
+    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, blank_card, card_skeleton, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link,
+    page_body, page_head, panel_body, paper_with_footer, primary_button, primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
@@ -106,19 +106,29 @@ impl TrackerScreen {
         if waits > 0 {
             subtitle.push_str(&format!(" {waits} of them wait for you in Today."));
         }
-        let subtitle = if state.failed() { Some("Not shown while the tracker cannot be read.") } else { (!pipeline.is_empty()).then_some(subtitle.as_str()) };
+        let subtitle = match state.load {
+            Load::Reading => Some("Reading your applications…"),
+            Load::Failed => Some("Not shown while the tracker cannot be read."),
+            Load::Ready => (!pipeline.is_empty()).then_some(subtitle.as_str()),
+        };
         page_head(ui, Title::Slab("Applications"), subtitle.map(Subtitle::Text), |ui| {
             primary_command_action(ui, "Record a result", "/outcome");
             command_action(ui, "Check mail for replies", "/gmail-sync");
         });
         page_body(ui, |ui| {
             (state.alerts)(ui);
-            if state.failed() {
-                let body = "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
-                empty_note(ui, "Your applications are hidden, not gone", body);
-                return None;
+            match state.load {
+                Load::Reading => {
+                    loading(ui);
+                    None
+                }
+                Load::Failed => {
+                    let body = "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
+                    empty_note(ui, "Your applications are hidden, not gone", body);
+                    None
+                }
+                Load::Ready => self.body(ui, pipeline, waiting),
             }
-            self.body(ui, pipeline, waiting)
         })
     }
 
@@ -207,6 +217,28 @@ impl TrackerScreen {
         })
         .clicked()
     }
+}
+
+/// The lanes a board shows with no Hired card, and how many blank cards each holds while it loads.
+const LOADING_LANES: [(StatusBucket, usize); 5] =
+    [(StatusBucket::Drafted, 1), (StatusBucket::Active, 2), (StatusBucket::Interview, 1), (StatusBucket::Offer, 1), (StatusBucket::Closed, 2)];
+/// How tall a lane stands before the first read.
+const LOADING_LANE_HEIGHT: f32 = 400.0;
+
+/// The board before the first read: the lanes by their fixed names, holding blank cards.
+fn loading(ui: &mut Ui) {
+    ui.spacing_mut().item_spacing.x = BOARD_GAP;
+    ui.columns(LOADING_LANES.len(), |columns| {
+        for (ui, (bucket, cards)) in columns.iter_mut().zip(LOADING_LANES) {
+            lane_frame(ui, |ui| {
+                ui.set_min_height(LOADING_LANE_HEIGHT);
+                lane_title(ui, lane_name(bucket), bucket_tone(bucket));
+                for _ in 0..cards {
+                    blank_card(ui, |ui| skeleton_lines(ui, &[155.0, 123.0, 80.0], card_skeleton));
+                }
+            });
+        }
+    });
 }
 
 fn applications(count: usize) -> String {

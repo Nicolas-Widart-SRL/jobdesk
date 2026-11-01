@@ -61,6 +61,10 @@ pub const TALLY_FAT: TallySize = TallySize { width: 6.0, height: 18.0, gap: 3.0 
 pub const BAR_HEIGHT: f32 = 8.0;
 
 pub const CARD_PADDING: (i8, i8) = (11, 9);
+/// The room between grey lines while a screen loads.
+pub const SKELETON_GAP: f32 = 8.0;
+/// A grey line's height while a screen loads.
+pub const SKELETON_LINE: f32 = 12.0;
 pub const LANE_PADDING: (i8, i8, i8) = (8, 10, 12);
 pub const LANE_GAP: f32 = 6.0;
 

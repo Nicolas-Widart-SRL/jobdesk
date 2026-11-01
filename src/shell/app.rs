@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -446,7 +446,8 @@ impl Shell {
             }
         };
         let loaded = self.loaded;
-        let failed = |source: Source| failures.iter().any(|(failed, _)| *failed == source);
+        let unread: Vec<Source> = failures.iter().map(|(source, _)| *source).collect();
+        let failed = |source: Source| unread.contains(&source);
         let load = |source: Source| {
             if failed(source) {
                 Load::Failed
@@ -457,7 +458,7 @@ impl Shell {
             }
         };
         let whole = if loaded { Load::Ready } else { Load::Reading };
-        let state = |load: Load| ScreenState { load, alerts: &alerts };
+        let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
         // Each screen says where its alert goes, so a new one must choose.
         let alert_over_head = match self.screen {
             Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Workspace => false,
@@ -506,7 +507,7 @@ impl Shell {
                     }
                     // A failed tracker loads with no rows, so the application is only hidden, and comes back with the file.
                     _ if tracker_failed => {
-                        page_body(ui, |ui| muted(ui, "Hidden while the tracker cannot be read."));
+                        page_body(ui, |ui| hidden_note(ui, insights::ui::TRACKER_HIDDEN));
                     }
                     _ => {
                         page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));
@@ -515,9 +516,7 @@ impl Shell {
             }
             Screen::Insights => {
                 // Each failed source hides only the parts it feeds, so the screen as a whole never fails.
-                let sources =
-                    insights::ui::Sources { tracker_failed: failed(Source::Applications), jobs_failed: failed(Source::Jobs), skill_gaps_failed: failed(Source::SkillGaps) };
-                insights::ui::show(ui, &state(whole), &sources, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref());
+                insights::ui::show(ui, &state(whole), &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref());
             }
             Screen::Runs => {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
@@ -530,7 +529,7 @@ impl Shell {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
                 let action = match self.environment.as_mut() {
-                    Some(environment) => workspace::ui::show(ui, &state(whole), failed(Source::Jobs), &name, &snapshot.workspace, environment),
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
                     None => {
                         page_body(ui, alerts);
                         None

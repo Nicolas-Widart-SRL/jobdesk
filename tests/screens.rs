@@ -2186,10 +2186,58 @@ fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
 
 /// The sample folder, open but not read yet.
 fn loading_shell(name: &str) -> Shell {
+    loading_on(Screen::InTray, name)
+}
+
+/// The sample folder, open on `screen` but not read yet.
+fn loading_on(screen: Screen, name: &str) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    Shell::loading(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+    Shell::loading(screen, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+/// Until the first read, no screen says it has nothing: each says it is reading, and its head actions stay.
+#[test]
+fn loading_screens_promise_nothing() {
+    let empty = ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
+    let cases: [(Screen, &str, &[&str]); 4] = [
+        (Screen::Jobs, "Reading your saved jobs…", &["Find new jobs…", "Score", "Worth knowing"]),
+        (Screen::Tracker, "Reading your applications…", &["Record a result…", "Check mail for replies…", "Not sent yet", "Applied", "Closed"]),
+        (Screen::Insights, "Reading your jobs, applications and reports…", &["Find skill gaps…", "Rebuild dashboard…", "Profile", "Result", "Funnel", "By sector"]),
+        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Profile", "Environment", "Portals"]),
+    ];
+    for (screen, subtitle, shown) in cases {
+        let mut shell = loading_on(screen, &format!("loading_{screen:?}"));
+        let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+        checks.ensure_started();
+        *shell.environment_slot() = Some(checks);
+        let harness = tray_harness(shell);
+        assert!(is_shown(&harness, subtitle), "{screen:?} says it is reading");
+        for text in shown {
+            assert!(is_shown(&harness, text), "{screen:?} shows {text}");
+        }
+        for text in empty {
+            assert!(!is_shown(&harness, text), "{screen:?} promises {text}");
+        }
+    }
+    let harness = tray_harness(loading_on(Screen::Workspace, "loading_setup_name"));
+    assert!(!is_shown(&harness, "ai-job-search"), "the folder name waits for the read");
+}
+
+#[test]
+fn jobs_loading_light() {
+    render_probed(loading_on(Screen::Jobs, "jobs_loading_light"), Theme::Light, "jobs_loading_light");
+}
+
+#[test]
+fn tracker_loading_light() {
+    render_probed(loading_on(Screen::Tracker, "tracker_loading_light"), Theme::Light, "tracker_loading_light");
+}
+
+#[test]
+fn insights_loading_dark() {
+    render_probed(loading_on(Screen::Insights, "insights_loading_dark"), Theme::Dark, "insights_loading_dark");
 }
 
 #[test]

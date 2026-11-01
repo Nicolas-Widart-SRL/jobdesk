@@ -5,9 +5,9 @@ use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRo
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
     deal, divider, fat_tally, desk_label, key_button, lead_line, link, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
-    slip, stamp, stamped_head, strong, undo_row, wrapped_height,
+    skeleton_lines, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -17,10 +17,6 @@ const SCORE_SOURCE: &str = "Job ad only";
 const CODE_HEIGHT: f32 = 150.0;
 /// The room above the line that closes Coming up.
 const CLOSING_GAP: f32 = 6.0;
-/// The room between grey lines while Today loads.
-const SKELETON_GAP: f32 = 8.0;
-/// A grey line's height while Today loads.
-const SKELETON_LINE: f32 = 12.0;
 
 enum Pressed {
     Act(Action),
@@ -177,16 +173,6 @@ pub fn loading(ui: &mut Ui, today: NaiveDate) {
                 ui.label(rich(ui, "Your first card appears in a moment.", Type::BODY, Ink::Text));
             });
         });
-    });
-}
-
-/// Grey lines in a column, `SKELETON_GAP` apart, drawn with `block`.
-fn skeleton_lines(ui: &mut Ui, widths: &[f32], block: fn(&mut Ui, f32, f32)) {
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = SKELETON_GAP;
-        for &width in widths {
-            block(ui, width, SKELETON_LINE);
-        }
     });
 }
 

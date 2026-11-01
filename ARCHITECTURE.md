@@ -52,7 +52,7 @@ PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no P
 
 A worker thread rebuilds an immutable `Snapshot` when watched files change, every hour and at
 local midnight, and sends it to the UI thread. So the app's today changes at midnight, not up to an hour later. The UI never reads from disk. A feature that fails to load reports an issue and the
-others keep working. Its tab carries a mark, and an alert names what failed and what still works. A screen whose source failed shows the alert under its head and says its content is hidden, never that it is empty.
+others keep working. Its tab carries a mark, and an alert names what failed and what still works. Until the first snapshot arrives, every screen shows a loading view, not an empty one. A screen whose source failed shows the alert under its head and says its content is hidden, never that it is empty. The shell tells each screen both through `ScreenState`: whether its source is still being read, failed or ready, and which `Source`s failed, for a screen fed by more than one.
 
 Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout. A supervisor thread owns the child and a reader thread turns stdout lines into domain events. The UI thread applies them once per frame through `RunDesk::poll`. Dropping a session ends its process.
 

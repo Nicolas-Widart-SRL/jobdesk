@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
 use egui::Ui;
+use egui_extras::{Column, TableBuilder};
 
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
-use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP};
+use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT, SKELETON_GAP, SKELETON_LINE, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
-    CheckMark, ColumnWidth, Ink, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel, panel_body,
-    paper_with_footer, pick_table, primary_command_action, rich, score, segmented, stamp, stamp_square, strong, tag, title_over, with_side_column,
+    CellRule, CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel,
+    panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented, skeleton, skeleton_lines, stamp, stamp_square, strong, table_cell, table_head, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
@@ -99,8 +100,13 @@ fn score_jobs_label(new: usize) -> String {
 impl JobsScreen {
     /// `waiting` holds the key of every job with a card in Today, and `kept` every job whose flagged ad the user kept there.
     /// While the saved jobs cannot be read, the list and its segments are hidden, never shown as empty.
+    /// Until the first read, the table's head and grey rows stand in for the jobs, so no lane reads as empty.
     pub fn show(&mut self, ui: &mut Ui, state: &ScreenState, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
-        let subtitle = if state.failed() { "Not shown while your saved jobs cannot be read." } else { "Scored from the job ad alone. Drafting an application also checks the company." };
+        let subtitle = match state.load {
+            Load::Reading => "Reading your saved jobs…",
+            Load::Failed => "Not shown while your saved jobs cannot be read.",
+            Load::Ready => "Scored from the job ad alone. Drafting an application also checks the company.",
+        };
         let new = board.count(Lane::New);
         page_head(ui, Title::Slab("Jobs"), Some(Subtitle::Text(subtitle)), |ui| {
             primary_command_action(ui, &score_jobs_label(new), "/rank");
@@ -108,12 +114,14 @@ impl JobsScreen {
         });
         page_body(ui, |ui| {
             (state.alerts)(ui);
-            if state.failed() {
-                let body = "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
-                empty_note(ui, "Your saved jobs are hidden, not gone", body);
-                return;
+            match state.load {
+                Load::Reading => loading(ui),
+                Load::Failed => {
+                    let body = "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
+                    empty_note(ui, "Your saved jobs are hidden, not gone", body);
+                }
+                Load::Ready => self.body(ui, board, waiting, kept),
             }
-            self.body(ui, board, waiting, kept);
         });
     }
 
@@ -251,6 +259,86 @@ fn job_cell(ui: &mut Ui, job: &JobView, column: JobColumn, waiting: &HashSet<Str
             }
         }
     }
+}
+
+/// Grey blocks where each column's content goes, by the column.
+fn column_skeleton(column: JobColumn) -> &'static [f32] {
+    match column {
+        JobColumn::Score => &[32.0],
+        JobColumn::Job => &[190.0, 120.0],
+        JobColumn::Where => &[80.0],
+        JobColumn::DayRate => &[56.0],
+        JobColumn::Closes => &[64.0],
+        JobColumn::WorthKnowing => &[110.0],
+        JobColumn::FoundOn => &[56.0],
+        JobColumn::Waiting => &[],
+    }
+}
+
+const LOADING_ROWS: usize = 6;
+
+/// The shape of the screen before the first read: the segments, the table's head over grey rows, and the details beside it.
+fn loading(ui: &mut Ui) {
+    skeleton(ui, 520.0, SEGMENT_HEIGHT);
+    ui.add_space(SCREEN_GAP);
+    with_side_column(
+        ui,
+        340.0,
+        |ui| {
+            panel(ui, |ui| {
+                let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
+                let shown: Vec<_> = COLUMNS.iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect();
+                // Cells pad themselves, so the rules run unbroken.
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                let mut table = TableBuilder::new(ui).id_salt("jobs_loading").vscroll(false).striped(false).cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                for (_, column) in &shown {
+                    table = table.column(match column.width {
+                        ColumnWidth::Exact(width) => Column::exact(width),
+                        ColumnWidth::Rest { least } => Column::remainder().at_least(least),
+                    });
+                }
+                table
+                    .header(TABLE_HEAD_HEIGHT, |mut header| {
+                        for (_, column) in &shown {
+                            header.col(|ui| {
+                                table_cell(ui, CellRule::Head, |ui| table_head(ui, column.head));
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(58.0, LOADING_ROWS, |mut line| {
+                            let rule = if line.index() + 1 == LOADING_ROWS { CellRule::Last } else { CellRule::Row };
+                            for (column, _) in &shown {
+                                line.col(|ui| {
+                                    let widths = column_skeleton(*column);
+                                    let height = widths.len() as f32 * (SKELETON_LINE + SKELETON_GAP) - SKELETON_GAP;
+                                    // A box as tall as the lines, so the row centres them as it centres text.
+                                    table_cell(ui, rule, |ui| {
+                                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height.max(0.0)), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                            skeleton_lines(ui, widths, skeleton);
+                                        });
+                                    });
+                                });
+                            }
+                        });
+                    });
+            });
+        },
+        |ui| {
+            panel(ui, |ui| {
+                panel_body(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = ROW_GAP;
+                        skeleton(ui, 62.0, 50.0);
+                        skeleton_lines(ui, &[120.0, 200.0, 160.0], skeleton);
+                    });
+                });
+                divider(ui);
+                panel_body(ui, |ui| skeleton_lines(ui, &[260.0, 230.0, 250.0, 200.0], skeleton));
+            });
+        },
+    );
 }
 
 fn lane_empty(ui: &mut Ui, lane: Lane, board: &JobBoard) {

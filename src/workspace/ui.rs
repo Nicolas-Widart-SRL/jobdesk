@@ -4,8 +4,9 @@ use egui_extras::{Column, TableBuilder};
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
     CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
-    hidden_note, rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+    hidden_note, rich, skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
+use crate::shared_kernel::Source;
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
 
 /// Environment rows sit closer than other list rows.
@@ -40,12 +41,13 @@ pub enum WorkspaceAction {
 
 /// `name` is the checkout's folder name, never its full path.
 /// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
-/// so `jobs_failed` hides those counts.
-pub fn show(ui: &mut Ui, state: &ScreenState, jobs_failed: bool, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
+/// so a failed one hides those counts. Until the first read, the slips show their names over grey lines.
+pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
     let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
-    page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
+    let subtitle = if state.reading() { Subtitle::Text("Reading your profile, tools and portals…") } else { Subtitle::Typed(name) };
+    page_head(ui, Title::Slab("Setup"), Some(subtitle), |ui| {
         if button(ui, "Change folder").clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
         }
@@ -57,6 +59,11 @@ pub fn show(ui: &mut Ui, state: &ScreenState, jobs_failed: bool, name: &str, vie
         (state.alerts)(ui);
         muted(ui, "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.");
         ui.add_space(SPLIT_GAP);
+        if state.reading() {
+            loading(ui);
+            return;
+        }
+        let jobs_failed = state.cannot_read(Source::Jobs);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
                 profile(main, view);
@@ -74,6 +81,30 @@ pub fn show(ui: &mut Ui, state: &ScreenState, jobs_failed: bool, name: &str, vie
         });
     });
     action
+}
+
+/// A section's name over grey lines where its rows go.
+fn loading_lines(ui: &mut Ui, title: &str, note: Option<&str>, widths: &[f32]) {
+    panel_header(ui, title, note);
+    panel_body(ui, |ui| {
+        ui.set_width(ui.available_width());
+        skeleton_lines(ui, widths, skeleton);
+    });
+}
+
+/// The sections before the first read, in their places.
+fn loading(ui: &mut Ui) {
+    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| loading_lines(ui, "Profile", Some(".claude/skills/job-application-assistant"), &[220.0, 180.0, 240.0, 200.0, 170.0, 230.0, 190.0]));
+        slip(side, |ui| loading_lines(ui, "Environment", None, &[200.0, 170.0, 190.0, 160.0, 180.0]));
+    });
+    ui.add_space(SPLIT_GAP);
+    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| loading_lines(ui, "Portals", Some(".agents/skills"), &[180.0, 150.0, 200.0]));
+        slip(side, |ui| loading_lines(ui, "Templates", None, &[190.0, 160.0]));
+        side.add_space(12.0);
+        slip(side, |ui| loading_lines(ui, "Sync", None, &[200.0, 170.0]));
+    });
 }
 
 fn profile(ui: &mut Ui, view: &WorkspaceView) {

@@ -5,6 +5,7 @@ use egui::{
     WidgetInfo, WidgetText, pos2, vec2,
 };
 
+use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
@@ -13,7 +14,7 @@ use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, cut_hove
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -203,17 +204,28 @@ pub enum Load {
     Ready,
 }
 
-/// What the shell tells a screen beside its data: whether its source loaded, and the alert to draw under its head.
+/// What the shell tells a screen beside its data: whether its source loaded, which sources could not be read,
+/// and the alert to draw under its head.
 /// Every screen draws `page_head`, then `alerts`, then its body, so the alert sits in the same place on each.
 #[derive(Clone, Copy)]
 pub struct ScreenState<'a> {
     pub load: Load,
+    /// Every source that could not be read. A screen fed by more than one hides only the parts a failed one feeds.
+    pub unread: &'a [Source],
     pub alerts: &'a dyn Fn(&mut Ui),
 }
 
 impl ScreenState<'_> {
+    pub fn reading(&self) -> bool {
+        self.load == Load::Reading
+    }
+
     pub fn failed(&self) -> bool {
         self.load == Load::Failed
+    }
+
+    pub fn cannot_read(&self, source: Source) -> bool {
+        self.unread.contains(&source)
     }
 }
 
@@ -758,6 +770,16 @@ pub fn card_skeleton(ui: &mut Ui, width: f32, height: f32) {
     block(ui, width, height, if p.card == p.panel { p.raised } else { p.panel });
 }
 
+/// Grey lines in a column, `SKELETON_GAP` apart, drawn with `block`: `skeleton`, or `card_skeleton` on a card.
+pub fn skeleton_lines(ui: &mut Ui, widths: &[f32], block: fn(&mut Ui, f32, f32)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = SKELETON_GAP;
+        for &width in widths {
+            block(ui, width, SKELETON_LINE);
+        }
+    });
+}
+
 fn block(ui: &mut Ui, width: f32, height: f32, fill: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()), height), Sense::hover());
     ui.painter().rect_filled(rect, RADIUS_CARD, fill);
@@ -839,6 +861,15 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
     let spoken = if look.waits { format!("{spoken}, waits for you in Today") } else { spoken.to_owned() };
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &spoken));
     response
+}
+
+/// The shape of an index card while its board loads: the card's face, with nothing to pick.
+pub fn blank_card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let p = Palette::of(ui);
+    Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        add(ui);
+    });
 }
 
 pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadius) {

@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::JobBoard;
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
-use crate::shared_kernel::LoadError;
+use crate::shared_kernel::{LoadError, Source};
 use crate::tracking::application::Pipeline;
 use crate::workspace::application::{WorkspaceView, workspace_view};
 use crate::{discovery, dossier, insights, tracking, workspace};
@@ -23,16 +23,6 @@ pub struct Snapshot {
     pub workspace: WorkspaceView,
     pub issues: Vec<Issue>,
     pub today: NaiveDate,
-}
-
-/// A source the snapshot reads that can fail on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    Jobs,
-    Applications,
-    SkillGaps,
-    /// Today's decisions in Jobdesk's own data folder. The tray reports this one, not the snapshot.
-    Decisions,
 }
 
 /// A source that could not be read, and why.

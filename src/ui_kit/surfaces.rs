@@ -6,7 +6,7 @@ use egui::{
 };
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::interactive;
+use crate::ui_kit::controls::{interactive, pointer_over};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
@@ -369,7 +369,7 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let response = ui
         .scope_builder(clickable(), |ui| {
-            let lit = on || ui.response().hovered();
+            let lit = on || pointer_over(&ui.response());
             let frame = Frame::new().corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
             let frame = if lit { frame.fill(p.panel) } else { frame };
             frame.show(ui, |ui| {
@@ -558,7 +558,7 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             if look.faded {
                 ui.multiply_opacity(FADED_OPACITY);
             }
-            let fill = if look.on || ui.response().hovered() { p.raised } else { p.card };
+            let fill = if look.on || pointer_over(&ui.response()) { p.raised } else { p.card };
             let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 2.0;

@@ -643,7 +643,7 @@ impl RunScreen {
                     rich(ui, text, Type::BODY, ink).append_to(&mut job, &style, FontSelection::Default, Align::Min);
                 }
                 job.wrap.max_rows = rows;
-                ui.add(egui::Label::new(job).wrap()).on_hover_text(&question.text);
+                copyable(ui, |ui| ui.add(egui::Label::new(job).wrap())).on_hover_text(&question.text);
             }
             None => {
                 muted(ui, "Claude finished this step. Read its message, then reply.");
@@ -743,7 +743,7 @@ impl RunScreen {
                                 // Under the choice's words, past its radio or checkbox.
                                 let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
                                 Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
-                                    ui.add(egui::Label::new(rich(ui, &option.description, Type::BODY, Ink::Muted)).wrap());
+                                    copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, &option.description, Type::BODY, Ink::Muted)).wrap()));
                                 });
                             }
                             if changed {

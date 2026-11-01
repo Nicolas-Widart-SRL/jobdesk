@@ -32,11 +32,16 @@ const NORMAL: Fit = Fit { height: BUTTON_HEIGHT, padding: BUTTON_PADDING, font: 
 const SMALL: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::SMALL_BUTTON };
 const COMMAND: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::MONO };
 
+/// Whether the pointer is over `response` now. Every hover fill and the hand ask this, so they light and go out together.
+/// A disabled widget never reports hover. `hovered` alone also holds on a key press and while a press is dragged off
+/// the widget, so the pointer must be over it too.
+pub(in crate::ui_kit) fn pointer_over(response: &Response) -> bool {
+    response.hovered() && response.contains_pointer()
+}
+
 /// What every clickable kit widget calls last: the pointing hand while the pointer is over it, then the focus ring.
-/// A disabled widget never reports hover, so it keeps the arrow. `hovered` alone also holds on a key press and while a press
-/// is dragged off the widget, so the pointer must be over it too.
 pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
-    if response.hovered() && response.contains_pointer() {
+    if pointer_over(response) {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     if response.has_focus() {
@@ -47,7 +52,10 @@ pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl 
 
 /// The pointing hand on a control egui paints, such as a checkbox or a combo box. The kit's own widgets set it themselves.
 pub fn hand(response: Response) -> Response {
-    response.on_hover_cursor(CursorIcon::PointingHand)
+    if pointer_over(&response) {
+        response.ctx.set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// A plain button at rest is clear on a surface, and fills with paper on the desk, so the grid never runs behind its label.
@@ -81,10 +89,10 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = look_colors(&p, look, response.hovered(), on_desk(ui));
+    let (fill, border) = look_colors(&p, look, pointer_over(&response), on_desk(ui));
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(fit.padding, (fit.height - galley.size().y) / 2.0), galley.size());
-    if matches!(look, Look::Primary) && response.hovered() {
+    if matches!(look, Look::Primary) && pointer_over(&response) {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
     paint_text(ui, text_rect.min, galley, ink, fill);
@@ -157,7 +165,7 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     ui.painter().rect(rect, RADIUS_BUTTON, p.card, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(NORMAL.padding, (NORMAL.height - label.size().y) / 2.0), label.size());
-    if response.hovered() {
+    if pointer_over(&response) {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
     let mut x = text_rect.right() + lead;
@@ -267,7 +275,7 @@ pub enum TabMark {
 /// `line` is the palest neutral that stands off both the desk's base and its grid lines.
 fn tab_swipe(ui: &Ui, response: &Response, on: bool) -> Option<(Color32, Option<Color32>)> {
     let p = Palette::of(ui);
-    match (on, response.hovered()) {
+    match (on, pointer_over(response)) {
         (true, _) => Some((p.mark, Some(p.turn))),
         (false, true) => Some((p.line, None)),
         (false, false) => None,
@@ -357,7 +365,7 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
     let widest = if on { galley.size().x } else { line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x) };
     let size = vec2(widest + look.padding * 2.0, look.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let fill = match (on, response.hovered()) {
+    let fill = match (on, pointer_over(&response)) {
         (true, _) => inks.on.0,
         (false, true) => inks.hover,
         (false, false) => Color32::TRANSPARENT,
@@ -409,7 +417,7 @@ pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &
 pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
     let p = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), Sense::click());
-    let fill = if on || response.hovered() { p.panel } else { Color32::TRANSPARENT };
+    let fill = if on || pointer_over(&response) { p.panel } else { Color32::TRANSPARENT };
     ui.painter().rect_filled(rect, 0.0, fill);
     let ink = if on { p.text } else { p.muted };
     let galley = line(ui, text, style, ink, rect.width() - crate::ui_kit::tokens::INSET as f32 * 2.0);
@@ -424,7 +432,7 @@ pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
 pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: bool) -> Response {
     let p = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), Sense::click());
-    let fill = if on || response.hovered() { p.panel } else { Color32::TRANSPARENT };
+    let fill = if on || pointer_over(&response) { p.panel } else { Color32::TRANSPARENT };
     ui.painter().rect_filled(rect, 0.0, fill);
     ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), HAIRLINE)), 0.0, p.line);
     let left = rect.left() + PICK_ROW_INLINE;

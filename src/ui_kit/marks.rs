@@ -8,7 +8,7 @@ use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::on_desk;
-use crate::ui_kit::text::{add_galley, add_job, add_text, copyable, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
     KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, MOTION_TIME, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
@@ -195,7 +195,7 @@ pub fn path_label(ui: &mut Ui, dir: &str, file: &str) -> Response {
     let mut job = LayoutJob::default();
     job.append(dir, 0.0, TextFormat::simple(Type::MONO.font(), p.faint));
     job.append(file, 0.0, TextFormat::simple(Type::MONO.font(), p.text));
-    copyable(ui, |ui| add_job(ui, job, TextWrapMode::Truncate))
+    add_job(ui, job, TextWrapMode::Truncate)
 }
 
 /// The centres of the weekday, day and month lines, below the stamp's centre, from the canvas's 80px view box.

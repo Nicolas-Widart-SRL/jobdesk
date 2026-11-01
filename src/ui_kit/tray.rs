@@ -3,7 +3,7 @@
 use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{interactive, small_button, small_key_button, small_toggle};
+use crate::ui_kit::controls::{interactive, pointer_over, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined, surface};
@@ -213,7 +213,7 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let inert = done || end == AgendaEnd::Now;
     let sense = if inert { Sense::hover() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
-    let fill = if !inert && response.hovered() { p.raised } else { Color32::TRANSPARENT };
+    let fill = if !inert && pointer_over(&response) { p.raised } else { Color32::TRANSPARENT };
     ui.painter().rect_filled(rect, 0.0, fill);
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;

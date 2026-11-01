@@ -1210,7 +1210,7 @@ fn a_footer_button_leaves_the_card_in_place() {
     let top = tab_top(&harness);
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
     assert_eq!(tab_top(&harness), top);
 }
 

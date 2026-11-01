@@ -182,8 +182,8 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
 
 - `designer` draws HTML canvases for a new screen in `mockups/`. It runs in its own session, through the `designer` skill.
   When the task names canvases, give the planner the index and every changed handoff file of the canvases' folder (`mockups/README.md` and `mockups/handoff/` by default).
-  Before planning, check that the canvases and their handoff files are on `origin/main`.
-  If not, ask the user to commit and merge them first, because the builders' worktrees start from it.
-  The planner puts the handoff files' Doc changes in a docs step, and that step also deletes the Doc changes section from each handoff file.
+  Before planning, run `git status --porcelain -- <folder>` and `git diff --quiet origin/main -- <folder>` on the canvases' folder.
+  If either shows changes, ask the user to commit and merge the design first, because the builders' worktrees start from `origin/main`.
+  The planner puts the handoff files' Doc changes in a docs step, and that step deletes the section from each file after applying it.
 
 Use cheap models only for work that is fully written down.

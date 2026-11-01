@@ -67,6 +67,13 @@ fn check_mark(check: Check) -> CheckMark {
     }
 }
 
+/// What the Today screen keeps between frames.
+#[derive(Default)]
+pub struct TodayScreen {
+    /// The card whose command line is open. It closes when another card comes on top.
+    command_open: Option<String>,
+}
+
 /// Keys never fire while a text field has focus. Y does nothing on a card with no default.
 fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
     if ui.ctx().egui_wants_keyboard_input() {
@@ -87,12 +94,15 @@ fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
 }
 
 /// Draws the tray and applies what the user did. `keys` is off while a dialog covers the window.
-pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option<Request> {
+pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Queue, keys: bool) -> Option<Request> {
     let top = queue.cards.first();
     if let Some(top) = top {
         tray.read(&top.key);
     }
-    close_command_off_top(ui, top);
+    // Another card on top, or an empty tray, closes the line, so a card back after Later starts closed.
+    if screen.command_open.as_ref().is_some_and(|key| top.is_none_or(|card| &card.key != key)) {
+        screen.command_open = None;
+    }
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
 
     head(ui, queue);
@@ -105,7 +115,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
 
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| cleared(ui, queue, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
-            Some(card) => stack(ui, card, queue.cards.len(), &mut pressed),
+            Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
             None => {
                 ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
             }
@@ -191,7 +201,7 @@ fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
 
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
 /// The card takes the height left, so its actions stay in view however long its body is.
-fn stack(ui: &mut Ui, card: &Card, pending: usize, pressed: &mut Option<Pressed>) {
+fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<String>, pressed: &mut Option<Pressed>) {
     let (kind, ink, _) = kind_look(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     let tab = ui
@@ -205,7 +215,7 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, pressed: &mut Option<Pressed>
         })
         .inner;
     let look = DealLook { key: &card.key, frame: deal_frame(card.kind), behind: pending - 1 };
-    deal(ui, tab, look, |ui| card_face(ui, card), |ui| actions(ui, card, pressed));
+    deal(ui, tab, look, |ui| card_face(ui, card), |ui| actions(ui, card, command_open, pressed));
 }
 
 /// Any string here may come from a posting, a note or a report, so each shows as a plain label.
@@ -342,7 +352,7 @@ fn options_body(ui: &mut Ui, options: &[(String, String)]) {
 
 /// The keyed actions lead, then the rest. The note on what Y does sits on the right, or under them when the row is full.
 /// The command shows only on request, as plain text, and showing it starts nothing.
-fn actions(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
+fn actions(ui: &mut Ui, card: &Card, command_open: &mut Option<String>, pressed: &mut Option<Pressed>) {
     if let Some(primary) = &card.primary
         && primary_key_button(ui, &primary.label, "Y").clicked()
     {
@@ -372,37 +382,12 @@ fn actions(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
         }
         ui.add(egui::Label::new(rich(ui, card.note.as_str(), Type::NOTE, Ink::Muted)).halign(Align::Max).wrap());
         if let Some(command) = &card.command {
-            command_line(ui, card, command);
+            // The line stays open only while its card stays on top: `show` closes it when the top card changes.
+            let mut open = command_open.as_deref() == Some(card.key.as_str());
+            reveal_command(ui, command, &mut open);
+            *command_open = open.then(|| card.key.clone());
         }
     });
-}
-
-/// Names the card whose command line is open.
-fn command_open_id() -> egui::Id {
-    egui::Id::NULL.with("tray_command_open")
-}
-
-/// The line stays open only while its card stays on top: `show` closes it when the top card changes.
-fn command_line(ui: &mut Ui, card: &Card, command: &str) {
-    let id = command_open_id();
-    let mut open = ui.data(|data| data.get_temp::<String>(id)).is_some_and(|key| key == card.key);
-    reveal_command(ui, command, &mut open);
-    ui.data_mut(|data| {
-        if open {
-            data.insert_temp(id, card.key.clone());
-        } else {
-            data.remove::<String>(id);
-        }
-    });
-}
-
-/// Another card on top, or an empty tray, closes the line, so a card back after Later starts closed.
-fn close_command_off_top(ui: &Ui, top: Option<&Card>) {
-    let id = command_open_id();
-    let shown = ui.data(|data| data.get_temp::<String>(id));
-    if shown.is_some_and(|key| top.is_none_or(|card| card.key != key)) {
-        ui.data_mut(|data| data.remove::<String>(id));
-    }
 }
 
 fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {

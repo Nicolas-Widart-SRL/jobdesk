@@ -12,6 +12,7 @@ use crate::dossier::ui::DossierScreen;
 use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
+use crate::intray::ui::TodayScreen;
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
@@ -83,6 +84,7 @@ pub struct Shell {
     run_screen: RunScreen,
     data: Option<PathBuf>,
     tray: Option<InTray>,
+    today: TodayScreen,
     confirm_quit: bool,
     dossier_screen: DossierScreen,
     pages: Option<PageStore>,
@@ -112,6 +114,7 @@ impl Shell {
             run_screen: RunScreen::default(),
             data: None,
             tray: None,
+            today: TodayScreen::default(),
             confirm_quit: false,
             dossier_screen: DossierScreen::default(),
             pages: None,
@@ -408,7 +411,7 @@ impl Shell {
         match self.screen {
             Screen::InTray => {
                 let keys = !self.confirm_quit;
-                if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, tray, queue, keys)) {
+                if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, keys)) {
                     self.follow(ui.ctx(), request);
                 }
             }

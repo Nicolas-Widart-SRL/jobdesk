@@ -6,7 +6,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{divider, inset, offset_shadow, paint_outlined};
+use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
@@ -152,7 +152,7 @@ pub fn card_tab(ui: &mut Ui, title: &str, ink: TabInk, when: &str) -> CardTab {
     CardTab { rect, fill }
 }
 
-/// How the dealt card sits. `key` names it, so the next card's body opens at its top.
+/// How the dealt card sits. `key` names it, so a card that comes on top, new or back, opens its body at the top.
 /// `frame` rings one that has no default and needs reading first, in the colour of why. `behind` counts the cards under it.
 #[derive(Debug, Clone, Copy)]
 pub struct DealLook<'a> {
@@ -176,30 +176,30 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
         None => frame,
     };
     let (x, y) = DEAL_PADDING;
-    // The stroke sits inside the allocated height, on both edges.
-    let content = (height - 2.0 * HAIRLINE).max(0.0);
     let shown = ui.allocate_ui(vec2(ui.available_width(), height), |ui| {
         frame.show(ui, |ui| {
-            let inner = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), content));
+            let inner = Rect::from_min_size(ui.cursor().min, ui.available_size());
             ui.advance_cursor_after_rect(inner);
             // The footer goes in first, at the foot of the card, so the body takes what it leaves.
-            // Its height is known only once laid out: when it differs from the height kept for this card,
-            // the pass is discarded and laid out again before anything shows.
-            let kept = ui.scope_id().with(("deal_footer", look.key));
-            let foot_height = ui.data(|data| data.get_temp::<f32>(kept)).unwrap_or(0.0).min(content);
-            let foot_rect = Rect::from_min_max(pos2(inner.left(), inner.bottom() - foot_height), pos2(inner.right(), inner.bottom() + content));
+            // One height is kept for whichever card is dealt, so only a footer of a new height costs a pass.
+            let kept = KeptHeight::read(ui, ui.scope_id().with("deal_footer"), 0.0);
+            let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
             let mut foot = ui.new_child(UiBuilder::new().id_salt("deal_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
-            foot.shrink_clip_rect(inner);
+            foot.shrink_clip_rect(foot_rect);
             deal_footer(&mut foot, footer);
-            let laid = foot.min_rect().height().min(content);
-            if (laid - foot_height).abs() > 0.5 {
-                ui.data_mut(|data| data.insert_temp(kept, laid));
-                ui.ctx().request_discard("a card's footer changed height");
+            kept.keep(ui, foot.min_rect().height().min(inner.height()), "a card's footer changed height");
+            // A card that comes on top, new or back, opens its body at the top.
+            let dealt = ui.scope_id().with("deal_shown");
+            let fresh = ui.data(|data| data.get_temp::<String>(dealt)).as_deref() != Some(look.key);
+            if fresh {
+                ui.data_mut(|data| data.insert_temp(dealt, look.key.to_owned()));
             }
             let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
             let mut body_ui = ui.new_child(UiBuilder::new().id_salt("deal_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
             body_ui.shrink_clip_rect(body_rect);
-            ScrollArea::vertical().id_salt(("deal_body", look.key)).auto_shrink([false, false]).show(&mut body_ui, |ui| {
+            let scroll = ScrollArea::vertical().id_salt("deal_body").auto_shrink([false, false]);
+            let scroll = if fresh { scroll.vertical_scroll_offset(0.0) } else { scroll };
+            scroll.show(&mut body_ui, |ui| {
                 Frame::new()
                     .inner_margin(Margin::symmetric(x, y))
                     .show(ui, |ui| {

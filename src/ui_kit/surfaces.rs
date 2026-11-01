@@ -344,6 +344,31 @@ pub fn clear_panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// The height of a part laid out after what must leave room for it, such as a footer under a scroll area,
+/// as it measured on the frame before.
+#[derive(Debug, Clone, Copy)]
+pub struct KeptHeight {
+    id: egui::Id,
+    pub height: f32,
+}
+
+impl KeptHeight {
+    /// The height kept under `id`, or `fallback` before the first measure.
+    pub fn read(ui: &Ui, id: egui::Id, fallback: f32) -> Self {
+        Self { id, height: ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(fallback) }
+    }
+
+    /// Keeps `laid` when it differs from the height read. A discard redraws within this frame when a pass is left.
+    /// The repaint covers the frames where none is, so an idle window still settles on the new measure.
+    pub fn keep(self, ui: &Ui, laid: f32, reason: &'static str) {
+        if (laid - self.height).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(self.id, laid));
+            ui.ctx().request_discard(reason);
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
 /// Commands and untrusted text: plain, in a recessed box.
 pub fn code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let fill = Palette::of(ui).field;

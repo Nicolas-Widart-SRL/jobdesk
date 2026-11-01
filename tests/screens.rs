@@ -1172,7 +1172,23 @@ fn the_next_card_opens_its_body_at_the_top() {
     assert!(is_shown(&harness, MERIDIAN));
     let (tab, resting) = (tab_top(&harness), name_top(&harness, "Meridian Rail Systems"));
 
-    harness.hover_at(harness.get_by_label("Meridian Rail Systems").rect().center());
+    scroll_body(&mut harness, "Meridian Rail Systems");
+    assert!(name_top(&harness, "Meridian Rail Systems") < resting, "the body scrolls");
+    assert_eq!(tab_top(&harness), tab, "the card stays put");
+
+    press(&mut harness, Key::L);
+    assert_eq!(name_top(&harness, "Ardent Software"), ardent_resting(), "the next card starts at its top");
+    assert_eq!(tab_top(&harness), tab);
+
+    scroll_body(&mut harness, "Ardent Software");
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert_eq!(name_top(&harness, "Meridian Rail Systems"), resting, "a card back on top starts at its top");
+}
+
+/// Turns the mouse wheel over the dealt card's body, where `company` is.
+fn scroll_body(harness: &mut Harness, company: &str) {
+    harness.hover_at(harness.get_by_label(company).rect().center());
     let wheel = egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(0.0, -200.0),
@@ -1182,12 +1198,20 @@ fn the_next_card_opens_its_body_at_the_top() {
     };
     harness.event(wheel);
     harness.run_steps(3);
-    assert!(name_top(&harness, "Meridian Rail Systems") < resting, "the body scrolls");
-    assert_eq!(tab_top(&harness), tab, "the card stays put");
+}
 
-    press(&mut harness, Key::L);
-    assert_eq!(name_top(&harness, "Ardent Software"), ardent_resting(), "the next card starts at its top");
-    assert_eq!(tab_top(&harness), tab);
+/// A footer button decides the card, and the next card's tab sits where this one's did.
+#[test]
+fn a_footer_button_leaves_the_card_in_place() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_footer_click"));
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+    }
+    let top = tab_top(&harness);
+    harness.get_by_label("Harmless, keep posting").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    assert_eq!(tab_top(&harness), top);
 }
 
 fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {

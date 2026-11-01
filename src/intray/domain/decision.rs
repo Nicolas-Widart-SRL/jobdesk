@@ -49,6 +49,8 @@ pub struct Decision {
     pub name: String,
     pub outcome: Outcome,
     pub reason: Option<SkipReason>,
+    /// The label of the action a followed card opened, so the log can name the task.
+    pub action: Option<String>,
     pub on: NaiveDate,
 }
 
@@ -72,6 +74,9 @@ impl Decision {
     }
 
     pub fn label(&self) -> String {
+        if self.outcome == Outcome::Followed {
+            return self.action.as_ref().map_or_else(|| "Task opened".to_owned(), |action| format!("{action} opened"));
+        }
         let verb = self.outcome.verb();
         self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb}, {}", reason.label().to_lowercase()))
     }
@@ -87,7 +92,7 @@ mod tests {
     use super::*;
 
     fn decided(outcome: Outcome) -> Decision {
-        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
+        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, action: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
     }
 
     #[test]
@@ -116,5 +121,12 @@ mod tests {
     fn label_names_the_reason() {
         let skipped = Decision { reason: Some(SkipReason::Rate), ..decided(Outcome::Skipped) };
         assert_eq!(skipped.label(), "Skipped, rate");
+    }
+
+    #[test]
+    fn a_followed_decision_names_the_task_it_opened() {
+        let followed = Decision { action: Some("Draft application".into()), ..decided(Outcome::Followed) };
+        assert_eq!(followed.label(), "Draft application opened");
+        assert_eq!(decided(Outcome::Followed).label(), "Task opened");
     }
 }

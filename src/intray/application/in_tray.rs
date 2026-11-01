@@ -378,8 +378,8 @@ impl InTray {
         self.reading = None;
     }
 
-    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, today: NaiveDate) {
-        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, on: today });
+    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, action: Option<String>, today: NaiveDate) {
+        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, action, on: today });
         self.can_undo = true;
         self.reading = None;
         self.forget_returns_before(today);
@@ -423,12 +423,12 @@ impl InTray {
     }
 
     pub fn later(&mut self, card: &Card, today: NaiveDate) {
-        self.record(card, Outcome::Later, None, today);
+        self.record(card, Outcome::Later, None, None, today);
     }
 
     pub fn skip(&mut self, card: &Card, today: NaiveDate) {
         if card.can_skip {
-            self.record(card, Outcome::Skipped, None, today);
+            self.record(card, Outcome::Skipped, None, None, today);
         }
     }
 
@@ -436,15 +436,15 @@ impl InTray {
     pub fn follow(&mut self, card: &Card, action: &Action, today: NaiveDate) -> Option<Request> {
         match &action.effect {
             Effect::Command(line) => {
-                self.record(card, Outcome::Followed, None, today);
+                self.record(card, Outcome::Followed, None, Some(action.label.clone()), today);
                 Some(Request::Command(line.clone()))
             }
             Effect::Skip(reason) => {
-                self.record(card, Outcome::Skipped, Some(*reason), today);
+                self.record(card, Outcome::Skipped, Some(*reason), None, today);
                 None
             }
             Effect::Keep => {
-                self.record(card, Outcome::Kept, None, today);
+                self.record(card, Outcome::Kept, None, None, today);
                 None
             }
             Effect::Dossier(folder) => Some(Request::Dossier(folder.clone())),
@@ -467,7 +467,8 @@ impl InTray {
             _ if asks_reason && last.reason.is_none() => "Skipped. Why? Optional.".to_owned(),
             _ => last.label(),
         };
-        let spoken = format!("Last decision: {}, {}. Press U to undo.", last.outcome.verb(), last.name);
+        let said = if last.outcome == Outcome::Followed { last.label() } else { last.outcome.verb().to_owned() };
+        let spoken = format!("Last decision: {said}, {}. Press U to undo.", last.name);
         Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
@@ -638,7 +639,8 @@ mod tests {
         assert_eq!(request, Some(Request::Command("/apply".into())));
         assert!(dealt(&tray, &jobs).is_empty());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Command opened"));
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Draft application opened"));
+        assert_eq!(offer.spoken, "Last decision: Draft application opened, Acme. Press U to undo.");
         tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
     }

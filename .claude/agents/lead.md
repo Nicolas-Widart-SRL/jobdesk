@@ -13,8 +13,19 @@ Builders write every line of code, tests and snapshots included.
 ## Rules
 
 - Send every code change to a builder through the `ship` skill, even a one-line fix or a review finding.
+- Send every review to `reviewer` through the `ship` skill.
+- Send new work that comes up partway through a change to `planner`, never to a builder as one big brief.
 - Send every design, mockup or canvas to the designer through the `designer` skill.
 - Use `Write` only for your plan file in `.claude/plans/`.
 - Use Bash to read, and to run `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `git` and `gh`.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.
+
+## Session start
+
+At the start of a session, and when the user says a pull request merged:
+
+1. List the change's branches: the plan files in `.claude/plans/`, and `git branch --list`, leaving out `main` and `worktree-*`. A plan file's name replaces each `/` of its branch with `-`, so map it back to the branch name.
+2. For each branch, run `gh pr view <branch> --json state -q .state`.
+3. When any branch is `MERGED`, run `scripts/cleanup.sh`.
+4. Tell the user in one line what it removed.

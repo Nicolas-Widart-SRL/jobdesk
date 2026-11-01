@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Cleans up after merged work: agent worktrees and stale branches.
+# Cleans up after merged work: agent worktrees, stale branches and their plan files.
 # A branch is merged when the base already holds all its changes, even after a rebase
 # or a squash merge. The default base is origin/main. Pass a change's branch as well
-# to clean up the steps already merged into it.
+# to clean up the steps already merged into it. A branch also counts as merged when
+# GitHub shows a merged pull request from its current head commit. That covers a
+# squash merge after main changed the same lines. Agent branches (worktree-*) skip
+# that check. A change's branch that main already contains is new, not merged, so
+# it stays until GitHub shows its pull request merged. Deleting a branch also
+# deletes its plan file in .claude/plans/.
 #
 #   scripts/cleanup.sh                        after the user merges a pull request
 #   scripts/cleanup.sh feat/standing-orders   after steps merge into feat/standing-orders
@@ -30,6 +35,32 @@ merged() {
     [ "$tree" = "$(git rev-parse "$base^{tree}")" ] && return 0
   done
   return 1
+}
+
+# True when GitHub shows a merged pull request whose head is the branch's current commit.
+# Matching the commit keeps a reused branch name safe.
+pr_merged() {
+  command -v gh >/dev/null || return 1
+  gh pr list --head "$1" --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qxF "$(git rev-parse "$1")"
+}
+
+# True when a base already contains the branch's head: a new change's branch starts there.
+started() {
+  local base
+  for base in "${bases[@]}"; do
+    git rev-parse -q --verify "$base" >/dev/null || continue
+    git merge-base --is-ancestor "$1" "$base" && return 0
+  done
+  return 1
+}
+
+# True when a branch can go. A step branch goes once its change's branch holds it.
+# A change's branch needs commits of its own, or a merged pull request from its head.
+done_with() {
+  case $1 in
+    worktree-*) merged "$1" ;;
+    *) { ! started "$1" && merged "$1"; } || pr_merged "$1" ;;
+  esac
 }
 
 kept=0
@@ -64,9 +95,15 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads); do
   case "$branch" in main) continue ;; esac
   for base in "$@"; do [ "$branch" = "$base" ] && continue 2; done
   grep -qxF "$branch" <<<"$in_use" && continue
-  if merged "$branch"; then
+  if done_with "$branch"; then
     echo "delete branch $branch"
     run git branch --quiet -D "$branch"
+    # Plan files are named after the branch, with each / turned into -.
+    plan="$root/.claude/plans/${branch//\//-}.md"
+    if [ -f "$plan" ]; then
+      echo "delete plan $plan"
+      run rm "$plan"
+    fi
   fi
 done
 

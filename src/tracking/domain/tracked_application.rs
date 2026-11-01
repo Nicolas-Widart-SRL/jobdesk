@@ -73,6 +73,12 @@ impl TrackedApplication {
         Some(days_from(last, today))
     }
 
+    /// Days since the application went out, from its date alone. A date ahead of today reads as today.
+    pub fn days_since_sent(&self, today: NaiveDate) -> Option<i64> {
+        let sent = self.applied_on.date().filter(|_| self.was_submitted())?;
+        Some(days_from(sent, today).max(0))
+    }
+
     pub fn follow_up_is_due(&self, today: NaiveDate, threshold_days: i64) -> bool {
         let sent = self.follow_up_dates();
         let last = sent.iter().copied().max().or(self.applied_on.date());
@@ -152,6 +158,15 @@ mod tests {
     fn quiet_days_count_from_the_latest_dated_note() {
         let app = application(ApplicationStatus::Applied, "2026-10-01", "called 2026-10-21");
         assert_eq!(app.days_quiet(today()), Some(10));
+    }
+
+    #[test]
+    fn days_since_sent_ignore_notes_and_never_go_negative() {
+        let followed = application(ApplicationStatus::Applied, "2026-10-01", "followed up 2026-10-28");
+        assert_eq!((followed.days_since_sent(today()), followed.days_quiet(today())), (Some(30), Some(3)));
+        let ahead = application(ApplicationStatus::Applied, "2026-11-05", "");
+        assert_eq!(ahead.days_since_sent(today()), Some(0));
+        assert_eq!(application(ApplicationStatus::Drafted, "2026-10-01", "").days_since_sent(today()), None);
     }
 
     #[test]

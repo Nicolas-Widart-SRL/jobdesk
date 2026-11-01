@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use chrono::NaiveDate;
 use egui::{Frame, ScrollArea, Ui};
 
@@ -60,25 +62,29 @@ fn card_meta(card: &ApplicationCard) -> String {
             Some(stage) => stage.date.map_or_else(|| stage.name.clone(), |date| format!("{} {}", stage.name, day(date))),
             None => card.status_label.clone(),
         },
-        _ => match card.days_quiet {
-            Some(0) => "Sent today".into(),
-            Some(1) => "Sent yesterday".into(),
-            Some(days) if days < FOLLOW_UP_DAYS => format!("Sent {days} days ago"),
-            Some(days) if card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
-            Some(days) => format!("No reply in {days} days"),
-            None => card.status_label.clone(),
+        // Quiet days restart with each dated note, so only the applied date says when it was sent.
+        _ => match (card.days_quiet, card.days_sent) {
+            (Some(days), _) if days >= FOLLOW_UP_DAYS && card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
+            (Some(days), _) if days >= FOLLOW_UP_DAYS => format!("No reply in {days} days"),
+            (_, Some(0)) => "Sent today".into(),
+            (_, Some(1)) => "Sent yesterday".into(),
+            (_, Some(days)) => format!("Sent {days} days ago"),
+            (_, None) => card.status_label.clone(),
         },
     }
 }
 
-fn card_waits(card: &ApplicationCard, waiting: &[(String, String)]) -> bool {
-    waiting.iter().any(|(company, role)| company == &card.company && role == &card.role)
+/// The role of every application with a card in Today, by company.
+type Waiting = HashMap<String, HashSet<String>>;
+
+fn card_waits(card: &ApplicationCard, waiting: &Waiting) -> bool {
+    waiting.get(&card.company).is_some_and(|roles| roles.contains(&card.role))
 }
 
 impl TrackerScreen {
     /// `waiting` holds the company and role of every application with a card in Today.
     /// Returns the archive folder of a dossier the user asked to open.
-    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) -> Option<String> {
+    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let open = pipeline.open_count();
         let waits = pipeline.cards().filter(|card| card_waits(card, waiting)).count();
         let mut subtitle = format!("{open} open, {} closed.", pipeline.cards().count() - open);
@@ -93,7 +99,7 @@ impl TrackerScreen {
         page_body(ui, |ui| self.body(ui, pipeline, waiting))
     }
 
-    fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) -> Option<String> {
+    fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let mut open = None;
         if pipeline.is_empty() {
             panel(ui, |ui| {
@@ -127,7 +133,7 @@ impl TrackerScreen {
         open
     }
 
-    fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) {
+    fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) {
         let lanes: Vec<&PipelineLane> = pipeline.lanes.iter().filter(|lane| !lane.cards.is_empty() || lane.bucket != StatusBucket::Hired).collect();
         // Every lane takes the height of the tallest, measured on the frame before.
         let tallest_id = ui.scope_id().with("tallest_lane");
@@ -269,4 +275,30 @@ fn fact(ui: &mut Ui, label: &str, value: &str) {
         muted(ui, label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(value));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tracking::application::ReachedStage;
+
+    fn applied(days_quiet: i64, days_sent: i64, follow_ups_sent: usize) -> ApplicationCard {
+        ApplicationCard {
+            company: "Acme".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
+            status_label: "Applied".into(), bucket: StatusBucket::Active, applied_on: String::new(), deadline: None, deadline_state: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: Some(days_quiet), days_sent: Some(days_sent),
+            follow_ups_sent, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
+            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
+            archive_folder: None, outcome: None,
+        }
+    }
+
+    #[test]
+    fn sent_counts_from_the_applied_date() {
+        assert_eq!(card_meta(&applied(3, 30, 1)), "Sent 30 days ago", "a follow-up three days ago");
+        assert_eq!(card_meta(&applied(-9, 5, 0)), "Sent 5 days ago", "a note dated ahead of today");
+        assert_eq!(card_meta(&applied(1, 1, 0)), "Sent yesterday");
+        assert_eq!(card_meta(&applied(12, 30, 1)), "No reply in 12 days, followed up once");
+        assert_eq!(card_meta(&applied(15, 15, 0)), "No reply in 15 days");
+    }
 }

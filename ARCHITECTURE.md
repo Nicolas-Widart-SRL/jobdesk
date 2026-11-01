@@ -66,6 +66,8 @@ No card action runs anything by itself: Y opens the launcher on the slash comman
 
 `/rank` stores no contract, day rate or commute fields, so `discovery` reads them from what it does store: the title, location, strengths and gaps. A gate with nothing to read flags, because silence is not a pass. Failed freelance gates suggest a skip and never change a job's lane, because `/rank` owns the shortlist. The day-rate floor comes from `01-candidate-profile.md` and the commute tiers from `04-job-evaluation.md`. With neither, the gates flag instead of guessing.
 
+A job's check rows and the sentence that sums them up come from `JobChecks` in discovery's application layer. Each row has a typed kind, which gives both its label and its wording. Today's card and the Jobs detail both read it, so the two screens word a job the same way. An ad the safety check never saw reads as unchecked, not as flagged.
+
 ## Trust
 
 Posting text, notes and reports are third-party or generated data. Screens render them as

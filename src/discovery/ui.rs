@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-use crate::discovery::application::{FitLevel, Gate, JobBoard, JobView, Lane, Signal, Verdict};
+use crate::discovery::application::{CheckRow, CheckState, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
     CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, muted, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
@@ -64,11 +66,13 @@ fn days_words(days: i64) -> String {
     }
 }
 
-fn check_mark(gate: Gate) -> CheckMark {
-    match gate {
-        Gate::Pass => CheckMark::Ok,
-        Gate::Flag => CheckMark::Unclear,
-        Gate::Fail => CheckMark::Fails,
+/// A check the ad never went through shows no tag.
+fn check_mark(state: CheckState) -> Option<CheckMark> {
+    match state {
+        CheckState::Pass => Some(CheckMark::Ok),
+        CheckState::Unclear => Some(CheckMark::Unclear),
+        CheckState::Fail => Some(CheckMark::Fails),
+        CheckState::Unchecked => None,
     }
 }
 
@@ -89,66 +93,6 @@ fn verdict_tone(verdict: Verdict) -> Tone {
     }
 }
 
-fn verdict_words(verdict: Verdict) -> &'static str {
-    match verdict {
-        Verdict::Strong => "Strong fit.",
-        Verdict::Good => "Good fit.",
-        Verdict::Moderate => "Moderate fit.",
-        Verdict::Weak => "Weak fit.",
-        Verdict::Poor => "Poor fit.",
-    }
-}
-
-/// One check on the posting: its name, what the posting says and how it came out.
-struct Check {
-    name: &'static str,
-    value: String,
-    mark: Option<CheckMark>,
-}
-
-fn checks(job: &JobView) -> Vec<Check> {
-    let check = |name, value: String, gate| Check { name, value, mark: Some(check_mark(gate)) };
-    let gates = &job.freelance;
-    let mut rows = vec![
-        check("Contract", gates.contract.value.clone(), gates.contract.gate),
-        check("Day rate", gates.day_rate.value.replace(", floor ", ", your floor "), gates.day_rate.gate),
-    ];
-    if let Some(gate) = job.location_gate {
-        rows.push(check("Where", job.location.clone().unwrap_or_else(|| NOT_STATED.to_owned()), gate));
-    }
-    rows.push(check("Commute", gates.commute.value.clone(), gates.commute.gate));
-    if let Some(gate) = job.language_gate {
-        let unsaid = if gate == Gate::Pass { "No conflict" } else { NOT_STATED };
-        rows.push(check("Language", job.language_note.clone().unwrap_or_else(|| unsaid.to_owned()), gate));
-    }
-    rows.push(match job.guard.as_deref() {
-        Some("clean") => Check { name: "Safety check", value: "Nothing hidden in the ad".to_owned(), mark: Some(CheckMark::Ok) },
-        Some(guard) => Check { name: "Safety check", value: guard.to_owned(), mark: Some(CheckMark::Unclear) },
-        None => Check { name: "Safety check", value: "Not checked".to_owned(), mark: None },
-    });
-    rows
-}
-
-fn number_words(count: usize) -> String {
-    let words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"];
-    words.get(count).map_or_else(|| count.to_string(), |word| (*word).to_owned())
-}
-
-/// How the checks came out in one sentence: "All six checks pass." or "One fails, two are unclear."
-fn checks_words(checks: &[Check]) -> String {
-    let marks: Vec<CheckMark> = checks.iter().filter_map(|check| check.mark).collect();
-    let fails = marks.iter().filter(|mark| **mark == CheckMark::Fails).count();
-    let unclear = marks.iter().filter(|mark| **mark == CheckMark::Unclear).count();
-    if fails == 0 && unclear == 0 {
-        return format!("All {} checks pass.", number_words(marks.len()));
-    }
-    let fails = (fails > 0).then(|| format!("{} {}", number_words(fails), if fails == 1 { "fails" } else { "fail" }));
-    let unclear = (unclear > 0).then(|| format!("{} {} unclear", number_words(unclear), if unclear == 1 { "is" } else { "are" }));
-    let sentence = [fails, unclear].into_iter().flatten().collect::<Vec<_>>().join(", ");
-    let mut letters = sentence.chars();
-    letters.next().map_or_else(String::new, |first| format!("{}{}.", first.to_uppercase(), letters.as_str()))
-}
-
 /// The stated rate without the floor it is read against. The slip shows the floor.
 fn day_rate(job: &JobView) -> &str {
     let value = job.freelance.day_rate.value.as_str();
@@ -165,7 +109,7 @@ fn score_jobs_label(new: usize) -> String {
 
 impl JobsScreen {
     /// `waiting` holds the key of every job with a card in Today.
-    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &[String]) {
+    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>) {
         let subtitle = Subtitle::Text("Scored from the job ad alone. Drafting an application also checks the company.");
         let new = board.count(Lane::New);
         page_head(ui, Title::Slab("Jobs"), Some(subtitle), |ui| {
@@ -175,7 +119,7 @@ impl JobsScreen {
         page_body(ui, |ui| self.body(ui, board, waiting));
     }
 
-    fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &[String]) {
+    fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>) {
         if !lane_shown(self.lane, board) {
             self.lane = Lane::Shortlist;
         }
@@ -224,7 +168,7 @@ impl JobsScreen {
         });
     }
 
-    fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &[String]) {
+    fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &HashSet<String>) {
         let selected = self.selected.clone();
         let last = jobs.len().saturating_sub(1);
         // Cells pad themselves, so rules and the selected row run unbroken.
@@ -324,8 +268,17 @@ fn empty_state(ui: &mut Ui, lane: Lane, board: &JobBoard) {
     }
 }
 
+/// The verdict and the checks in one line, worded as the Today card words them.
+fn verdict_line(job: &JobView, checks: &JobChecks) -> String {
+    match (job.verdict, job.scraper_fit) {
+        (Some(verdict), _) => format!("{} {}", fit_band(Some(verdict), job.score.unwrap_or_default()), checks.summary),
+        (None, Some(fit)) => format!("Not scored yet. The search guessed a {} fit.", fit_words(fit)),
+        (None, None) => "Not scored yet.".to_owned(),
+    }
+}
+
 fn details(ui: &mut Ui, job: &JobView) {
-    let checks = checks(job);
+    let checks = JobChecks::of(job, false);
     panel_body(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = ROW_GAP;
@@ -337,18 +290,13 @@ fn details(ui: &mut Ui, job: &JobView) {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 muted(ui, job.company.as_str());
                 ui.add(egui::Label::new(rich(ui, job.title.as_str(), Type::SLIP_TITLE, Ink::Text)).wrap());
-                let verdict = match (job.verdict, job.scraper_fit) {
-                    (Some(verdict), _) => format!("{} {}", verdict_words(verdict), checks_words(&checks)),
-                    (None, Some(fit)) => format!("Not scored yet. The search guessed a {} fit.", fit_words(fit)),
-                    (None, None) => "Not scored yet.".to_owned(),
-                };
-                ui.add(egui::Label::new(rich(ui, verdict, Type::NOTE, Ink::Muted)).wrap());
+                ui.add(egui::Label::new(rich(ui, verdict_line(job, &checks), Type::NOTE, Ink::Muted)).wrap());
             });
         });
     });
     divider(ui);
     panel_body(ui, |ui| {
-        for check in &checks {
+        for check in &checks.rows {
             check_row(ui, check);
         }
         if let Some(attempts) = job.fetch_attempts {
@@ -388,12 +336,12 @@ fn details(ui: &mut Ui, job: &JobView) {
 
 /// A check: its name on the left, what the posting says and the result on the right.
 /// The value wraps in the room between them, so a guard's reason or a language note shows in full.
-fn check_row(ui: &mut Ui, check: &Check) {
+fn check_row(ui: &mut Ui, check: &CheckRow) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
-        muted(ui, check.name);
+        muted(ui, check.kind.label());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(mark) = check.mark {
+            if let Some(mark) = check_mark(check.state) {
                 check_tag(ui, mark);
             }
             ui.add(egui::Label::new(check.value.as_str()).wrap());

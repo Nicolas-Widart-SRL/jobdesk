@@ -1215,6 +1215,29 @@ fn a_triage_card_shows_why_it_fits_without_scrolling() {
     assert!(why.bottom() < footer.top(), "Why it fits at {why:?} sits above the footer at {footer:?}");
 }
 
+/// Today's card and the Jobs detail read one job's checks from one place, so they say the same.
+#[test]
+fn today_and_jobs_word_a_job_the_same() {
+    let mut today = tray_harness(shell(Screen::InTray, "checks_today"));
+    press(&mut today, Key::L);
+    press(&mut today, Key::L);
+    assert!(is_shown(&today, MERIDIAN));
+    let line = today.get_by_label_contains("84 of 100.").accesskit_node().value().expect("a verdict line");
+    // A value can also be a strength, so each is looked for, not counted.
+    let values = ["Freelance mission, 12 months", "Brussels, hybrid", "No conflict", "Nothing hidden in the ad"];
+    for value in values {
+        assert!(today.query_all_by_label(value).count() > 0, "{value} on Today");
+    }
+
+    let mut jobs = tray_harness(shell(Screen::Jobs, "checks_jobs"));
+    jobs.query_all_by_label(MERIDIAN).next().expect("a Meridian row").click();
+    jobs.run_steps(3);
+    assert!(is_shown(&jobs, &line), "{line} on Jobs");
+    for value in values {
+        assert!(jobs.query_all_by_label(value).count() > 0, "{value} on Jobs");
+    }
+}
+
 /// The top of the dealt card's tab. Only the card's body scrolls, so a decision never moves it.
 fn tab_top(harness: &Harness) -> f32 {
     let kinds = ["Claude asks", "Your turn", "Ready to send", "New match", "Interview prep", "Offer", "Check this ad", "Follow up", "Close it?"];

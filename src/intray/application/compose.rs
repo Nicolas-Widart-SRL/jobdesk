@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, Lane, Verdict};
+use crate::discovery::application::{CheckKind, CheckRow, CheckState, FreelanceGates, JobBoard, JobChecks, JobView, Lane, failed_gate, fit_band};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Check, Due, Effect, GateRow, SkipReason, Subject};
 use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point, wants_reply};
@@ -27,10 +27,11 @@ pub fn derive_cards(sources: &Sources, kept: impl Fn(&str) -> bool) -> Vec<Card>
             if sources.pipeline.cards().any(|card| is_tracked(card, job)) {
                 continue;
             }
-            if job.guard_flagged && !kept(&guard_key(job)) {
+            let kept_ad = job.guard_flagged && kept(&guard_key(job));
+            if job.guard_flagged && !kept_ad {
                 cards.push(guard_card(job, sources.today));
             } else if lane == Lane::Shortlist && !has_passed(job) {
-                cards.push(triage_card(job));
+                cards.push(triage_card(job, kept_ad));
             }
         }
     }
@@ -158,91 +159,24 @@ fn question_options(question: &Question) -> Body {
     Body::Options(question.options.iter().map(|option| (option.label.clone(), option.description.clone())).collect())
 }
 
-fn check_of(gate: Gate) -> Check {
-    match gate {
-        Gate::Pass => Check::Pass,
-        Gate::Flag => Check::Flag,
-        Gate::Fail => Check::Fail,
-    }
-}
-
-fn gate_row(label: &'static str, reading: &GateReading) -> GateRow {
-    GateRow { label, value: reading.value.clone(), check: check_of(reading.gate) }
-}
-
-/// The reason to suggest a skip, from the first freelance gate that fails.
-fn skip_suggestion(gates: &FreelanceGates) -> Option<(SkipReason, &'static str, &'static str)> {
-    if gates.contract.gate == Gate::Fail {
-        Some((SkipReason::Scope, "Skip, not freelance", "The posting is not open to freelancers."))
-    } else if gates.day_rate.gate == Gate::Fail {
-        Some((SkipReason::Rate, "Skip, rate too low", "The stated rate is under your floor."))
-    } else if gates.commute.gate == Gate::Fail {
-        Some((SkipReason::Location, "Skip, too far", "The commute is over your limit."))
-    } else {
-        None
-    }
-}
-
-const WHERE: &str = "Where";
-const SAFETY: &str = "Safety check";
-
-fn job_gates(job: &JobView) -> Vec<GateRow> {
-    let gates = &job.freelance;
-    let work_mode = job.location_gate.map(|gate| GateRow { label: WHERE, value: job.location.clone().unwrap_or_else(|| "Not stated".into()), check: check_of(gate) });
-    let language = job.language_gate.map(|gate| GateRow { label: "Language", value: job.language_note.clone().unwrap_or_else(|| "No conflict".into()), check: check_of(gate) });
-    let guard = GateRow {
-        label: SAFETY,
-        value: job.guard.as_deref().map_or_else(|| "Not checked".to_owned(), |guard| if guard.trim() == "clean" { "Nothing hidden in the ad".to_owned() } else { guard.to_owned() }),
-        check: if job.guard_flagged { Check::Flag } else if job.guard.is_some() { Check::Pass } else { Check::Flag },
+fn gate_row(row: &CheckRow) -> GateRow {
+    let check = match row.state {
+        CheckState::Pass => Check::Pass,
+        CheckState::Unclear => Check::Flag,
+        CheckState::Fail => Check::Fail,
+        CheckState::Unchecked => Check::Unchecked,
     };
-    [Some(gate_row("Contract", &gates.contract)), Some(gate_row("Day rate", &gates.day_rate)), work_mode, Some(gate_row("Commute", &gates.commute)), language, Some(guard)]
-        .into_iter()
-        .flatten()
-        .collect()
+    GateRow { label: row.kind.label(), value: row.value.clone(), check }
 }
 
-fn number_word(count: usize) -> &'static str {
-    ["No", "One", "Two", "Three", "Four", "Five", "Six"].get(count).copied().unwrap_or("Many")
-}
-
-/// What to check first, for the first row that fails, else the first that is unclear.
-fn weakest_check(rows: &[GateRow]) -> &'static str {
-    let row = rows.iter().find(|row| row.check == Check::Fail).or_else(|| rows.iter().find(|row| row.check == Check::Flag));
-    match row.map(|row| (row.label, row.check)) {
-        Some(("Contract", Check::Flag)) => "The ad does not say it is freelance, so check before you apply.",
-        Some(("Day rate", Check::Flag)) => "The day rate is not in the ad, so check it before you apply.",
-        Some(("Commute", Check::Flag)) => "The commute is not clear from the ad, so check it before you apply.",
-        Some((WHERE, Check::Flag)) => "The work mode is not clear from the ad, so check it before you apply.",
-        Some((WHERE, Check::Fail)) => "The location does not suit you.",
-        Some(("Language", Check::Flag)) => "The language needs a look, so check it before you apply.",
-        Some(("Language", Check::Fail)) => "The language does not suit you.",
-        Some((SAFETY, Check::Flag)) => "The ad has not had a safety check yet.",
-        _ => "One check needs a look before you apply.",
+/// The skip to suggest, from the first freelance gate that fails.
+fn skip_suggestion(gates: &FreelanceGates) -> Option<(SkipReason, &'static str)> {
+    match failed_gate(gates)? {
+        CheckKind::Contract => Some((SkipReason::Scope, "Skip, not freelance")),
+        CheckKind::DayRate => Some((SkipReason::Rate, "Skip, rate too low")),
+        CheckKind::Commute => Some((SkipReason::Location, "Skip, too far")),
+        _ => None,
     }
-}
-
-fn take_on(job: &JobView, rows: &[GateRow]) -> String {
-    if let Some((_, _, reason)) = skip_suggestion(&job.freelance) {
-        return format!("Claude suggests you skip this. {reason}");
-    }
-    let passing = rows.iter().filter(|row| row.check == Check::Pass).count();
-    if passing == rows.len() {
-        return format!("All {} checks pass. Scored from the job ad alone.", number_word(rows.len()).to_lowercase());
-    }
-    let passes = if passing == 1 { "check passes" } else { "checks pass" };
-    format!("{} {passes}. {}", number_word(passing), weakest_check(rows))
-}
-
-fn fit_band(verdict: Option<Verdict>, score: u8) -> String {
-    let words = match verdict {
-        Some(Verdict::Strong) => "Strong fit",
-        Some(Verdict::Good) => "Good fit",
-        Some(Verdict::Moderate) => "Moderate fit",
-        Some(Verdict::Weak) => "Weak fit",
-        Some(Verdict::Poor) => "Poor fit",
-        None => return format!("Scored {score} of 100."),
-    };
-    format!("{words}, {score} of 100.")
 }
 
 fn apply_line(job: &JobView) -> String {
@@ -262,15 +196,17 @@ fn posting_action(job: &JobView) -> Option<Action> {
     job.url.clone().map(|url| Action::new("Open job ad", Effect::Posting(url)))
 }
 
-fn triage_card(job: &JobView) -> Card {
+/// `kept` says the user kept this ad after its safety check flagged it.
+fn triage_card(job: &JobView, kept: bool) -> Card {
     let line = apply_line(job);
     let (primary, mut others, command, note) = match skip_suggestion(&job.freelance) {
-        Some((reason, label, _)) => (Action::new(label, Effect::Skip(reason)), vec![Action::new("Draft anyway…", Effect::Command(line)).opening("draft")], None, "Skips stay in the app. Nothing runs."),
+        Some((reason, label)) =>(Action::new(label, Effect::Skip(reason)), vec![Action::new("Draft anyway…", Effect::Command(line)).opening("draft")], None, "Skips stay in the app. Nothing runs."),
         None => (Action::new("Draft application…", Effect::Command(line.clone())).opening("draft"), vec![], Some(line), "Opens the drafting task. Nothing starts until you press Start."),
     };
     others.extend(posting_action(job));
     let score = job.score.unwrap_or_default();
-    let gates = job_gates(job);
+    let checks = JobChecks::of(job, kept);
+    let gates = checks.rows.iter().map(gate_row).collect();
     let location = job.location.clone().unwrap_or_else(|| "No location stated".into());
     Card {
         key: format!("triage:{}", job.key),
@@ -280,7 +216,7 @@ fn triage_card(job: &JobView) -> Card {
         subject: Subject::Job(job.key.clone()),
         title: job.title.clone(),
         subtitle: job.found_on.as_ref().map_or_else(|| format!("{location}."), |site| format!("{location}. Found on {site}.")),
-        take: take_on(job, &gates),
+        take: checks.summary,
         when: job.days_to_deadline.map_or_else(|| "No deadline".to_owned(), |days| days_text("Closes", days)),
         due: job.deadline.map(|on| Due { on, label: format!("{} closes", job.company) }),
         weight: -i64::from(score),
@@ -423,13 +359,25 @@ fn prep_card(card: &ApplicationCard, stage: &Stage, archive: &ArchiveContents) -
         subtitle: "Prep pack ready".into(),
         take: "Read the pack once before the call.".into(),
         when: on.format("%A %-d %b").to_string(),
-        due: Some(Due { on, label: format!("{} interview", card.company) }),
+        due: Some(Due { on, label: round_label(&card.company, &stage.name) }),
         body: Body::Lines(lines),
         primary: card.archive_folder.clone().map(|folder| Action::new("Open dossier", Effect::Dossier(folder))),
         note: format!("{} prep pack", pack.name),
         command: None,
         ..base_card(card, format!("{}:{}:{on}", application_key("prep", card), stage.name.to_lowercase()), CardKind::Prep)
     })
+}
+
+/// "Acme Corp phone screen", so two rounds read apart. A round with no name reads "Acme Corp interview".
+fn round_label(company: &str, round: &str) -> String {
+    let round = round.trim();
+    let mut letters = round.chars();
+    match letters.next() {
+        None => format!("{company} interview"),
+        // An acronym such as HR keeps its capitals.
+        Some(_) if letters.next().is_some_and(char::is_uppercase) => format!("{company} {round}"),
+        Some(first) => format!("{company} {}{}", first.to_lowercase(), &round[first.len_utf8()..]),
+    }
 }
 
 fn follow_up_card(card: &ApplicationCard, archive: Option<&ArchiveContents>) -> Card {
@@ -476,7 +424,7 @@ fn close_card(card: &ApplicationCard) -> Card {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::application::{LaneView, Signal};
+    use crate::discovery::application::{Gate, GateReading, LaneView, Signal, Verdict};
     use crate::dossier::application::{NamedText, PdfDocument};
     use crate::runs::application::{AgentEvent, RunRequest};
     use crate::tracking::application::{OutcomeRecord, PipelineLane, ReachedStage};
@@ -507,7 +455,7 @@ mod tests {
         ApplicationCard {
             company: "Acme Corp".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
             status_label: String::new(), bucket, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None,
             follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
             is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
             archive_folder: Some("acme_corp_lead".into()), outcome: None,
@@ -654,6 +602,20 @@ mod tests {
         let archives = HashMap::new();
         let kept = derive_cards(&Sources { board: &board, pipeline: &pipeline, archives: &archives, runs: &[], today: today() }, |key| key == guard_key(&flagged));
         assert_eq!(kept[0].kind, CardKind::Triage);
+        assert_eq!(kept[0].take, "Three checks pass. The safety check flagged this ad and you kept it.");
+        let Body::Triage { gates, .. } = &kept[0].body else { panic!("a triage body") };
+        assert_eq!(gates[3].check, Check::Flag, "a flagged ad is not an unchecked one");
+    }
+
+    #[test]
+    fn a_triage_card_reads_its_checks_from_discovery() {
+        let job = JobView { location_gate: Some(Gate::Flag), language_gate: Some(Gate::Pass), guard: None, ..job("Acme") };
+        let card = &cards(&shortlist(vec![job.clone()]), vec![], ArchiveContents::default(), &[])[0];
+        let checks = JobChecks::of(&job, false);
+        assert_eq!(card.take, checks.summary);
+        let Body::Triage { gates, .. } = &card.body else { panic!("a triage body") };
+        assert_eq!(gates.iter().map(|row| (row.label, row.value.as_str())).collect::<Vec<_>>(), checks.rows.iter().map(|row| (row.kind.label(), row.value.as_str())).collect::<Vec<_>>());
+        assert_eq!(gates[5].check, Check::Unchecked);
     }
 
     #[test]
@@ -847,9 +809,17 @@ mod tests {
         let card = &one_app(waiting.clone(), ArchiveContents { prep_packs: vec![pack], ..Default::default() })[0];
         assert_eq!(card.kind, CardKind::Prep);
         assert_eq!(card.when, "Wednesday 4 Nov");
-        assert_eq!(card.due.as_ref().unwrap().label, "Acme Corp interview");
+        assert_eq!(card.due.as_ref().unwrap().label, "Acme Corp technical interview");
 
         assert!(one_app(waiting, ArchiveContents::default()).is_empty());
+    }
+
+    #[test]
+    fn a_prep_card_names_its_round() {
+        assert_eq!(round_label("Acme Corp", "Phone screen"), "Acme Corp phone screen");
+        assert_eq!(round_label("Acme Corp", "Technical interview"), "Acme Corp technical interview");
+        assert_eq!(round_label("Acme Corp", "HR interview"), "Acme Corp HR interview");
+        assert_eq!(round_label("Acme Corp", " "), "Acme Corp interview");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
-use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
+use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer, horizon_words};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
     deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
@@ -58,11 +58,13 @@ fn deal_frame(kind: CardKind) -> Option<Tone> {
     }
 }
 
-fn check_mark(check: Check) -> CheckMark {
+/// A check the ad never went through shows no tag.
+fn check_mark(check: Check) -> Option<CheckMark> {
     match check {
-        Check::Pass => CheckMark::Ok,
-        Check::Flag => CheckMark::Unclear,
-        Check::Fail => CheckMark::Fails,
+        Check::Pass => Some(CheckMark::Ok),
+        Check::Flag => Some(CheckMark::Unclear),
+        Check::Fail => Some(CheckMark::Fails),
+        Check::Unchecked => None,
     }
 }
 
@@ -270,8 +272,9 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
         .horizontal(|ui| {
             let tab = card_tab(ui, kind, ink, card.when.as_str());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (_, span) = horizon_words();
                 ui.label(rich(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted))
-                    .on_hover_text("Claude's questions come first, then deadlines in the next two weeks, then the rest.");
+                    .on_hover_text(format!("Claude's questions come first, then deadlines in the next {span}, then the rest."));
             });
             tab
         })
@@ -357,7 +360,9 @@ fn gate_cell(ui: &mut Ui, gate: &GateRow) {
     ui.add_space(GATE_CELL_GAP);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-            check_tag(ui, check_mark(gate.check));
+            if let Some(mark) = check_mark(gate.check) {
+                check_tag(ui, mark);
+            }
             ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
@@ -545,7 +550,8 @@ fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
     let agenda = queue.agenda();
     slip(ui, |ui| {
-        panel_header(ui, "Coming up", Some("2 weeks"));
+        let (span, _) = horizon_words();
+        panel_header(ui, "Coming up", Some(&span));
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;

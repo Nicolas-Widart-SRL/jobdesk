@@ -12,7 +12,7 @@ use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dos
 use crate::dossier::ui::DossierScreen;
 use crate::insights;
 use crate::intray;
-use crate::intray::application::{InTray, Queue, Request, Sources};
+use crate::intray::application::{InTray, Queue, Request, Sources, Waiting};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
@@ -91,6 +91,10 @@ pub struct Shell {
     data: Option<PathBuf>,
     tray: Option<InTray>,
     today: TodayScreen,
+    /// What waits in Today, built again only when the dealt cards change.
+    waiting: Waiting,
+    /// The keys of the cards `waiting` was built from, in order.
+    waiting_keys: Vec<String>,
     confirm_quit: bool,
     dossier_screen: DossierScreen,
     pages: Option<PageStore>,
@@ -122,6 +126,8 @@ impl Shell {
             data: None,
             tray: None,
             today: TodayScreen::default(),
+            waiting: Waiting::default(),
+            waiting_keys: Vec::new(),
             confirm_quit: false,
             dossier_screen: DossierScreen::default(),
             pages: None,
@@ -244,6 +250,10 @@ impl Shell {
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
+        if !queue.deals(&self.waiting_keys) {
+            self.waiting = queue.waiting();
+            self.waiting_keys = queue.cards.iter().map(|card| card.key.clone()).collect();
+        }
         Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame(ui)).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
         Panel::bottom("status_bar").show_separator_line(false).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default().frame(sheet_frame(ui)).show(ui, |ui| {
@@ -458,9 +468,9 @@ impl Shell {
                     self.follow(ui.ctx(), request);
                 }
             }
-            Screen::Jobs => self.jobs.show(ui, &snapshot.board, &queue.waiting_jobs()),
+            Screen::Jobs => self.jobs.show(ui, &snapshot.board, &self.waiting.jobs),
             Screen::Tracker => {
-                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline, &queue.waiting_applications()) {
+                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline, &self.waiting.applications) {
                     self.show_dossier(folder);
                 }
             }

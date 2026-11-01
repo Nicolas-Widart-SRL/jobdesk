@@ -17,7 +17,6 @@ pub const BODY_PADDING: i8 = 12;
 pub const ROW_PADDING: i8 = 9;
 pub const PICK_ROW_HEIGHT: f32 = 34.0;
 pub const NOTE_PADDING: (i8, i8) = (14, 10);
-pub const CLEAR_PADDING: (i8, i8) = (24, 48);
 pub const CODE_PADDING: (i8, i8) = (11, 9);
 pub const PROMPT_PADDING: (i8, i8) = (16, 14);
 pub const PICK_PADDING: (i8, i8) = (10, 7);

@@ -7,7 +7,7 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabInk, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
-    check_tag, chrome_status, clear_panel, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
+    check_tag, chrome_status, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
@@ -265,13 +265,8 @@ fn sections(ui: &mut Ui) {
         strong(ui, "A prompt that needs you");
     });
     ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        page_frame(ui, |ui| {
-            ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
-        });
-        clear_panel(ui, |ui| {
-            ui.label(rich(ui, "Tray clear", Type::CLEAR, Ink::Text));
-        });
+    page_frame(ui, |ui| {
+        ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
     });
 }
 

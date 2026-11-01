@@ -2,11 +2,11 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, button, card_tab, check_tag, clear_panel, code_box, command_button, day_stamp, deal, divider,
-    fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, reveal_command, rich, side_column, slip, stamp, stamped_head, strong,
+    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, button, card_tab, check_tag, code_box, command_action, day_stamp, deal, divider,
+    fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, slip, stamp, stamped_head, strong,
     undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -335,22 +335,36 @@ fn actions(ui: &mut Ui, card: &Card, command_open: &mut Option<String>, pressed:
     });
 }
 
+/// Nothing is left to decide, so the panel offers new work. Both buttons only open the launcher: the user starts the run there.
 fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
-    clear_panel(ui, |ui| {
-        let title = if queue.set_aside.is_empty() { "Tray clear" } else { "Nothing else for now" };
-        ui.label(rich(ui, title, Type::CLEAR, Ink::Text));
-        if !queue.set_aside.is_empty() {
-            muted(ui, format!("Set aside: {}. They return tomorrow. A paused run stays paused until you answer.", queue.set_aside_names()));
-            if primary_button(ui, "Bring them back").clicked() {
-                *pressed = Some(Pressed::BringAll);
+    let height = ui.available_height();
+    paper(ui, false, |ui| {
+        ui.set_min_height(height - 2.0);
+        Frame::new().inner_margin(Margin::same(OFFER_PADDING)).show(ui, |ui| {
+            ui.set_max_width(OFFER_WIDTH);
+            ui.spacing_mut().item_spacing.y = OFFER_GAP;
+            ui.label(rich(ui, "Want more to look at?", Type::SLIP_TITLE, Ink::Text));
+            let intro = "Jobdesk can search your job sites for new ads and score them against your profile. Each opens as a task, and you start it there.";
+            ui.label(rich(ui, intro, Type::BODY, Ink::Muted));
+            ui.horizontal(|ui| {
+                primary_command_action(ui, "Find new jobs…", "/scrape");
+                if queue.unranked > 0 {
+                    let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
+                    command_action(ui, &format!("Score {jobs}…"), "/rank");
+                }
+            });
+            if !queue.set_aside.is_empty() {
+                let n = queue.set_aside.len();
+                let (cards, verb, link) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(rich(ui, format!("{n} {cards} set aside with Later {verb} back tomorrow. "), Type::NOTE, Ink::Muted));
+                    if ui.add(egui::Link::new(rich(ui, link, Type::NOTE, Ink::Text).underline())).clicked() {
+                        *pressed = Some(Pressed::BringAll);
+                    }
+                });
             }
-        } else if queue.unranked > 0 {
-            muted(ui, format!("{} new postings wait for scoring.", queue.unranked));
-            command_button(ui, "/rank");
-        } else {
-            muted(ui, "Search your portals for new postings.");
-            command_button(ui, "/scrape");
-        }
+        });
     });
 }
 

@@ -1016,10 +1016,35 @@ fn bring_them_back_refills_the_tray() {
     assert!(is_shown(&harness, "All done for today"));
     assert!(!is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
 
-    harness.get_by_label("Bring them back").click();
+    assert!(is_shown(&harness, "Want more to look at?"));
+    harness.get_by_label("Bring them back now").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
+    assert!(!is_shown(&harness, "Want more to look at?"));
+}
+
+/// The buttons open the launcher with the line filled in, and the user starts the run there.
+#[test]
+fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::InTray, "tray_find_new_jobs");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, "Want more to look at?"));
+    assert!(is_shown(&harness, "Score 2 new jobs…"), "the sample board holds two unscored jobs");
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} cards set aside with Later come back tomorrow. ")));
+    assert!(!is_shown(&harness, "All commands"));
+
+    harness.get_by_label("Find new jobs…").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, "All commands"), "the launcher opens");
+    assert!(harness.query_all_by_label("/scrape").count() > 0, "the line is filled in");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
 }
 
 /// Later leaves a card out of the count, a skip ticks one off the stamp.

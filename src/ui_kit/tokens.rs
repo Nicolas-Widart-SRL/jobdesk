@@ -80,6 +80,10 @@ pub const WAITS_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
 pub const WELCOME_WIDTH: f32 = 620.0;
+/// The panel that offers new work when Today is clear: its inset, the width of its text and the gap between its parts.
+pub const OFFER_PADDING: i8 = 32;
+pub const OFFER_WIDTH: f32 = 480.0;
+pub const OFFER_GAP: f32 = 14.0;
 pub const OFFSET_SHADOW: i8 = 5;
 pub const WINDOW_SHADOW: i8 = 6;
 pub const STACK_EDGE_HEIGHT: f32 = 5.0;

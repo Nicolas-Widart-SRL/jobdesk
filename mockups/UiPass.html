@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UI pass: interaction states and missing screen states</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* UI pass. Choose with ?scene=states|jobs|failed|loading|empty and ?theme=light|dark.
+   Drawn from the built screens in tests/snapshots, with their fictional data from tests/sample_workspace.
+   Every rule is scoped to .up, so app.css and the other canvases are unchanged.
+   Only Ledger tokens: sheet, panel, raised, line, field, off, text, muted, faint, pri, active, closed, turn, card, grid, mark.
+   The pointer drawings stand for the OS cursor and use page and page-head, the two tokens that hold in both themes. */
+body { margin: 0; }
+.up {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+  font-size: 14px;
+}
+.up[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.up .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; position: relative; }
+.up .num { font-variant-numeric: tabular-nums; }
+
+/* Shell, as built: brand, tabs with the highlighter, New task, the status strip. */
+.up .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.up .menu .brand { margin-right: 0; }
+.up .menu .brand svg path:last-child { stroke: var(--sheet); }
+.up .tabs { display: flex; gap: 6px; }
+.up .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.up .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.up .tabs a.on { color: var(--text); font-weight: 600; }
+.up .tabs a.on .lbl::before, .up .tab.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.up .chip { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.up .fail { display: inline-block; width: 8px; height: 8px; background: var(--closed); }
+.up .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.up .newtask .keys { color: var(--muted); }
+.up .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.up .statusbar .seg { margin-left: auto; display: flex; gap: 3px; border: 0; }
+.up .statusbar .seg span { height: 24px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: 3px; color: var(--muted); font-size: 12.5px; }
+.up .statusbar .seg span.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.up .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Controls, as built, plus the states this pass adds. */
+.up .b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; white-space: nowrap; position: relative; }
+.up .b.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.up .b.pri { background: var(--pri); border-color: var(--pri); color: var(--on-pri); }
+.up .b.bad { color: var(--closed); border-color: var(--closed); }
+.up .b .k { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 11.5px; font-weight: 600; }
+/* Hover: raised fill; the primary underlines its label, as built. */
+.up .b.hov { background: var(--raised); }
+.up .b.pri.hov { background: var(--pri); }
+.up .b.pri.hov .t { text-decoration: underline; text-underline-offset: 3px; }
+/* NEW pressed: one step deeper than hover. Plain and danger take line, the primary takes muted. */
+.up .b.prs { background: var(--line); }
+.up .b.pri.prs { background: var(--muted); border-color: var(--muted); }
+/* Focus: the 2px active ring, 1px out, as built. */
+.up .foc { outline: 2px solid var(--active); outline-offset: 1px; }
+/* NEW disabled: ink and border at 50% over an opaque fill, so the grid never runs through. */
+.up .b.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
+.up .b.pri.dis { background: color-mix(in srgb, var(--pri) 50%, var(--card)); border-color: transparent; color: var(--card); }
+.up .b.bad.dis { color: color-mix(in srgb, var(--closed) 50%, var(--card)); border-color: color-mix(in srgb, var(--closed) 50%, var(--card)); }
+.up .b.sheetfill { background: var(--sheet); }
+.up .b.sheetfill.dis { color: color-mix(in srgb, var(--text) 50%, var(--sheet)); border-color: color-mix(in srgb, var(--line) 50%, var(--sheet)); }
+.up .b.pri.sheetfill.dis { background: color-mix(in srgb, var(--pri) 50%, var(--sheet)); color: var(--sheet); }
+
+.up .tab { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; color: var(--muted); font-weight: 500; border-radius: 3px; }
+.up .tab .lbl { position: relative; z-index: 0; }
+.up .tab.on { color: var(--text); font-weight: 600; }
+.up .tab.hov .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--line); }
+.up .tab.prs .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); }
+
+.up .segc { white-space: nowrap; display: inline-flex; align-items: center; height: 30px; padding: 0 10px; border-radius: 4px 4px 0 0; color: var(--muted); font-weight: 500; }
+.up .deskbox { background: var(--sheet); }
+.up .deskbox .ph { background: var(--card); border-radius: 4px 4px 0 0; }
+.up .segc.hov { background: var(--panel); }
+.up .segc.prs { background: var(--raised); }
+.up .segc.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+/* NEW link: active ink, underlined at rest, a 2px rule on hover, a 24px hit area. */
+.up .lk { position: relative; white-space: nowrap; display: inline-flex; align-items: center; height: 24px; color: var(--active); font-size: 13px; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.up .lk.hov { text-decoration-thickness: 2px; }
+.up .lk.prs { color: var(--text); text-decoration-thickness: 2px; }
+.up .lk .hit { position: absolute; inset: 0 -4px; outline: 1px dashed var(--faint); outline-offset: 0; }
+
+/* Tooltips: egui's window look, as built: sheet fill, text hairline, the hard line shadow. */
+.up .tip { position: absolute; z-index: 5; max-width: 250px; padding: 6px 9px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); color: var(--text); font-size: 13px; line-height: 1.4; font-weight: 400; white-space: normal; }
+.up .ptr { position: absolute; z-index: 6; width: 18px; height: 22px; pointer-events: none; }
+
+/* Paper and slips. */
+.up .paper { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.up .slip { border-radius: 4px; background: var(--panel); }
+.up .ph { display: flex; align-items: baseline; gap: 10px; padding: 9px 14px 7px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.up .ph .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.up .pb { padding: 8px 14px 10px; }
+
+/* States sheet */
+.up .spec { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 28px 0; }
+.up .spec > header { display: flex; align-items: baseline; gap: 14px; }
+.up .spec h1 { margin: 0; font: 600 26px/1.15 var(--slab); }
+.up .spec header p { color: var(--muted); }
+.up .cols { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 590px minmax(0, 1fr); gap: 14px; }
+.up .stack { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.up .mx { width: 100%; border-collapse: collapse; }
+.up .mx th { padding: 0 4px 6px; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.up .mx td { padding: 3px 4px; vertical-align: middle; }
+.up .mx td:first-child, .up .mx th:first-child { padding-left: 0; width: 70px; color: var(--muted); font-size: 13px; }
+.up .mx .cur td { padding-top: 6px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); }
+.up .cell { position: relative; display: inline-block; }
+.up .expl { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.up .expl b { color: var(--text); font-weight: 600; }
+
+/* Rows: hover is a fill, selected is the fill plus a 3px ink edge. */
+.up .rowt { width: 100%; border-collapse: collapse; }
+.up .rowt td { padding: 4px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.up .rowt tr:last-child td { border-bottom: 0; }
+.up .rowt .lab { width: 76px; padding-left: 0; color: var(--muted); font-size: 13px; background: none !important; box-shadow: none !important; border-bottom-color: transparent; }
+.up .rowt .sc { width: 34px; font: 600 19px/1 var(--slab); }
+.up .rowt .ti { font-weight: 600; white-space: nowrap; }
+.up .rowt .co { font-size: 13px; color: var(--muted); }
+.up .rowt tr.hov td:not(.lab) { background: var(--raised); }
+.up .rowt tr.sel td:not(.lab) { background: var(--raised); }
+.up .rowt tr.sel td.sc { box-shadow: inset 3px 0 0 var(--text); }
+.up .rowt tr.foc td:not(.lab) { box-shadow: inset 0 2px 0 var(--active), inset 0 -2px 0 var(--active); }
+.up .rowt tr.foc td.sc { box-shadow: inset 2px 0 0 var(--active), inset 0 2px 0 var(--active), inset 0 -2px 0 var(--active); }
+.up .rowt tr.foc td:last-child { box-shadow: inset -2px 0 0 var(--active), inset 0 2px 0 var(--active), inset 0 -2px 0 var(--active); }
+.up .pr { position: relative; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px 0 0; }
+.up .pr .lab { color: var(--muted); font-size: 13px; }
+.up .pr .body { grid-column: 2 / 5; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border-radius: 4px; }
+.up .pr.hov .body, .up .pr.sel .body { background: var(--raised); }
+.up .pr.sel .body { box-shadow: inset 3px 0 0 var(--text); }
+.up .pr .mono { font-size: 13px; }
+.up .pr:not(.sel) .mono { color: var(--muted); }
+.up .tg { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border: 1px solid currentColor; border-radius: 2px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.up .tg.solid { background: var(--turn); border-color: var(--turn); color: var(--on-turn); }
+.up .lanebg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 8px; border-radius: 4px; background: var(--panel); }
+.up .ic { position: relative; display: flex; flex-direction: column; padding: 7px 10px; border-radius: 2px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); font-size: 13px; }
+.up .ic b { font-weight: 600; font-size: 14px; }
+.up .ic .r { color: var(--muted); }
+.up .ic.hov { background: var(--raised); }
+.up .ic.sel { background: var(--raised); box-shadow: inset 0 0 0 1px var(--text); }
+.up .ic.mine { box-shadow: inset 3px 0 0 var(--turn), inset 0 0 0 1px var(--line); }
+.up .ic.mine.sel { box-shadow: inset 3px 0 0 var(--turn), inset 0 0 0 1px var(--text); }
+.up .ic .st { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+.up .ic.mine .st { color: var(--turn); font-weight: 600; }
+.up .capt { margin-top: 4px; font-size: 12.5px; color: var(--muted); text-align: center; }
+.up .ag { position: relative; display: grid; grid-template-columns: 76px 46px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; border-top: 1px solid var(--line); }
+.up .ag:first-child { border-top: 0; }
+.up .ag .lab { color: var(--muted); font-size: 13px; }
+.up .ag .d2 { font-size: 13px; color: var(--muted); }
+.up .ag .tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up .ag.hov::before { content: ""; position: absolute; z-index: 0; left: 76px; right: 0; top: 0; bottom: 0; background: var(--raised); }
+.up .ag > * { position: relative; z-index: 1; }
+.up .ag.done .d2, .up .ag.done .tx { color: var(--faint); }
+.up .now { display: inline-block; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; line-height: 22px; }
+.up .foot { padding: 6px 28px; display: flex; gap: 18px; font-size: 13px; color: var(--muted); background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); }
+.up .foot .r { margin-left: auto; }
+
+/* Screens */
+.up .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 22px 32px 10px; }
+.up .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.up .phead .sub { margin-top: 3px; color: var(--muted); }
+.up .phead .acts { margin-left: auto; display: flex; gap: 12px; }
+.up .bbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 6px 32px 18px; }
+.up .seg2 { flex: none; display: flex; gap: 3px; border-bottom: 1px solid var(--text); }
+.up .seg2 span { display: inline-flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 4px 4px 0 0; color: var(--muted); font-weight: 500; }
+.up .seg2 span.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+.up .split2 { flex: 1 1 auto; min-height: 0; display: flex; gap: 12px; align-items: flex-start; }
+.up .jt { width: 100%; border-collapse: collapse; }
+.up .jt th { text-align: left; padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--text); white-space: nowrap; }
+.up .jt td { height: 58px; padding: 0 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.up .jt tr:last-child td { border-bottom: 0; }
+.up .jt tr.sel td { background: var(--raised); }
+.up .jt tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--text); }
+.up .jt tr.hov td { background: var(--raised); }
+.up .jt .sc { font: 600 21px/1 var(--slab); }
+.up .jt .ti { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 205px; }
+.up .jt .co { color: var(--muted); }
+.up .jt .mut { color: var(--muted); }
+.up .jt .fnt { color: var(--faint); }
+.up .needsq { display: inline-block; width: 8px; height: 8px; background: var(--turn); }
+.up .legend { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--muted); }
+.up .legend span:last-child { background: var(--sheet); }
+.up .detail { flex: 0 0 328px; display: flex; flex-direction: column; height: 538px; }
+.up .dbody { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.up .dfoot { flex: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.up .stampbox { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 68px; height: 56px; border: 1px solid var(--hired); outline: 1px solid var(--hired); outline-offset: 2px; margin: 3px; color: var(--hired); font: 600 32px/1 var(--slab); }
+.up .crow { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.up .crow .k { flex: 0 0 82px; color: var(--muted); }
+.up .crow .v { flex: 1 1 auto; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up .alert { flex: none; display: flex; align-items: flex-start; gap: 16px; margin-right: 5px; padding: 12px 16px; border: 1px solid var(--closed); border-radius: 2px; background: var(--sheet); box-shadow: 5px 5px 0 var(--closed); }
+.up .alert .at { color: var(--closed); font-weight: 600; }
+.up .alert .b { margin-left: auto; flex: none; }
+.up .board2 { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; align-content: start; }
+.up .lane2 { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px 12px; border-radius: 4px; background: var(--panel); min-height: 420px; }
+.up .lane2 .lh { display: flex; align-items: center; gap: 8px; padding: 0 3px 4px; font: 600 17px/1.3 var(--slab); }
+.up .lane2 .lh i { display: inline-block; width: 8px; height: 8px; }
+.up .sk { display: block; border-radius: 2px; background: var(--panel); }
+.up .skc { display: flex; flex-direction: column; gap: 8px; padding: 10px 11px 11px; border-radius: 2px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.up[data-theme="dark"] .skc .sk { background: var(--raised); }
+.up .empty { display: flex; flex-direction: column; gap: 10px; max-width: 560px; padding: 22px 24px 24px; }
+.up .empty h2 { margin: 0; font: 600 19px/1.25 var(--slab); }
+.up .empty p { color: var(--muted); line-height: 1.45; }
+.up .empty .row { gap: 10px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const SCENE = (P.get('scene') || 'states').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+
+// The OS pointers, drawn at their own size: the pointing hand and the arrow.
+const HAND = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M5.6 1.2c.9 0 1.6.7 1.6 1.6v5.9l.5-.1V7.8c0-.8.7-1.4 1.5-1.4s1.5.6 1.5 1.4v1l.4-.1v-.3c0-.8.7-1.4 1.5-1.4s1.5.6 1.5 1.4v.9l.3-.1c.8 0 1.5.7 1.5 1.5v4.3c0 3.1-2.2 5.3-5.3 5.3H9c-1.7 0-2.9-.7-3.9-2.1L1.8 12.6c-.6-.7-.4-1.8.4-2.3.7-.5 1.6-.3 2.1.4l.7.9V2.8c0-.9.7-1.6 1.6-1.6z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
+const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
+
+function shell(on, inner, o = {}) {
+  const tabs = [['Today', o.today ?? '10'], ['Jobs', ''], ['Applications', o.apps || ''], ['Insights', ''], ['Tasks', ''], ['Setup', '']]
+    .map(([t, c]) => `<a class="${t === on ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c === 'fail' ? '<span class="fail" aria-label="could not be read"></span>' : c ? `<span class="chip num">${c}</span>` : ''}</a>`).join('');
+  return `<div class="app up" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar"><span><span class="sq" style="background: var(--hired)"></span>Claude is ready</span>
+      <div class="seg"><span>System</span><span class="${THEME === 'light' ? 'on' : ''}">Light</span><span class="${THEME === 'dark' ? 'on' : ''}">Dark</span></div></footer></div>`;
+}
+
+const btn = (t, cls = '', k = '') => `<span class="b ${cls}"><span class="t">${t}</span>${k ? `<span class="k">${k}</span>` : ''}</span>`;
+
+// One sheet: every kit control in each state, then rows, cards and Coming up.
+function states() {
+  const row = (name, t, cls, k) => `<tr><td>${name}</td>
+      <td>${btn(t, cls, k)}</td><td>${btn(t, cls + ' hov', k)}</td><td>${btn(t, cls + ' prs', k)}</td>
+      <td>${btn(t, cls + ' foc', k)}</td><td>${btn(t, cls + ' dis', k)}</td></tr>`;
+  return `<div class="app up" data-theme="${THEME}"><div class="spec">
+    <header><h1>One rule per state</h1><p>Every clickable kit widget, in every state. ${THEME === 'dark' ? 'Dark' : 'Light'}. Fictional data.</p></header>
+    <div class="cols">
+      <div class="stack">
+        <section class="paper"><div class="ph">Buttons <span class="n">press_as, shortcut_button</span></div><div class="pb">
+          <table class="mx"><tr><th></th><th>Rest</th><th>Hover</th><th>Pressed (new)</th><th>Focus</th><th>Disabled (new)</th></tr>
+            ${row('Plain', 'Later', '', 'L')}
+            ${row('Primary', 'Send', 'pri', '')}
+            ${row('Danger', 'Deny', 'bad', '')}
+            ${row('Small', 'Copy', 'sm', '')}
+            <tr class="cur"><td>Pointer</td><td>Hand</td><td>Hand</td><td>Hand</td><td>Keyboard</td><td>Arrow, and why on hover</td></tr>
+          </table></div></section>
+        <section class="paper deskbox"><div class="ph">Tabs, segments and links <span class="n">on the desk, as built</span></div><div class="pb">
+          <table class="mx"><tr><th></th><th>Rest</th><th>Hover</th><th>Pressed (new)</th><th>On</th><th>Focus</th></tr>
+            <tr><td>Tab</td><td><span class="tab"><span class="lbl">Jobs</span></span></td><td><span class="tab hov"><span class="lbl">Jobs</span></span></td><td><span class="tab prs"><span class="lbl">Jobs</span></span></td><td><span class="tab on"><span class="lbl">Jobs</span></span></td><td><span class="tab foc"><span class="lbl">Jobs</span></span></td></tr>
+            <tr><td>Segment</td><td><span class="segc">New 2</span></td><td><span class="segc hov">New 2</span></td><td><span class="segc prs">New 2</span></td><td><span class="segc on">New 2</span></td><td><span class="segc foc">New 2</span></td></tr>
+          </table>
+          <div style="display: flex; align-items: center; gap: 14px; margin-top: 4px; font-size: 13px"><span class="muted" style="width: 62px">Link</span>
+            <span class="lk"><span class="hit"></span>Show the command</span><span class="lk hov">Hover</span><span class="lk prs">Pressed</span><span class="lk foc">Focus</span></div>
+          <p class="expl" style="margin-top: 6px">One link widget for both links in the app. The dashed box is its 24px hit area. Disabled tabs, on the first run, fade as buttons do and say why.</p></div></section>
+        <section class="paper"><div class="ph">Disabled says why, done says so</div><div class="pb" style="position: relative; height: 112px">
+          <div class="cell" style="position: absolute; left: 14px; top: 12px">${btn('New task', 'sheetfill dis', '')}</div>
+          <div class="tip" style="left: 44px; top: 56px; width: 196px">Choose your job search folder first.</div>
+          ${ARROW(70, 30)}
+          <div class="cell" style="position: absolute; left: 272px; top: 12px">${btn('Send', 'pri dis', '')}</div>
+          <div class="tip" style="left: 290px; top: 56px">Type a reply first.</div>
+          ${ARROW(300, 30)}
+          <div class="cell" style="position: absolute; left: 446px; top: 15px">${btn('Copied', 'sm', '')}</div>
+          <p class="expl" style="position: absolute; left: 446px; top: 52px; width: 128px">Copy reads Copied for 2 seconds, then Copy again.</p>
+        </div></section>
+      </div>
+      <div class="stack">
+        <section class="paper"><div class="ph">Rows pick from anywhere on the row <span class="n">table, pick_row</span></div><div class="pb" style="position: relative; padding-top: 6px">
+          <table class="rowt">
+            <tr><td class="lab">Rest</td><td class="sc">72</td><td><div class="ti">Java Application Architect</div><div class="co">Federal Data Agency</div></td><td class="co">Brussels</td></tr>
+            <tr class="hov"><td class="lab">Hover</td><td class="sc">78</td><td><div class="ti">Solution Architect, Event…</div><div class="co">Kestrel Payments</div></td><td class="co">Remote, EU</td></tr>
+            <tr class="sel"><td class="lab">Selected</td><td class="sc">84</td><td><div class="ti">Tech Lead Java, Real-Time…</div><div class="co">Meridian Rail Systems</div></td><td class="co">Brussels</td></tr>
+            <tr class="foc"><td class="lab">Focus</td><td class="sc">71</td><td><div class="ti">Backend Lead, EV Charging</div><div class="co">Brightwell Energy</div></td><td class="co">Ghent</td></tr>
+          </table>
+          ${HAND(190, 66)}
+          <div style="margin-top: 8px; padding: 6px 0 2px; border-radius: 4px; background: var(--panel)">
+            <div class="pr hov"><span class="lab" style="padding-left: 8px">Hover</span><div class="body"><span class="mono">/scrape broad</span><span class="tg c-closed">Failed</span><span class="faint num">$0.08</span></div></div>
+            <div class="pr sel"><span class="lab" style="padding-left: 8px">Selected</span><div class="body"><span class="mono">/apply https://kes…</span><span class="tg solid">Your turn</span><span class="faint num">$1.12</span></div></div>
+          </div>
+          <p class="expl" style="margin-top: 5px"><b>Hover</b> is the raised fill. <b>Selected</b> adds a 3px ink edge. Focus is an inset ring.</p></div></section>
+        <section class="paper"><div class="ph">Index cards <span class="n">index_card</span></div><div class="pb" style="position: relative">
+          <div class="lanebg">
+            <div><div class="ic"><b>Corvid Systems</b><span class="r">Backend Architect</span><span class="st">Sent 3 days ago</span></div><div class="capt">Rest</div></div>
+            <div><div class="ic hov"><b>Sable Analytics</b><span class="r">Tech Lead</span><span class="st">Sent 3 days ago</span></div><div class="capt">Hover</div></div>
+            <div><div class="ic sel"><b>Tessel Group</b><span class="r">Solution Architect</span><span class="st">Interview Wed 4</span></div><div class="capt">Selected</div></div>
+            <div><div class="ic mine sel"><b>Harbor Bank</b><span class="r">Lead Java Engineer</span><span class="st">Send by Tue 3</span></div><div class="capt">Selected, waits</div></div>
+          </div>
+          ${HAND(236, 30)}</div></section>
+        <section class="slip"><div class="ph">Coming up <span class="n">agenda_row</span></div><div class="pb" style="position: relative; padding-top: 4px">
+          <p class="expl" style="margin-bottom: 2px">A cut row shows its whole text on hover. Now is the card on top: no click, no fill.</p>
+          <div class="ag"><span class="lab">Now</span><span class="d2">Tue 3</span><span class="tx">Harbor Bank deadline</span><span class="now">Now</span></div>
+          <div class="ag done"><span class="lab">Done</span><span class="d2">Mon 2</span><span class="tx">Quarry Labs follow-up</span><span class="faint" style="font-size: 12.5px">Done</span></div>
+          <div class="ag hov"><span class="lab">Hover</span><span class="d2">Wed 4</span><span class="tx">Tessel Group technical int…</span><span></span></div>
+          <div class="tip" style="left: 214px; top: 128px">Tessel Group technical interview</div>
+          ${HAND(250, 108)}</div></section>
+      </div>
+    </div></div>
+    <footer class="foot" style="margin-top: 10px"><span>Cursor rule: a hand on everything that clicks, an I-beam only in text fields, the arrow on everything else.</span><span class="r">UI pass, sample data</span></footer></div>`;
+}
+
+// Jobs: the title is part of the row, the hovered row has the hand, the picked row has the ink edge, and the detail's actions are pinned.
+function jobs() {
+  const rows = [
+    ['84', 'Tech Lead Java, Real-Time Traffic', 'Meridian Rail Systems', 'Brussels, hybrid', 'EUR 780', 'Thu 5 Nov', '<span class="tg c-interview">Closes in 5 days</span>', 'LinkedIn', 'sel'],
+    ['78', 'Solution Architect, Event Sourcing Platform', 'Kestrel Payments', 'Remote, EU', '<span class="fnt">Not stated</span>', 'None', '', 'Freehire', 'hov'],
+    ['72', 'Java Application Architect', 'Federal Data Agency', 'Brussels, hybrid', 'EUR 640', 'None', '<span class="tg c-closed">Rate under your floor</span>', 'LinkedIn', ''],
+    ['71', 'Backend Lead, EV Charging', 'Brightwell Energy', 'Ghent, hybrid', '<span class="fnt">Not stated</span>', 'None', '<span class="tg c-interview">Location unclear</span> <span class="mut">+1</span>', 'Freehire', ''],
+  ].map(([s, t, c, w, r, cl, k, f, cls]) => `<tr class="${cls}"><td class="sc">${s}</td><td><div class="ti">${t}</div><div class="co">${c}</div></td><td class="mut">${w}</td><td>${r}</td><td>${cl}</td><td>${k}</td><td>${f}</td><td><span class="needsq"></span></td></tr>`).join('');
+  return shell('Jobs', `
+    <div class="phead"><div><h1>Jobs</h1><div class="sub">Scored from the job ad alone. Drafting an application also checks the company.</div></div>
+      <div class="acts">${btn('Find new jobs…')}${btn('Score 2 new jobs…', 'pri')}</div></div>
+    <div class="bbody">
+      <div class="seg2"><span class="on">Shortlist 4</span><span>New 2</span><span>Low score 1</span><span>Ruled out 1</span><span>Could not open 1</span><span>Skipped 1</span></div>
+      <div class="split2" style="position: relative">
+        <div style="flex: 1 1 auto; min-width: 0">
+          <div class="paper" style="overflow: hidden"><table class="jt">
+            <tr><th>Score</th><th>Job</th><th>Where</th><th>Day rate</th><th>Closes</th><th>Worth knowing</th><th>Found on</th><th></th></tr>${rows}</table></div>
+          <div class="legend"><span class="needsq"></span><span>Waiting in Today. Decide there, or open the drafting task from here.</span></div>
+        </div>
+        <aside class="paper detail">
+          <div class="dbody">
+            <div style="display: flex; gap: 10px; padding: 14px 14px 12px; border-bottom: 1px solid var(--line)">
+              <span class="stampbox">84</span>
+              <div><div class="muted">Meridian Rail Systems</div><div style="font: 600 19px/1.2 var(--slab)">Tech Lead Java, Real-Time Traffic</div><div class="muted" style="font-size: 13px; margin-top: 2px">Strong fit, 84 of 100. All six checks pass.</div></div>
+            </div>
+            <div style="padding: 8px 14px">
+              <div class="crow"><span class="k">Contract</span><span class="v">Freelance mission, 12 months</span><span class="tg c-hired">OK</span></div>
+              <div class="crow"><span class="k">Day rate</span><span class="v">EUR 780, your floor 700</span><span class="tg c-hired">OK</span></div>
+              <div class="crow"><span class="k">Where</span><span class="v">Brussels, hybrid</span><span class="tg c-hired">OK</span></div>
+              <div class="crow"><span class="k">Commute</span><span class="v">Brussels, up to 1h15</span><span class="tg c-hired">OK</span></div>
+              <div class="crow"><span class="k">Language</span><span class="v">No conflict</span><span class="tg c-hired">OK</span></div>
+              <div class="crow"><span class="k">Safety check</span><span class="v">Nothing hidden in the ad</span><span class="tg c-hired">OK</span></div>
+            </div>
+            <div style="padding: 8px 14px; border-top: 1px solid var(--line)"><b style="font-weight: 600">Why it fits</b><div class="muted" style="margin-top: 4px">Freelance mission, 12 months</div><div class="muted">Day rate EUR 780 is stated</div></div>
+          </div>
+          <div class="dfoot">${btn('Draft application…', 'pri')}${btn('Find skill gaps…', 'sm')}${btn('Open job ad', 'sm')}</div>
+        </aside>
+        <div class="tip" style="left: 168px; top: 178px">Solution Architect, Event Sourcing Platform</div>
+        ${HAND(200, 147)}
+      </div>
+    </div>`);
+}
+
+// Applications, its tracker unreadable: the alert sits under the head, as on Today, and the body says nothing is shown, not that nothing exists.
+function failed() {
+  return shell('Applications', `
+    <div class="phead"><div><h1>Applications</h1><div class="sub">Not shown while the tracker cannot be read.</div></div>
+      <div class="acts">${btn('Check mail for replies…')}${btn('Record a result…', 'pri')}</div></div>
+    <div class="bbody">
+      <div class="alert"><div><div class="at">Your applications could not be read.</div><div>job_search_tracker.csv: not UTF-8 text, re-save it as CSV UTF-8</div><div>Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work.</div></div>${btn('Open Setup')}</div>
+      <section class="paper"><div class="empty">
+        <h2>Your applications are hidden, not gone</h2>
+        <p>Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.</p>
+      </div></section>
+    </div>`, { apps: 'fail', today: '5' });
+}
+
+// Applications before the first read: the lanes are known, their cards are not.
+function loading() {
+  const lanes = [['Not sent yet', 'var(--drafted)', [2]], ['Applied', 'var(--active)', [3, 2]], ['Interview', 'var(--interview)', [1]], ['Offer', 'var(--offer)', [1]], ['Closed', 'var(--closed)', [2, 1]]];
+  const card = (w) => `<div class="skc"><i class="sk" style="width: ${60 + w * 9}%; height: 12px"></i><i class="sk" style="width: ${48 + w * 7}%; height: 12px"></i><i class="sk" style="width: 40%; height: 10px"></i></div>`;
+  const board = lanes.map(([name, ink, cards]) => `<div class="lane2"><div class="lh"><i style="background: ${ink}"></i>${name}</div>${cards.map(card).join('')}</div>`).join('');
+  return shell('Applications', `
+    <div class="phead"><div><h1>Applications</h1><div class="sub">Reading your applications…</div></div>
+      <div class="acts">${btn('Check mail for replies…')}${btn('Record a result…', 'pri')}</div></div>
+    <div class="bbody"><div class="board2">${board}</div></div>`, { today: '' });
+}
+
+// Tasks with no run yet: the empty state says what a task is and offers the two ways to start one.
+function empty() {
+  return shell('Tasks', `
+    <div class="phead"><div><h1>Tasks</h1><div class="sub">Every command Jobdesk ran in this workspace</div></div></div>
+    <div class="bbody">
+      <section class="paper"><div class="empty">
+        <h2>No tasks yet</h2>
+        <p>A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends.</p>
+        <div class="row">${btn('Find new jobs…', 'pri')}${btn('New task…')}</div>
+      </div></section>
+    </div>`);
+}
+
+const SCENES = { states, jobs, failed, loading, empty };
+document.getElementById('root').innerHTML = (SCENES[SCENE] || states)();
+</script>
+</body>
+</html>

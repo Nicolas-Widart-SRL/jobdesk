@@ -1,6 +1,90 @@
 # Mockups handoff
 
-Two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+One social preview, one UI pass, two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+
+## Social preview
+
+### Brief
+
+The user asked: "Update the github repository to make it marketable for the app. We need a github social media preview. Use it also on the readme." The repository goes public soon.
+Redraw `Social.html`, which still had the old Ledger look, in the Postmark look, at GitHub's 1280x640. The same image is the README hero, about 830px wide on github.com in both page themes, and it can show as small as 400px wide.
+Out of scope: code, tests, snapshots, `assets/brand/`, README.md and the other canvases. The lead has a builder copy the PNG to `assets/brand/jobdesk-social.png`.
+
+### Canvas
+
+`Social.html` keeps the `support.js` / `<x-dc>` structure. Its rules are scoped to `.so`. It loads Zilla Slab and Schibsted Grotesk from `assets/fonts`, so it renders offline. It has one state and one theme.
+
+| PNG (1280x640) | State |
+| --- | --- |
+| `Social.png` | Light grid paper. Left: the app icon and name, the headline, one line saying what it is, and four labels. Right: the Today desk at 1.25x, drawn from `intray_light.png`: the Harbor Bank deal card with its tab and stack edges, the Coming up slip behind it, and the day stamp across the card's corner. 150 KB. |
+
+Render with `--window-size=1280,640 --hide-scrollbars --allow-file-access-from-files`, so the local fonts load.
+
+### Copy
+
+- **Headline**: "Your job search, one decision at a time.", broken after "search," and "decision" so each line holds one idea. I kept the brief's line because the card beside it shows exactly that: one decision on top of a stack. I tried "dealt one decision at a time", but it was longer and no clearer.
+- **Line**: "A desktop app for the ai-job-search commands. Nothing runs until you start it." The first sentence says what it is. The second is the promise that matters most to someone handing their job search to an agent, and it is the hard rule behind Y.
+- **Labels**: macOS, Windows, Built in Rust, Uses your Claude Code. They are facts, not features. "Uses your Claude Code" says it runs on the user's own install, with no Anthropic or Claude logo and no hint of endorsement.
+- The card keeps its own footnote, shortened to "The app never sends for you."
+
+### Decisions
+
+- **Light only, on its own grid.** The image is fully opaque, so it needs no dark twin. Light navy-on-paper sits well on both GitHub page themes, and the light screen is the one most people meet first. A `<picture>` swap would also not work for the social preview itself.
+- **The app's objects on the desk, not a window screenshot.** A tilted window with a soft shadow is the stock SaaS hero. Here the card, the slip and the stamp lie on the same grid the app paints. They are tilted 1 to 2 degrees, like papers dealt onto a desk, and they use the app's solid offset shadow (`raised`), not a grey blur. The menu is left out, so the only mark on the card is the app icon, the same icon as in the Dock.
+- **The stamp is struck across the card's top-right corner, like a postmark**, rotated -12 degrees. Its rim catches the slip's lower edge. It is the one bold move, and it names the look: Postmark. Two of its ten ticks are done.
+- **One magenta**: the Now chip on "Harbor Bank deadline" in Coming up. It is `turn`, meaning "this needs you", and it points at the same job as the card. Nothing else uses `turn` or `mark`. The highlighter was left off the headline, because a highlighted word is the stock headline trick.
+- **Sizes for 400px**: headline 78px (24px at 400 wide), line 25px, labels 18px, card title 27px x 1.25. Everything stays inside the 40px safe margin. The slip's top-right corner reaches x 1236, and the stack edges end at y 588.
+- **Tokens**: `sheet`, `grid`, `panel`, `raised`, `line`, `off`, `card`, `text`, `muted`, `drafted`, `turn`, `on_turn`, all LIGHT from `palette.rs`. The icon's `#7f98b3` bars are the brand file's own colour. The labels use `panel` with no border, so they do not read as buttons.
+- **Data** is from `intray_light.png`: Harbor Bank, Lead Java Engineer, Tessel Group, Meridian Rail Systems, Sat 31 Oct. Only the tick count differs from the snapshot.
+
+### New widgets
+
+None. The canvas is not a screen.
+
+### Doc changes
+
+For the lead, once the PNG is in `assets/brand/jobdesk-social.png`:
+- README.md: replace the banner `<picture>` in the `<h1>` with this image, `alt="Jobdesk: your job search, one decision at a time. A desktop app for the ai-job-search commands."`, at `width="830"` or no width. Keep `<h1>Jobdesk</h1>` as text above or below it, so the page still has a heading for screen readers and search. The banner PNGs can stay in `assets/brand/` for other uses.
+- Repository settings: upload the same PNG under Settings, General, Social preview. That is a manual step on github.com, because no file in the repo sets it.
+
+## UI pass
+
+### Brief
+
+The user asked for a UI pass over the whole app: "links and clickable items dont show a hand icon. job list: job title and sub title show a cursor, line not clickable there. and similar."
+
+This is an audit, not a new screen. The findings, ranked and split into bugs and gaps, are in `UiPass.md`, with file and line for each, the fix as one `ui_kit` rule where one rule covers every call site, and the snapshots and tests each fix changes.
+Out of scope: code, tests, snapshots, commits. Fictional data only, from `tests/sample_workspace`.
+
+### Canvas
+
+`UiPass.html` uses `app.css` and `support.js`. Its rules are scoped to `.up` in its own `<style>`. Choose with `?scene=states|jobs|failed|loading|empty` and `?theme=light|dark`. Cursor-only fixes have no canvas. The drawn pointers stand for the OS cursor.
+
+| PNG (1280x820) | State |
+| --- | --- |
+| `UiPass-states.png` | One sheet, light. Every clickable kit widget at rest, hover, pressed (new), focus and disabled (new), with the cursor each shows. Rows and cards at rest, hover, selected (new ink edge) and focus. Coming up with a cut row's tooltip and a Now row that takes no click. Disabled controls with their reason, and Copy turned to Copied. |
+| `UiPass-states-dark.png` | The same sheet in dark, where `card == panel` hid the picked command and the picked run. |
+| `UiPass-jobs.png` | Jobs, full: the pointer on the second job's title gives the hand, the row's hover fill and the full title in a tooltip. The picked job has the 3px ink edge. The detail's actions are pinned under its body. |
+| `UiPass-applications-failed.png` | Applications, its tracker unreadable: the alert under the head, as on Today, and a "hidden, not gone" panel in place of the empty state. The tab carries the failed square. |
+| `UiPass-applications-loading.png` | Applications before the first read: the lane names, with blank cards in `card_skeleton` blocks, and "Reading your applications…". |
+| `UiPass-tasks-empty.png` | Tasks with no run yet: the shared empty state, with Find new jobs… and New task…. |
+
+### Decisions
+
+- **Hover is a fill, selected is a fill and an edge.** Hover takes `raised` everywhere. Selected adds a 3px `text` bar on a row, or a `text` hairline on an index card, whose left edge stays Today's `turn` mark. So the two states never match, and both show on paper and on a slip in both themes.
+- **Pressed is one step deeper than hover**: `line` for plain and danger buttons, `muted` for the primary, the `mark` swipe without its rule for a tab, `raised` for a segment.
+- **Disabled is painted by the kit at full opacity**: the opaque rest fill, with ink and border at 50%. The grid never runs through a control. A disabled control always says why on hover, and keeps the arrow.
+- **One link**: `active` ink, underlined at rest, a 2px rule on hover, `text` when pressed, a 24px hit area and the focus ring.
+- **Labels are not selectable.** Clicks on a row's text reach the row. Claude's documents, code boxes, the archived posting and drafts stay copyable, and none sits inside something clickable.
+- **Loading and failed are not empty.** Every screen gets a loading view and a failed view. The alert goes under the head on every screen.
+
+### New widgets and tokens
+
+`interactive` (the hand, pressed and focus, replacing `focus_ring`), `pick_look`, `link`, `paper_with_footer`, `empty_state`, `copy_button`, the `copyable` scope and `pick_table`. New measures: `DISABLED_OPACITY = 0.5`, `PICK_EDGE = 3.0` and `MIN_HIT = 24.0`. No new colour, font or radius. Details are in `UiPass.md`.
+
+### Doc changes
+
+The ARCHITECTURE.md (ui_kit, Runtime) and README.md wording is at the end of `UiPass.md`, for the lead to apply.
 
 ## Refresh, grid and highlighter
 

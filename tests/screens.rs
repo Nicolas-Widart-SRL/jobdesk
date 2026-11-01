@@ -933,8 +933,8 @@ fn is_shown(harness: &Harness, label: &str) -> bool {
 }
 
 const TRAY_CARDS: usize = 10;
-const HARBOR: &str = "Harbor Bank, Lead Java Engineer";
-const MERIDIAN: &str = "Meridian Rail Systems, Tech Lead Java, Real-Time Traffic";
+const HARBOR: &str = "Lead Java Engineer";
+const MERIDIAN: &str = "Tech Lead Java, Real-Time Traffic";
 
 /// Y on a card, launcher form, run, then the Runs screen.
 #[test]
@@ -976,7 +976,7 @@ fn a_timeline_mark_pulls_a_set_aside_card_back() {
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
 
-    harness.get_by_label("Harbor deadline").click();
+    harness.get_by_label("Harbor Bank deadline").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
@@ -1030,7 +1030,7 @@ fn a_paused_run_comes_first_and_y_does_nothing() {
     press(&mut harness, Key::N);
     assert!(is_shown(&harness, "/apply: allow Bash?"));
 
-    harness.get_by_label("Open run").click();
+    harness.get_by_label("Open task").click();
     harness.run_steps(3);
     harness.get_by_label("Recent runs");
 }
@@ -1058,7 +1058,7 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
     for _ in 0..4 {
         press(&mut harness, Key::L);
     }
-    let guarded = "Halden Logistics, Lead Developer Kafka";
+    let guarded = "Lead Developer Kafka";
     assert!(is_shown(&harness, guarded));
     press(&mut harness, Key::Y);
     assert!(is_shown(&harness, guarded));
@@ -1171,7 +1171,7 @@ fn overdue_cards_show_in_todays_cell() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
     assert!(harness.query_by_label_contains(" overdue").is_some());
     assert!(is_shown(&harness, "No other deadlines in the next 14 days"));
-    assert!(!is_shown(&harness, "Harbor deadline"));
+    assert!(!is_shown(&harness, "Harbor Bank deadline"));
 }
 
 #[test]

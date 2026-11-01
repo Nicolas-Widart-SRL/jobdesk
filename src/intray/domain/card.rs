@@ -96,6 +96,16 @@ pub struct Due {
     pub label: String,
 }
 
+/// What a card is about, so a screen can tell which of its rows wait in Today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subject {
+    /// The job's key.
+    Job(String),
+    Application { company: String, role: String },
+    /// The run's id.
+    Run(String),
+}
+
 /// One pending decision. `primary` is the Y key: permission, question, guard and Your turn cards have none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
@@ -103,6 +113,9 @@ pub struct Card {
     pub key: String,
     pub kind: CardKind,
     pub name: String,
+    /// The company on a job or application card, shown above the title. None on a paused run.
+    pub over: Option<String>,
+    pub subject: Subject,
     pub title: String,
     pub subtitle: String,
     pub take: String,
@@ -115,7 +128,8 @@ pub struct Card {
     pub others: Vec<Action>,
     pub can_skip: bool,
     pub note: String,
-    pub trace: String,
+    /// The slash command the primary action opens in the launcher, if it has one.
+    pub command: Option<String>,
 }
 
 impl Card {
@@ -164,6 +178,8 @@ mod tests {
             key: key.into(),
             kind,
             name: String::new(),
+            over: None,
+            subject: Subject::Run(String::new()),
             title: String::new(),
             subtitle: String::new(),
             take: String::new(),
@@ -175,7 +191,7 @@ mod tests {
             others: vec![],
             can_skip: false,
             note: String::new(),
-            trace: String::new(),
+            command: None,
         }
     }
 

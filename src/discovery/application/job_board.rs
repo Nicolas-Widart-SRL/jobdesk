@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use chrono::NaiveDate;
 
-use crate::discovery::domain::{FetchFailure, FitLevel, FreelanceGates, FreelanceTerms, Gate, Job, JobRepository, Lane, Signal, Verdict};
+use crate::discovery::domain::{FetchFailure, FitLevel, FreelanceGates, FreelanceTerms, Gate, Job, JobRepository, Lane, Signal, Verdict, portal_name};
 use crate::shared_kernel::{LoadError, WebUrl};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +13,8 @@ pub struct JobView {
     pub location: Option<String>,
     pub url: Option<WebUrl>,
     pub portal: Option<String>,
+    /// The site the posting came from, in words: `linkedin-search` reads as LinkedIn.
+    pub found_on: Option<String>,
     pub deadline: Option<NaiveDate>,
     pub days_to_deadline: Option<i64>,
     pub score: Option<u8>,
@@ -97,6 +99,7 @@ fn view_of(job: &Job, today: NaiveDate, terms: &FreelanceTerms) -> JobView {
         location: job.location.clone(),
         url: job.url.clone(),
         portal: job.portal.clone(),
+        found_on: job.portal.as_deref().map(portal_name).filter(|name| !name.is_empty()),
         deadline: job.deadline,
         days_to_deadline: job.days_to_deadline(today),
         score: job.score(),

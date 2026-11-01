@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
 use crate::intray::application::compose::{Sources, derive_cards};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, HORIZON_DAYS, rank};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, rank};
 use crate::shared_kernel::WebUrl;
 
 /// What a card asks of the rest of the app.
@@ -277,6 +277,24 @@ pub struct UndoOffer {
     pub reason: Option<SkipReason>,
 }
 
+impl Queue {
+    /// The key of every job with a card pending, so the Jobs screen can mark what waits in Today.
+    pub fn waiting_jobs(&self) -> Vec<String> {
+        self.cards.iter().filter_map(|card| match &card.subject {
+            Subject::Job(key) => Some(key.clone()),
+            _ => None,
+        }).collect()
+    }
+
+    /// The company and role of every application with a card pending.
+    pub fn waiting_applications(&self) -> Vec<(String, String)> {
+        self.cards.iter().filter_map(|card| match &card.subject {
+            Subject::Application { company, role } => Some((company.clone(), role.clone())),
+            _ => None,
+        }).collect()
+    }
+}
+
 /// Owns the stored decisions and deals the queue from them.
 pub struct InTray {
     store: Option<Box<dyn DecisionStore>>,
@@ -509,7 +527,7 @@ mod tests {
     fn job(company: &str, score: u8) -> JobView {
         let read = || GateReading { gate: Gate::Pass, value: "x".into() };
         JobView {
-            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None,
+            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None, found_on: None,
             deadline: None, days_to_deadline: None, score: Some(score), verdict: None, scraper_fit: None,
             location_gate: None, language_gate: None, language_note: None,
             freelance: FreelanceGates { contract: read(), day_rate: read(), commute: read() },
@@ -675,7 +693,7 @@ mod tests {
         let mut tray = InTray::unsaved();
         let on = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let jobs = board(vec![JobView { deadline: Some(on), days_to_deadline: Some(5), ..job("Meridian Rail", 80) }]);
-        assert_eq!(queue(&tray, &jobs, today()).marks[0].label, "Meridian closes");
+        assert_eq!(queue(&tray, &jobs, today()).marks[0].label, "Meridian Rail closes");
         let card = top(&tray, &jobs);
 
         tray.later(&card, today());
@@ -1013,10 +1031,28 @@ mod tests {
     }
 
     #[test]
+    fn the_queue_names_the_jobs_and_applications_waiting_on_you() {
+        let tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90)]);
+        let offer = ApplicationCard {
+            company: "Beta".into(), role: "Dev".into(), sector: String::new(), channel: String::new(),
+            status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: None, deadline_state: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None,
+            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
+            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
+            archive_folder: None, outcome: None,
+        };
+        let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
+        let queue = tray.queue(&Sources { board: &jobs, pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
+        assert_eq!(queue.waiting_jobs(), ["acme"]);
+        assert_eq!(queue.waiting_applications(), [("Beta".to_owned(), "Dev".to_owned())]);
+    }
+
+    #[test]
     fn headline_counts_minutes() {
         let card = |kind| Card {
-            key: String::new(), kind, name: String::new(), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: None::<Due>, weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), trace: String::new(),
+            key: String::new(), kind, name: String::new(), over: None, subject: Subject::Run(String::new()), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
+            due: None::<Due>, weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), command: None,
         };
         let queue = |cards| Queue { cards, ..Default::default() };
         assert_eq!(queue(vec![]).headline(), "Nothing needs you");
@@ -1029,8 +1065,8 @@ mod tests {
 
     fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {
         Card {
-            key: String::new(), kind, name: String::new(), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), trace: String::new(),
+            key: String::new(), kind, name: String::new(), over: None, subject: Subject::Run(String::new()), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
+            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), command: None,
         }
     }
 

@@ -71,6 +71,17 @@ impl Lane {
     pub const ALL: [Self; 7] = [Self::Shortlist, Self::BelowThreshold, Self::Excluded, Self::CouldNotFetch, Self::New, Self::Skipped, Self::Expired];
 }
 
+/// A portal id read as the site it searches: `linkedin-search` is LinkedIn. An unknown site keeps the id's first part.
+pub fn portal_name(id: &str) -> String {
+    let site = id.trim().split('-').next().unwrap_or_default();
+    match site.to_lowercase().as_str() {
+        "linkedin" => "LinkedIn".to_owned(),
+        "freehire" => "Freehire".to_owned(),
+        "indeed" => "Indeed".to_owned(),
+        _ => site.to_owned(),
+    }
+}
+
 /// A warning shown beside a job, never a veto.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
@@ -271,6 +282,15 @@ mod tests {
 
         assert_eq!(posting.lane(), Lane::Shortlist);
         assert_eq!(posting.signals(date(2026, 10, 31), &terms), [Signal::ContractFail, Signal::RateBelowFloor]);
+    }
+
+    #[test]
+    fn portal_ids_read_as_site_names() {
+        assert_eq!(portal_name("linkedin-search"), "LinkedIn");
+        assert_eq!(portal_name("freehire-search"), "Freehire");
+        assert_eq!(portal_name("indeed"), "Indeed");
+        assert_eq!(portal_name("stepstone-search-be"), "stepstone");
+        assert_eq!(portal_name("jobat"), "jobat");
     }
 
     #[test]

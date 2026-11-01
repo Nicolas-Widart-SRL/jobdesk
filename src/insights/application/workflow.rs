@@ -44,7 +44,7 @@ mod tests {
     fn job(key: &str) -> JobView {
         let pass = GateReading { gate: Gate::Pass, value: String::new() };
         JobView {
-            key: key.into(), title: "Lead".into(), company: "Acme".into(), location: None, url: None, portal: None,
+            key: key.into(), title: "Lead".into(), company: "Acme".into(), location: None, url: None, portal: None, found_on: None,
             deadline: None, days_to_deadline: None, score: None, verdict: None, scraper_fit: None,
             location_gate: None, language_gate: None, language_note: None, freelance: FreelanceGates { contract: pass.clone(), day_rate: pass.clone(), commute: pass },
             guard: None, strengths: vec![], gaps: vec![], fetch_attempts: None, fetch_error: None,

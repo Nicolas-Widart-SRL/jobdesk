@@ -187,6 +187,9 @@ fn stack(ui: &mut Ui, card: &Card, left: usize, pressed: &mut Option<Pressed>) {
 fn card_face(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
+        if let Some(over) = &card.over {
+            muted(ui, over.as_str());
+        }
         ui.label(rich(ui, card.title.as_str(), Type::DEAL, Ink::Text));
         muted(ui, card.subtitle.as_str());
     });
@@ -199,7 +202,9 @@ fn card_face(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
         Body::Options(options) => options_body(ui, options),
     }
     actions(ui, card, pressed);
-    faint_mono(ui, card.trace.as_str());
+    if let Some(command) = &card.command {
+        faint_mono(ui, command.as_str());
+    }
 }
 
 fn triage_body(ui: &mut Ui, score: u8, band: &str, gates: &[GateRow], strengths: &[String], gaps: &[String]) {

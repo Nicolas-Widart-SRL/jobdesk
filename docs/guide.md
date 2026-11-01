@@ -28,7 +28,7 @@ Open an application from Applications for its dossier: compiled PDFs, verificati
 
 The Tasks screen starts any slash command through your local `claude` CLI and shows its progress, questions, cost and history. Jobdesk allows tool permissions on its own for now and lists each one in the activity.
 
-A run reads like a report: Claude's messages come first, and each step is one plain sentence, with its actions a click away. A band at the top says where the run is, whose turn it is and what comes next.
+A run reads like a report: Claude's messages come first, and each step is one plain sentence, with its actions a click away. A message's text keeps to a readable column, and a table that stands on its own uses the whole width of the run, scrolling sideways only when wider still. A table inside a list or a quote keeps to the column, and so do a message's tables when a footnote points across one. A band at the top says where the run is, whose turn it is and what comes next.
 
 When Claude waits on you, the Tasks tab counts it, Recent runs tags the run Your turn, Today deals a card that opens the task, and Claude's question sits above the reply box, with one-click replies at known stop points such as /apply's proceed with drafting. They wait while you write a reply of your own. When Claude finishes a turn without asking anything, the band says it is done for now and the reply box stays under the story.
 

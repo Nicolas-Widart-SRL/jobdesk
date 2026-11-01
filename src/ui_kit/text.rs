@@ -135,15 +135,116 @@ pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
 }
 
 /// A message as a document: one readable column that never grows past the space it has, with headings held to the
-/// section size. It goes through `markdown`, so ARCHITECTURE.md#trust holds.
+/// section size. A top-level table leaves the column for the whole width, and scrolls only past that.
+/// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    let parts = ui.ctx().memory_mut(|memory| memory.caches.cache::<PartsCache>().get(text).clone());
     ui.scope(|ui| {
-        ui.set_max_width(ui.available_width().min(DOC_MEASURE));
         let styles = &mut ui.style_mut().text_styles;
         styles.insert(TextStyle::Heading, Type::SECTION.font());
         styles.insert(TextStyle::Body, Type::TAKE.font());
-        markdown(ui, cache, text);
+        for (index, part) in parts.iter().enumerate() {
+            // The blank line one viewer would leave between two blocks, less the gap every widget already keeps.
+            if part.spaced {
+                let line = ui.fonts_mut(|fonts| fonts.row_height(&Type::TAKE.font()));
+                ui.add_space(line - ui.spacing().item_spacing.y);
+            }
+            // Each part numbers its tables from one, so each gets its own id.
+            ui.push_id(("document part", index), |ui| {
+                let width = ui.available_width();
+                ui.set_max_width(if part.table { width } else { width.min(DOC_MEASURE) });
+                markdown(ui, cache, &part.text);
+            });
+        }
     });
+}
+
+/// A run of a document shown at one width: a top-level table, or the prose between tables.
+struct Part {
+    text: String,
+    table: bool,
+    /// Whether a blank line comes before it, as it would inside one viewer.
+    spaced: bool,
+}
+
+#[derive(Default)]
+struct Parts;
+
+impl egui::cache::ComputerMut<&str, Arc<[Part]>> for Parts {
+    fn compute(&mut self, text: &str) -> Arc<[Part]> {
+        parts(text).into()
+    }
+}
+
+type PartsCache = egui::cache::FrameCache<Arc<[Part]>, Parts>;
+
+/// `text` cut around its top-level tables. A text without one stays whole.
+/// Each part of a cut text starts with every link reference the whole text defines, so a link resolves in any part.
+/// A footnote definition renders where it stands, so it cannot be copied the same way: a text that would lose a
+/// footnote marker to the cut stays whole.
+fn parts(text: &str) -> Vec<Part> {
+    let whole = || vec![Part { text: text.to_owned(), table: false, spaced: false }];
+    let parser = Parser::new_ext(text, markdown::options());
+    let mut definitions: Vec<_> = parser.reference_definitions().iter().map(|(label, link)| (link.span.start, reference(label, &link.dest, link.title.as_deref()))).collect();
+    let (mut tables, mut headings, mut blocks, mut notes, mut depth) = (Vec::new(), Vec::new(), Vec::new(), 0, 0);
+    for (event, range) in parser.into_offset_iter() {
+        if depth == 0 && matches!(event, Event::Start(_) | Event::Rule) {
+            blocks.push(range.start);
+        }
+        match event {
+            Event::Start(Tag::Table(_)) if depth == 0 => {
+                tables.push(range);
+                depth += 1;
+            }
+            Event::Start(Tag::Heading { .. }) if depth == 0 => {
+                headings.push(range.start);
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            Event::FootnoteReference(_) => notes += 1,
+            _ => {}
+        }
+    }
+    if tables.is_empty() {
+        return whole();
+    }
+    definitions.sort();
+    let head: String = definitions.into_iter().map(|(_, line)| line + "\n").chain(["\n".to_owned()]).collect();
+    // The viewer sets a heading off by itself, even at the top.
+    let part = |range: std::ops::Range<usize>, table| {
+        let spaced = !headings.iter().any(|&at| at >= range.start && text[range.start..at].trim().is_empty());
+        Part { text: format!("{head}{}", &text[range]), table, spaced }
+    };
+    // Prose with no block in it, such as link references alone, draws nothing, so it takes no part and no blank line.
+    let drawn = |range: &std::ops::Range<usize>| blocks.iter().any(|at| range.contains(at));
+    let mut out = Vec::new();
+    let mut from = 0;
+    for table in tables {
+        if drawn(&(from..table.start)) {
+            out.push(part(from..table.start, false));
+        }
+        from = table.end;
+        out.push(part(table, true));
+    }
+    if drawn(&(from..text.len())) {
+        out.push(part(from..text.len(), false));
+    }
+    let kept: usize = out.iter().map(|part| Parser::new_ext(&part.text, markdown::options()).filter(|event| matches!(event, Event::FootnoteReference(_))).count()).sum();
+    if kept != notes {
+        return whole();
+    }
+    out[0].spaced = false;
+    out
+}
+
+/// One link reference definition, written so it reads back the same. The label keeps its own escapes, because labels
+/// match as written.
+fn reference(label: &str, destination: &str, title: Option<&str>) -> String {
+    match title {
+        Some(title) => format!("[{label}]: <{}> \"{}\"", escaped(destination), escaped(title)),
+        None => format!("[{label}]: <{}>", escaped(destination)),
+    }
 }
 
 #[derive(Default)]
@@ -401,5 +502,134 @@ mod tests {
         harness.run();
         assert!(*narrow.borrow() <= 400.0, "in a 400 px parent the document is {} px", narrow.borrow());
         assert!(*wide.borrow() <= DOC_MEASURE, "in a wide parent the document is {} px", wide.borrow());
+    }
+
+    const WIDE_TABLE: &str = "| Role | Score | Notes |\n|---|---|---|\n| Platform engineer at Tessel | 4.2 | Event sourcing and Kafka match the posting, and the team runs the same payments stack the last role used. |\n| Staff engineer at Kestrel | 3.1 | A strong product, but the role leans on mobile work and card schemes, two gaps the CV cannot close yet. |";
+
+    #[test]
+    fn a_document_table_takes_the_whole_width() {
+        let source = format!("{}\n\n{WIDE_TABLE}\n\nAfter the table.", "word ".repeat(300));
+        let mut cache = CommonMarkCache::default();
+        let area = Rc::new(RefCell::new(Rect::NOTHING));
+        let seen = Rc::clone(&area);
+        let mut harness = Harness::builder().with_size([1400.0, 900.0]).build_ui(move |ui| {
+            *seen.borrow_mut() = ui.scope(|ui| document(ui, &mut cache, &source)).response.rect;
+        });
+        harness.run();
+        let area = *area.borrow();
+        let paragraph = harness.get_by_label_contains("word word").rect().width();
+        // Labels in a table cell never wrap, so their own rects run past a capped table. The document's rect is what the
+        // cap holds back, and the last cell has to sit inside it.
+        let last = harness.get_by_label_contains("two gaps the CV").rect();
+        assert!(paragraph <= DOC_MEASURE, "the paragraph is {paragraph} px");
+        assert!(area.width() > DOC_MEASURE, "the document is {} px", area.width());
+        assert!(last.right() <= area.right(), "the last cell ends at {}, the document at {}", last.right(), area.right());
+    }
+
+    #[test]
+    fn a_reference_link_resolves_across_a_table() {
+        let source: &'static str = "See [the posting][tessel] first.\n\n| Area | Match |\n|---|---|\n| Skills | [strong][tessel] |\n\nThen [the role][kestrel].\n\n[tessel]: https://tessel.example/jobs/1\n[kestrel]: https://kestrel.example/jobs/2 \"Kestrel\"";
+        assert_eq!(opened_through(unmarked, source, "the posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+        assert_eq!(opened_through(unmarked, source, "strong"), vec!["https://tessel.example/jobs/1".to_owned()]);
+        assert_eq!(opened_through(unmarked, source, "the role"), vec!["https://kestrel.example/jobs/2".to_owned()]);
+    }
+
+    #[test]
+    fn a_document_cut_around_tables_keeps_its_parts() {
+        let cut = parts("1. one\n2. two\n\n| A |\n|---|\n| x |\n\n3. three\n\n[r]: <https://x.example/a b> \"t\\\"q\"");
+        let tables: Vec<bool> = cut.iter().map(|part| part.table).collect();
+        assert_eq!(tables, vec![false, true, false]);
+        assert!(cut[2].text.contains("3. three"));
+        for part in cut.iter() {
+            let parser = Parser::new_ext(&part.text, markdown::options());
+            let link = parser.reference_definitions().get("r").expect("each part defines the reference");
+            assert_eq!((&*link.dest, link.title.as_deref()), ("https://x.example/a b", Some("t\"q")));
+        }
+        assert_eq!(parts("no table [r]\n\n[r]: https://x.example").len(), 1);
+    }
+
+    /// `source` as a document, or as one viewer held to the measure.
+    fn shown(ui: &mut Ui, cache: &mut CommonMarkCache, source: &str, cut: bool) {
+        if cut {
+            document(ui, cache, source);
+        } else {
+            ui.scope(|ui| {
+                ui.set_max_width(DOC_MEASURE);
+                let styles = &mut ui.style_mut().text_styles;
+                styles.insert(TextStyle::Heading, Type::SECTION.font());
+                styles.insert(TextStyle::Body, Type::TAKE.font());
+                markdown(ui, cache, source);
+            });
+        }
+    }
+
+    /// Where each label sits when `source` shows as a document, or as one viewer held to the measure.
+    fn label_tops(source: &'static str, cut: bool, labels: &[&str]) -> Vec<f32> {
+        let mut cache = CommonMarkCache::default();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([800.0, 600.0]).with_context_setup(setup).build_ui(move |ui| shown(ui, &mut cache, source, cut));
+        harness.run();
+        labels.iter().map(|label| harness.get_by_label(label).rect().top()).collect()
+    }
+
+    #[test]
+    fn a_document_cut_around_a_table_keeps_its_blank_lines() {
+        let source = "Gates\n\n| Gate | Result |\n|---|---|\n| Salary | Check |\n\nStrengths\n\n- One\n\nShall I?";
+        let labels = ["Gate", "Strengths", "Shall I?"];
+        let (cut, whole) = (label_tops(source, true, &labels), label_tops(source, false, &labels));
+        for ((label, cut), whole) in labels.iter().zip(cut).zip(whole) {
+            assert!((cut - whole).abs() <= 2.0, "{label} sits at {cut}, one viewer puts it at {whole}");
+        }
+    }
+
+    #[test]
+    fn a_document_ends_where_one_viewer_ends() {
+        let source = "Gates\n\n| Gate | Result |\n|---|---|\n| Salary | Check |\n\n[tessel]: https://tessel.example/jobs/1\n";
+        let ends = |cut: bool| {
+            let bottom = Rc::new(RefCell::new(0.0));
+            let seen = Rc::clone(&bottom);
+            let mut cache = CommonMarkCache::default();
+            let setup = |ctx: &egui::Context| {
+                crate::ui_kit::install_fonts(ctx);
+                crate::ui_kit::install_theme(ctx);
+            };
+            let mut harness = Harness::builder().with_size([800.0, 600.0]).with_context_setup(setup).build_ui(move |ui| {
+                *seen.borrow_mut() = ui.scope(|ui| shown(ui, &mut cache, source, cut)).response.rect.bottom();
+            });
+            harness.run();
+            bottom.take()
+        };
+        let (cut, whole) = (ends(true), ends(false));
+        assert!((cut - whole).abs() <= 2.0, "the document ends at {cut}, one viewer ends at {whole}");
+    }
+
+    /// Every label's text, in order, when `source` renders as a document, or as one viewer.
+    fn labels_shown(source: &'static str, cut: bool) -> Vec<String> {
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([800.0, 900.0]).build_ui(move |ui| shown(ui, &mut cache, source, cut));
+        harness.run();
+        harness.query_all_by_role(egui::accesskit::Role::Label).filter_map(|node| node.value()).collect()
+    }
+
+    #[test]
+    fn a_footnote_resolves_across_a_table() {
+        let table = "| Gate | Result |\n|---|---|\n| Salary | Check |";
+        let cell = "| Gate | Result |\n|---|---|\n| Salary | Check[^1] |";
+        let sources: [&'static str; 3] = [
+            Box::leak(format!("Salary is not stated[^1].\n\n{table}\n\nAfter the table.\n\n[^1]: Ask on the first call.").into_boxed_str()),
+            Box::leak(format!("Before the table.\n\n{cell}\n\nAfter the table.\n\n[^1]: Ask on the first call.").into_boxed_str()),
+            Box::leak(format!("[^1]: Ask on the first call.\n\n{table}\n\nSalary is not stated[^1].").into_boxed_str()),
+        ];
+        for source in sources {
+            let (cut, whole) = (labels_shown(source, true), labels_shown(source, false));
+            assert_eq!(cut, whole, "{source}");
+            assert!(whole.iter().any(|label| label == "1"), "{source} shows no footnote marker: {whole:?}");
+            assert_eq!(whole.iter().filter(|label| *label == "Ask on the first call.").count(), 1, "{source}");
+        }
+        // A footnote kept inside one part leaves the table free to widen.
+        assert_eq!(parts("Intro.\n\n| A |\n|---|\n| x |\n\nAfter[^1].\n\n[^1]: A note.").len(), 3);
     }
 }

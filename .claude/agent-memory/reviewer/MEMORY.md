@@ -23,3 +23,6 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 9 `src/tracking/ui.rs`: expired offer reply date not marked passed. Class: state over time.
 - PR 9 `src/tracking/ui.rs`: custom closed statuses dropped from card metadata. Class: copy claims more than the data.
 - PR 9 `src/ui_kit/controls.rs`: hovered `status_segmented` segment fill same as the selected fill. Class: hover/focus/keyboard.
+- PR 11 `.claude/agents/designer.md`: Rounds section could copy real job-search values from feedback into a committed README. Class: untrusted text.
+- PR 11 `.claude/skills/ship/SKILL.md`: an interrupted CodeRabbit answer reran the builder or posted duplicate replies; a review id counted as handled after one of its findings. Class: state over time.
+- PR 11 `scripts/pr-feedback.sh`: output and count silently cut at 100 threads, 100 reviews and 20 comments. Class: copy claims more than the data.

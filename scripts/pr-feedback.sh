@@ -8,7 +8,9 @@
 #
 # A thread line holds the first comment's id, for a reply, and the thread's node id,
 # for the resolveReviewThread mutation. Each comment follows on a "  comment <id> <author>"
-# line, indented two spaces. It reads the first 100 threads and reviews.
+# line, indented two spaces. It reads the first 100 threads, the first 100 reviews and
+# the first 20 comments of each thread. When GitHub holds more, a "warning: more ..."
+# line follows the count line, and the rest must be read on GitHub.
 # Only the script's own lines start at column 0 or with exactly two spaces. Every line
 # of every comment and review body is indented four spaces, so take ids only from the
 # script's own lines.
@@ -26,9 +28,9 @@ query='
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) { nodes { id isResolved isOutdated path line originalLine
-        comments(first: 20) { nodes { databaseId author { login } body } } } }
-      reviews(first: 100) { nodes { databaseId author { login } state submittedAt body } }
+      reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { id isResolved isOutdated path line originalLine
+        comments(first: 20) { pageInfo { hasNextPage } nodes { databaseId author { login } body } } } }
+      reviews(first: 100) { pageInfo { hasNextPage } nodes { databaseId author { login } state submittedAt body } }
     }
   }
 }'
@@ -48,6 +50,10 @@ def indent($pad): $pad + gsub(breaks; "\n" + $pad);
     | "thread \(.comments.nodes[0].databaseId) \(.id) \(.path | gsub(breaks; " ")):\(.line // .originalLine)\(if .isOutdated then " [outdated]" else "" end)",
       (.comments.nodes[] | "  comment \(.databaseId) \(.author.login // "ghost")", (.body | clean | indent("    ")))),
   ($reviews[] | "review \(.databaseId) \(.author.login // "ghost") \(.state) \(.submittedAt)", (.body | indent("    "))),
-  "\($threads | length) unresolved threads, \($reviews | length) reviews with a body"'
+  "\($threads | length) unresolved threads, \($reviews | length) reviews with a body",
+  (if $pr.reviewThreads.pageInfo.hasNextPage then "warning: more threads than shown; read the rest on GitHub" else empty end),
+  (if $pr.reviews.pageInfo.hasNextPage then "warning: more reviews than shown; read the rest on GitHub" else empty end),
+  ($threads[] | select(.comments.pageInfo.hasNextPage)
+    | "warning: more comments on thread \(.id) than shown; read the rest on GitHub")'
 
 gh api graphql -f query="$query" -f owner="$owner" -f name="$name" -F number="$number" --jq "$filter"

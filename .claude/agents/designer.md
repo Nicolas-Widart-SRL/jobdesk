@@ -42,7 +42,10 @@ You draw screens. Builders turn them into egui code.
    Open each PNG and check that the screen drew.
 6. Write `mockups/README.md`, or the README in your brief's folder: the brief, each canvas and its state,
    the new widgets and the changes to `ARCHITECTURE.md` or `docs/guide.md`.
-   Add a Rounds section: each round's feedback, the options drawn and what the user chose.
+   Add a Rounds section. Each round records a short summary of the feedback, the options drawn,
+   what the user chose and what is still open.
+   The README is committed, so it never copies a value from a real job search:
+   no company, salary, person or screenshot. Write the change in fictional or generic terms.
    It is the handoff to the next designer and to the planner. Update it in every round.
 
 ## Report

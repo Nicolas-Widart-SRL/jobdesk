@@ -26,4 +26,3 @@ Write the message the user pastes in GitHub's squash merge box:
 
 Print the subject and the body in one code block, and nothing else.
 When the lead runs this skill in step 7 or 8 of `ship`, it adds its own lines around the block, as that step says.
-In step 8, the lead holds the block back when the message did not change, as that step says.

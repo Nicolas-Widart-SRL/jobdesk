@@ -2,19 +2,19 @@ use std::collections::{HashMap, HashSet};
 
 use egui::style::ScrollAnimation;
 use egui::text::LayoutJob;
-use egui::{Align, FontSelection, Frame, Grid, Layout, Margin, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, TextEdit, Ui, UiBuilder, Vec2, vec2};
+use egui::{Align, FontSelection, Frame, Grid, Layout, Margin, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, TextEdit, Ui, UiBuilder, Vec2, pos2, vec2};
 use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
-    Activity, ActivityKind, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine, StepState, ToolState, band,
-    closing_question, elapsed_text, short_path, step_lines, stop_point, wants_reply,
+    Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine, StepState, ToolState,
+    action_noun, band, closing_question, elapsed_text, short_path, step_lines, stop_point, wants_reply,
 };
 use crate::ui_kit::tokens::{
     BAND_COMPACT_HEIGHT, BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, KNOT_SIZE_SMALL, OFFSET_SHADOW, PROMPT_PADDING, ROW_GAP, RUN_SIDE,
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, list_row, markdown, muted, page_body, page_head, panel,
+    BandCell, CellLook, Ink, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, markdown, muted, page_body, page_head, panel,
     panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
@@ -59,6 +59,8 @@ pub struct RunScreen {
     opened: HashSet<(String, Option<usize>)>,
     /// The run and message the story last opened on, so the user's own scrolling wins after it.
     opened_at: Option<(String, usize)>,
+    /// The run shown last frame, and whether its story was settled, so a resumed run is followed again.
+    settled_seen: Option<(String, bool)>,
     markdown: CommonMarkCache,
 }
 
@@ -143,27 +145,19 @@ fn settled(run: &Run) -> bool {
     run.awaits_reply() || run.status == RunStatus::Closed
 }
 
-/// Rows the story shows outside any toggle: the user's words and Claude's own messages.
+/// Rows the story shows outside any toggle: the user's words, Claude's own messages, and the notices that explain the run.
+/// Tool rows, routine allowances and nested rows fold behind the step's toggle.
 fn in_story(item: &Activity) -> bool {
-    !item.nested && matches!(item.kind, ActivityKind::You(_) | ActivityKind::Claude(_))
+    !item.nested && matches!(item.kind, ActivityKind::You(_) | ActivityKind::Claude(_) | ActivityKind::Notice(_))
 }
 
-fn knot_state(state: StepState) -> Option<KnotState> {
+/// How a step shows: its knot, and its mark's ink in the band's tally. A step not reached has neither.
+fn step_look(state: StepState) -> Option<(KnotState, Ink)> {
     match state {
-        StepState::Done => Some(KnotState::Done),
-        StepState::Working => Some(KnotState::Working),
-        StepState::Waiting => Some(KnotState::Waiting),
-        StepState::Failed => Some(KnotState::Failed),
-        StepState::Next => None,
-    }
-}
-
-fn mark_ink(state: StepState) -> Option<Ink> {
-    match state {
-        StepState::Done => Some(Ink::Text),
-        StepState::Working => Some(Ink::Status(Tone::Active)),
-        StepState::Waiting => Some(Ink::Status(Tone::Turn)),
-        StepState::Failed => Some(Ink::Status(Tone::Closed)),
+        StepState::Done => Some((KnotState::Done, Ink::Text)),
+        StepState::Working => Some((KnotState::Working, Ink::Status(Tone::Active))),
+        StepState::Waiting => Some((KnotState::Waiting, Ink::Status(Tone::Turn))),
+        StepState::Failed => Some((KnotState::Failed, Ink::Status(Tone::Closed))),
         StepState::Next => None,
     }
 }
@@ -172,7 +166,7 @@ fn mark_ink(state: StepState) -> Option<Ink> {
 fn tally_marks(states: &[StepState]) -> Vec<(usize, Option<Ink>)> {
     let mut marks: Vec<(usize, Option<Ink>)> = Vec::new();
     for state in states {
-        let ink = mark_ink(*state);
+        let ink = step_look(*state).map(|(_, ink)| ink);
         match marks.last_mut() {
             Some((count, last)) if *last == ink => *count += 1,
             _ => marks.push((1, ink)),
@@ -195,23 +189,58 @@ fn toggle_text(actions: usize, live: bool, open: bool) -> String {
     if open {
         return "Hide actions".to_owned();
     }
-    let noun = if actions == 1 { "action" } else { "actions" };
+    let noun = action_noun(actions);
     if live { format!("Show {actions} {noun} so far") } else { format!("Show {actions} {noun}") }
 }
 
-/// The rows of one part of the story, in the order they arrived. The command line, row 0, is the head's title.
-struct Story<'a> {
-    run: &'a Run,
-    root: &'a str,
+/// One part of the story: a step, or the whole run for a command without steps. Rows are indices into `Run::activity`.
+struct Part {
+    step: Option<usize>,
+    line: Option<StepLine>,
+    /// The rows behind the toggle, from the cut on.
+    folded: Vec<usize>,
+    /// The rows the story shows, from the cut on.
+    shown: Vec<usize>,
+    /// Tool rows from the cut on: what the toggle counts.
+    actions: usize,
+    /// Tool rows before the cut, kept only in the run log.
+    cut: usize,
+}
+
+/// What the screen shows of one run, worked out once a frame.
+struct View {
+    band: Band,
+    parts: Vec<Part>,
     /// The first row shown: older ones are in the run log.
     from: usize,
-    /// The newest top-level message, which the story opens on when settled.
+    /// The newest top-level message, which a settled story opens on.
     newest: Option<usize>,
 }
 
-impl Story<'_> {
-    fn rows(&self, step: Option<usize>) -> impl Iterator<Item = (usize, &Activity)> {
-        self.run.activity.iter().enumerate().skip(self.from.max(1)).filter(move |(_, item)| item.step == step)
+impl View {
+    fn of(run: &Run) -> Self {
+        let from = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
+        let lines = step_lines(run);
+        let steps: Vec<(Option<usize>, Option<StepLine>)> = if lines.is_empty() { vec![(None, None)] } else { lines.into_iter().map(|line| (Some(line.step), Some(line))).collect() };
+        let parts = steps
+            .into_iter()
+            .map(|(step, line)| {
+                let mut part = Part { step, line, folded: Vec::new(), shown: Vec::new(), actions: 0, cut: 0 };
+                // The command line, row 0, is the head's title.
+                for (index, item) in run.activity.iter().enumerate().skip(1).filter(|(_, item)| item.step == step) {
+                    let tool = usize::from(matches!(item.kind, ActivityKind::Tool { .. }));
+                    if index < from {
+                        part.cut += tool;
+                    } else {
+                        part.actions += tool;
+                        if in_story(item) { part.shown.push(index) } else { part.folded.push(index) }
+                    }
+                }
+                part
+            })
+            .collect();
+        let newest = run.activity.iter().rposition(|item| !item.nested && matches!(item.kind, ActivityKind::Claude(_)));
+        Self { band: band(run), parts, from, newest }
     }
 }
 
@@ -246,9 +275,12 @@ impl RunScreen {
             return;
         };
         let narrow = ui.ctx().content_rect().width() < DETAILS_BELOW_WIDTH;
+        // A run that stopped or failed can still hold its process, idle: its session can be ended too.
+        let idle = matches!(run.status, RunStatus::Stopped | RunStatus::Failed(_)) && !run.is_busy() && desk.has_session(&run.id);
+        let endable = run.awaits_reply() || idle;
         let mut head = Head::default();
         page_head(ui, Title::Typed(first_line(&run.line)), None, |ui| {
-            let pass = head_actions(ui, &run, narrow);
+            let pass = head_actions(ui, &run, endable, narrow);
             // The real pass comes last, so its buttons are the ones kept.
             head = Head { action: pass.action.or(head.action), ..pass };
         });
@@ -267,7 +299,8 @@ impl RunScreen {
             Some(button) => self.details_popup(desk, &run, &button),
             None => self.details = false,
         }
-        page_body(ui, |ui| self.body(ui, desk, &run, root, narrow));
+        let view = View::of(&run);
+        page_body(ui, |ui| self.body(ui, desk, &run, &view, root, narrow));
     }
 
     /// Asks before the session ends. Keep it open is the default, and Esc keeps it open too.
@@ -328,9 +361,9 @@ impl RunScreen {
         self.details = open && self.details;
     }
 
-    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, root: &str, narrow: bool) {
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, view: &View, root: &str, narrow: bool) {
         let compact = ui.ctx().content_rect().height() < BAND_COMPACT_HEIGHT;
-        let band = band(run);
+        let band = &view.band;
         let marks = tally_marks(&band.marks);
         let cells = [
             BandCell { label: "Where", value: &band.place.value, note: &band.place.note, look: cell_look(&band.place), marks: &marks },
@@ -344,11 +377,11 @@ impl RunScreen {
             ui.add_space(ROW_GAP);
         }
         if narrow {
-            self.story(ui, desk, run, root);
+            self.story(ui, desk, run, view, root);
         } else {
             split(ui, RUN_SIDE, |main, side| {
                 self.facts(side, desk, run, None);
-                self.story(main, desk, run, root);
+                self.story(main, desk, run, view, root);
             });
         }
     }
@@ -356,11 +389,13 @@ impl RunScreen {
     /// The story, then the footer under it, outside the story's scroll area.
     /// The story takes what the footer left on the frame before. Each footer has its own measure:
     /// with none yet, it gets the whole column. A new measure redraws the frame, so the footer is never left below the window.
-    fn story(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, root: &str) {
+    fn story(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, view: &View, root: &str) {
         let reserved_id = footer_height_id(run);
         let input = has_footer(run);
         let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
         let settled = settled(run);
+        // A reply takes a settled story back to working: it follows the run again, from its end.
+        let resumed = !settled && self.settled_seen.as_ref().is_some_and(|(id, was)| *id == run.id && *was);
         let title = if run.status == RunStatus::Closed { "The run" } else { "The run so far" };
         panel(ui, |ui| {
             panel_header(ui, title, None);
@@ -369,7 +404,11 @@ impl RunScreen {
             let area = ScrollArea::vertical().id_salt(("run_story", &run.id)).max_height(room).stick_to_bottom(!settled).auto_shrink([false, true]);
             area.show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let anchor = self.story_rows(ui, run, root);
+                let anchor = self.story_rows(ui, run, view, root);
+                if resumed {
+                    let end = Rect::from_min_max(pos2(ui.min_rect().left(), ui.min_rect().bottom()), ui.min_rect().right_bottom());
+                    ui.scroll_to_rect_animation(end, Some(Align::BOTTOM), ScrollAnimation::none());
+                }
                 if let Some((index, rect)) = anchor.filter(|_| settled) {
                     let key = (run.id.clone(), index);
                     if self.opened_at.as_ref() != Some(&key) {
@@ -381,9 +420,17 @@ impl RunScreen {
                 }
             });
         });
-        if !input {
-            return;
+        if input {
+            self.measured_footer(ui, desk, run, reserved);
         }
+        if !ui.ctx().will_discard() {
+            self.settled_seen = Some((run.id.clone(), settled));
+        }
+    }
+
+    /// The footer, and its height kept for the next frame.
+    fn measured_footer(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, reserved: f32) {
+        let reserved_id = footer_height_id(run);
         // The cursor moves past a gap after each item, so this counts the gap below the footer.
         // The gap above it, between the story and the cursor, is added.
         let start = ui.cursor().top();
@@ -398,26 +445,18 @@ impl RunScreen {
         }
     }
 
-    /// One line per started step, each followed by its messages and the user's replies.
+    /// One line per started step, each followed by its messages, notices and the user's replies.
     /// A command without steps has one toggle for all its actions, then its messages.
     /// Returns where the newest message sits, so a settled story can open on it.
-    fn story_rows(&mut self, ui: &mut Ui, run: &Run, root: &str) -> Option<(usize, Rect)> {
-        let from = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
-        let newest = run.activity.iter().rposition(|item| !item.nested && matches!(item.kind, ActivityKind::Claude(_)));
-        let story = Story { run, root, from, newest };
+    fn story_rows(&mut self, ui: &mut Ui, run: &Run, view: &View, root: &str) -> Option<(usize, Rect)> {
         let mut first = true;
         let mut anchor = None;
-        if from > 0 {
-            panel_body(ui, |ui| muted(ui, format!("{from} earlier items are in the run log.")));
+        if view.from > 0 {
+            panel_body(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
             first = false;
         }
-        let lines = step_lines(run);
-        if lines.is_empty() {
-            self.part(ui, &story, None, None, &mut first, &mut anchor);
-        } else {
-            for line in &lines {
-                self.part(ui, &story, Some(line.step), Some(line), &mut first, &mut anchor);
-            }
+        for part in &view.parts {
+            self.part(ui, run, view, part, root, &mut first, &mut anchor);
         }
         if !run.streaming_text.is_empty() {
             separate(ui, &mut first);
@@ -429,20 +468,18 @@ impl RunScreen {
         anchor
     }
 
-    /// One step: its line and toggle, its actions when open, then its messages and replies.
-    fn part(&mut self, ui: &mut Ui, story: &Story, step: Option<usize>, line: Option<&StepLine>, first: &mut bool, anchor: &mut Option<(usize, Rect)>) {
-        let run = story.run;
-        let key = (run.id.clone(), step);
+    /// One step: its line and toggle, its actions when open, then its messages, notices and replies.
+    #[allow(clippy::too_many_arguments)]
+    fn part(&mut self, ui: &mut Ui, run: &Run, view: &View, part: &Part, root: &str, first: &mut bool, anchor: &mut Option<(usize, Rect)>) {
+        let key = (run.id.clone(), part.step);
         let open = self.opened.contains(&key);
-        let tools = story.rows(step).filter(|(_, item)| matches!(item.kind, ActivityKind::Tool { .. })).count();
-        let actions = line.map_or(tools, |line| line.actions);
-        let live = line.map_or(run.is_busy(), |line| line.live);
-        let toggle = (actions > 0).then(|| toggle_text(actions, live, open));
-        let clicked = match line {
+        let live = part.line.as_ref().map_or(run.is_busy(), |line| line.live);
+        let toggle = (part.actions > 0).then(|| toggle_text(part.actions, live, open));
+        let clicked = match &part.line {
             Some(line) => {
                 separate(ui, first);
                 let number = line.step.to_string();
-                let knot = knot_state(line.state).map(|state| (number.as_str(), state));
+                let knot = step_look(line.state).map(|(state, _)| (number.as_str(), state));
                 step_line(ui, knot, line.name, &line.sentence, toggle.as_deref().map(|text| (text, open)))
             }
             None => toggle.as_deref().and_then(|text| {
@@ -457,32 +494,38 @@ impl RunScreen {
                 self.opened.insert(key);
             }
         }
-        // With no action to count, there is no toggle, so the step's notes show as they are.
-        if open || actions == 0 {
-            let others: Vec<&Activity> = story.rows(step).map(|(_, item)| item).filter(|item| !in_story(item)).collect();
-            if !others.is_empty() {
-                let indent = KNOT_SIZE_SMALL + STEP_NAME_WIDTH + STEP_LINE_GAP * 2.0;
-                Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
-                    for (index, item) in others.into_iter().enumerate() {
-                        if index > 0 {
-                            divider(ui);
-                        }
-                        self.action_row(ui, item, story.root);
+        // With no action to count, there is no toggle, so the step's other rows show as they are.
+        if (open || part.actions == 0) && (part.cut > 0 || !part.folded.is_empty()) {
+            let indent = KNOT_SIZE_SMALL + STEP_NAME_WIDTH + STEP_LINE_GAP * 2.0;
+            Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
+                if part.cut > 0 {
+                    Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| {
+                        muted(ui, format!("{} earlier {} in the run log.", part.cut, if part.cut == 1 { "action is" } else { "actions are" }));
+                    });
+                }
+                for (at, index) in part.folded.iter().enumerate() {
+                    if at > 0 || part.cut > 0 {
+                        divider(ui);
                     }
-                });
-            }
+                    self.action_row(ui, &run.activity[*index], root);
+                }
+            });
         }
-        for (index, item) in story.rows(step).filter(|(_, item)| in_story(item)) {
-            match &item.kind {
+        for index in &part.shown {
+            match &run.activity[*index].kind {
                 ActivityKind::You(text) => {
                     separate(ui, first);
                     you_line(ui, text);
                 }
+                ActivityKind::Notice(text) => {
+                    separate(ui, first);
+                    notice_line(ui, text);
+                }
                 ActivityKind::Claude(text) => {
                     *first = false;
                     let shown = Frame::new().inner_margin(Margin::symmetric(0, ROW_GAP as i8)).show(ui, |ui| document(ui, &mut self.markdown, text));
-                    if story.newest == Some(index) {
-                        *anchor = Some((index, shown.response.rect));
+                    if view.newest == Some(*index) {
+                        *anchor = Some((*index, shown.response.rect));
                     }
                 }
                 _ => {}
@@ -505,7 +548,7 @@ impl RunScreen {
             ActivityKind::Claude(text) => {
                 markdown(ui, &mut self.markdown, text);
             }
-            ActivityKind::Notice(text) => {
+            ActivityKind::Notice(text) | ActivityKind::Allowed(text) => {
                 muted(ui, text);
             }
             ActivityKind::Tool { name, summary, state, .. } => {
@@ -761,20 +804,6 @@ impl RunScreen {
                     }
                 });
             });
-            for (title, items) in [("Agents", &run.agents), ("Files changed", &run.files_changed)] {
-                if items.is_empty() {
-                    continue;
-                }
-                ui.add_space(ROW_GAP);
-                slip(ui, |ui| {
-                    panel_header(ui, title, None);
-                    for (index, item) in items.iter().enumerate() {
-                        list_row(ui, index == 0, |ui| {
-                            ui.add(egui::Label::new(rich(ui, item, Type::MONO, Ink::Text)).truncate()).on_hover_text(item);
-                        });
-                    }
-                });
-            }
             ui.add_space(ROW_GAP);
             slip(ui, |ui| {
                 panel_header(ui, "Recent runs", None);
@@ -837,6 +866,14 @@ fn you_line(ui: &mut Ui, text: &str) {
     });
 }
 
+/// A notice in the story, such as why the run failed: muted, under the step names' column, wrapped.
+fn notice_line(ui: &mut Ui, text: &str) {
+    let indent = KNOT_SIZE_SMALL + STEP_LINE_GAP;
+    Frame::new().inner_margin(Margin { left: indent as i8, right: 0, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 }).show(ui, |ui| {
+        ui.add(egui::Label::new(rich(ui, text, Type::BODY, Ink::Muted)).wrap());
+    });
+}
+
 /// Whether the quick replies fit beside the field and Send.
 fn inline_replies(ui: &Ui, replies: &[QuickReply]) -> bool {
     let gap = ui.spacing().item_spacing.x;
@@ -867,12 +904,12 @@ fn reply_rows_height(ui: &Ui, replies: &[QuickReply]) -> f32 {
 /// A prompt's scrolling part takes what `room` leaves, between its least and its most.
 /// The least wins over the room: the story under the bar shrinks instead, so the prompt stays answerable.
 fn prompt_height(room: f32, least: f32, most: f32) -> f32 {
-    room.clamp(least, most)
+    room.clamp(least, most.max(least))
 }
 
 /// Stop, force or end, by the run's state, then Run details when the window is narrow. Added right to left.
 /// `page_head` runs this twice a frame, so it only reports a click, and the buttons to anchor the popovers on.
-fn head_actions(ui: &mut Ui, run: &Run, narrow: bool) -> Head {
+fn head_actions(ui: &mut Ui, run: &Run, endable: bool, narrow: bool) -> Head {
     let mut head = Head::default();
     if run.status == RunStatus::Stopping {
         if small_danger_button(ui, "Force stop").clicked() {
@@ -882,7 +919,7 @@ fn head_actions(ui: &mut Ui, run: &Run, narrow: bool) -> Head {
         if small_danger_button(ui, "Stop run").clicked() {
             head.action = Some(HeadAction::Stop);
         }
-    } else if run.awaits_reply() {
+    } else if endable {
         let response = small_button(ui, END_SESSION);
         if response.clicked() {
             head.action = Some(HeadAction::AskToEnd);

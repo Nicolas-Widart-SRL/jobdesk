@@ -42,6 +42,8 @@ pub enum ActivityKind {
     Claude(String),
     Tool { id: String, name: String, summary: String, state: ToolState },
     Notice(String),
+    /// A tool Jobdesk allowed without asking. Routine, unlike a notice that explains the run.
+    Allowed(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -186,7 +188,7 @@ impl Run {
     pub fn allow_automatically(&mut self, request_id: &str) -> Option<Prompt> {
         let prompt = self.resolve_prompt(request_id, &Decision::Allow { remember: false })?;
         if let PromptKind::Permission { tool, .. } = &prompt.kind {
-            self.notice(&format!("Allowed {tool} without asking."));
+            self.push(ActivityKind::Allowed(format!("Allowed {tool} without asking.")), false);
         }
         Some(prompt)
     }
@@ -375,7 +377,7 @@ mod tests {
         run.apply(AgentEvent::PromptRaised(Prompt { kind: permission, ..prompt("a") }));
         assert!(run.allow_automatically("a").is_some());
         assert!(!run.needs_user());
-        assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Notice("Allowed Bash without asking.".into()));
+        assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Allowed("Allowed Bash without asking.".into()));
     }
 
     #[test]

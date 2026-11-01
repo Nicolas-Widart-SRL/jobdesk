@@ -74,6 +74,11 @@ impl RunDesk {
         !self.sessions.is_empty()
     }
 
+    /// Whether the run's process is still up, so its session can be ended.
+    pub fn has_session(&self, id: &str) -> bool {
+        self.sessions.contains_key(id)
+    }
+
     /// Runs where Claude waits on the user, as `wants_reply` says.
     pub fn waiting_count(&self) -> usize {
         self.runs.iter().filter(|run| wants_reply(run)).count()
@@ -230,6 +235,19 @@ mod tests {
 
     fn now() -> NaiveDateTime {
         chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 30, 0).unwrap()
+    }
+
+    #[test]
+    fn a_failed_turn_keeps_its_session_until_closed() {
+        let (mut desk, _) = desk();
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        desk.event_sender.send((id.clone(), AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 })).unwrap();
+        desk.poll();
+        assert!(matches!(desk.run(&id).unwrap().status, RunStatus::Failed(_)));
+        assert!(desk.has_session(&id));
+        desk.close(&id);
+        assert!(!desk.has_session(&id));
+        assert!(!desk.has_session("unknown"));
     }
 
     #[test]

@@ -36,13 +36,13 @@ pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
 /// Claude ended its turn and wants something from the user: a known stop, a closing question,
 /// or a stop part-way through the command's steps. An open prompt always does.
 /// A run that ended its last step, or has no steps, without asking anything is done, not waiting.
-/// A run being stopped never waits: a prompt raised while it stops is withdrawn with the process.
+/// A run being stopped waits only on a prompt, because AskUserQuestion always reaches the user.
 pub fn wants_reply(run: &Run) -> bool {
-    if run.status == RunStatus::Stopping {
-        return false;
-    }
     if run.needs_user() {
         return true;
+    }
+    if run.status == RunStatus::Stopping {
+        return false;
     }
     if !run.awaits_reply() {
         return false;
@@ -352,13 +352,14 @@ mod tests {
     }
 
     #[test]
-    fn stopping_is_never_your_turn() {
+    fn stopping_is_your_turn_only_for_a_prompt() {
         let mut run = run("/apply x");
         reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
         run.note_stop_requested();
         assert!(!wants_reply(&run));
         run.apply(AgentEvent::PromptRaised(prompt()));
-        assert!(run.needs_user());
-        assert!(!wants_reply(&run), "a prompt raised while the run stops");
+        assert!(wants_reply(&run), "a prompt raised while the run stops still reaches the user");
+        run.apply(AgentEvent::PromptWithdrawn { request_id: "a".into() });
+        assert!(!wants_reply(&run));
     }
 }

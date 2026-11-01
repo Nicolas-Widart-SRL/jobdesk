@@ -116,7 +116,6 @@ fn sentence(run: &Run, step: usize) -> String {
             _ => other += 1,
         }
     }
-    let plural = |count: usize| if count == 1 { "action" } else { "actions" };
     let mut text = match clauses.as_slice() {
         [] => String::new(),
         [only] => (*only).to_owned(),
@@ -124,9 +123,9 @@ fn sentence(run: &Run, step: usize) -> String {
     };
     if other > 0 {
         if text.is_empty() {
-            text = format!("{other} {}", plural(other));
+            text = format!("{other} {}", action_noun(other));
         } else {
-            text.push_str(&format!(", and {other} other {}", plural(other)));
+            text.push_str(&format!(", and {other} other {}", action_noun(other)));
         }
     }
     if !text.is_empty() {
@@ -139,6 +138,11 @@ fn sentence(run: &Run, step: usize) -> String {
         Some(phrase) => format!("{text} {}", phrase.now),
         None => text,
     }
+}
+
+/// "action" or "actions", for `count` of them.
+pub fn action_noun(count: usize) -> &'static str {
+    if count == 1 { "action" } else { "actions" }
 }
 
 pub fn band(run: &Run) -> Band {

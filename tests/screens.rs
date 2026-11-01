@@ -491,20 +491,19 @@ fn actions_open_only_when_asked() {
     let mut harness = tray_harness(shell);
     let file = "main_kestrel_solution_architect.tex";
     let named = |harness: &Harness| harness.query_all_by_label_contains(file).count();
-    let before = named(&harness);
-    assert_eq!(before, 1, "only Files changed in the side column, while every toggle is closed");
+    assert_eq!(named(&harness), 0, "nowhere while every toggle is closed");
 
     // Draft's toggle is the one on Draft's line.
     let draft = harness.get_by_label("Draft").rect().center().y;
     let toggle = harness.get_all_by_label("Show 1 action").find(|toggle| (toggle.rect().center().y - draft).abs() < 4.0).expect("Draft's toggle");
     toggle.click();
     harness.run_steps(3);
-    assert!(named(&harness) > before, "Draft's Write row");
+    assert_eq!(named(&harness), 1, "Draft's Write row");
     assert!(is_shown(&harness, "Hide actions"));
 
     harness.get_by_label("Hide actions").click();
     harness.run_steps(3);
-    assert_eq!(named(&harness), before);
+    assert_eq!(named(&harness), 0);
 }
 
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
@@ -560,6 +559,55 @@ fn the_turn_bar_fits_the_smallest_window() {
     assert!(is_shown(&harness, "Another run is working. You can reply when it finishes."));
     assert!(!is_shown(&harness, "Recent runs"), "picking a run closes Run details");
     assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
+}
+
+const STATUS_LINE: &str = "Slash commands stay the only writers of your files.";
+
+/// A reply takes a stop's story back to following the run: its newest row comes into view.
+#[test]
+fn a_resumed_run_is_followed_again() {
+    let (desk, sink) = stop_with(SharedCalls::default(), STOP_EVALUATION);
+    let mut harness = smallest_window(desk, "resumed_follow");
+    harness.get_by_label("Go ahead with the draft").click();
+    harness.run_steps(3);
+    emit_all(&sink, [
+        tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
+        done("6"),
+        tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
+    ]);
+    harness.run_steps(3);
+    let draft = harness.get_by_label("Draft").rect();
+    let status = harness.get_by_label(STATUS_LINE).rect();
+    assert!(draft.bottom() <= status.top(), "Draft's line at {draft:?} is below the story, over the status line at {status:?}");
+    assert!(draft.top() >= harness.get_by_label("The run so far").rect().bottom(), "Draft's line at {draft:?} is above the story");
+}
+
+const COMPILE_FAILED: &str = "lualatex stopped: main_kestrel_solution_architect.tex has an undefined control sequence on line 88.";
+
+/// Why a run failed shows in the story, outside the step's toggle, even where the compact band drops its notes.
+#[test]
+fn a_failure_reason_shows_without_opening_the_step() {
+    let failed = AgentEvent::TurnEnded { failed: true, message: Some(COMPILE_FAILED.into()), cost_usd: 1.4, duration_ms: 90_000 };
+    let harness = smallest_window(apply_run_ending([failed]), "failure_reason_shown");
+    assert!(!is_shown(&harness, "Hide actions"), "every toggle is closed");
+    assert_in_window(&harness, [1040.0, 640.0], &[COMPILE_FAILED]);
+    assert!(harness.get_by_label(COMPILE_FAILED).rect().bottom() <= harness.get_by_label(STATUS_LINE).rect().top());
+}
+
+/// A run that failed with its process still up can end its session, through the same popover.
+#[test]
+fn an_idle_failed_session_can_be_ended() {
+    let mut shell = shell(Screen::Runs, "end_failed_session");
+    let failed = AgentEvent::TurnEnded { failed: true, message: Some(COMPILE_FAILED.into()), cost_usd: 1.4, duration_ms: 90_000 };
+    *shell.desk_slot() = Some(apply_run_ending([failed]));
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("End session…").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Keep it open"), "the popover asks first");
+    harness.get_by_label("End session").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "End session…"), "the session is gone");
+    assert!(harness.query_all_by_label(COMPILE_FAILED).count() > 0, "the run keeps why it failed");
 }
 
 /// A click on a Recent runs row's command text picks the run, as a click on its tag does.

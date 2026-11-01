@@ -117,6 +117,25 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
     desk
 }
 
+/// An `/apply` run that evaluated the posting, asked whether to draft, and ended its turn.
+fn tray_waiting_apply_run() -> RunDesk {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    let events = [
+        AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+        tool("1", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
+        done("1"),
+        AgentEvent::AssistantText { text: "**Fit 78, Strong Fit.** Event sourcing and Kafka match. Card schemes are a gap.\n\nShall I proceed with drafting?".into(), nested: false },
+        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.94, duration_ms: 401_000 },
+    ];
+    let guard = sink.lock().unwrap();
+    let emit = guard.as_ref().unwrap();
+    events.into_iter().for_each(emit);
+    drop(guard);
+    desk
+}
+
 fn permission_prompt() -> AgentEvent {
     AgentEvent::PromptRaised(Prompt {
         request_id: "p".into(),
@@ -467,6 +486,23 @@ fn a_paused_run_comes_first_and_y_does_nothing() {
 }
 
 #[test]
+fn a_waiting_run_deals_a_your_turn_card() {
+    let mut shell = shell(Screen::InTray, "tray_turn");
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "/apply: proceed with drafting?"));
+    assert!(is_shown(&harness, "Your turn"));
+
+    press(&mut harness, Key::Y);
+    press(&mut harness, Key::N);
+    assert!(is_shown(&harness, "/apply: proceed with drafting?"));
+
+    harness.get_by_label("Open run").click();
+    harness.run_steps(3);
+    harness.get_by_label("Recent runs");
+}
+
+#[test]
 fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
     let mut harness = tray_harness(shell(Screen::InTray, "tray_guard"));
     for _ in 0..4 {
@@ -511,7 +547,7 @@ fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
 
 /// The top of the dealt card's tab, which moves only when the tray scrolls.
 fn tab_top(harness: &Harness) -> f32 {
-    let kinds = ["Permission", "Question", "Send", "Triage", "Prep", "Offer", "Guard flag", "Follow-up", "Close"];
+    let kinds = ["Permission", "Question", "Your turn", "Send", "Triage", "Prep", "Offer", "Guard flag", "Follow-up", "Close"];
     kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
 }
 
@@ -654,6 +690,13 @@ fn intray_question_light() {
     let mut shell = shell(Screen::InTray, "intray_question_light");
     *shell.desk_slot() = Some(apply_run(question_prompt()));
     tray_after(wgpu_tray(shell, Theme::Light), &[], "intray_question_light");
+}
+
+#[test]
+fn intray_turn_light() {
+    let mut shell = shell(Screen::InTray, "intray_turn_light");
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    tray_after(wgpu_tray(shell, Theme::Light), &[], "intray_turn_light");
 }
 
 #[test]

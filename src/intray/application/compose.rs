@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, Lane};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Check, Due, Effect, GateRow, SkipReason};
-use crate::runs::application::{Prompt, PromptKind, Question, Run};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, stop_point};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -20,7 +20,7 @@ pub struct Sources<'a> {
 
 /// `kept` holds the guard cards the user cleared, so their postings can reach triage.
 pub fn derive_cards(sources: &Sources, kept: impl Fn(&str) -> bool) -> Vec<Card> {
-    let mut cards: Vec<Card> = sources.runs.iter().filter_map(paused_card).collect();
+    let mut cards: Vec<Card> = sources.runs.iter().filter_map(|run| paused_card(run).or_else(|| turn_card(run))).collect();
     for lane in [Lane::Shortlist, Lane::BelowThreshold] {
         for job in sources.board.jobs_in(lane) {
             if sources.pipeline.cards().any(|card| is_tracked(card, job)) {
@@ -99,6 +99,41 @@ fn paused_card(run: &Run) -> Option<Card> {
         can_skip: false,
         note: note.into(),
         trace: trace.into(),
+    })
+}
+
+/// A run whose turn ended and waits for the user's reply. It has no default, because only a reply moves the run on.
+fn turn_card(run: &Run) -> Option<Card> {
+    if !run.awaits_reply() {
+        return None;
+    }
+    let line = run.line.lines().next().unwrap_or_default();
+    let command = command_word(line);
+    let title = match stop_point(run) {
+        Some(stop) => format!("{command}: {}?", stop.label),
+        None => format!("{command} is waiting for your reply"),
+    };
+    let spent = format!("${:.2} of ${:.2} spent", run.cost_usd, run.budget_usd);
+    let subtitle = match run.steps.as_ref().and_then(|rail| rail.labels.get(rail.current)) {
+        Some(step) => format!("{line} stopped after {step}, {spent}"),
+        None => format!("{line} is waiting, {spent}"),
+    };
+    Some(Card {
+        key: format!("turn:{}:{}", run.id, run.turn_number()),
+        kind: CardKind::Turn,
+        name: command.to_owned(),
+        title,
+        subtitle,
+        take: "Claude finished a step and waits for your reply.".into(),
+        when: "Run is waiting".into(),
+        due: None,
+        weight: 0,
+        body: closing_question(run).map_or(Body::Empty, |question| Body::Code { label: "Claude asks".into(), text: question.text }),
+        primary: None,
+        others: vec![Action::new("Open run", Effect::Run(run.id.clone()))],
+        can_skip: false,
+        note: "No default here. Reply in the run.".into(),
+        trace: "Opens the run. Nothing is sent until you reply there.".into(),
     })
 }
 
@@ -517,6 +552,74 @@ mod tests {
             assert_eq!(card.others[0].effect, Effect::Run("r1".into()));
             assert_eq!(card.key, "run:r1:p1");
         }
+    }
+
+    /// An `/apply` run that read the evaluation guide, said `message` and ended its turn.
+    fn waiting(message: &str) -> Run {
+        let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let mut run = Run::new(&request);
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Read".into(), summary: "skills/04-job-evaluation.md".into(), nested: false });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Ok(()) });
+        run.apply(AgentEvent::AssistantText { text: message.into(), nested: false });
+        end_turn(&mut run, 0.94);
+        run
+    }
+
+    fn end_turn(run: &mut Run, cost_usd: f64) {
+        run.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd, duration_ms: 1 });
+    }
+
+    fn turn_card_of(run: &Run) -> Option<Card> {
+        cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(run)).into_iter().next()
+    }
+
+    #[test]
+    fn a_waiting_run_deals_a_your_turn_card_with_no_default() {
+        let run = waiting("Fit 78.\n\nShall I proceed with drafting?");
+        let card = turn_card_of(&run).unwrap();
+        assert_eq!(card.kind, CardKind::Turn);
+        assert_eq!(card.title, "/apply: proceed with drafting?");
+        assert_eq!(card.subtitle, "/apply x stopped after Evaluate, $0.94 of $3.00 spent");
+        assert_eq!(card.body, Body::Code { label: "Claude asks".into(), text: "Shall I proceed with drafting?".into() });
+        assert_eq!(card.key, "turn:r1:1");
+        assert_eq!(card.primary, None);
+        assert!(!card.can_skip);
+        assert_eq!(card.others, [Action::new("Open run", Effect::Run("r1".into()))]);
+    }
+
+    #[test]
+    fn a_waiting_run_without_a_stop_point_or_question_still_deals() {
+        let request = RunRequest { run_id: "r2".into(), line: "/rank".into(), model: None, budget_usd: 2.0, started_at: String::new(), resume_session: None };
+        let mut run = Run::new(&request);
+        end_turn(&mut run, 0.5);
+        let card = turn_card_of(&run).unwrap();
+        assert_eq!(card.title, "/rank is waiting for your reply");
+        assert_eq!(card.body, Body::Empty);
+    }
+
+    #[test]
+    fn a_reply_ends_the_turn_card() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        assert!(turn_card_of(&run).is_some());
+        run.note_reply("Yes, proceed with drafting.");
+        assert!(turn_card_of(&run).is_none());
+    }
+
+    #[test]
+    fn a_later_stop_deals_a_new_key() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        let first = turn_card_of(&run).unwrap().key;
+        run.note_reply("Yes, proceed with drafting.");
+        end_turn(&mut run, 1.5);
+        assert_ne!(turn_card_of(&run).unwrap().key, first);
+    }
+
+    #[test]
+    fn a_prompt_deals_its_own_card_and_not_a_turn_card() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
+        let dealt = cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(&run));
+        assert_eq!(dealt.iter().map(|card| card.kind).collect::<Vec<_>>(), [CardKind::Question]);
     }
 
     #[test]

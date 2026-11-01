@@ -25,6 +25,7 @@ fn kind_tag(kind: CardKind) -> (&'static str, Tone) {
     match kind {
         CardKind::Permission => ("Permission", Tone::Interview),
         CardKind::Question => ("Question", Tone::Interview),
+        CardKind::Turn => ("Your turn", Tone::Turn),
         CardKind::Send => ("Send", Tone::Drafted),
         CardKind::Triage => ("Triage", Tone::Closed),
         CardKind::Prep => ("Prep", Tone::Interview),
@@ -35,8 +36,13 @@ fn kind_tag(kind: CardKind) -> (&'static str, Tone) {
     }
 }
 
-fn waits_for_reading(kind: CardKind) -> bool {
-    matches!(kind, CardKind::Permission | CardKind::Question | CardKind::GuardFlag)
+/// The frame a card is dealt in: cards that wait on the user to read and decide get one.
+fn deal_frame(kind: CardKind) -> Option<Tone> {
+    match kind {
+        CardKind::Turn => Some(Tone::Turn),
+        CardKind::Permission | CardKind::Question | CardKind::GuardFlag => Some(Tone::Interview),
+        _ => None,
+    }
 }
 
 fn check_tag(check: Check) -> (&'static str, Tone) {
@@ -162,7 +168,7 @@ fn stack(ui: &mut Ui, card: &Card, left: usize, pressed: &mut Option<Pressed>) {
     let (kind, tone) = kind_tag(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     card_tab(ui, kind, tone, card.when.as_str());
-    deal(ui, waits_for_reading(card.kind).then_some(Tone::Interview), |ui| card_face(ui, card, pressed));
+    deal(ui, deal_frame(card.kind), |ui| card_face(ui, card, pressed));
     stack_edges(ui, left);
     ui.add_space(4.0);
     if left > 0 {

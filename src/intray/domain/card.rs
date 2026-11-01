@@ -12,6 +12,7 @@ pub const HORIZON_DAYS: i64 = 14;
 pub enum CardKind {
     Permission,
     Question,
+    Turn,
     Offer,
     Send,
     Prep,
@@ -31,7 +32,7 @@ impl CardKind {
     }
 
     fn pauses_a_run(self) -> bool {
-        matches!(self, Self::Permission | Self::Question)
+        matches!(self, Self::Permission | Self::Question | Self::Turn)
     }
 }
 

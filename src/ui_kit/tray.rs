@@ -1,12 +1,12 @@
 //! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{Area, Color32, CornerRadius, Frame, Margin, Order, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{interactive_row, pick_look, pointer_over, pressed, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined, surface};
+use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, surface};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_text};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
@@ -80,28 +80,13 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
     let (x, y) = DEAL_PADDING;
     let shown = ui.allocate_ui(vec2(ui.available_width(), height), |ui| {
         frame.show(ui, |ui| {
-            let inner = Rect::from_min_size(ui.cursor().min, ui.available_size());
-            ui.advance_cursor_after_rect(inner);
-            // The footer goes in first, at the foot of the card, so the body takes what it leaves.
-            // One height is kept for whichever card is dealt, so only a footer of a new height costs a pass.
-            let kept = KeptHeight::read(ui, ui.scope_id().with("deal_footer"), 0.0);
-            let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
-            let mut foot = ui.new_child(UiBuilder::new().id_salt("deal_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
-            foot.shrink_clip_rect(foot_rect);
-            deal_footer(&mut foot, footer);
-            kept.keep(ui, foot.min_rect().height().min(inner.height()), "a card's footer changed height");
             // A card that comes on top, new or back, opens its body at the top.
             let dealt = ui.scope_id().with("deal_shown");
             let fresh = ui.data(|data| data.get_temp::<String>(dealt)).as_deref() != Some(look.key);
             if fresh {
                 ui.data_mut(|data| data.insert_temp(dealt, look.key.to_owned()));
             }
-            let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
-            let mut body_ui = ui.new_child(UiBuilder::new().id_salt("deal_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
-            body_ui.shrink_clip_rect(body_rect);
-            let scroll = ScrollArea::vertical().id_salt("deal_body").auto_shrink([false, false]);
-            let scroll = if fresh { scroll.vertical_scroll_offset(0.0) } else { scroll };
-            scroll.show(&mut body_ui, |ui| {
+            let body = |ui: &mut Ui| {
                 Frame::new()
                     .inner_margin(Margin::symmetric(x, y))
                     .show(ui, |ui| {
@@ -110,8 +95,8 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
                         body(ui)
                     })
                     .inner
-            })
-            .inner
+            };
+            footed(ui, true, fresh, body, |ui| deal_footer(ui, footer))
         })
     });
     // The tab's foot and the card's top edge give way to the tab's fill, so the two read as one sheet.
@@ -139,15 +124,7 @@ pub fn departing(ui: &Ui, room: Rect, part: f32, add: impl FnOnce(&mut Ui)) {
 
 /// The row under a card's body that holds its actions, ruled off on top.
 pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    divider(ui);
-    let (x, y) = DEAL_FOOT_PADDING;
-    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
-            add(ui);
-        });
-    });
+    footer_row(ui, DEAL_FOOT_PADDING, add);
 }
 
 /// What closes an agenda row.

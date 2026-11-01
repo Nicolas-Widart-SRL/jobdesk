@@ -6,7 +6,7 @@ use egui_extras::{Column, TableBuilder};
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
-    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, hand, muted, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
+    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, hand, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, primary_command_action, rich,
     score, segmented, side_column, stamp, stamp_square, strong, table_cell, table_head, tag, title_over,
 };
 
@@ -137,9 +137,7 @@ impl JobsScreen {
 
         side_column("job_details", 340.0).show(ui, |ui| {
             if let Some(job) = selected {
-                paper(ui, false, |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, job, kept.contains(&job.key)));
-                });
+                paper_with_footer(ui, |ui| details(ui, job, kept.contains(&job.key)), |ui| actions(ui, job));
             }
         });
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
@@ -313,16 +311,14 @@ fn details(ui: &mut Ui, job: &JobView, kept: bool) {
             bullets(ui, "What is missing", &job.gaps);
         });
     }
-    divider(ui);
-    panel_body(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-            let apply = job.url.as_ref().map_or_else(|| "/apply".to_owned(), |url| format!("/apply {}", url.as_str()));
-            primary_command_action(ui, "Draft application…", &apply);
-            command_action(ui, "Find skill gaps…", "/upskill");
-            open_link(ui, "Open job ad", job.url.as_ref());
-        });
-    });
+}
+
+/// What the user can do with the job, pinned under its details.
+fn actions(ui: &mut Ui, job: &JobView) {
+    let apply = job.url.as_ref().map_or_else(|| "/apply".to_owned(), |url| format!("/apply {}", url.as_str()));
+    primary_command_action(ui, "Draft application…", &apply);
+    command_action(ui, "Find skill gaps…", "/upskill");
+    open_link(ui, "Open job ad", job.url.as_ref());
 }
 
 /// A check: its name on the left, what the posting says and the result on the right.

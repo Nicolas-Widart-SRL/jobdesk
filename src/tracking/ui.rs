@@ -6,7 +6,7 @@ use egui::{Frame, ScrollArea, Ui};
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
     CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
-    primary_button, primary_command_action, rich, side_column, slip, small_command_action, stamp_square, strong, tag,
+    paper_with_footer, primary_button, primary_command_action, rich, side_column, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
@@ -129,7 +129,7 @@ impl TrackerScreen {
         let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
         if let Some(card) = selected {
             side_column("application_details", 320.0).show(ui, |ui| {
-                slip(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
+                paper_with_footer(ui, |ui| open = details(ui, card), |ui| actions(ui, card));
             });
         }
         if pipeline.cards().any(|card| card_waits(card, waiting)) {
@@ -270,15 +270,14 @@ fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
             muted(ui, card.notes.as_str());
         });
     }
-    divider(ui);
-    panel_body(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            small_command_action(ui, "Record a result…", &format!("/outcome {}", card.company.to_lowercase()));
-            small_command_action(ui, "Prepare for the interview…", &format!("/interview {}", card.company.to_lowercase()));
-            open_link(ui, "Open job ad", card.source.as_ref());
-        });
-    });
     open
+}
+
+/// What the user can do with the application, pinned under its details.
+fn actions(ui: &mut Ui, card: &ApplicationCard) {
+    small_command_action(ui, "Record a result…", &format!("/outcome {}", card.company.to_lowercase()));
+    small_command_action(ui, "Prepare for the interview…", &format!("/interview {}", card.company.to_lowercase()));
+    open_link(ui, "Open job ad", card.source.as_ref());
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {

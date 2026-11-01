@@ -1423,6 +1423,17 @@ fn the_card_actions_fit_the_smallest_window() {
     assert_in_window(&harness, [1040.0, 640.0], &["Draft application…", "Skip", "Later", "Open job ad", "Show the command"]);
 }
 
+/// The job's actions sit under the detail's scroll, so a long detail keeps them in view.
+#[test]
+fn the_job_actions_stay_in_view() {
+    for size in [[1280.0, 820.0], [1040.0, 640.0]] {
+        let mut shell = shell(Screen::Jobs, "job_actions_in_view");
+        let mut harness = Harness::builder().with_size(size).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+        harness.run_steps(3);
+        assert_in_window(&harness, size, &["Draft application…", "Find skill gaps…", "Open job ad"]);
+    }
+}
+
 /// The line is plain text to read: it opens no launcher and starts no run.
 #[test]
 fn show_the_command_reveals_the_line_and_starts_nothing() {

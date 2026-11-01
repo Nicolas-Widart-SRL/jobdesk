@@ -11,7 +11,7 @@ use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
     ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
@@ -485,6 +485,57 @@ pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R 
             add(ui)
         })
         .inner
+}
+
+/// A sheet of paper whose body scrolls over its actions, pinned under a hairline. It takes only the height its body needs,
+/// up to what is left in `ui`, so a long body gives way first and the actions stay in view.
+pub fn paper_with_footer(ui: &mut Ui, body: impl FnOnce(&mut Ui), footer: impl FnOnce(&mut Ui)) {
+    paper(ui, false, |ui| {
+        footed(ui, false, false, body, |ui| {
+            let padding = (inset(ui), BODY_PADDING);
+            footer_row(ui, padding, footer);
+        })
+    });
+}
+
+/// A scrolling body over a footer pinned at its foot, inside a frame's content `ui`. `fill` takes all the height left,
+/// where otherwise the two take what the body needs, up to it. `fresh` opens the body at the top.
+pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
+    let room = ui.available_size();
+    let kept = KeptHeight::read(ui, ui.scope_id().with("footed_footer"), 0.0);
+    let needed = KeptHeight::read(ui, ui.scope_id().with("footed_body"), room.y);
+    let height = if fill { room.y } else { (needed.height + kept.height).min(room.y) };
+    let inner = Rect::from_min_size(ui.cursor().min, vec2(room.x, height));
+    ui.advance_cursor_after_rect(inner);
+    // The footer goes in first, at the foot, so the body takes what it leaves.
+    // One height is kept for whatever the body shows, so only a footer of a new height costs a pass.
+    let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
+    let mut foot = ui.new_child(UiBuilder::new().id_salt("footed_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
+    foot.shrink_clip_rect(foot_rect);
+    footer(&mut foot);
+    kept.keep(ui, foot.min_rect().height().min(room.y), "a footer changed height");
+    let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
+    let mut body_ui = ui.new_child(UiBuilder::new().id_salt("footed_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+    body_ui.shrink_clip_rect(body_rect);
+    let scroll = egui::ScrollArea::vertical().id_salt("footed_body").auto_shrink([false, false]);
+    let scroll = if fresh { scroll.vertical_scroll_offset(0.0) } else { scroll };
+    let shown = scroll.show(&mut body_ui, body);
+    if !fill {
+        needed.keep(ui, shown.content_size.y, "a body changed height");
+    }
+    shown.inner
+}
+
+/// The row under a body that holds its actions, ruled off on top and padded `(x, y)`.
+pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnOnce(&mut Ui)) {
+    divider(ui);
+    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
+            add(ui);
+        });
+    });
 }
 
 /// A grey block where content will be, while it loads. In a slip or a paper section it takes the raised plane.

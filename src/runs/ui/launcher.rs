@@ -4,7 +4,7 @@ use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, group_title, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -65,9 +65,7 @@ impl Launcher {
     /// Each group's heading stands on the hairline of its first row.
     fn list(&mut self, ui: &mut Ui) {
         for group in CommandGroup::ALL {
-            Frame::new().inner_margin(Margin::symmetric(0, HEADER_PADDING)).show(ui, |ui| {
-                ui.label(rich(ui, group.label(), Type::SECTION, Ink::Text));
-            });
+            group_title(ui, group.label());
             for command in CATALOG.iter().filter(|command| command.group == group) {
                 let on = command.name == self.command.name;
                 if command_row(ui, command.name, command.summary, command.writes, on).clicked() {
@@ -109,7 +107,7 @@ impl Launcher {
                     let width = ui.available_width();
                     ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0).labelled_by(label);
                 });
-                labelled(budget, "Budget cap, USD", |ui, label| {
+                labelled(budget, "Spend at most, USD", |ui, label| {
                     let edit = TextEdit::singleline(&mut self.budget).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
                     ui.add(edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY)).labelled_by(label);
                 });
@@ -117,10 +115,10 @@ impl Launcher {
             let line = self.line();
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = FIELD_GAP;
-                ui.label(rich(ui, "Sent to Claude", Type::SMALL, Ink::Muted));
+                ui.label(rich(ui, "Claude will run", Type::SMALL, Ink::Muted));
                 code_box(ui, |ui| ui.add(egui::Label::new(rich(ui, &line, Type::MONO, Ink::Text)).wrap()));
             });
-            muted(ui, "Runs in your repo checkout, with your project settings and permissions.");
+            muted(ui, "Runs in your job search folder.");
             if self.command.destructive {
                 ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");

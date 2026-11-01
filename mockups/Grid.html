@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Refresh, grid and highlighter</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* Postmark on grid paper. Choose with ?screen=today|jobs|tracker|turn|firstrun and ?theme=light|dark.
+   Drawn from the built screens in tests/snapshots (intray, jobs, tracker, run_turn, first_run). Fictional data.
+   Every rule is scoped to .gp, so app.css and the other canvases are unchanged. */
+body { margin: 0; }
+.gp {
+  /* Postmark tokens as built (palette.rs), plus the two NEW ones: grid and mark. */
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49;
+  --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  /* The canvas draws the grid with two 1px line patterns. egui paints the same lines once per frame. */
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.gp[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.gp .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.gp .num { font-variant-numeric: tabular-nums; }
+
+/* Menu: one row on the grid. Brand, tabs, New task. */
+.gp .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.gp .menu .brand { margin-right: 0; }
+.gp .menu .brand svg path:last-child { stroke: var(--sheet); }
+.gp .tabs { display: flex; gap: 6px; }
+.gp .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.gp .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+/* The highlighter: a pale magenta swipe under the lower part of the label, edged by a 2px turn rule. */
+.gp .tabs a.on { color: var(--text); font-weight: 600; }
+.gp .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.gp .tabs a:hover:not(.on) .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--raised); }
+.gp .tabs a.off { opacity: .55; }
+.gp .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.gp .tabs .warn { display: inline-block; width: 8px; height: 8px; background: var(--closed); }
+.gp .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.gp .newtask .keys { color: var(--muted); }
+
+/* Status: a plain sheet strip with a hairline, so small text never sits on grid lines. */
+.gp .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.gp .statusbar .seg { margin-left: auto; border: 0; }
+.gp .statusbar .seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 12.5px; }
+.gp .statusbar .seg button.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.gp .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Every control that sits on the grid is opaque, so no line runs through it. */
+.gp .btn { background: var(--card); }
+.gp .btn.pri { background: var(--pri); }
+
+/* Today */
+.gp .bhead { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 32px 14px; }
+.gp .bhead h1 { margin: 0; font: 600 44px/1.05 var(--slab); }
+.gp .bhead .sub { margin-top: 4px; font-size: 15px; color: var(--muted); }
+.gp .stampring { flex: none; width: 84px; height: 84px; }
+.gp .bbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 32px 14px; }
+.gp .split2 { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: stretch; }
+.gp .col-a { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.gp .col-b { flex: 0 0 292px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.gp .tabrow2 { display: flex; align-items: flex-end; }
+.gp .ktab2 { display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 14px; border-radius: 6px 6px 0 0; background: var(--card); box-shadow: inset 1px 1px 0 var(--line), inset -1px 0 0 var(--line); font-weight: 600; color: var(--drafted); }
+.gp .ktab2 .when { font-weight: 500; color: var(--muted); }
+.gp .pos { margin-left: auto; padding: 0 4px 6px; font-size: 13px; color: var(--muted); }
+.gp .card2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-radius: 0 4px 4px 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.gp .cbody2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 14px; }
+.gp .cbody2 h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.gp .cfoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 22px 14px; border-top: 1px solid var(--line); }
+.gp .cfoot .why { margin-left: auto; text-align: right; font-size: 13px; color: var(--muted); line-height: 1.4; }
+.gp .cfoot .why a { color: var(--active); }
+.gp .edges i { display: block; height: 5px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 3px 3px; background: var(--raised); }
+.gp .slip2 { border-radius: 4px; background: var(--panel); }
+.gp .slip2 .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.gp .slip2 .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.gp .slip2 .sb { padding: 10px 14px 12px; }
+.gp .ag { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; border-top: 1px solid var(--line); }
+.gp .ag:first-child { border-top: 0; }
+.gp .ag .d2 { font-size: 13px; color: var(--muted); }
+.gp .now { display: inline-block; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; line-height: 20px; }
+.gp .foot { padding-top: 8px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+
+/* Paper on the desk: anything with rows of text sits on an opaque card. */
+.gp .paperbox { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* Jobs */
+.gp .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
+.gp .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.gp .phead .sub { margin-top: 2px; color: var(--muted); }
+.gp .phead .acts { margin-left: auto; display: flex; gap: 8px; }
+.gp .seg2 { display: flex; gap: 3px; border-bottom: 1px solid var(--text); }
+.gp .seg2 button { height: 34px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: none; color: var(--muted); font-weight: 500; }
+.gp .seg2 button.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+.gp .seg2 button .n { margin-left: 6px; }
+.gp .jt { width: 100%; border-collapse: collapse; }
+.gp .jt th { text-align: left; padding: 9px 10px; font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--text); white-space: nowrap; }
+.gp .jt td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.gp .jt tr:last-child td { border-bottom: 0; }
+.gp .jt tr.sel td { background: var(--panel); }
+.gp .jt .sc { font: 600 21px/1 var(--slab); }
+.gp .jt .role { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+.gp .jt .co { font-size: 13px; color: var(--muted); }
+.gp .needsq { display: inline-block; width: 8px; height: 8px; background: var(--turn); }
+.gp .detail { flex: 0 0 330px; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; min-height: 0; overflow: hidden; }
+.gp .detail h2 { margin: 0; font: 600 19px/1.2 var(--slab); }
+.gp .crow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+.gp .crow .k { flex: 0 0 90px; color: var(--muted); font-size: 13px; }
+.gp .crow .v { flex: 1 1 auto; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Applications */
+.gp .note2 { flex: none; display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-radius: 4px; background: var(--panel); }
+.gp .board2 { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.gp .lane2 { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px 12px; border-radius: 4px; background: var(--panel); min-height: 0; }
+.gp .lane2 .lh { display: flex; align-items: center; gap: 8px; padding: 0 3px 4px; font: 600 17px/1.3 var(--slab); }
+.gp .lane2 .lh .n { font: 400 13px/1 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.gp .ic { display: flex; flex-direction: column; padding: 8px 11px; border-radius: 2px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.gp .ic.mine { box-shadow: inset 3px 0 0 var(--turn), inset 0 0 0 1px var(--line); }
+.gp .ic b { font-weight: 600; }
+.gp .ic .r { color: var(--muted); }
+.gp .ic .st { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.gp .ic.mine .st span:first-child { color: var(--turn); font-weight: 600; }
+.gp .ic .st .fit { margin-left: auto; white-space: nowrap; }
+.gp .ic.closed { opacity: .8; }
+
+/* Tasks, a run waiting on you */
+.gp .cmdline { font: 700 16px/1.3 var(--type); }
+.gp .dband { flex: none; display: grid; grid-template-columns: 1fr 1fr 1.4fr; border-radius: 4px; background: var(--panel); overflow: hidden; }
+.gp .dband .tb { display: flex; flex-direction: column; gap: 1px; padding: 9px 16px 10px; border-left: 1px solid var(--line); }
+.gp .dband .tb:first-child { border-left: 0; }
+.gp .dband .k { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.gp .dband b { font: 600 22px/1.15 var(--slab); }
+.gp .dband .tb.yours { background: var(--turn); color: var(--on-turn); border-left: 0; }
+.gp .dband .tb.yours .k, .gp .dband .tb.yours .muted { color: var(--on-turn); }
+.gp .tl { display: flex; gap: 2px; }
+.gp .tl i { display: block; width: 5px; height: 12px; background: var(--off); }
+.gp .tl i.d { background: var(--text); }
+.gp .tl i.h { background: var(--turn); }
+.gp .dock { flex: none; display: flex; flex-direction: column; gap: 8px; margin-right: 5px; padding: 11px 16px 12px; border: 1px solid var(--turn); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--turn); }
+.gp .dock .field2 { flex: 1 1 auto; height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
+.gp .story { padding: 10px 16px 12px; min-height: 0; overflow: hidden; }
+.gp .story h3 { margin: 0 0 6px; font: 600 17px/1.3 var(--slab); }
+.gp .gtab { border-collapse: collapse; margin: 6px 0 8px; font-size: 13.5px; }
+.gp .gtab th { text-align: left; padding: 3px 18px 3px 0; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--text); }
+.gp .gtab td { padding: 4px 18px 4px 0; border-bottom: 1px solid var(--line); }
+.gp .facts .fr { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
+.gp .facts .fr:first-child { border-top: 0; }
+.gp .bar { height: 8px; background: var(--off); margin: 2px 0 6px; }
+.gp .bar i { display: block; height: 100%; width: 37%; background: var(--text); }
+
+/* First run */
+.gp .welcome { flex: 1 1 auto; display: flex; justify-content: center; align-items: flex-start; padding: 40px 32px 0; }
+.gp .wcard { width: 620px; display: flex; flex-direction: column; gap: 14px; padding: 26px 28px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--line); }
+.gp .wcard h1 { margin: 0; font: 600 34px/1.1 var(--slab); }
+.gp .wstep { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.gp .wstep .kn { grid-row: span 2; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 2px; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12.5px; }
+.gp .wstep.cur .kn { background: var(--pri); color: var(--on-pri); }
+.gp .wstep b { font-weight: 600; }
+.gp .wstep .m { grid-column: 2; color: var(--muted); font-size: 13.5px; }
+.gp .wstep .btn { grid-row: 1 / span 2; grid-column: 3; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const SCREEN = (P.get('screen') || 'today').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const kb = (k) => `<span class="kb">${k}</span>`;
+
+// The day stamp as built: two rings, one tick per card dealt today, the date in the middle.
+function stamp(total, done, empty) {
+  const ticks = [];
+  for (let i = 0; i < total; i++) {
+    const a = -Math.PI / 2 + (i + 0.5) * (2 * Math.PI / total);
+    const c = (r) => [40 + r * Math.cos(a), 40 + r * Math.sin(a)].map((v) => v.toFixed(1));
+    const [x1, y1] = c(29.5), [x2, y2] = c(36);
+    ticks.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${!empty && i < done ? 'var(--text)' : 'var(--off)'}" stroke-width="4.5"/>`);
+  }
+  const edge = empty ? 'var(--line)' : 'var(--text)';
+  // The stamp is opaque: a sheet disc under it, so grid lines never cross the date.
+  return `<svg class="stampring" viewBox="0 0 80 80" role="img" aria-label="Saturday 31 October. ${done} of ${total} decided today.">
+    <circle cx="40" cy="40" r="38.5" fill="var(--sheet)"/>${ticks.join('')}
+    <circle cx="40" cy="40" r="38.5" fill="none" stroke="${edge}"/><circle cx="40" cy="40" r="27" fill="none" stroke="${edge}"/>
+    <text x="40" y="28" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Sat</text>
+    <text x="40" y="48.5" text-anchor="middle" font-size="24.8" font-weight="600" font-family="Zilla Slab, serif" fill="var(--text)">31</text>
+    <text x="40" y="61" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Oct</text></svg>`;
+}
+
+function shell(on, inner, o = {}) {
+  const tabs = [['Today', o.today ?? '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', o.tasks || ''], ['Setup', '']]
+    .map(([t, c]) => `<a class="${t === on ? 'on' : ''}${o.off && t !== on ? ' off' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}</a>`).join('');
+  return `<div class="app gp" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask${o.off ? '" style="opacity: .55' : ''}">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar">${o.status ? `<span><span class="sq" style="background: var(--hired)"></span>${o.status}</span>` : '<span><span class="sq" style="background: var(--hired)"></span>Claude is ready</span>'}
+      <div class="seg"><button type="button">System</button><button type="button" class="${THEME === 'light' ? 'on' : ''}">Light</button><button type="button" class="${THEME === 'dark' ? 'on' : ''}">Dark</button></div></footer></div>`;
+}
+
+function today() {
+  const tally = Array.from({ length: 10 }, () => '<i class="off"></i>').join('');
+  return shell('Today', `
+    <header class="bhead">${stamp(10, 0)}<div><h1>10 things need you</h1><div class="sub">About 15 minutes.</div></div></header>
+    <div class="bbody"><div class="split2">
+      <section class="col-a">
+        <div class="tabrow2"><div class="ktab2">Ready to send<span class="when">Deadline in 3 days</span></div><span class="pos num">1 of 10</span></div>
+        <article class="card2">
+          <div class="cbody2"><div class="col" style="gap: 2px"><span class="muted">Harbor Bank</span><h2>Lead Java Engineer</h2><span class="muted">CV and Cover letter compiled</span></div>
+            <p class="take">Send it from your own mail or the portal, then mark it sent.</p></div>
+          <div class="cfoot"><button class="btn pri" type="button">Mark as sent… ${kb('Y')}</button><button class="btn" type="button">Later ${kb('L')}</button>
+            <span class="why">Opens the task that records it as sent. The app never sends for you.<br><a href="#">Show the command</a></span></div>
+        </article>
+        <div class="edges">${[1, 2, 3, 4, 5].map((i) => `<i style="margin-inline: ${i * 5}px"></i>`).join('')}</div>
+      </section>
+      <aside class="col-b">
+        <section class="slip2"><div class="sh">Done today <span class="n num">0 of 10</span></div>
+          <div class="sb"><div class="tally fat" style="margin-bottom: 8px">${tally}</div><p class="muted" style="font-size: 13px">Each decision lands here. U undoes the last one.</p></div></section>
+        <section class="slip2"><div class="sh">Coming up <span class="n">2 weeks</span></div><div class="sb">
+          <div class="ag"><span class="d2">Tue 3</span><span class="trunc">Harbor Bank deadline</span><span class="now">Now</span></div>
+          <div class="ag"><span class="d2">Wed 4</span><span class="trunc">Tessel Group technical interview</span><span></span></div>
+          <div class="ag"><span class="d2">Thu 5</span><span class="trunc">Meridian Rail Systems closes</span><span></span></div>
+          <div class="ag"><span class="d2">Fri 6</span><span class="trunc">Ardent Software offer reply</span><span></span></div>
+          <div class="foot">Nothing else dated before Fri 13 Nov.</div></div></section>
+      </aside></div></div>`);
+}
+
+function jobs() {
+  const ok = '<span class="tag c-hired">OK</span>';
+  const rows = [
+    ['84', 'Tech Lead Java, Real-Time Traffic', 'Meridian Rail Systems', 'Brussels, hybrid', 'EUR 780', 'Thu 5 Nov', '<span class="tag c-interview">Closes in 5 days</span>', 'LinkedIn', true],
+    ['78', 'Solution Architect, Event Sourcing', 'Kestrel Payments', 'Remote, EU', '<span class="faint">Not stated</span>', '<span class="faint">None</span>', '', 'Freehire', false],
+    ['72', 'Java Application Architect', 'Federal Data Agency', 'Brussels, hybrid', 'EUR 640', '<span class="faint">None</span>', '<span class="tag c-closed">Rate under your floor</span>', 'LinkedIn', false],
+    ['71', 'Backend Lead, EV Charging', 'Brightwell Energy', 'Ghent, hybrid', '<span class="faint">Not stated</span>', '<span class="faint">None</span>', '<span class="tag c-interview">Location unclear</span> <span class="muted">+1</span>', 'Freehire', false],
+  ].map(([s, role, co, loc, rate, close, notes, src, sel]) => `<tr class="${sel ? 'sel' : ''}"><td><span class="sc num">${s}</span></td>
+      <td><div class="role">${role}</div><div class="co">${co}</div></td><td>${loc}</td><td class="num">${rate}</td><td class="num">${close}</td><td>${notes}</td><td>${src}</td><td><span class="needsq"></span></td></tr>`).join('');
+  const checks = [['Contract', 'Freelance, 12 months'], ['Day rate', 'EUR 780, your floor 700'], ['Where', 'Brussels, hybrid'], ['Commute', 'Brussels, up to 1h15'], ['Language', 'No conflict'], ['Safety check', 'Nothing hidden in the ad']]
+    .map(([k, v]) => `<div class="crow"><span class="k">${k}</span><span class="v">${v}</span>${ok}</div>`).join('');
+  return shell('Jobs', `
+    <header class="phead"><div><h1>Jobs</h1><div class="sub">Scored from the job ad alone. Drafting an application also checks the company.</div></div>
+      <div class="acts"><button class="btn" type="button">Find new jobs…</button><button class="btn pri" type="button">Score 2 new jobs…</button></div></header>
+    <div class="bbody">
+      <div class="seg2"><button class="on" type="button">Shortlist<span class="n num">4</span></button><button type="button">New<span class="n num">2</span></button><button type="button">Low score<span class="n num">1</span></button><button type="button">Ruled out<span class="n num">1</span></button><button type="button">Could not open<span class="n num">1</span></button><button type="button">Skipped<span class="n num">1</span></button></div>
+      <div class="split2" style="gap: 16px">
+        <div class="col-a" style="gap: 10px"><div class="paperbox" style="overflow: hidden"><table class="jt"><thead><tr><th>Score</th><th>Job</th><th>Where</th><th>Day rate</th><th>Closes</th><th>Worth knowing</th><th>Found on</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+          <p class="muted" style="font-size: 13px"><span class="needsq" style="margin-right: 8px"></span>Waiting in Today. Decide there, or open the drafting task from here.</p></div>
+        <aside class="detail paperbox">
+          <div class="row" style="gap: 12px; align-items: flex-start"><span class="stamp c-hired num" style="margin-top: 2px">84</span><div class="col" style="gap: 1px"><span class="muted">Meridian Rail Systems</span><h2>Tech Lead Java, Real-Time Traffic</h2><span class="muted" style="font-size: 13px">Strong fit, 84 of 100. All six checks pass.</span></div></div>
+          <div>${checks}</div>
+          <div class="col" style="gap: 3px"><b style="font-weight: 600">Why it fits</b><span class="muted">Freelance mission, 12 months</span><span class="muted">Day rate EUR 780 is stated</span></div>
+          <div class="row" style="margin-top: auto"><button class="btn pri" type="button">Draft application…</button><button class="btn" type="button">Open job ad</button></div>
+        </aside></div></div>`);
+}
+
+function tracker() {
+  const S = (tone) => `<span class="sq" style="margin: 0; background: var(--${tone})"></span>`;
+  const card = (co, role, st, fit, mine, closed) => `<div class="ic${mine ? ' mine' : ''}${closed ? ' closed' : ''}"><b>${co}</b><span class="r">${role}</span><div class="st"><span>${st}</span><span class="fit num">fit ${fit}</span></div></div>`;
+  return shell('Applications', `
+    <header class="phead"><div><h1>Applications</h1><div class="sub">7 open, 3 closed. 5 of them wait for you in Today.</div></div>
+      <div class="acts"><button class="btn" type="button">Check mail for replies…</button><button class="btn pri" type="button">Record a result…</button></div></header>
+    <div class="bbody">
+      <div class="note2"><span>3 applications have had no reply for 10 days or more. A short follow-up often gets one.</span><button class="btn" type="button" style="margin-left: auto">Draft follow-ups…</button></div>
+      <div class="board2">
+        <div class="lane2"><div class="lh">${S('drafted')}Not sent yet <span class="n num">1</span></div>${card('Harbor Bank', 'Lead Java Engineer', 'Send by Tue 3 Nov', 81, true)}</div>
+        <div class="lane2"><div class="lh">${S('active')}Applied <span class="n num">4</span></div>${card('Corvid Systems', 'Backend Architect', 'No reply in 49 days, followed up twice', 70)}${card('Granite Cloud', 'Platform Lead', 'No reply in 15 days', 73, true)}${card('Lumen Telecom', 'Technical Lead', 'No reply in 12 days', 69, true)}${card('Sable Analytics', 'Tech Lead', 'Sent 3 days ago', 75)}</div>
+        <div class="lane2"><div class="lh">${S('interview')}Interview <span class="n num">1</span></div>${card('Tessel Group', 'Solution Architect', 'Technical interview Wed 4 Nov', 78, true)}</div>
+        <div class="lane2"><div class="lh">${S('offer')}Offer <span class="n num">1</span></div>${card('Ardent Software', 'Lead Architect', 'Reply by Fri 6 Nov', 82, true)}</div>
+        <div class="lane2"><div class="lh">${S('closed')}Closed <span class="n num">3</span></div>${card('Mosaic Data', 'Architect', 'You withdrew', 63, false, true)}${card('Delta Works', 'Java Lead', 'No response', 60, false, true)}${card('Quay Finance', 'Tech Lead', 'Rejected', 68, false, true)}</div>
+      </div>
+      <p class="muted" style="font-size: 13px"><span class="needsq" style="margin-right: 8px"></span>A pink edge means the application waits for you in Today.</p>
+    </div>`);
+}
+
+function turn() {
+  const tl = '<span class="tl"><i class="d"></i><i class="d"></i><i class="h"></i><i></i><i></i><i></i><i></i></span>';
+  return shell('Tasks', `
+    <header class="phead" style="align-items: center; padding-bottom: 10px"><span class="cmdline">/apply https://kestrel.example/jobs/2</span><div class="acts"><button class="btn sm" type="button">End session…</button></div></header>
+    <div class="bbody" style="gap: 12px">
+      <div class="dband">
+        <div class="tb"><span class="k">Where ${tl}</span><b>1 Evaluate, done</b><span class="muted">Draft waits for your go</span></div>
+        <div class="tb yours"><span class="k">Whose turn</span><b>Yours</b><span class="muted">Claude stopped</span></div>
+        <div class="tb"><span class="k">What next</span><b>Answer Claude</b><span class="muted">Its question is right below.</span></div>
+      </div>
+      <div class="dock"><span><span class="muted">Claude asks:</span> Shall I go ahead and draft the CV and cover letter?</span>
+        <div class="row"><button class="btn" type="button">Go ahead with the draft</button><button class="btn" type="button">Stop here</button><span class="field2">Or write your own reply</span><button class="btn" type="button" disabled style="opacity: .6">Send</button></div></div>
+      <div class="split2">
+        <section class="col-a paperbox story"><h3>The run so far</h3>
+          <p style="font: 600 15px/1.3 var(--slab); margin-top: 10px">Job fit evaluation: Solution Architect at Kestrel Payments</p>
+          <p style="margin-top: 6px">Verdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.</p>
+          <table class="gtab"><tr><th>Gate</th><th>In the posting</th><th>Result</th></tr><tr><td>Contract</td><td>Permanent, full time</td><td>Pass</td></tr><tr><td>Work mode</td><td>Hybrid, 2 days a week in Leuven</td><td>Pass</td></tr><tr><td>Salary</td><td>Not stated</td><td>Check</td></tr></table>
+        </section>
+        <aside class="col-b"><section class="slip2"><div class="sh">This run</div><div class="sb facts">
+          <div class="fr"><span class="muted">Cost</span><span class="num">$1.12 of $3.00</span></div><div class="bar"><i></i></div>
+          <div class="fr"><span class="muted">Elapsed</span><span class="num">5m 3s</span></div>
+          <div class="fr"><span class="muted">Model</span><span>claude-opus-5-5</span></div></div></section></aside>
+      </div></div>`, { today: '11', tasks: '1' });
+}
+
+function firstrun() {
+  return shell('Today', `
+    <div class="welcome"><div class="wcard">
+      <div class="row" style="gap: 18px">${stamp(12, 0, true)}<div><h1>Welcome to Jobdesk</h1><p class="muted" style="font-size: 15px; margin-top: 4px">Your job search as a short list of decisions, one at a time. Claude does the legwork, and nothing runs until you say so.</p></div></div>
+      <div>
+        <div class="wstep cur"><span class="kn">1</span><b>Choose your job search folder</b><span class="m">The ai-job-search folder you set up with Claude Code.</span><button class="btn pri" type="button">Choose folder…</button></div>
+        <div class="wstep"><span class="kn">2</span><b>Check your profile</b><span class="m">Setup shows which parts are filled in and what is missing.</span><span></span></div>
+        <div class="wstep"><span class="kn">3</span><b>Find your first jobs</b><span class="m">Opens the search task. You start it, and Today fills in as it works.</span><span></span></div>
+      </div>
+      <p class="muted" style="font-size: 13px">Jobdesk reads this folder and never changes it. Only a task you start can change it, through Claude Code on this computer.</p>
+    </div></div>`, { today: '', off: true, status: 'Claude is installed. Jobdesk uses its sign-in and stores no passwords.' });
+}
+
+const SCREENS = { today, jobs, tracker, turn, firstrun };
+document.getElementById('root').innerHTML = (SCREENS[SCREEN] || today)();
+</script>
+</body>
+</html>

@@ -13,6 +13,9 @@ const TOOL_ROW_PADDING: i8 = 6;
 /// Shares of the portal table's width: portal, jobs seen, state.
 const PORTAL_COLUMNS: [f32; 3] = [0.5, 0.3, 0.2];
 
+/// A profile row holds the plain title over the file name.
+const PROFILE_ROW_HEIGHT: f32 = 38.0;
+
 /// A row of fixed height, so its text centres on the tags and buttons beside it.
 fn line(ui: &mut Ui, height: f32, add: impl FnOnce(&mut Ui)) {
     ui.allocate_ui_with_layout(vec2(ui.available_width(), height), Layout::left_to_right(Align::Center), |ui| {
@@ -39,12 +42,14 @@ pub enum WorkspaceAction {
 pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
-    page_head(ui, Title::Slab("Workspace"), Some(Subtitle::Typed(name)), |ui| {
+    page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
         if button(ui, "Change folder").clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
         }
     });
     page_body(ui, |ui| {
+        muted(ui, "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.");
+        ui.add_space(SPLIT_GAP);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
                 profile(main, view);
@@ -68,11 +73,15 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
     panel(ui, |ui| {
         panel_header(ui, "Profile", Some(".claude/skills/job-application-assistant"));
         for (index, file) in view.profile.iter().enumerate() {
-            row(ui, index == 0, |ui| {
-                ui.monospace(file.name.as_str());
+            list_row(ui, index == 0, |ui| line(ui, PROFILE_ROW_HEIGHT, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(profile_title(file.name.as_str()));
+                    faint_mono(ui, file.name.as_str());
+                });
                 right(ui, |ui| {
                     match file.state {
-                        ProfileState::Filled => small_command_action(ui, "Find signals", "/expand"),
+                        ProfileState::Filled => small_command_action(ui, "Look for more in your documents\u{2026}", "/expand"),
                         ProfileState::NeedsSetup { .. } | ProfileState::Missing => small_command_action(ui, "Update", "/setup"),
                     };
                     match file.state {
@@ -81,7 +90,7 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
                         ProfileState::Missing => tag(ui, "Missing", Tone::Closed),
                     };
                 });
-            });
+            }));
         }
     });
 }
@@ -147,21 +156,44 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
     });
 }
 
-/// A row of the Environment slip: the name in mono, a note, then a tag.
-fn tool_row(ui: &mut Ui, first: bool, name: &str, note: &str, mark: impl FnOnce(&mut Ui)) {
+/// A row of the Environment slip: the name in mono (or plain words), a note, then a tag.
+fn tool_row(ui: &mut Ui, first: bool, name: ToolName, note: &str, mark: impl FnOnce(&mut Ui)) {
     if !first {
         divider(ui);
     }
     Frame::new().inner_margin(Margin::symmetric(INSET, TOOL_ROW_PADDING)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         line(ui, TAG_HEIGHT, |ui| {
-            ui.monospace(name);
+            match name {
+                ToolName::Mono(name) => ui.monospace(name),
+                ToolName::Plain(text) => ui.label(text),
+            };
             right(ui, |ui| {
                 mark(ui);
                 muted(ui, note);
             });
         });
     });
+}
+
+/// The tool's name as the row shows it.
+enum ToolName<'a> {
+    Mono(&'a str),
+    Plain(String),
+}
+
+/// What a profile file holds, in words. An unknown file shows its own name.
+fn profile_title(file: &str) -> &str {
+    match file {
+        "01-candidate-profile.md" => "Your profile",
+        "02-behavioral-profile.md" => "How you work",
+        "03-writing-style.md" => "Your writing style",
+        "04-job-evaluation.md" => "How jobs are judged",
+        "05-cv-templates.md" => "CV templates",
+        "06-cover-letter-templates.md" => "Cover letter templates",
+        "07-interview-prep.md" => "Interview prep",
+        other => other,
+    }
 }
 
 fn tool_mark(ui: &mut Ui, check: &ToolCheck) {
@@ -196,15 +228,20 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
         match results {
             Some(results) => {
                 for (index, check) in results.iter().enumerate() {
+                    if check.version.is_none() && check.spec.required {
+                        // A shortfall reads as what it costs the user, then what is missing.
+                        tool_row(ui, index == 0, ToolName::Plain(format!("{}: missing {}", check.spec.purpose, check.spec.name)), "", |ui| tool_mark(ui, check));
+                        continue;
+                    }
                     let note = if check.spec.name == "claude" { checks.version_of("claude").unwrap_or(check.spec.purpose) } else { check.spec.purpose };
-                    tool_row(ui, index == 0, check.spec.name, note, |ui| tool_mark(ui, check));
+                    tool_row(ui, index == 0, ToolName::Mono(check.spec.name), note, |ui| tool_mark(ui, check));
                 }
             }
             None => {
-                tool_row(ui, true, "Checking tools", "", |_| {});
+                tool_row(ui, true, ToolName::Mono("Checking tools"), "", |_| {});
             }
         }
-        tool_row(ui, false, "salary_data.json", "Salary figures", |ui| {
+        tool_row(ui, false, ToolName::Mono("salary_data.json"), "Salary figures", |ui| {
             if has_salary_data {
                 tag(ui, "Ready", Tone::Hired);
             } else {

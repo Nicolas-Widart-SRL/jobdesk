@@ -47,24 +47,24 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand) {
             label: "Profile",
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
             marks: vec![(band.profile_filled, text), (band.profile_total.saturating_sub(band.profile_filled), None)],
-            note: "skill files filled".to_owned(),
+            note: format!("{} of {} profile parts filled", band.profile_filled, band.profile_total),
         },
         FlowNode {
-            label: "Scrape",
+            label: "Find",
             figure: band.new_postings.to_string(),
             marks: vec![(band.new_postings, text), (band.seen.saturating_sub(band.new_postings), None)],
-            note: format!("new of {} seen", band.seen),
+            note: format!("{} new of {} found", band.new_postings, band.seen),
         },
-        FlowNode { label: "Rank", figure: band.shortlisted.to_string(), marks: vec![(band.shortlisted, text)], note: "on shortlist".to_owned() },
+        FlowNode { label: "Score", figure: band.shortlisted.to_string(), marks: vec![(band.shortlisted, text)], note: "on shortlist".to_owned() },
         FlowNode { label: "Apply", figure: band.drafted.to_string(), marks: vec![(band.drafted, Some(Tone::Drafted.into()))], note: "drafted, not sent".to_owned() },
         FlowNode {
-            label: "In process",
+            label: "In progress",
             figure: (band.active + band.interview + band.offer).to_string(),
             marks: vec![(band.active, Some(Tone::Active.into())), (band.interview, Some(Tone::Interview.into())), (band.offer, Some(Tone::Offer.into()))],
             note: format!("{} applied, {} interview, {} offer", band.active, band.interview, band.offer),
         },
         FlowNode {
-            label: "Outcome",
+            label: "Result",
             figure: (band.hired + band.closed).to_string(),
             marks: vec![(band.hired, Some(Tone::Hired.into())), (band.closed, Some(Tone::Closed.into()))],
             note: format!("{} hired, {} closed", band.hired, band.closed),
@@ -77,7 +77,7 @@ fn calibration(ui: &mut Ui, report: &SearchInsights) {
     note(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(format!("{} resolved outcomes can calibrate your fit scoring.", report.resolved));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| small_command_action(ui, "Calibrate", "/setup"));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| small_command_action(ui, "Tune scoring", "/setup"));
         });
     });
 }
@@ -135,6 +135,7 @@ fn funnel(ui: &mut Ui, report: &SearchInsights) {
             tallied(ui, "Interview", report.reached_interview, Tone::Interview.into());
             tallied(ui, "Offer", report.reached_offer, Tone::Offer.into());
             tallied(ui, "Hired", report.reached_hired, Tone::Hired.into());
+            muted(ui, "Applications not sent yet are not counted.");
         });
     });
 }

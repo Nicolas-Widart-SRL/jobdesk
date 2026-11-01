@@ -1,43 +1,96 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2,
+    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, WidgetText, pos2,
     vec2,
 };
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{line, paint_centred, rich};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type,
+    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
     Margin::symmetric(x, y)
 }
 
-/// The desk plane, under everything.
-pub fn desk_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).bg)
+/// Marks the `Ui` that stands for the desk, so a widget can tell whether it sits straight on it.
+const DESK: &str = "jobdesk_desk";
+
+/// The gridded desk under `ui`'s whole rect, with everything `add` lays out standing on it.
+/// Widgets that stand straight on it, in no filled frame, see `on_desk` and keep the grid out of their small text.
+pub fn desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    paint_grid(ui.painter(), ui.max_rect());
+    ui.scope_builder(UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(DESK)), add).inner
 }
 
-/// The sheet plane, where a screen's content sits.
-pub fn sheet_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).sheet)
+/// Marks a `Ui` whose owner paints its own fill under it with the painter, not with a `Frame`, such as a row that lights up.
+const SURFACE: &str = "jobdesk_surface";
+
+/// A child `Ui` that counts as a surface for `on_desk`, for a widget that paints its own fill under what it holds.
+pub(in crate::ui_kit) fn surface() -> UiBuilder {
+    UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(SURFACE))
 }
 
-/// The desk strip above the sheet, where the brand and the folder tabs stand.
-pub fn shell_top_frame(ui: &Ui) -> Frame {
+/// Whether `ui` stands straight on the desk: inside `desk`, with no filled frame, such as paper or a slip, in between,
+/// and no `surface` either. Popups and windows stand on their own fill, so they are never on the desk.
+pub(in crate::ui_kit) fn on_desk(ui: &Ui) -> bool {
+    for node in ui.stack().iter() {
+        if node.tags().contains(DESK) {
+            return true;
+        }
+        if node.frame().fill != Color32::TRANSPARENT || node.tags().contains(SURFACE) {
+            return false;
+        }
+    }
+    false
+}
+
+/// `add` on a patch of the desk's base, the size of what it lays out, so no grid line runs through it.
+pub(in crate::ui_kit) fn backed<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let fill = Palette::of(ui).sheet;
+    Frame::new().fill(fill).show(ui, add).inner
+}
+
+/// The desk's base, ruled every `GRID_PITCH` in `grid`.
+/// The lines start at the window's origin, so they hold still while content scrolls over them.
+fn paint_grid(painter: &Painter, rect: Rect) {
+    let p = Palette::for_theme(painter.ctx().theme());
+    painter.rect_filled(rect, 0.0, p.sheet);
+    let stroke = Stroke::new(HAIRLINE, p.grid);
+    // On pixel centres, so each line stays one crisp row of pixels.
+    let first = |from: f32| (from / GRID_PITCH).ceil() * GRID_PITCH;
+    let mut x = first(rect.left());
+    while x <= rect.right() {
+        painter.vline(painter.round_to_pixel_center(x), rect.y_range(), stroke);
+        x += GRID_PITCH;
+    }
+    let mut y = first(rect.top());
+    while y <= rect.bottom() {
+        painter.hline(rect.x_range(), painter.round_to_pixel_center(y), stroke);
+        y += GRID_PITCH;
+    }
+}
+
+/// Where a screen's content sits: straight on the desk, with no fill of its own.
+pub fn sheet_frame() -> Frame {
+    Frame::new()
+}
+
+/// The menu on the desk: brand, tabs and New task in one row.
+pub fn shell_top_frame() -> Frame {
     let (x, top, bottom) = SHELL_PADDING;
-    Frame::new().fill(Palette::of(ui).bg).inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
+    Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
 }
 
-/// The desk strip under the sheet, for the status line.
+/// The strip at the desk's bottom edge, for the status line. The shell draws its top hairline as the panel's separator.
 pub fn status_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).bg).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
+    Frame::new().fill(Palette::of(ui).sheet).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
 }
 
 /// The big line at the top of a screen. The voice says what the line is.
@@ -102,9 +155,9 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
         let text = ui
             .vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = line_gap;
-                ui.add(egui::Label::new(title));
+                add_galley(ui, title);
                 if let Some(subtitle) = subtitle {
-                    ui.add(egui::Label::new(subtitle));
+                    add_galley(ui, subtitle);
                 }
             })
             .response
@@ -196,17 +249,12 @@ fn stacked<R>(ui: &mut Ui, inset: i8, add: impl FnOnce(&mut Ui) -> R) -> R {
     inner
 }
 
-/// A section: a heavy rule on the sheet, with no fill of its own. Its content sits flush with the column.
+/// A section of rows, on paper so no grid line runs between them. Its content sits `INSET` in.
 pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let color = Palette::of(ui).text;
-    let shown = Frame::new().inner_margin(Margin { top: SECTION_RULE as i8, ..Default::default() }).show(ui, |ui| stacked(ui, 0, add));
-    let mut rule = shown.response.rect;
-    rule.set_height(SECTION_RULE);
-    ui.painter().rect_filled(rule, 0.0, color);
-    shown.inner
+    paper(ui, false, |ui| stacked(ui, INSET, add))
 }
 
-/// A side slip: the only kind of section with a fill. Its content sits `INSET` in.
+/// A side slip: a section in the folder plane. Its content sits `INSET` in.
 pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let fill = Palette::of(ui).panel;
     Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, INSET, add)).inner
@@ -215,17 +263,22 @@ pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
     Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let heading = rich(ui, title, Type::SECTION, ink);
-            ui.label(heading);
+            add_text(ui, title, Type::SECTION, ink);
             if let Some(note) = note {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let note = rich(ui, note, Type::NOTE, Ink::Muted);
-                    ui.add(egui::Label::new(note).truncate());
+                    add_cut_text(ui, note, Type::NOTE, Ink::Muted);
                 });
             }
         });
     });
     divider(ui);
+}
+
+/// The title of a group of rows inside a section, set in as the section's header is, with no rule of its own.
+pub fn group_title(ui: &mut Ui, title: &str) {
+    Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
+        add_text(ui, title, Type::SECTION, Ink::Text);
+    });
 }
 
 pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
@@ -282,6 +335,7 @@ pub enum CellRule {
 }
 
 /// One cell of a table, padded inline and ruled underneath. Lay the table out with no item spacing, so rules meet.
+/// A table is read in rows, so it sits on paper, and egui_extras paints a picked row's fill under its cells: each cell is a `surface`.
 pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     let rect = ui.max_rect();
@@ -294,7 +348,7 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
         ui.painter().rect_filled(Rect::from_min_max(pos2(rect.left(), rect.bottom() - HAIRLINE), rect.right_bottom()), 0.0, color);
     }
     let inner = rect.shrink2(vec2(TABLE_CELL_PADDING.0, 0.0));
-    ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)), |ui| {
+    ui.scope_builder(surface().max_rect(inner).layout(Layout::left_to_right(Align::Center)), |ui| {
         ui.spacing_mut().item_spacing = vec2(ITEM_GAP, 0.0);
         add(ui)
     })
@@ -330,18 +384,29 @@ pub fn note<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
-/// The empty state of a whole screen.
-pub fn clear_panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let fill = Palette::of(ui).panel;
-    Frame::new()
-        .fill(fill)
-        .corner_radius(RADIUS_PANEL)
-        .inner_margin(margin(CLEAR_PADDING))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
-        })
-        .inner
+/// The height of a part laid out after what must leave room for it, such as a footer under a scroll area,
+/// as it measured on the frame before.
+#[derive(Debug, Clone, Copy)]
+pub struct KeptHeight {
+    id: egui::Id,
+    pub height: f32,
+}
+
+impl KeptHeight {
+    /// The height kept under `id`, or `fallback` before the first measure.
+    pub fn read(ui: &Ui, id: egui::Id, fallback: f32) -> Self {
+        Self { id, height: ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(fallback) }
+    }
+
+    /// Keeps `laid` when it differs from the height read. A discard redraws within this frame when a pass is left.
+    /// The repaint covers the frames where none is, so an idle window still settles on the new measure.
+    pub fn keep(self, ui: &Ui, laid: f32, reason: &'static str) {
+        if (laid - self.height).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(self.id, laid));
+            ui.ctx().request_discard(reason);
+            ui.ctx().request_repaint();
+        }
+    }
 }
 
 /// Commands and untrusted text: plain, in a recessed box.
@@ -368,7 +433,7 @@ pub fn prompt_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     prompt_box_tone(ui, Tone::Interview, add)
 }
 
-/// A prompt box framed in the colour of what it asks for.
+/// A prompt box framed in the colour of what it asks for, such as `Closed` for a source that could not be read.
 pub fn prompt_box_tone<R>(ui: &mut Ui, tone: Tone, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     let color = tone.color(&p);
@@ -384,6 +449,63 @@ pub fn prompt_box_tone<R>(ui: &mut Ui, tone: Tone, add: impl FnOnce(&mut Ui) -> 
             add(ui)
         })
         .inner
+}
+
+/// A sheet of paper on the desk: the card fill in a hairline. `shadow` lifts it with a hard offset in the line colour.
+/// It has no padding, so a body and a footer can each set their own.
+pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = Palette::of(ui);
+    let frame = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL);
+    let frame = if shadow {
+        frame
+            .shadow(Shadow { offset: [WINDOW_SHADOW, WINDOW_SHADOW], blur: 0, spread: 0, color: p.line })
+            .outer_margin(Margin { right: WINDOW_SHADOW, bottom: WINDOW_SHADOW, ..Default::default() })
+    } else {
+        frame
+    };
+    frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// A grey block where content will be, while it loads. In a slip or a paper section it takes the raised plane.
+pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
+    let p = Palette::of(ui);
+    // Only a section's content sits `INSET` in, so that inset says the block is on a filled surface.
+    let on_slip = ui.data(|data| data.get_temp::<i8>(inset_id())) == Some(INSET);
+    block(ui, width, height, if on_slip { p.raised } else { p.panel });
+}
+
+/// The same block on a card. Where the card already has the panel's fill, as in dark, it takes the raised plane.
+pub fn card_skeleton(ui: &mut Ui, width: f32, height: f32) {
+    let p = Palette::of(ui);
+    block(ui, width, height, if p.card == p.panel { p.raised } else { p.panel });
+}
+
+fn block(ui: &mut Ui, width: f32, height: f32, fill: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()), height), Sense::hover());
+    ui.painter().rect_filled(rect, RADIUS_CARD, fill);
+}
+
+/// A screen's head led by a stamp: the stamp, then the lead title over a muted subtitle, centred beside it.
+pub fn stamped_head(ui: &mut Ui, stamp: impl FnOnce(&mut Ui), title: &str, subtitle: &str) {
+    let (x, top, bottom) = HEAD_PADDING;
+    Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = HEAD_GAP.0;
+            stamp(ui);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                add_cut_text(ui, title, Type::LEAD, Ink::Text);
+                add_cut_text(ui, subtitle, Type::TAKE, Ink::Muted);
+            });
+        });
+    });
 }
 
 /// The hairline around a rendered document page.
@@ -408,18 +530,39 @@ pub fn lane<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
-/// One application on a board. Clicking anywhere on it counts.
-pub fn index_card(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
+/// How an index card looks: picked, waiting on the user in Today, or decided and set back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CardLook {
+    pub on: bool,
+    pub waits: bool,
+    pub faded: bool,
+}
+
+/// One application on a board. Clicking anywhere on it counts. `spoken` names the card for screen readers.
+pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
-    ui.scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
-        let fill = if on || ui.response().hovered() { p.raised } else { p.sheet };
-        Frame::new().fill(fill).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 2.0;
-            add(ui);
-        });
-    })
-    .response
+    let response = ui
+        .scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
+            if look.faded {
+                ui.multiply_opacity(FADED_OPACITY);
+            }
+            let fill = if look.on || ui.response().hovered() { p.raised } else { p.card };
+            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 2.0;
+                add(ui);
+            });
+            if look.waits {
+                let rect = frame.response.rect;
+                let edge = Rect::from_min_max(rect.min, pos2(rect.left() + WAITS_EDGE, rect.bottom()));
+                let corners = CornerRadius { nw: RADIUS_CARD, sw: RADIUS_CARD, ne: 0, se: 0 };
+                ui.painter().rect_filled(edge, corners, p.turn);
+            }
+        })
+        .response;
+    let spoken = if look.waits { format!("{spoken}, waits for you in Today") } else { spoken.to_owned() };
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &spoken));
+    response
 }
 
 pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadius) {
@@ -451,12 +594,12 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                 Frame::new().inner_margin(padding).show(column, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = NODE_GAP;
-                    ui.label(rich(ui, node.label, Type::TAB, Ink::Muted));
-                    ui.label(rich(ui, node.figure.as_str(), Type::FIGURE, Ink::Text));
+                    add_text(ui, node.label, Type::TAB, Ink::Muted);
+                    add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
                     let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
                     ui.add_space((NODE_TALLY_HEIGHT - tally.rect.height()).max(0.0) + NODE_TALLY_MARGIN.1);
-                    ui.label(rich(ui, node.note.as_str(), Type::BODY, Ink::Muted));
+                    add_text(ui, node.note.as_str(), Type::BODY, Ink::Muted);
                 });
             }
         });
@@ -473,7 +616,7 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
         let patch = Rect::from_center_size(centre, Vec2::splat(NODE_ARROW.1 * 2.0));
         ui.painter().rect_filled(patch, 0.0, p.panel);
         let arrow = line(ui, "\u{2192}", Type::BODY, p.faint, f32::INFINITY);
-        paint_centred(ui, patch, arrow, p.faint);
+        paint_centred(ui, patch, arrow, p.faint, p.panel);
     }
 }
 
@@ -506,10 +649,10 @@ fn baseline(galley: &Galley) -> f32 {
     galley.rows.first().map_or(galley.size().y, |row| row.pos.y + row.glyphs.first().map_or(row.size.y, |glyph| glyph.pos.y))
 }
 
-/// Paints `galley` at `at` and names it for screen readers and tests.
-fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, color: Color32, text: &str) {
+/// Paints `galley` at `at`, over the `under` fill, and names it for screen readers and tests.
+fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, under: Color32, text: &str) {
     let rect = Rect::from_min_size(at, galley.size());
-    ui.painter().galley(at, galley, color);
+    paint_text(ui, at, galley, Palette::of(ui).text, under);
     ui.interact(rect, id, Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
 }
 
@@ -576,12 +719,13 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
         }
         let id = response.id.with(index);
         let cell_text = &cells[index];
+        let under = cell.fill.unwrap_or(p.panel);
         let at = pos2(cell_rect.left() + x, rect.top() + top);
         // The label's line: centred in its row, or on the value's baseline when compact.
         let label_top = if compact { at.y + baseline(&cell.value) - baseline(&cell.label) } else { at.y + (BAND_LABEL_HEIGHT - cell.label.size().y) / 2.0 };
         let label_width = cell.label.size().x;
         let label_centre = label_top + cell.label.size().y / 2.0;
-        painted(ui, id.with("label"), pos2(at.x, label_top), cell.label, p.text, cell_text.label);
+        painted(ui, id.with("label"), pos2(at.x, label_top), cell.label, under, cell_text.label);
         let mut after = at.x + label_width + BAND_GAP;
         if !cell.marks.is_empty() {
             let tally = crate::ui_kit::marks::paint_mark_row(ui, pos2(after, label_centre - TALLY_BAND.height / 2.0), &cell.marks, TALLY_BAND);
@@ -589,13 +733,13 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
             after = tally.right() + BAND_GAP;
         }
         if compact {
-            painted(ui, id.with("value"), pos2(after, at.y), cell.value, p.text, cell_text.value);
+            painted(ui, id.with("value"), pos2(after, at.y), cell.value, under, cell_text.value);
         } else {
             let value_top = at.y + BAND_LABEL_HEIGHT + BAND_ROW_GAP;
             let value_bottom = value_top + cell.value.size().y;
-            painted(ui, id.with("value"), pos2(at.x, value_top), cell.value, p.text, cell_text.value);
+            painted(ui, id.with("value"), pos2(at.x, value_top), cell.value, under, cell_text.value);
             if let Some(note) = cell.note {
-                painted(ui, id.with("note"), pos2(at.x, value_bottom + BAND_ROW_GAP), note, p.text, cell_text.note);
+                painted(ui, id.with("note"), pos2(at.x, value_bottom + BAND_ROW_GAP), note, under, cell_text.note);
             }
         }
         if index > 0 {
@@ -625,9 +769,9 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
             }
             ui.allocate_ui_with_layout(vec2(STEP_NAME_WIDTH, KNOT_SIZE_SMALL), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_min_width(STEP_NAME_WIDTH);
-                ui.add(egui::Label::new(rich(ui, name, Type::STRONG, name_ink)).truncate());
+                add_cut_text(ui, name, Type::STRONG, name_ink);
             });
-            ui.add(egui::Label::new(rich(ui, sentence, Type::BODY, Ink::Text)).truncate());
+            add_cut_text(ui, sentence, Type::BODY, Ink::Text);
         });
         toggled
     })

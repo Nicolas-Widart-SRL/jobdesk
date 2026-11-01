@@ -10,7 +10,7 @@ use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, P
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
     panel_header, rich, segmented, slip, small_button, split, table_cell, table_head, tag, wrapped_height,
 };
 
@@ -76,7 +76,7 @@ impl DossierScreen {
             command_action(ui, "Prepare interview", &format!("/interview {company}"));
             command_action(ui, "Record a result", &format!("/outcome {company}"));
             if let Some(fit) = card.fit_rating {
-                ui.label(rich(ui, format!("Fit {fit}"), Type::BODY, Ink::Text));
+                desk_label(ui, format!("Fit {fit}"), Type::BODY, Ink::Text);
             }
             tag(ui, card.status_label.as_str(), bucket_tone(card.bucket));
         });
@@ -89,7 +89,7 @@ impl DossierScreen {
             (Section::Evaluation, "Evaluation".to_owned()),
             (Section::Posting, "Posting".to_owned()),
             (Section::Prep, format!("Interview prep  {}", dossier.contents.prep_packs.len())),
-            (Section::Outcome, format!("Outcome and follow-ups  {}", dossier.contents.follow_ups.len())),
+            (Section::Outcome, format!("Results and follow-ups  {}", dossier.contents.follow_ups.len())),
         ];
         if let Some(section) = segmented(ui, self.section, &sections) {
             self.section = section;
@@ -121,7 +121,7 @@ impl DossierScreen {
                         compiled_pages(ui, textures, &documents);
                     });
                     divider(ui);
-                    panel_header(ui, "Keyword coverage", Some("from CV text layer"));
+                    panel_header(ui, "Keywords from the ad compared with your CV", None);
                     keywords(ui, &dossier.findings.keywords);
                 });
             },

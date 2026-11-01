@@ -4,17 +4,20 @@ use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
+use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button,
-    deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
-    knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button, primary_key_button,
-    prompt_box, prompt_box_tone, rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
-    status_dot, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, button, card_tab,
+    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, faint_mono, fat_tally, figure,
+    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
+    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
+    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
+    stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
 const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
+/// The room a dealt card takes in the sheet, with its tab and the edges behind it.
+const DEALT_HEIGHT: f32 = 250.0;
 
 const TONES: [(&str, Tone); 8] = [
     ("Plain", Tone::Plain),
@@ -32,7 +35,6 @@ const SWATCHES_PER_ROW: usize = 7;
 fn swatches(ui: &mut Ui) {
     let p = Palette::of(ui);
     let colors = [
-        ("bg", p.bg),
         ("sheet", p.sheet),
         ("panel", p.panel),
         ("raised", p.raised),
@@ -55,6 +57,9 @@ fn swatches(ui: &mut Ui) {
         ("page", p.page),
         ("page_line", p.page_line),
         ("page_head", p.page_head),
+        ("grid", p.grid),
+        ("mark", p.mark),
+        ("card", p.card),
     ];
     for row in colors.chunks(SWATCHES_PER_ROW) {
         ui.horizontal(|ui| {
@@ -119,14 +124,19 @@ fn buttons(ui: &mut Ui) {
 }
 
 fn shell(ui: &mut Ui) {
-    desk_frame(ui).inner_margin(12).show(ui, |ui| {
+    shell_top_frame().inner_margin(12).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = BRAND_GAP;
-            brand_mark(ui);
-            ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
+            brand(ui);
             ui.add_space(24.0);
-            shortcut_button(ui, "Ask or run", &["Cmd", "K"]);
+            shortcut_button(ui, "New task", &["Cmd", "K"]);
+            attention_count(ui, 8);
             status_dot(ui, Tone::Hired);
+        });
+    });
+    status_frame(ui).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            status_line(ui, true, "Claude is ready");
+            status_line(ui, false, "Claude Code is not installed");
         });
     });
     page_head(ui, Title::Slab("All commands"), Some(Subtitle::Text("Every action is the unchanged slash command.")), |ui| {
@@ -167,17 +177,20 @@ fn marks(ui: &mut Ui) {
 }
 
 fn tabs(ui: &mut Ui) {
-    desk_frame(ui).inner_margin(12).show(ui, |ui| {
+    shell_top_frame().inner_margin(12).show(ui, |ui| {
         ui.horizontal(|ui| {
-            folder_tab(ui, "In-tray", Some("3"), true, None);
-            folder_tab(ui, "Jobs", None, false, None);
-            folder_tab(ui, "Runs", Some("1"), false, Some("Runs, 1 run waits for you"));
+            folder_tab(ui, "Today", TabMark::Count(8), true);
+            folder_tab(ui, "Jobs", TabMark::None, false);
+            folder_tab(ui, "Applications", TabMark::Failed, false);
+            folder_tab(ui, "Tasks", TabMark::Count(1), false);
         });
     });
     ui.add_space(10.0);
     segmented(ui, 1, &[(0, "Documents".to_owned()), (1, "Evaluation".to_owned()), (2, "Posting".to_owned())]);
     ui.add_space(8.0);
-    status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
+    status_frame(ui).show(ui, |ui| {
+        status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
+    });
 }
 
 fn sections(ui: &mut Ui) {
@@ -235,13 +248,8 @@ fn sections(ui: &mut Ui) {
         strong(ui, "A prompt that needs you");
     });
     ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        page_frame(ui, |ui| {
-            ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
-        });
-        clear_panel(ui, |ui| {
-            ui.label(rich(ui, "Tray clear", Type::CLEAR, Ink::Text));
-        });
+    page_frame(ui, |ui| {
+        ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
     });
 }
 
@@ -249,13 +257,17 @@ fn board(ui: &mut Ui) {
     ui.columns_const(|[left, right]| {
         lane(left, |ui| {
             lane_title(ui, "Interview", Tone::Interview);
-            index_card(ui, true, |ui| {
+            index_card(ui, CardLook { on: true, ..CardLook::default() }, "Picked card", |ui| {
                 strong(ui, "Picked card");
                 muted(ui, "Lead Java Engineer");
             });
-            index_card(ui, false, |ui| {
-                strong(ui, "Index card");
-                ui.label(rich(ui, "78", Type::FIT, Ink::Text));
+            index_card(ui, CardLook { waits: true, ..CardLook::default() }, "Waiting card", |ui| {
+                strong(ui, "Waiting card");
+                ui.label(rich(ui, "No reply in 15 days", Type::TAG, Tone::Turn));
+            });
+            index_card(ui, CardLook { faded: true, ..CardLook::default() }, "Faded card", |ui| {
+                strong(ui, "Faded card");
+                ui.label(rich(ui, "fit 68", Type::SMALL, Ink::Muted));
             });
         });
         Grid::new("table").spacing([24.0, 6.0]).show(right, |ui| {
@@ -270,51 +282,41 @@ fn board(ui: &mut Ui) {
 }
 
 fn tray(ui: &mut Ui) {
-    let days = ["Sat 31", "Sun 1", "Mon 2", "Tue 3", "Wed 4", "Thu 5", "Fri 6"];
-    horizon(ui, &days, None, |ui, day, today| {
-        horizon_day(ui, day, today);
-        if today {
-            horizon_mark(ui, "Harbor deadline", Some(Tone::Drafted));
-            horizon_count(ui, 0, 0, &[]);
-        } else if *day == "Mon 2" {
-            horizon_mark(ui, "Set aside", None);
-        }
+    dealt(ui, "send", |ui| {
+        let tab = card_tab(ui, "Ready to send", Tone::Drafted, "Due today");
+        deal(ui, tab, DealLook { key: "send", frame: None, behind: 3 }, |ui| {
+            ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
+        }, |ui| {
+            primary_key_button(ui, "Mark as sent…", "Y");
+            key_button(ui, "Later", "L");
+        });
     });
     ui.add_space(10.0);
-    horizon(ui, &days, Some("No other deadlines in the next 14 days"), |ui, day, today| {
-        horizon_day(ui, day, today);
-        if today {
-            horizon_count(ui, 7, 1, &[(5, "triage"), (2, "send")]);
-        } else if *day == "Sun 1" {
-            horizon_return(ui, "1 back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
-                ui.label("Juniper Retail");
-            });
-        }
+    dealt(ui, "asks", |ui| {
+        let tab = card_tab(ui, "Claude asks", Tone::Turn, "Paused task");
+        deal(ui, tab, DealLook { key: "asks", frame: Some(Tone::Interview), behind: 9 }, |ui| {
+            ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
+        }, |ui| {
+            key_button(ui, "Later", "L");
+        });
     });
     ui.add_space(10.0);
-    ui.spacing_mut().item_spacing.y = 0.0;
-    card_tab(ui, "Send", Tone::Drafted, "Due today");
-    deal(ui, None, |ui| {
-        ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
+    dealt(ui, "turn", |ui| {
+        let tab = card_tab(ui, "Your turn", Tone::Turn, "Task waits");
+        deal(ui, tab, DealLook { key: "turn", frame: Some(Tone::Turn), behind: 1 }, |ui| {
+            ui.label(rich(ui, "A card for a task that waits", Type::DEAL, Ink::Text));
+        }, |ui| {
+            key_button(ui, "Later", "L");
+        });
     });
-    stack_edges(ui, 3);
-    ui.add_space(10.0);
-    card_tab(ui, "Permission", Tone::Interview, "Paused run");
-    deal(ui, Some(Tone::Interview), |ui| {
-        ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
-    });
-    stack_edges(ui, 9);
-    ui.add_space(10.0);
-    card_tab(ui, "Your turn", Tone::Turn, "Run waits");
-    deal(ui, Some(Tone::Turn), |ui| {
-        ui.label(rich(ui, "A card for a run that waits", Type::DEAL, Ink::Text));
-    });
-    stack_edges(ui, 1);
     ui.add_space(10.0);
     ui.scope(|ui| {
         ui.set_max_width(SLIP);
         slip(ui, |ui| {
-            panel_header(ui, "Cleared today", Some("2"));
+            panel_header(ui, "Done today", Some("2 of 5"));
+            panel_body(ui, |ui| {
+                fat_tally(ui, 2, 5, Ink::Text);
+            });
             let toggles = [("Rate", false), ("Scope", true), ("Domain", false), ("Location", false)];
             undo_row(ui, "Quarry Labs", "Skipped. Why? Optional.", "Last decision: Skipped, Quarry Labs. Press U to undo.", &toggles, false);
             panel_body(ui, |ui| {
@@ -351,7 +353,7 @@ fn runs(ui: &mut Ui) {
         &[
             BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
             BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
-            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Runs tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
+            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Tasks tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
         ],
         false,
         "Where the run is",
@@ -410,12 +412,89 @@ fn document_sample(ui: &mut Ui) {
     document(ui, &mut CommonMarkCache::default(), DOCUMENT);
 }
 
+/// A dealt card takes the height it is given, so each gets a fixed room and its own id for its footer.
+fn dealt(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
+    ui.push_id(id, |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), DEALT_HEIGHT), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui);
+        });
+    });
+}
+
+fn postmark(ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        day_stamp(ui, "Sat", "31", "Oct", 11, 3, "Saturday 31 October. 3 of 11 decided today.");
+        day_stamp(ui, "Sat", "31", "Oct", 11, 11, "Saturday 31 October. All 11 decided today.");
+        day_stamp(ui, "Sat", "31", "Oct", 0, 0, "Saturday 31 October");
+        day_stamp(ui, "Sun", "1", "Nov", 60, 20, "Sunday 1 November. 20 of 60 decided today.");
+    });
+    ui.horizontal(|ui| {
+        solid_tag(ui, "Now", Tone::Turn);
+        stamp_square(ui, "Needs you");
+        knot(ui, "1", KnotState::Next, KNOT_SIZE);
+        knot(ui, "2", KnotState::Ahead, KNOT_SIZE);
+        check_tag(ui, CheckMark::Ok);
+        check_tag(ui, CheckMark::Unclear);
+        check_tag(ui, CheckMark::Fails);
+        tally(ui, 3, 8, Tone::Turn);
+    });
+    lead_line(ui, "Good fit, 78 of 100.", "Five checks pass. The day rate is not in the ad, so check it before you apply.");
+    reveal_command(ui, "/apply https://meridian.example/jobs/42", &mut false);
+    ui.add_space(10.0);
+    prompt_box_tone(ui, Tone::Closed, |ui| {
+        ui.label(rich(ui, "Your applications could not be read.", Type::STRONG, Tone::Closed));
+        ui.label("Line 14 has 13 columns instead of 14.");
+    });
+    ui.add_space(10.0);
+    ui.columns_const(|[left, right]| {
+        paper(left, true, |ui| {
+            stamped_head(ui, |ui| {
+                day_stamp(ui, "Sat", "31", "Oct", 5, 0, "Saturday 31 October. 0 of 5 decided today.");
+            }, "5 to decide", "Start with Meridian Rail. It closes Thursday.");
+            deal_footer(ui, |ui| {
+                primary_button(ui, "Open the task");
+                button(ui, "Later");
+            });
+        });
+        slip(right, |ui| {
+            panel_header(ui, "Coming up", Some("2 weeks"));
+            panel_body(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                agenda_return(ui, "Sun 1", "1 comes back", "Bring back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
+                    ui.label("Juniper Retail");
+                });
+                agenda_row(ui, "Tue 3", "Harbor Bank deadline", AgendaEnd::Done, false);
+                agenda_row(ui, "Wed 4", "Quarry Labs reply", AgendaEnd::Late("2 days late"), false);
+                agenda_row(ui, "Thu 5", "Meridian Rail closes", AgendaEnd::Now, false);
+                agenda_row(ui, "Fri 6", "Ardent Software offer reply", AgendaEnd::Nothing, false);
+            });
+        });
+        right.add_space(10.0);
+        slip(right, |ui| {
+            panel_header(ui, "Done today", None);
+            panel_body(ui, |ui| {
+                skeleton(ui, 200.0, 18.0);
+                skeleton(ui, 140.0, 12.0);
+            });
+        });
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        skeleton(ui, 68.0, 56.0);
+        ui.vertical(|ui| {
+            skeleton(ui, 120.0, 12.0);
+            skeleton(ui, 260.0, 22.0);
+        });
+    });
+}
+
 type Section = (&'static str, fn(&mut Ui));
 
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [Section; 12] = [
+        let sections_of_gallery: [Section; 13] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -425,9 +504,10 @@ fn gallery(ui: &mut Ui) {
             ("Tabs", tabs),
             ("Sections and rows", sections),
             ("Board", board),
-            ("In-tray", tray),
-            ("Runs", runs),
+            ("Today", tray),
+            ("Tasks", runs),
             ("Document", document_sample),
+            ("Postmark", postmark),
         ];
         for (title, section) in sections_of_gallery {
             ui.heading(title);
@@ -439,14 +519,15 @@ fn gallery(ui: &mut Ui) {
 }
 
 fn render(theme: Theme, name: &str) {
+    // One point per pixel: at more, the sheet is taller than the 8192px a texture holds.
     let mut harness = Harness::builder()
-        .with_size([1000.0, 5800.0])
-        .with_pixels_per_point(1.25)
+        .with_size([1000.0, 7450.0])
+        .with_pixels_per_point(1.0)
         .with_theme(theme)
         .with_context_setup(install_look)
         .wgpu()
         .build_ui(|ui| {
-            jobdesk::ui_kit::sheet_frame(ui).inner_margin(24).show(ui, gallery);
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
         });
     harness.run_steps(3);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));

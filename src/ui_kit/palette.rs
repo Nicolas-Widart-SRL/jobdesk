@@ -3,10 +3,9 @@ use egui::{Color32, Context, CornerRadius, CursorIcon, FontFamily, Shadow, Strok
 use crate::ui_kit::tokens::{BUTTON_PADDING, HAIRLINE, ITEM_GAP, RADIUS_BUTTON, RADIUS_PANEL, ROW_GAP, Type, WINDOW_SHADOW};
 
 /// The Ledger tokens from `project/app.css`, one set per theme.
-/// Depth comes from three flat planes: desk (`bg`), folder (`panel`), sheet (`sheet`).
+/// Depth comes from a gridded desk (`sheet` with `grid` lines), folders (`panel`) and paper (`card`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    pub bg: Color32,
     pub sheet: Color32,
     pub panel: Color32,
     pub raised: Color32,
@@ -29,6 +28,12 @@ pub struct Palette {
     pub page: Color32,
     pub page_line: Color32,
     pub page_head: Color32,
+    /// The squared lines on the desk, a step off `sheet`.
+    pub grid: Color32,
+    /// The highlighter under the open tab: a tint of `turn`.
+    pub mark: Color32,
+    /// The fill of deal, job slip and application cards.
+    pub card: Color32,
 }
 
 const fn hex(rgb: u32) -> Color32 {
@@ -36,7 +41,6 @@ const fn hex(rgb: u32) -> Color32 {
 }
 
 const DARK: Palette = Palette {
-    bg: hex(0x0d1a2b),
     sheet: hex(0x13243a),
     panel: hex(0x1a2f49),
     raised: hex(0x233b59),
@@ -59,10 +63,12 @@ const DARK: Palette = Palette {
     page: hex(0xf7f9fc),
     page_line: hex(0xc7d3e0),
     page_head: hex(0x35495f),
+    grid: hex(0x1e3554),
+    mark: hex(0x5c3057),
+    card: hex(0x1a2f49),
 };
 
 const LIGHT: Palette = Palette {
-    bg: hex(0xbdccdc),
     sheet: hex(0xeff3f8),
     panel: hex(0xdfe7f0),
     raised: hex(0xd0dce9),
@@ -85,6 +91,9 @@ const LIGHT: Palette = Palette {
     page: hex(0xffffff),
     page_line: hex(0xd0dae6),
     page_head: hex(0x35495f),
+    grid: hex(0xd4dee9),
+    mark: hex(0xf4c2db),
+    card: hex(0xffffff),
 };
 
 impl Palette {
@@ -100,7 +109,7 @@ impl Palette {
     }
 }
 
-/// Colour is for job status only, except `Turn`, which marks that a run needs you.
+/// Colour is for job status only, except `Turn`, the stamp ink for what waits on you, such as a run's turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Plain,
@@ -128,7 +137,7 @@ impl Tone {
     }
 }
 
-/// How strongly text or a mark reads: a neutral step, or a job status.
+/// How strongly text or a mark reads: a neutral step, or a job status. `Status(Tone::Turn)` is the stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ink {
     Text,
@@ -198,6 +207,9 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
+    // egui's own controls rest clear. None stands on the desk: the kit's buttons take the desk fill themselves,
+    // and egui's are used only on a surface, the launcher form's model list and checkbox on its slip,
+    // and a question's choices in the turn bar's prompt box. A screen that puts one on the desk needs the kit's button instead.
     for (state, fill, control) in [
         (&mut visuals.widgets.inactive, Color32::TRANSPARENT, p.field),
         (&mut visuals.widgets.hovered, p.raised, p.raised),
@@ -212,4 +224,75 @@ fn visuals(theme: Theme) -> Visuals {
         state.expansion = 0.0;
     }
     visuals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(color: Color32) -> f64 {
+        let channel = |c: u8| {
+            let c = f64::from(c) / 255.0;
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn stamp_and_highlighter_inks_read_on_their_fills() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let p = Palette::for_theme(theme);
+            for (name, ink, fill) in [
+                ("on_turn on turn", p.on_turn, p.turn),
+                ("text on mark", p.text, p.mark),
+                ("text on raised", p.text, p.raised),
+                ("muted on panel", p.muted, p.panel),
+            ] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 4.5, "{name} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+            }
+            // The rule under the highlighter is a mark, not text: it needs 3:1 on the swipe and on the desk.
+            for (name, ink, fill) in [("turn on mark", p.turn, p.mark), ("turn on sheet", p.turn, p.sheet)] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 3.0, "{name} in {theme:?} reads at {ratio:.2}:1, under 3:1");
+            }
+            // The hover swipe has to show against the desk's base and its lines, and keep a tab's label legible.
+            for (name, ink, fill) in [("line on sheet", p.line, p.sheet), ("line on grid", p.line, p.grid)] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 1.3, "{name} in {theme:?} stands off at {ratio:.2}:1, under 1.3:1");
+            }
+            let ratio = contrast(p.muted, p.line);
+            assert!(ratio >= 4.5, "muted on line in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+        }
+    }
+
+    /// Every ink that sets text straight on the desk reads on its base and where a grid line crosses the glyphs.
+    #[test]
+    fn inks_on_the_grid_read_on_the_base_and_the_lines() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let p = Palette::for_theme(theme);
+            for (name, ink) in [
+                ("text", p.text),
+                ("muted", p.muted),
+                ("faint", p.faint),
+                ("drafted", p.drafted),
+                ("active", p.active),
+                ("interview", p.interview),
+                ("offer", p.offer),
+                ("hired", p.hired),
+                ("closed", p.closed),
+                ("turn", p.turn),
+            ] {
+                for (ground, fill) in [("sheet", p.sheet), ("grid", p.grid)] {
+                    let ratio = contrast(ink, fill);
+                    assert!(ratio >= 4.5, "{name} on {ground} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+                }
+            }
+        }
+    }
 }

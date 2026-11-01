@@ -1,6 +1,328 @@
 # Mockups handoff
 
-One Runs brief and two In tray briefs. The newest comes first.
+Two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+
+## Refresh, grid and highlighter
+
+### Brief
+
+The user approved direction B, Postmark, and it is built on `feat/postmark-refresh`. They now want two things from direction C on top of it:
+
+1. C's squared paper behind every screen, in place of B's plain sheet.
+2. No navy bar. The brand, the tabs and New task sit on the grid, and the open tab gets a highlighter in our magenta (`Tone::Turn`), not C's yellow.
+
+Everything else stays B: Zilla Slab and Schibsted Grotesk, white cards, the day stamp, Done today and Coming up, the pinned footer, and the magenta count chips.
+Out of scope: code, tests, snapshots. The canvas starts from the built snapshots (`intray_light`, `intray_dark`, `jobs_light`, `tracker_light`, `run_turn_light`, `first_run_light`), with their fictional data.
+
+### Canvas
+
+`Grid.html` uses `app.css` and `support.js`. Its rules are scoped to `.gp` in its own `<style>`. Choose with `?screen=today|jobs|tracker|turn|firstrun` and `?theme=light|dark`.
+
+| PNG (1280x820) | State |
+| --- | --- |
+| `Grid-today.png` | Today, full, light: 10 things need you, Harbor Bank ready to send. The Today tab carries the highlighter and the count chip. |
+| `Grid-today-dark.png` | The same in dark, with the dark grid and the dark highlighter. |
+| `Grid-jobs.png` | Jobs: the table moves onto paper, the detail card is paper, and the segments and actions sit on the grid. |
+| `Grid-tracker.png` | Applications: the note band and the lanes are opaque panels on the grid, with the grid showing in the 8px gutters. |
+| `Grid-tasks-turn.png` | Tasks, a run waiting on you. The Tasks tab is highlighted with its chip. The band's Yours cell and the dock keep the solid magenta. The run's story is on paper. |
+| `Grid-firstrun.png` | First run: the welcome card on the grid. The other tabs and New task are dimmed. |
+
+### Decisions
+
+**The highlighter: a pale swipe with a magenta edge.**
+- Full magenta behind dark text fails: navy `#12263f` on `#b0246a` is 2.41:1, and `#e6edf5` on `#f48cc0` is 1.9:1.
+- So the swipe is a tint of the turn ink, 14px tall, under the lower part of the label, reaching 6px past each side. A 2px `turn` rule runs along its bottom. The tint carries the "highlighter" look and the rule carries the brand magenta.
+- The label stays `text` in `Type::TAB_ON`.
+
+| | Light | Dark |
+| --- | --- | --- |
+| `mark` (the tint) | `#f4c2db` | `#5c3057` |
+| Label on `mark` | `#12263f`: 9.88:1 | `#e6edf5`: 8.83:1 |
+| `turn` rule on `mark` | 4.11:1 | 4.64:1 |
+| `turn` rule on `sheet` | 5.70:1 | 6.98:1 |
+| `mark` against `sheet` | 1.39:1 (the swipe is a tint, not a boundary) | 1.50:1 |
+
+Every non-text part clears 3:1 where it must be seen: the rule and the chip. Inactive tabs are `muted` on the grid, at 6.8:1 even where a grid line crosses the glyphs. Hover draws the same swipe in `raised` with no rule.
+
+**The count chip** stays solid: `turn` with `on_turn` in both themes, white on `#b0246a` at 6.35:1 and `#0d1a2b` on `#f48cc0` at 7.8:1.
+- It sits after the label, outside the swipe, so it never stacks magenta on magenta.
+- With the navy bar gone, the separate on-navy chip ink is no longer needed.
+
+**The status bar is a light strip, not transparent.** It is a `sheet` fill with a `line` hairline on top.
+- Its 13px text and the theme switch never sit on grid lines.
+- It gives the window a bottom edge.
+- The grid is the desk, and the strip is the edge of the desk.
+
+**New task is a plain button on paper**: `card` fill, `line` hairline, `text` label, keys in `muted`.
+- C drew it dark. A dark button would be a second primary on every screen, competing with the card's Y action and with the Jobs and Applications primaries.
+- If the user wants the C look, `primary` works and needs no new token.
+
+**The grid**: 1px lines every 20px, painted once per frame behind everything, anchored to the window's top-left, so they never move when content scrolls.
+
+| | Light | Dark |
+| --- | --- | --- |
+| Base (`sheet`, unchanged) | `#eff3f8` | `#13243a` |
+| Lines (`grid`, new) | `#d4dee9`, 1.22:1 on the base, about C's 1.21:1 | `#1e3554`, 1.26:1 |
+| `muted` text crossing a line | 6.8:1 | 6.96:1 |
+
+The dark lines are a step lighter than the base, between `sheet` and `panel`, so slips (`panel`) still read as blocks on the grid.
+
+**The grid and the surfaces: the grid is the desk, and anything you read in rows sits on paper.**
+- **Opaque, unchanged**: `paper` (deal card, job detail, first-run card, dock), `slip` (Done today, Coming up, This run), `lane`, `note`, the turn band, index cards, the stack edges. The grid stops at their edges.
+- **Newly on paper**: sections that hold rows of text under a `panel` rule, so lines never run between rows:
+  - the Jobs table;
+  - "The run so far";
+  - Setup's Profile and Portals;
+  - Insights' four columns;
+  - dossier sections;
+  - the command list.
+  - The 2px section rule is dropped inside paper. The table head's `text` rule stays.
+- **On the grid**:
+  - the menu;
+  - page heads (headline, subtitle, page actions);
+  - the day stamp, which gets a `sheet` disc under its outer ring so no line crosses the date;
+  - the Jobs segments;
+  - the position counter ("1 of 10");
+  - one-line footnotes ("A pink edge means…").
+  - Large or single-line text reads fine over the lines.
+- **Controls on the grid are opaque**: plain buttons fill `card` instead of transparent, and fields keep `field`.
+
+**The menu is one row**: brand, tabs, New task at the right.
+- Without the bar, the two-row frame only spent height. One row gives the page about 44px back, which matters most at the user's 1040x650 window.
+- At 1040 the row needs about 760px, so it fits.
+
+### Token changes (`src/ui_kit/palette.rs`, `tokens.rs`)
+
+| Change | Token | Light | Dark |
+| --- | --- | --- | --- |
+| New | `grid` | `#d4dee9` | `#1e3554` |
+| New | `mark` | `#f4c2db` | `#5c3057` |
+| Removed | `chrome`, `chrome_tab`, `chrome_ink`, `chrome_line` | | |
+| Removed, now `muted` | `chrome_muted` (inactive tabs, status text, segment labels) | | |
+| Removed, now `closed` | `chrome_alert` (the failed-source square, the status alert) | | |
+| Removed, now `turn` and `on_turn` | `turn_on_chrome`, `on_turn_chrome` | | |
+| Unchanged | `sheet`, `card`, `turn`, `on_turn`, `panel`, `raised`, `line` | | |
+| New measure | `GRID_PITCH = 20.0` | | |
+| New measure | `MARK_HEIGHT = 14.0`, `MARK_RULE = 2.0`, `MARK_OVERHANG = 6.0` | | |
+| Changed measure | `SHELL_PADDING = (28.0, 14.0, 4.0)`: one row | | |
+| Changed measure | `NAV_TAB_PADDING = 10.0` (was 18), `NAV_TAB_GAP = 6.0` (was 3): no tab shapes to separate | | |
+
+The `Palette` doc comment becomes: "Depth comes from a gridded desk (`sheet` with `grid` lines), folders (`panel`) and paper (`card`)."
+
+### Widget changes
+
+| Widget | Change |
+| --- | --- |
+| New `paint_grid(painter, rect)` in `surfaces.rs` | Fills `sheet`, then draws vertical and horizontal `HAIRLINE` segments in `grid` every `GRID_PITCH`, from the window origin, on half pixels. About 105 segments at 1280x820. The shell calls it once on the full window rect, before any panel. |
+| `sheet_frame` | No fill. The grid is already painted under it. |
+| `shell_top_frame` | No fill. One row: `brand`, the tabs, then `shortcut_button` right-aligned. |
+| `status_frame` | `sheet` fill, plus a `HAIRLINE` in `line` along its top edge. |
+| `folder_tab` | No tab shape. The label is `Type::TAB` in `muted`, or `TAB_ON` in `text` when on. When on, it paints the swipe: a rect `MARK_HEIGHT` tall, label width plus `MARK_OVERHANG` each side, bottom 1px below the baseline, filled `mark`, then a `MARK_RULE` rect in `turn` along its bottom. Hover paints the swipe in `raised` with no rule. `TabMark::Count` draws `attention_count(ui, n)`, and the failed square is `closed`. The hit rect stays `NAV_TAB_HEIGHT` tall. |
+| `attention_count(ui, n, on_chrome)` | Drop `on_chrome`. Always `turn` and `on_turn`. |
+| `shortcut_button` | `card` fill, `line` hairline, `text` label, keys in `muted`. |
+| `status_segmented` | Off: `muted`. Hover: `panel` fill. On: `raised` fill with `text` semibold. |
+| `brand` | Mark in `text` with its cutout in `sheet`, word in `text`. |
+| `chrome_status`, `chrome_note` | Rename to `status_line` and `status_note`. Inks `muted`, alerts `closed`, the ready square `hired`. |
+| `day_stamp` | Paint a `sheet` circle under the outer ring first. |
+| Plain buttons (`install_theme`) | `widgets.inactive.weak_bg_fill` becomes `card` instead of transparent, so a button on the grid is opaque. |
+| `paper(ui, false, …)` | Now also wraps the row sections listed above. |
+
+### Doc changes (for the lead)
+
+- **`ARCHITECTURE.md` line 24**: replace "The frame is a fixed navy in both themes." with:
+  > The window is a gridded desk in both themes, and anything read in rows sits on paper.
+- **`src/ui_kit/mod.rs` line 1** (for the builder): the same replacement.
+- **`README.md`**: no change. It does not describe the frame.
+- **`AGENTS.md`**: no change.
+
+### For the user to decide
+
+1. **Magenta now marks two things**: what waits on you, and where you are.
+   - B kept magenta for "needs you" only. The pale swipe keeps the two apart, because only chips, Now, Yours and the dock are solid.
+   - If they want magenta to stay strictly "needs you", the swipe can use `raised` with a `text` rule instead.
+2. **The New task button**: plain on paper (drawn) or dark as in C.
+3. **Grid strength**: the drawn lines are as faint as C's. A stronger line every 5 squares (100px), as on a real engineering pad, is one more token if they want more texture.
+
+## 0. Refresh: clearer words, and a less bland look
+
+### Brief
+
+The user showed Jobdesk to someone who does not code. That person did not know what "In-tray" meant, and found the app a bit bland. The user asked for more than that: review the actual app for a better experience, and propose a nice, unique, interesting design.
+
+The lead's brief asked for:
+
+- A written review (`Review.md`), ranked by impact.
+- Two or three visual directions that egui can build.
+- Today's main screen, under its new name, in each direction.
+- The recommended direction applied to Jobs and Applications.
+- A dark variant.
+
+Out of scope: Rust code, tests, snapshots and workflow behaviour. One run at a time, card actions that never start a run, and Trust rendering all stay as they are.
+
+The review used `tests/snapshots/*.png` and the copy in `src/`. The live window offered for the review showed a real job search, so none of it was used.
+All canvas data comes from `tests/sample_workspace`: Meridian Rail Systems, Kestrel Payments, Harbor Bank and the rest. Today is Saturday 31 October.
+
+### Canvas
+
+`Refresh.html` uses `app.css` and `support.js`. All its rules sit in its own `<style>`, scoped to `.rf`, so no other canvas changes. `app.css` is not edited.
+It is plain markup built by a small script, not an `x-dc` template. Choose with `?dir=A|B|C|all`, `?screen=` and `?theme=light|dark`.
+
+| PNG (1280x820) | Direction | State |
+| --- | --- | --- |
+| `Refresh-all-directions.png` | all | The three directions side by side: palette, type, signature, motion, cost. B is marked as recommended. |
+| `Refresh-A-today.png` | A, Ledger tidied | Full. Existing tokens only, plus the new copy, the pinned action row, a white card, a 54px strip without repeated counts, and a tally in Done today. |
+| `Refresh-B-today.png` | B, Postmark (recommended) | Full: 8 things need you, 3 of 11 done. A navy frame, the day stamp, the Meridian card with pinned actions, Done today with Undo, and Coming up with Now on Thu 5. |
+| `Refresh-B-today-dark.png` | B | The same in dark. |
+| `Refresh-B-today-nodates.png` | B | The user's own case: only undated new matches. No strip. Coming up is one return row and "No deadlines in the next two weeks." Done today shows an empty tally and a hint. |
+| `Refresh-B-today-clear.png` | B | Empty: all 11 decided. The stamp's ring is full. "Want more to look at?" offers Find new jobs… and Score 2 new jobs…, which open the launcher. |
+| `Refresh-B-today-loading.png` | B | Loading: "Reading your job search…", an empty ring, placeholder bars. |
+| `Refresh-B-today-failed.png` | B | Feature failed to load: the tracker cannot be read. A framed alert names the line and what still works, and the Applications tab shows a closed-ink square. Today deals the rest. |
+| `Refresh-B-firstrun.png` | B | First run: a welcome card with three steps, Choose folder… first. The other tabs are dimmed. |
+| `Refresh-B-jobs.png` | B | Jobs: plain segment names, "Found on" in words, a stamp-ink square on jobs that wait in Today, a white detail card with OK tags. |
+| `Refresh-B-tracker.png` | B | Applications: plain lane and status words, "fit 70", and a stamp-ink edge on the 4 applications that wait in Today. |
+| `Refresh-C-today.png` | C, Graph pad | Full. A green grid desk, graphite ink, a highlighter under today and the open tab, Atkinson Hyperlegible Next. |
+
+Not drawn: Insights, Tasks, Setup and the dossier in B. The review lists their copy changes. Their layout only takes B's frame, white cards and stamp ink.
+
+### The directions
+
+| | A. Ledger, tidied | B. Postmark | C. Graph pad |
+| --- | --- | --- | --- |
+| New tokens | none | 6 colours per theme, 4 measures | a full palette per theme and a face |
+| Signature | card stack, day tally | the day stamp | grid and highlighter |
+| Fixes "bland" | a little | yes | yes, the most different |
+| Builder cost | small | medium | large |
+
+**Recommendation: B.**
+- It keeps Ledger's faces, stamp, tallies, folder tabs and status inks.
+- It adds one accent that means only "this needs you".
+- The frame is the same in both themes, because it borrows the dark theme's values.
+- The stamp magenta is the candidate the Runs round is testing for "Your turn", so both rounds can settle on one accent. If that round picks another ink, B takes the same one.
+
+### Renamed labels (all directions)
+
+| Today | New | Code names |
+| --- | --- | --- |
+| In-tray (tab) | Today | `intray`, `Screen::InTray` unchanged |
+| Tracker | Applications | `tracking` unchanged |
+| Runs | Tasks | `runs` unchanged |
+| Workspace | Setup | `workspace` unchanged |
+| Ask or run ⌘K | New task ⌘K | the launcher |
+| Card kinds: Triage, Send, Prep, Offer, Follow-up, Close, Guard flag, Permission, Question | New match, Ready to send, Interview prep, Offer, Follow up, Close it?, Check this ad, Claude asks, Claude asks | `kind_tag` |
+| Gate tags: Pass, Flag, Fail | OK, Unclear, Fails | `check_of` |
+| Posting guard | Safety check | `GateRow` label |
+| Draft application, Mark as sent, Draft a follow-up, Close as no response (they open the launcher) | the same with "…" | `Action` labels |
+| Cleared today | Done today | `panel_header` |
+| Decision "Command opened" | "{action label} opened" | `Decision::label` |
+
+`Review.md` has the full copy table for every screen.
+
+### Rules for the builder (direction B)
+
+- **Frame**:
+  - `shell_top_frame` and `status_frame` fill with `chrome`.
+  - The brand, inactive tabs and status text use `chrome_ink` and `chrome_muted`.
+  - The active tab is `sheet` with `text`, so it joins the page as today.
+  - New task is a plain button with a `chrome_tab` fill and a `chrome_line` hairline.
+- **Tab marks**:
+  - Only the Today and Tasks counts show, and only when above 0. The Jobs and Applications counts are dropped from tabs.
+  - The count draws as a filled chip, `stamp_on_chrome` on an inactive tab and `stamp` on the active one.
+  - A feature that failed to load puts an 8px square in `closed` after its tab label.
+- **Head of Today**:
+  - The day stamp (84px), then the headline in `Type::LEAD` and a subtitle in `Type::TAKE`, `Ink::Muted`.
+  - Headline: "{n} things need you". When every pending card is one kind: "{n} new matches to look at". When clear: "All done for today". While the first snapshot loads: "Reading your job search…".
+  - Subtitle: "About {m} minutes. {d} done so far today." With overdue cards it adds "{k} is past its deadline." When a feature failed: "{Feature} are missing from this list."
+  - The ranking rule moves to a tooltip on the position counter.
+- **The card**:
+  - `deal` fills `page` in light and `panel` in dark, with a `line` hairline.
+  - The kind tab sits in the same fill, with the kind in its tone and the date in `Ink::Muted`. Card kinds that wait on the user fill the tab with `stamp`.
+  - The body scrolls. The action row is a footer outside the scroll area, with a `line` hairline on top.
+  - The footer holds the primary action with Y, Skip N, Later L and Open job ad. On the right, in `Type::NOTE` with `Ink::Muted`, a plain line about what Y does, and a "Show the command" link that opens a `code_box` with the line.
+- **Card copy**:
+  - The company sits above the role. The role is in `Type::DEAL`.
+  - Then "{location}. Found on {portal name}."
+  - The verdict sentence names the weakest check, not a count.
+  - Checks are a three-column grid of label, value and an OK, Unclear or Fails tag.
+- **The rail** (`TRAY_RAIL`):
+  - **Done today**: a `fat_tally` of today's cards (done in `text`, left in `off`), the `undo_row`, then the log.
+  - **Coming up** replaces the horizon strip. Each row reads day, event and trailing:
+    - Trailing is Bring back on the return row, "Done" in faint for a decided card, or a solid "Now" tag in `stamp` for the card being read.
+    - At most 6 rows, then "Nothing else dated before {day 14}." With no dated card, one line: "No deadlines in the next two weeks."
+    - Overdue cards come first, with "{k} days late" in `Tone::Interview`.
+- **Stamp ink** goes only on things that wait on the user:
+  - the Today count;
+  - the Now tag;
+  - the Your turn and Claude asks card tabs;
+  - Jobs rows and Applications cards that have a pending Today card. Jobs shows an 8px square, and Applications a 3px left edge with the status line in `stamp`.
+  - It never marks a status.
+- **Applications board**: the lane title shows an 8px square in the status tone, then the name in `Type::SECTION`. Cards fill `page`. Closed cards draw at 80% opacity.
+- **First run**: shown while no folder is open. A `page` card (`CALL_WIDTH`-like, 620px) with the empty stamp, `Type::CLEAR` "Welcome to Jobdesk", three `knot` steps, and the folder promise.
+- **Failed feature**: `prompt_box_tone(closed)` from the Runs round, with a bold first line naming what could not be read, the reason as plain text, what still works, and "Open Setup".
+- **Motion**:
+  - A decision animates the card 12px toward the rail and fades it over 150 ms with `ctx.animate_value_with_time`, then the next card is in place, and the new ring tick fills.
+  - The last tick settles the stamp from 104% to 100% once.
+  - Nothing else animates. A future setting can turn it off.
+- **Accessibility**:
+  - The stamp's label is "Saturday 31 October. 3 of 11 decided today."
+  - Tab labels read "Today, 8 need you" and "Applications, could not be read".
+  - The Now tag reads "This is the card you are reading."
+
+### New widgets and tokens
+
+| Widget | Where | Purpose | Tokens |
+| --- | --- | --- | --- |
+| `day_stamp(ui, weekday, day, month, total, done)` | `marks.rs` | The postmark: two rings, one tick per card dealt today, filled as decided, and the date | new `DAY_STAMP_SIZE = 84.0`, `DAY_STAMP_RINGS = (40.4, 28.4)`, `DAY_STAMP_TICK = (31.0, 37.8, 4.7)` (inner and outer radius, width); ticks `text` and `off`, rings `text` (`line` when empty); weekday and month `Type::SMALL` `Ink::Muted`, day `Type::CLOCK` |
+| `agenda_row(ui, day, text, trailing)` | `tray.rs` | One Coming up row | new `AGENDA_DAY_WIDTH = 50.0`, `PICK_ROW_HEIGHT`, `HAIRLINE` `line` between rows; day `Type::NOTE` `Ink::Muted`; done rows `Ink::Faint` |
+| `deal_footer(ui, add)` | `tray.rs` | The pinned action row under the card's scroll area | `DEAL_PADDING`, `BUTTON_GAP`, `HAIRLINE` `line` on top |
+| `attention_count(ui, n, on_chrome)` | `controls.rs`, used by `folder_tab` | The filled count chip on Today and Tasks | `HORIZON_CHIP_HEIGHT`, `HORIZON_CHIP_PADDING`, `RADIUS_CARD`, `Type::TAG`, fill `stamp` or `stamp_on_chrome` |
+| `skeleton(ui, width, height)` | `surfaces.rs` | Loading placeholders | fill `panel` (`raised` inside slips), `RADIUS_CARD` |
+| `reveal_command(ui, line)` | `controls.rs` | "Show the command", then a `code_box` with the line | `Type::NOTE` link in `active`, `code_box`, `Type::MONO` |
+| `solid_tag`, `knot`, `prompt_box_tone` | from the Runs round | Now tag, welcome steps, failed-feature alert | as listed in section 1 |
+
+New colours, as new `Palette` fields:
+
+| Token | Light | Dark | Note |
+| --- | --- | --- | --- |
+| `chrome` | `#12263f` | `#0d1a2b` | light `text`, dark `bg` |
+| `chrome_tab` | `#233b59` | `#1a2f49` | dark `raised`, dark `panel` |
+| `chrome_ink` | `#e6edf5` | `#e6edf5` | dark `text` |
+| `chrome_muted` | `#b3c4d6` | `#b3c4d6` | dark `muted` |
+| `chrome_line` | `#33506f` | `#33506f` | dark `line` |
+| `stamp`, `on_stamp` | `#b0246a`, `#ffffff` (6.4:1) | `#f48cc0`, `#0d1a2b` (7.8:1) | the Runs round's candidate |
+| `stamp_on_chrome` | `#f48cc0` on `#12263f` | same | the chip on an inactive tab |
+
+The `palette.rs` rule "Colour is for job status only" becomes: "Colour is for job status, plus one stamp ink for what waits on you."
+
+### Proposed doc changes (for the lead)
+
+- **`README.md`**, the In-tray paragraph (line 10): rename the screen.
+  - Replace "In-tray is the home screen" with "Today is the home screen".
+  - Replace "The strip above it counts what is left to decide today, and what is overdue." with:
+    > The day stamp counts what you decided today, and Coming up lists the next two weeks' deadlines, with a button to bring back what you set aside.
+  - Replace "Y follows the suggestion" with "Y opens the suggested task".
+  - Replace "Cleared today" with "Done today".
+- **`README.md`** line 12: replace "In-tray, Jobs, Tracker and Insights" with "Today, Jobs, Applications and Insights", "The Runs screen" with "The Tasks screen", and "Ask or run (Cmd+K…)" with "New task (Cmd+K…)".
+- **`README.md`** line 14: replace "Workspace shows" with "Setup shows".
+- **`README.md`** line 16: replace "Open an application from Tracker" with "Open an application from Applications".
+- **`README.md`** line 18: no change. It keeps the trust promise for readers of the README. The app shows it in Setup and on the first-run card instead of the status bar.
+- **`ARCHITECTURE.md`** Features table: no change, because the feature names stay. Add one sentence under the table:
+  > Screen names differ from feature names: `intray` is Today, `tracking` is Applications, `runs` is Tasks, and `workspace` is Setup.
+- **`ARCHITECTURE.md`** queue paragraph (line 57): replace from "The horizon strip shows the 14 days from today." to "so no cell is silently blank." with:
+  > Coming up lists the dated cards of the next 14 days, overdue ones first. When none is dated it says so in one line.
+- **`ARCHITECTURE.md`** Later paragraph: replace "Tomorrow's cell on the horizon counts the cards set aside, names them on hover, and brings them all back on top when clicked." with:
+  > Coming up's first row counts the cards set aside, names them on hover, and brings them all back on top from its button.
+- **`ARCHITECTURE.md`** `ui_kit` sentence: replace "Colour is reserved for data; chrome stays neutral." (in `ui_kit/mod.rs` and the `palette.rs` comment, for the builder) with:
+  > Colour is for job status, plus one stamp ink for what waits on the user. The frame is a fixed navy in both themes.
+- **`AGENTS.md`**: no change. "Card actions never start a run. Y opens the launcher" holds, and the footer line now says it on screen.
+
+### Noticed, out of scope
+
+- **The review window showed real data.**
+  - The instance started with `--workspace tests/sample_workspace` (pid 83635, window 14626) displayed postings from `../ai-job-search/job_scraper/seen_jobs.json`.
+  - Either the window is not that process's sample workspace, or the relative path fell back to the saved folder.
+  - Worth a check before anyone screenshots it again.
+- **The pinned action row** also fixes a bug at the user's 1040x650 window: today the card's buttons need a scroll on most new-match cards.
+- **`app.css` is being edited by the Runs round.** This round adds nothing to it.
 
 ## 1. Runs: where am I, and is it my turn?
 

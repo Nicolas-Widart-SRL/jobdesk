@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
+use egui::text::{LayoutJob, TextFormat};
+use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
+use crate::ui_kit::surfaces::{backed, on_desk};
 use crate::ui_kit::tokens::{DOC_MEASURE, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
@@ -14,41 +16,78 @@ pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) 
     RichText::new(text).font(style.font()).color(ink.into().color(&Palette::of(ui)))
 }
 
+/// The largest type in a laid-out text.
+fn largest(job: &LayoutJob) -> f32 {
+    job.sections.iter().map(|section| section.format.font_id.size).fold(0.0, f32::max)
+}
+
+/// Straight on the desk, text at `Type::TAKE` size or smaller keeps the grid out of its glyphs. Larger type reads over the lines.
+fn needs_backing(ui: &Ui, size: f32) -> bool {
+    size <= Type::TAKE.size && on_desk(ui)
+}
+
+/// Every label in the kit is added here, with `size` read from the label's own text by the callers below.
+fn show_label(ui: &mut Ui, label: Label, size: f32) -> Response {
+    if needs_backing(ui, size) { backed(ui, |ui| ui.add(label)) } else { ui.add(label) }
+}
+
+/// Text in `style` and `ink`, as a label that wraps as the `Ui` says.
+pub(in crate::ui_kit) fn add_text(ui: &mut Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> Response {
+    let label = Label::new(rich(ui, text, style, ink));
+    show_label(ui, label, style.size)
+}
+
+/// The same, cut to one line with the whole text on hover.
+pub(in crate::ui_kit) fn add_cut_text(ui: &mut Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> Response {
+    let label = Label::new(rich(ui, text, style, ink)).truncate();
+    show_label(ui, label, style.size)
+}
+
+/// A galley laid out before it is placed, such as a head's subtitle.
+pub(in crate::ui_kit) fn add_galley(ui: &mut Ui, galley: Arc<Galley>) -> Response {
+    let size = largest(&galley.job);
+    show_label(ui, Label::new(galley), size)
+}
+
+/// Text in several runs of type, wrapped or cut by `mode`.
+pub(in crate::ui_kit) fn add_job(ui: &mut Ui, job: LayoutJob, mode: TextWrapMode) -> Response {
+    let size = largest(&job);
+    show_label(ui, Label::new(job).wrap_mode(mode), size)
+}
+
+/// Text in a named type style, as a label. On the desk, small text keeps the grid out of it.
+pub fn desk_label(ui: &mut Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> Response {
+    add_text(ui, text, style, ink)
+}
+
 pub fn muted(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::BODY, Ink::Muted);
-    ui.label(text)
+    add_text(ui, text, Type::BODY, Ink::Muted)
 }
 
 pub fn faint_mono(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::MONO, Ink::Faint);
-    ui.label(text)
+    add_text(ui, text, Type::MONO, Ink::Faint)
 }
 
 pub fn strong(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::STRONG, Ink::Text);
-    ui.label(text)
+    add_text(ui, text, Type::STRONG, Ink::Text)
 }
 
 /// Something went wrong. Closed is the one status that reads as failure.
 pub fn alert(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::BODY, crate::ui_kit::Tone::Closed);
-    ui.label(text)
+    add_text(ui, text, Type::BODY, crate::ui_kit::Tone::Closed)
 }
 
 pub fn table_head(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::TABLE_HEAD, Ink::Muted);
-    ui.label(text)
+    add_text(ui, text, Type::TABLE_HEAD, Ink::Muted)
 }
 
 pub fn score(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::SCORE, Ink::Text);
-    ui.label(text)
+    add_text(ui, text, Type::SCORE, Ink::Text)
 }
 
 /// A large count, read at a glance.
 pub fn figure(ui: &mut Ui, text: impl Into<String>, ink: impl Into<Ink>) -> Response {
-    let text = rich(ui, text, Type::FIGURE, ink);
-    ui.label(text)
+    add_text(ui, text, Type::FIGURE, ink)
 }
 
 /// A strong line over a muted one, each cut to one line, the pair centred in the height it has. Such as a role in a table row.
@@ -59,10 +98,19 @@ pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
     let detail = line(ui, detail, Type::BODY, p.muted, width);
     ui.vertical(|ui| {
         ui.add_space(((ui.available_height() - title.size().y - detail.size().y) / 2.0).max(0.0));
-        ui.label(title);
-        ui.label(detail);
+        add_galley(ui, title);
+        add_galley(ui, detail);
     })
     .response
+}
+
+/// One wrapped sentence that leads with a bold phrase, such as a verdict.
+pub fn lead_line(ui: &mut Ui, strong: &str, rest: &str) -> Response {
+    let p = Palette::of(ui);
+    let mut job = LayoutJob::default();
+    job.append(strong, 0.0, TextFormat::simple(Type::STRONG.font(), p.text));
+    job.append(&format!(" {rest}"), 0.0, TextFormat::simple(Type::BODY.font(), p.text));
+    add_job(ui, job, TextWrapMode::Wrap)
 }
 
 /// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.
@@ -178,9 +226,19 @@ pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, 
     WidgetText::from(text).into_galley(ui, Some(TextWrapMode::Truncate), width, style.font())
 }
 
-pub(in crate::ui_kit) fn paint_centred(ui: &Ui, rect: Rect, galley: Arc<Galley>, color: Color32) {
-    let at = Align2::CENTER_CENTER.anchor_size(rect.center(), galley.size()).min;
+/// Every galley a widget paints itself goes down here. `under` is the fill the widget painted beneath the text, if any:
+/// with none, small text straight on the desk gets a patch of the desk's base, so no grid line runs through it.
+pub(in crate::ui_kit) fn paint_text(ui: &Ui, at: Pos2, galley: Arc<Galley>, color: Color32, under: Color32) {
+    if under == Color32::TRANSPARENT && needs_backing(ui, largest(&galley.job)) {
+        ui.painter().rect_filled(Rect::from_min_size(at, galley.size()), 0.0, Palette::of(ui).sheet);
+    }
     ui.painter().galley(at, galley, color);
+}
+
+/// `galley` centred in `rect`, over `under` as `paint_text` takes it.
+pub(in crate::ui_kit) fn paint_centred(ui: &Ui, rect: Rect, galley: Arc<Galley>, color: Color32, under: Color32) {
+    let at = Align2::CENTER_CENTER.anchor_size(rect.center(), galley.size()).min;
+    paint_text(ui, at, galley, color, under);
 }
 
 #[cfg(test)]

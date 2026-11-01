@@ -9,7 +9,6 @@ pub const ROW_GAP: f32 = 8.0;
 pub const INSET: i8 = 14;
 pub const GUTTER: i8 = 12;
 
-pub const SECTION_RULE: f32 = 2.0;
 pub const HAIRLINE: f32 = 1.0;
 
 pub const HEADER_PADDING: i8 = 8;
@@ -17,7 +16,6 @@ pub const BODY_PADDING: i8 = 12;
 pub const ROW_PADDING: i8 = 9;
 pub const PICK_ROW_HEIGHT: f32 = 34.0;
 pub const NOTE_PADDING: (i8, i8) = (14, 10);
-pub const CLEAR_PADDING: (i8, i8) = (24, 48);
 pub const CODE_PADDING: (i8, i8) = (11, 9);
 pub const PROMPT_PADDING: (i8, i8) = (16, 14);
 pub const PICK_PADDING: (i8, i8) = (10, 7);
@@ -37,9 +35,16 @@ pub const KEY_SIZE: f32 = 18.0;
 pub const KEY_PADDING: f32 = 4.0;
 
 pub const NAV_TAB_HEIGHT: f32 = 38.0;
-pub const NAV_TAB_PADDING: f32 = 18.0;
-pub const NAV_TAB_GAP: f32 = 3.0;
+pub const NAV_TAB_PADDING: f32 = 10.0;
+pub const NAV_TAB_GAP: f32 = 6.0;
+/// The highlighter under the open tab: its height, the rule along its bottom, and how far it reaches past the label.
+pub const MARK_HEIGHT: f32 = 14.0;
+pub const MARK_RULE: f32 = 2.0;
+pub const MARK_OVERHANG: f32 = 6.0;
+/// The line box of a tab's label, centred in the tab. The swipe's bottom sits 1px under it.
+pub const MARK_LINE: f32 = 20.0;
 pub const SEGMENT_HEIGHT: f32 = 34.0;
+pub const SEGMENT_GAP: f32 = 3.0;
 pub const SEGMENT_PADDING: f32 = 12.0;
 pub const STATUS_SEGMENT_HEIGHT: f32 = 24.0;
 pub const STATUS_SEGMENT_PADDING: f32 = 8.0;
@@ -57,17 +62,48 @@ pub const CARD_PADDING: (i8, i8) = (11, 9);
 pub const LANE_PADDING: (i8, i8, i8) = (8, 10, 12);
 pub const LANE_GAP: f32 = 6.0;
 
-pub const HORIZON_CELL_HEIGHT: f32 = 72.0;
-pub const HORIZON_PADDING: (i8, i8, i8) = (7, 7, 9);
-pub const HORIZON_CHIP_HEIGHT: f32 = 20.0;
-pub const HORIZON_CHIP_PADDING: f32 = 6.0;
-pub const HORIZON_NOTE_PADDING: (f32, f32) = (14.0, 7.0);
-pub const HORIZON_TIP_WIDTH: f32 = 250.0;
+pub const CHIP_HEIGHT: f32 = 20.0;
+pub const CHIP_PADDING: f32 = 6.0;
 pub const CARD_TAB_HEIGHT: f32 = 30.0;
 pub const CARD_TAB_PADDING: (i8, i8) = (14, 6);
 pub const CARD_TAB_GAP: f32 = 10.0;
 pub const DEAL_PADDING: (i8, i8) = (22, 20);
 pub const DEAL_GAP: f32 = 16.0;
+pub const DEAL_FOOT_PADDING: (i8, i8) = (22, 12);
+/// The least width the note beside a card's actions takes before it moves under them.
+pub const DEAL_ASIDE_MIN: f32 = 240.0;
+/// The day stamp's size, its two ring radii, and a tick's inner radius, outer radius and width.
+pub const DAY_STAMP_SIZE: f32 = 84.0;
+pub const DAY_STAMP_RINGS: (f32, f32) = (40.4, 28.4);
+pub const DAY_STAMP_TICK: (f32, f32, f32) = (31.0, 37.8, 4.7);
+pub const DAY_STAMP_EMPTY_TICKS: usize = 12;
+pub const DAY_STAMP_MAX_TICKS: usize = 40;
+/// The day stamp's size the moment its last tick fills, before it settles to its own.
+pub const DAY_STAMP_SETTLE: f32 = 1.04;
+/// Motion is decoration only: off, every change shows at once.
+pub const MOTION: bool = true;
+/// How long a decision moves for, in seconds, and how far a decided card slides toward the rail.
+pub const MOTION_TIME: f32 = if MOTION { 0.15 } else { 0.0 };
+pub const MOTION_SLIDE: f32 = 12.0;
+pub const AGENDA_DAY_WIDTH: f32 = 50.0;
+pub const AGENDA_TIP_WIDTH: f32 = 250.0;
+/// The stamp-ink edge on a card that waits on the user.
+pub const WAITS_EDGE: f32 = 3.0;
+/// The opacity of a card that is decided or set aside.
+pub const FADED_OPACITY: f32 = 0.8;
+/// The room between a step's knot and its words.
+pub const KNOT_GAP: f32 = 20.0;
+pub const WELCOME_WIDTH: f32 = 620.0;
+/// The panel that offers new work when Today is clear: its inset, the width of its text and the gap between its parts.
+pub const OFFER_PADDING: i8 = 32;
+pub const OFFER_WIDTH: f32 = 480.0;
+pub const OFFER_GAP: f32 = 14.0;
+/// The welcome card's room above it, its padding, and the padding above and below each step.
+pub const WELCOME_TOP: f32 = 36.0;
+pub const WELCOME_PADDING: (i8, i8) = (27, 26);
+pub const WELCOME_STEP_PADDING: f32 = 16.0;
+/// The width of the empty tab over a card that is still loading.
+pub const BLANK_TAB_WIDTH: f32 = 180.0;
 pub const OFFSET_SHADOW: i8 = 5;
 pub const WINDOW_SHADOW: i8 = 6;
 pub const STACK_EDGE_HEIGHT: f32 = 5.0;
@@ -95,9 +131,10 @@ pub const BAND_ROW_GAP: f32 = 2.0;
 pub const BAND_GAP: f32 = 10.0;
 pub const TALLY_BAND: TallySize = TallySize { width: 5.0, height: 12.0, gap: 2.0 };
 
-pub const SHELL_PADDING: (f32, f32, f32) = (28.0, 12.0, 0.0);
+/// The side of a square on the desk's grid.
+pub const GRID_PITCH: f32 = 20.0;
+pub const SHELL_PADDING: (f32, f32, f32) = (28.0, 14.0, 4.0);
 pub const SHELL_GAP: (f32, f32) = (20.0, 8.0);
-pub const NAV_TOP: f32 = 4.0;
 pub const HEAD_PADDING: (f32, f32, f32) = (32.0, 26.0, 6.0);
 pub const HEAD_GAP: (f32, f32) = (16.0, 10.0);
 pub const HEAD_TITLE_MIN: f32 = 240.0;
@@ -123,6 +160,8 @@ pub const SPLIT_MAIN_BASIS: f32 = 520.0;
 pub const SPLIT_SIDE_BASIS: f32 = 340.0;
 /// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
 pub const TRAY_RAIL: f32 = 292.0;
+/// The room between the slips in the rail.
+pub const RAIL_GAP: f32 = 14.0;
 pub const CARD_GRID_MIN: f32 = 150.0;
 pub const FLOW_MIN: f32 = 170.0;
 pub const NODE_PADDING: (f32, f32, f32) = (16.0, 12.0, 14.0);
@@ -143,7 +182,6 @@ pub const PAGE_LINE_HEIGHTS: (f32, f32) = (3.0, 6.0);
 pub const PAGE_GAP: f32 = 12.0;
 pub const MINI_PAGE_SIZE: (f32, f32) = (92.0, 130.0);
 pub const MINI_PAGE_PADDING: (f32, f32) = (7.0, 8.0);
-pub const HORIZON_CELL_MIN: f32 = 68.0;
 pub const GATE_PADDING: f32 = 7.0;
 pub const GATE_COLUMN_GAP: f32 = 20.0;
 pub const GATE_MIN: f32 = 210.0;

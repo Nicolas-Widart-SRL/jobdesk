@@ -1,11 +1,19 @@
 use chrono::NaiveDate;
 
 use crate::intray::domain::SkipReason;
-use crate::shared_kernel::WebUrl;
+use crate::shared_kernel::{CheckState, WebUrl};
 use crate::shared_kernel::dates::days_from;
 
-/// How far ahead a date counts as a deadline, the width of the horizon strip.
+/// How far ahead a date counts as a deadline, the span of Coming up.
 pub const HORIZON_DAYS: i64 = 14;
+
+/// The horizon as a heading, "2 weeks", and in a sentence, "two weeks".
+/// Another span will not compile until it has words here.
+pub const HORIZON_WORDS: (&str, &str) = match HORIZON_DAYS {
+    14 => ("2 weeks", "two weeks"),
+    7 => ("1 week", "one week"),
+    _ => panic!("name HORIZON_DAYS in words"),
+};
 
 /// Declared in the order cards of one tier and date are dealt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,18 +51,11 @@ enum Tier {
     Rest,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Check {
-    Pass,
-    Flag,
-    Fail,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateRow {
     pub label: &'static str,
     pub value: String,
-    pub check: Check,
+    pub check: CheckState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +83,18 @@ pub enum Effect {
 pub struct Action {
     pub label: String,
     pub effect: Effect,
+    /// For a command: the stable key of the task it opens, which a decision stores in place of the label.
+    pub task: Option<&'static str>,
 }
 
 impl Action {
     pub fn new(label: impl Into<String>, effect: Effect) -> Self {
-        Self { label: label.into(), effect }
+        Self { label: label.into(), effect, task: None }
+    }
+
+    pub fn opening(self, task: &'static str) -> Self {
+        debug_assert!(crate::intray::domain::task_name(task).is_some(), "{task} is not a task a decision can name");
+        Self { task: Some(task), ..self }
     }
 }
 
@@ -96,6 +104,16 @@ pub struct Due {
     pub label: String,
 }
 
+/// What a card is about, so a screen can tell which of its rows wait in Today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subject {
+    /// The job's key.
+    Job(String),
+    Application { company: String, role: String },
+    /// The run's id.
+    Run(String),
+}
+
 /// One pending decision. `primary` is the Y key: permission, question, guard and Your turn cards have none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
@@ -103,6 +121,9 @@ pub struct Card {
     pub key: String,
     pub kind: CardKind,
     pub name: String,
+    /// The company on a job or application card, shown above the title. None on a paused run.
+    pub over: Option<String>,
+    pub subject: Subject,
     pub title: String,
     pub subtitle: String,
     pub take: String,
@@ -115,7 +136,8 @@ pub struct Card {
     pub others: Vec<Action>,
     pub can_skip: bool,
     pub note: String,
-    pub trace: String,
+    /// The slash command the primary action opens in the launcher, if it has one.
+    pub command: Option<String>,
 }
 
 impl Card {
@@ -164,6 +186,8 @@ mod tests {
             key: key.into(),
             kind,
             name: String::new(),
+            over: None,
+            subject: Subject::Run(String::new()),
             title: String::new(),
             subtitle: String::new(),
             take: String::new(),
@@ -175,7 +199,7 @@ mod tests {
             others: vec![],
             can_skip: false,
             note: String::new(),
-            trace: String::new(),
+            command: None,
         }
     }
 
@@ -209,6 +233,11 @@ mod tests {
         assert!(card("a", CardKind::Send, Some(0)).is_on_horizon(today()));
         assert!(card("a", CardKind::Send, Some(13)).is_on_horizon(today()));
         assert!(!card("a", CardKind::Send, Some(14)).is_on_horizon(today()));
+    }
+
+    #[test]
+    fn the_horizon_reads_in_weeks() {
+        assert_eq!(HORIZON_WORDS, ("2 weeks", "two weeks"));
     }
 
     #[test]

@@ -21,8 +21,25 @@ pub struct Snapshot {
     pub skill_gaps: Option<SkillGapView>,
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
-    pub issues: Vec<LoadError>,
+    pub issues: Vec<Issue>,
     pub today: NaiveDate,
+}
+
+/// A source the snapshot reads that can fail on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Jobs,
+    Applications,
+    SkillGaps,
+    /// Today's decisions in Jobdesk's own data folder. The tray reports this one, not the snapshot.
+    Decisions,
+}
+
+/// A source that could not be read, and why.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Issue {
+    pub source: Source,
+    pub error: LoadError,
 }
 
 impl Snapshot {
@@ -30,15 +47,15 @@ impl Snapshot {
     pub fn load(root: &Path, today: NaiveDate) -> Self {
         let mut issues = Vec::new();
         let board = discovery::load_board(root, today).unwrap_or_else(|error| {
-            issues.push(error);
+            issues.push(Issue { source: Source::Jobs, error });
             JobBoard::default()
         });
         let pipeline = tracking::load_pipeline(root, today).unwrap_or_else(|error| {
-            issues.push(error);
+            issues.push(Issue { source: Source::Applications, error });
             Pipeline::default()
         });
         let skill_gaps = insights::load_skill_gaps(root).unwrap_or_else(|error| {
-            issues.push(error);
+            issues.push(Issue { source: Source::SkillGaps, error });
             None
         });
         let archives = pipeline

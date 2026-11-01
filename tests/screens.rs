@@ -12,6 +12,7 @@ use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
 use jobdesk::shell::{Screen, Shell, Snapshot, install_look};
+use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
 fn sample_workspace(root: &Path) {
@@ -344,7 +345,7 @@ fn a_command_button_leads_to_a_started_run() {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
-    harness.get_by_label("Calibrate").click();
+    harness.get_by_label("Tune scoring").click();
     harness.run_steps(3);
     harness.get_by_label("All commands");
 
@@ -491,7 +492,7 @@ fn stop_here_ends_your_turn() {
     assert!(harness.query_all_by_label("Your turn").count() == 0, "no run is tagged Your turn");
     assert!(harness.query_all_by_label("Ready for reply").count() > 0, "the tag reads Ready for reply");
     assert!(is_shown(&harness, "Claude is done for now"));
-    assert!(harness.query_by_label_contains("waits for you").is_none(), "the Runs tab has no mark");
+    assert!(harness.query_by_label_contains("Tasks, ").is_none(), "the Tasks tab has no mark");
     assert!(harness.query_by_label_contains("needs you").is_none());
     assert!(is_shown(&harness, "Send"), "the reply field stays under the story");
     assert!(!is_shown(&harness, "Go ahead with the draft"));
@@ -609,15 +610,19 @@ fn actions_open_only_when_asked() {
 }
 
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
+/// Both stories are taller than their room, so they have to scroll: the stop in the smallest window, and a long stop in the default one.
 #[test]
 fn a_stop_opens_on_the_newest_message() {
-    let mut shell = shell(Screen::Runs, "stop_opens_on_message");
-    *shell.desk_slot() = Some(apply_stop_after_evaluate());
-    let harness = tray_harness(shell);
-    let story = harness.get_by_label("The run so far").rect();
-    let heading = harness.get_by_label_contains("Job fit evaluation").rect();
-    assert!(heading.top() > story.bottom(), "{heading:?} is under the story's heading at {story:?}");
-    assert!(heading.top() < story.bottom() + 40.0, "{heading:?} opens at the top of the story under {story:?}");
+    let long = format!("{STOP_EVALUATION}\n\n{}", "The gaps are small and either can be closed in the letter.\n\n".repeat(24));
+    let harnesses = [smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message"), tray_harness_with(stop_with(SharedCalls::default(), &long).0, "long_stop_opens_on_message")];
+    for harness in harnesses {
+        let story = harness.get_by_label("The run so far").rect();
+        // Where the story's rows start: under its heading's padding, its rule and the body's padding.
+        let content_top = story.bottom() + f32::from(HEADER_PADDING) + HAIRLINE + f32::from(BODY_PADDING);
+        let heading = harness.get_by_label_contains("Job fit evaluation").rect();
+        assert!(heading.top() > content_top, "{heading:?} is under the story's rows at {content_top}");
+        assert!(heading.top() < content_top + 40.0, "{heading:?} opens at the top of the story's rows at {content_top}");
+    }
 }
 
 #[test]
@@ -644,6 +649,26 @@ fn a_question_stays_answerable_in_the_smallest_window() {
     assert!(!harness.get_by_label("Send answer").accesskit_node().is_disabled(), "Send answer is enabled");
 }
 
+/// In the smallest window, the footer under the story ends inside the story's column, above the screen's bottom padding.
+/// A run that waits on a question with word of a background agent, and a finished run with its reply field.
+#[test]
+fn the_story_footer_stays_inside_its_column() {
+    const BACKGROUND: &str = "1 background agent is still working. Claude continues when it reports back.";
+    let (long_stop, sink) = stop_with(SharedCalls::default(), LONG_QUESTION);
+    emit_all(&sink, [AgentEvent::BackgroundTasksChanged { count: 1 }]);
+    let cases = [
+        (apply_run_ending([many_choices("q"), AgentEvent::BackgroundTasksChanged { count: 1 }]), BACKGROUND),
+        (long_stop, BACKGROUND),
+        (apply_finished(), "Send"),
+    ];
+    for (desk, footer) in cases {
+        let harness = smallest_window(desk, "footer_in_column");
+        let column_end = harness.get_by_label(STATUS_LINE).rect().top() - STATUS_PADDING.1 - SCREEN_PADDING.2;
+        let rect = harness.get_by_label(footer).rect();
+        assert!(rect.bottom() <= column_end + 0.5, "{footer} ends at {} under the column's end at {column_end}", rect.bottom());
+    }
+}
+
 const LONG_QUESTION: &str = "Every hard gate passes.\n\nShall I go ahead and draft the CV and the cover letter for the Solution Architect role at Kestrel Payments, leading with the event-sourcing work and the Kafka migration, keeping the CV to two pages and the letter to one, naming the hybrid days in Leuven as fine, and noting in the letter that the posting states no salary, so the range can be asked for on the first call with the hiring manager, or would you rather stop here and look at the evaluation first?";
 
 /// The turn bar keeps Send in the smallest window, with a long question, the blocked line and the quick replies.
@@ -663,7 +688,8 @@ fn the_turn_bar_fits_the_smallest_window() {
     assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
 }
 
-const STATUS_LINE: &str = "Slash commands stay the only writers of your files.";
+/// The theme switch, which sits in the status line.
+const STATUS_LINE: &str = "System";
 
 /// A reply takes a stop's story back to following the run: its newest row comes into view.
 #[test]
@@ -853,9 +879,33 @@ fn the_launcher_shortcut_works_while_typing() {
     harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
     harness.run_steps(3);
     harness.get_by_label("All commands");
-    harness.get_by_label("Runs, 1 run waits for you").click();
+    harness.get_by_label("Tasks, 1 need you").click();
     harness.run_steps(3);
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
+}
+
+#[test]
+fn the_tabs_use_plain_names() {
+    let harness = tray_harness(shell(Screen::InTray, "plain_tabs"));
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Setup"] {
+        harness.get_by_label_contains(name);
+    }
+    assert!(harness.query_by_label_contains("In-tray").is_none());
+}
+
+/// A square marks each job with a card in Today, and the legend under the table says what it means.
+#[test]
+fn jobs_mark_what_waits_in_today() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_waiting"));
+    let legend = "Waiting in Today. Decide there, or open the drafting task from here.";
+    assert!(is_shown(&harness, legend));
+    let marks = harness.query_all_by_label("Waiting in Today").count();
+    assert_eq!(marks, 4 + 1, "every shortlisted job waits, and the legend has its own square");
+
+    harness.get_by_label_contains("Skipped").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, legend));
+    assert!(!is_shown(&harness, "Waiting in Today"));
 }
 
 /// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.
@@ -923,9 +973,19 @@ fn is_shown(harness: &Harness, label: &str) -> bool {
     harness.query_by_label(label).is_some()
 }
 
+#[test]
+fn applications_mark_what_waits_in_today() {
+    let harness = tray_harness(shell(Screen::Tracker, "applications_waits"));
+    assert!(is_shown(&harness, "Granite Cloud, Platform Lead, No reply in 15 days, waits for you in Today"));
+    assert!(is_shown(&harness, "Sable Analytics, Tech Lead, Sent 3 days ago"), "a card with nothing in Today stays plain");
+    assert!(is_shown(&harness, "Mosaic Data, Architect, You withdrew"));
+    assert!(harness.query_by_label_contains("of them wait for you in Today.").is_some());
+    assert!(is_shown(&harness, "A pink edge means the application waits for you in Today."));
+}
+
 const TRAY_CARDS: usize = 10;
-const HARBOR: &str = "Harbor Bank, Lead Java Engineer";
-const MERIDIAN: &str = "Meridian Rail Systems, Tech Lead Java, Real-Time Traffic";
+const HARBOR: &str = "Lead Java Engineer";
+const MERIDIAN: &str = "Tech Lead Java, Real-Time Traffic";
 
 /// Y on a card, launcher form, run, then the Runs screen.
 #[test]
@@ -950,15 +1010,15 @@ fn later_deals_the_next_card_and_undo_brings_it_back() {
 
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
-    let row = "Last decision: Set aside, Harbor Bank. Press U to undo.";
+    let row = "Last decision on Harbor Bank: Set aside until tomorrow. Press U to undo.";
     assert!(is_shown(&harness, row));
     assert!(is_shown(&harness, "Set aside until tomorrow"));
-    assert!(!is_shown(&harness, "Nothing yet."), "the undo row heads the rail");
+    assert!(!is_shown(&harness, "Each decision lands here. U undoes the last one."), "the undo row heads the rail");
 
     press(&mut harness, Key::U);
     assert!(is_shown(&harness, HARBOR));
     assert!(!is_shown(&harness, row));
-    assert!(is_shown(&harness, "Nothing yet."), "setting aside clears nothing");
+    assert!(is_shown(&harness, "Each decision lands here. U undoes the last one."), "setting aside clears nothing");
 }
 
 #[test]
@@ -967,7 +1027,7 @@ fn a_timeline_mark_pulls_a_set_aside_card_back() {
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
 
-    harness.get_by_label("Harbor deadline").click();
+    harness.get_by_label("Tue 3, Harbor Bank deadline").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
@@ -979,13 +1039,86 @@ fn bring_them_back_refills_the_tray() {
     for _ in 0..TRAY_CARDS {
         press(&mut harness, Key::L);
     }
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
-    assert!(!is_shown(&harness, "Nothing needs you"));
+    assert!(is_shown(&harness, "All done for today"));
+    assert!(!is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
 
-    harness.get_by_label("Bring them back").click();
+    assert!(is_shown(&harness, "Want more to look at?"));
+    harness.get_by_label("Bring them back now").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
+    assert!(!is_shown(&harness, "Want more to look at?"));
+}
+
+/// The buttons open the launcher with the line filled in, and the user starts the run there.
+#[test]
+fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::InTray, "tray_find_new_jobs");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, "Want more to look at?"));
+    assert!(is_shown(&harness, "Score 2 new jobs…"), "the sample board holds two unscored jobs");
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} cards set aside with Later come back tomorrow. ")));
+    assert!(!is_shown(&harness, "All commands"));
+
+    harness.get_by_label("Find new jobs…").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, "All commands"), "the launcher opens");
+    assert!(harness.query_all_by_label("/scrape").count() > 0, "the line is filled in");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
+}
+
+/// Later leaves a card out of the count, a skip ticks one off the stamp.
+#[test]
+fn the_head_counts_what_needs_you() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_head"));
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} things need you")));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 0 of {TRAY_CARDS} decided today.")));
+    assert!(is_shown(&harness, &format!("1 of {TRAY_CARDS}")));
+    assert!(!is_shown(&harness, &format!("{} behind this one", TRAY_CARDS - 1)));
+
+    press(&mut harness, Key::L);
+    let left = TRAY_CARDS - 1;
+    assert!(is_shown(&harness, &format!("{left} things need you")));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 0 of {left} decided today.")));
+    assert!(is_shown(&harness, &format!("1 of {left}")));
+
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::N);
+    harness.get_by_label("Domain").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("{} things need you", left - 2)));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 1 of {} decided today.", left - 1)));
+}
+
+/// The decided card slides off from a copy while the next one already takes keys, and nothing moves after 150 ms.
+#[test]
+fn a_decision_settles_within_the_animation_time() {
+    let mut shell = shell(Screen::InTray, "tray_motion");
+    let frame = 1.0 / 60.0;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_step_dt(frame)
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+
+    harness.key_press(Key::L);
+    harness.run_steps(2);
+    assert!(is_shown(&harness, HARBOR), "the decided card's copy is still sliding off");
+    harness.key_press(Key::L);
+    harness.run_steps(1);
+    assert!(is_shown(&harness, &format!("1 of {}", TRAY_CARDS - 2)), "a key during the slide decides the new top card");
+
+    harness.run_steps((0.15_f32 / frame).ceil() as usize);
+    assert!(!is_shown(&harness, HARBOR));
+    assert!(is_shown(&harness, MERIDIAN));
+    harness.run();
 }
 
 #[test]
@@ -1004,8 +1137,8 @@ fn skip_takes_a_reason_and_only_some_cards_allow_it() {
 
     harness.get_by_label("Domain").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Skipped, domain"));
-    assert!(is_shown(&harness, "Last decision: Skipped, Meridian Rail Systems. Press U to undo."));
+    assert!(is_shown(&harness, "Skipped for domain"));
+    assert!(is_shown(&harness, "Last decision on Meridian Rail Systems: Skipped for domain. Press U to undo."));
     assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the logged skip is not drawn twice");
     assert_eq!(harness.get_by_label("Domain").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
 }
@@ -1021,7 +1154,7 @@ fn a_paused_run_comes_first_and_y_does_nothing() {
     press(&mut harness, Key::N);
     assert!(is_shown(&harness, "/apply: allow Bash?"));
 
-    harness.get_by_label("Open run").click();
+    harness.get_by_label("Open task").click();
     harness.run_steps(3);
     harness.get_by_label("Recent runs");
 }
@@ -1038,7 +1171,7 @@ fn a_waiting_run_deals_a_your_turn_card() {
     press(&mut harness, Key::N);
     assert!(is_shown(&harness, "/apply: proceed with drafting?"));
 
-    harness.get_by_label("Open run").click();
+    harness.get_by_label("Open task").click();
     harness.run_steps(3);
     harness.get_by_label("Recent runs");
 }
@@ -1049,61 +1182,223 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
     for _ in 0..4 {
         press(&mut harness, Key::L);
     }
-    let guarded = "Halden Logistics, Lead Developer Kafka";
+    let guarded = "Lead Developer Kafka";
     assert!(is_shown(&harness, guarded));
     press(&mut harness, Key::Y);
     assert!(is_shown(&harness, guarded));
 
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
 }
 
+/// The slip's note and its tally both read the count.
+fn tallied(harness: &Harness, done: usize, total: usize) -> bool {
+    harness.query_all_by_label(&format!("{done} of {total}")).count() == 2
+}
+
+/// Later leaves a card out of the total, a skip ticks one off.
 #[test]
-fn the_horizon_counts_what_is_left_today() {
+fn the_tally_counts_what_is_done() {
     let mut harness = tray_harness(shell(Screen::InTray, "tray_count"));
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+    assert!(tallied(&harness, 0, TRAY_CARDS));
 
     press(&mut harness, Key::L);
-    assert!(is_shown(&harness, &format!("{} to decide", TRAY_CARDS - 1)));
+    assert!(tallied(&harness, 0, TRAY_CARDS - 1));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::N);
+    assert!(tallied(&harness, 1, TRAY_CARDS - 2));
 }
 
 #[test]
-fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
-    let mut shell = shell(Screen::InTray, "tray_return_chip");
+fn bring_back_returns_set_aside_cards_without_a_run() {
+    let mut shell = shell(Screen::InTray, "tray_bring_back_row");
     let started = SharedSink::default();
     *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
     let mut harness = tray_harness(shell);
     press(&mut harness, Key::L);
+    assert!(is_shown(&harness, "1 set aside, back tomorrow: Harbor Bank. Bring it back now."));
 
-    harness.get_by_label_contains("1 set aside, back tomorrow: Harbor Bank").click();
+    harness.get_by_label("Bring back").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR), "the card brought back is on top again");
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+    assert!(tallied(&harness, 0, TRAY_CARDS));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
-    assert!(!is_shown(&harness, "All commands"), "the chip opens no launcher");
-    assert!(started.lock().unwrap().is_none(), "the chip starts no run");
+    assert!(!is_shown(&harness, "All commands"), "the row opens no launcher");
+    assert!(started.lock().unwrap().is_none(), "the row starts no run");
 }
 
-/// The top of the dealt card's tab, which moves only when the tray scrolls.
-fn tab_top(harness: &Harness) -> f32 {
-    let kinds = ["Permission", "Question", "Your turn", "Send", "Triage", "Prep", "Offer", "Guard flag", "Follow-up", "Close"];
-    kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
-}
-
+/// With the rail beside the card and nothing above it, a new match reads down to why it fits before any scroll.
 #[test]
-fn later_and_keep_leave_the_scroll_alone() {
-    let mut harness = tray_harness(shell(Screen::InTray, "tray_no_scroll"));
-    let top = tab_top(&harness);
+fn a_triage_card_shows_why_it_fits_without_scrolling() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_why_it_fits"));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    let why = harness.get_by_label("Why it fits").rect();
+    let footer = harness.get_by_label("Draft application…").rect();
+    assert!(why.bottom() < footer.top(), "Why it fits at {why:?} sits above the footer at {footer:?}");
+}
+
+/// Today's card and the Jobs detail read one job's checks from one place, so they say the same.
+#[test]
+fn today_and_jobs_word_a_job_the_same() {
+    let mut today = tray_harness(shell(Screen::InTray, "checks_today"));
+    press(&mut today, Key::L);
+    press(&mut today, Key::L);
+    assert!(is_shown(&today, MERIDIAN));
+    let line = today.get_by_label_contains("84 of 100.").accesskit_node().value().expect("a verdict line");
+    // A value can also be a strength, so each is looked for, not counted.
+    let values = ["Freelance mission, 12 months", "Brussels, hybrid", "No conflict", "Nothing hidden in the ad"];
+    for value in values {
+        assert!(today.query_all_by_label(value).count() > 0, "{value} on Today");
+    }
+
+    let mut jobs = tray_harness(shell(Screen::Jobs, "checks_jobs"));
+    jobs.query_all_by_label(MERIDIAN).next().expect("a Meridian row").click();
+    jobs.run_steps(3);
+    // Jobs says in its subtitle that scores rest on the ad alone, so its line leaves that out.
+    let on_jobs = line.strip_suffix(" Scored from the job ad alone.").expect("Today says where the score comes from");
+    assert!(is_shown(&jobs, on_jobs), "{on_jobs} on Jobs");
+    for value in values {
+        assert!(jobs.query_all_by_label(value).count() > 0, "{value} on Jobs");
+    }
+
+    // Halden's ad was flagged. Kept in Today, Jobs words it as Today's card does.
+    let halden = |kept: &str| format!("Moderate fit, 58 of 100. Five checks pass. The safety check flagged this ad{kept}");
+    jobs.get_by_label_contains("Low score").click();
+    jobs.run_steps(3);
+    assert!(is_shown(&jobs, &halden(", so read what it found before you apply.")), "not kept yet");
+
+    let mut harness = tray_harness(shell(Screen::InTray, "checks_kept"));
     for _ in 0..4 {
         press(&mut harness, Key::L);
-        assert_eq!(tab_top(&harness), top);
     }
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    harness.get_by_label_contains("Jobs").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("Low score").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &halden(" and you kept it.")), "kept in Today");
+}
+
+/// The top of the dealt card's tab. Only the card's body scrolls, so a decision never moves it.
+fn tab_top(harness: &Harness) -> f32 {
+    let kinds = ["Claude asks", "Your turn", "Ready to send", "New match", "Interview prep", "Offer", "Check this ad", "Follow up", "Close it?"];
+    kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
+}
+
+/// The top of a company's name on the dealt card, near the top of its body.
+fn name_top(harness: &Harness, company: &str) -> f32 {
+    harness.get_by_label(company).rect().top()
+}
+
+/// Ardent Software's offer comes after Meridian. Its body's top, dealt without scrolling anything first.
+fn ardent_resting() -> f32 {
+    let mut harness = smallest_tray("tray_body_resting", ScriptedGateway(SharedSink::default()));
+    for _ in 0..3 {
+        press(&mut harness, Key::L);
+    }
+    name_top(&harness, "Ardent Software")
+}
+
+/// Scrolling one card's body leaves the next card's body at its top, and the card itself in place.
+#[test]
+fn the_next_card_opens_its_body_at_the_top() {
+    let mut harness = smallest_tray("tray_body_scroll", ScriptedGateway(SharedSink::default()));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    let (tab, resting) = (tab_top(&harness), name_top(&harness, "Meridian Rail Systems"));
+
+    scroll_body(&mut harness, "Meridian Rail Systems");
+    assert!(name_top(&harness, "Meridian Rail Systems") < resting, "the body scrolls");
+    assert_eq!(tab_top(&harness), tab, "the card stays put");
+
+    press(&mut harness, Key::L);
+    assert_eq!(name_top(&harness, "Ardent Software"), ardent_resting(), "the next card starts at its top");
+    assert_eq!(tab_top(&harness), tab);
+
+    scroll_body(&mut harness, "Ardent Software");
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert_eq!(name_top(&harness, "Meridian Rail Systems"), resting, "a card back on top starts at its top");
+}
+
+/// Turns the mouse wheel over the dealt card's body, where `company` is.
+fn scroll_body(harness: &mut Harness, company: &str) {
+    harness.hover_at(harness.get_by_label(company).rect().center());
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.event(wheel);
+    harness.run_steps(3);
+}
+
+/// A footer button decides the card, and the next card's tab sits where this one's did.
+#[test]
+fn a_footer_button_leaves_the_card_in_place() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_footer_click"));
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+    }
+    let top = tab_top(&harness);
+    harness.get_by_label("Harmless, keep posting").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
     assert_eq!(tab_top(&harness), top);
+}
+
+fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {
+    let mut shell = shell(Screen::InTray, name);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 640.0])
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness
+}
+
+/// The footer sits outside the card's scroll, so a long triage card keeps its actions in view.
+#[test]
+fn the_card_actions_fit_the_smallest_window() {
+    let mut harness = smallest_tray("tray_actions_smallest", ScriptedGateway(SharedSink::default()));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert_in_window(&harness, [1040.0, 640.0], &["Draft application…", "Skip", "Later", "Open job ad", "Show the command"]);
+}
+
+/// The line is plain text to read: it opens no launcher and starts no run.
+#[test]
+fn show_the_command_reveals_the_line_and_starts_nothing() {
+    let started = SharedSink::default();
+    let mut harness = smallest_tray("tray_show_command", ScriptedGateway(Arc::clone(&started)));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    let line = "/apply https://meridian.example/jobs/1";
+    assert!(!is_shown(&harness, line));
+
+    harness.get_by_label("Show the command").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, line));
+    assert!(is_shown(&harness, "Hide the command"));
+    assert!(is_shown(&harness, MERIDIAN), "the card stays dealt");
+    assert!(!is_shown(&harness, "All commands"), "no launcher opens");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
+
+    press(&mut harness, Key::L);
+    assert!(!is_shown(&harness, line), "the line leaves with its card");
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert!(!is_shown(&harness, line), "a card back on top starts with its line closed");
 }
 
 /// The rail sits outside the card's scroll, so the row and its reasons show without scrolling.
@@ -1134,8 +1429,8 @@ fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
     }
     let resting = tab_top(&harness);
     press(&mut harness, Key::Y);
-    assert!(is_shown(&harness, "Last decision: Skipped, Federal Data Agency. Press U to undo."));
-    assert!(is_shown(&harness, "Skipped, rate"), "Y skips with the suggested reason");
+    assert!(is_shown(&harness, "Last decision on Federal Data Agency: Skipped for rate. Press U to undo."));
+    assert!(is_shown(&harness, "Skipped for rate"), "Y skips with the suggested reason");
     assert_eq!(tab_top(&harness), resting);
 }
 
@@ -1148,28 +1443,26 @@ fn a_logged_offer_shows_once_above_the_log() {
     for key in SKIP_OVER_LOG {
         press(&mut harness, key);
     }
-    let row = harness.get_by_label("Last decision: Skipped, Federal Data Agency. Press U to undo.").rect();
+    let row = harness.get_by_label("Last decision on Federal Data Agency: Skipped for rate. Press U to undo.").rect();
     assert_eq!(harness.query_all_by_label("Federal Data Agency").count(), 1, "the offer is not drawn again in the log");
     assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the older skip stays in the log");
     let logged = harness.get_by_label("Meridian Rail Systems").rect();
     assert!(row.bottom() <= logged.top(), "the undo row at {row:?} heads the log row at {logged:?}");
     assert!(is_shown(&harness, "Skipped"));
-    assert!(!is_shown(&harness, "Nothing yet."));
+    assert!(!is_shown(&harness, "Each decision lands here. U undoes the last one."));
 }
 
 #[test]
-fn overdue_cards_show_in_todays_cell() {
+fn overdue_cards_lead_coming_up() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
-    assert!(harness.query_by_label_contains(" overdue").is_some());
-    assert!(is_shown(&harness, "No other deadlines in the next 14 days"));
-    assert!(!is_shown(&harness, "Harbor deadline"));
+    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late"));
+    assert!(is_shown(&harness, "Nothing else dated before Fri 20 Nov."), "late rows leave the next two weeks empty");
 }
 
 #[test]
 fn an_empty_tray_says_nothing_is_due() {
     let harness = tray_harness(empty_shell("tray_empty"));
-    assert!(is_shown(&harness, "0 to decide"));
-    assert!(is_shown(&harness, "No deadlines in the next 14 days"));
+    assert!(is_shown(&harness, "No deadlines in the next two weeks."));
 }
 
 fn tray_after(mut harness: Harness, keys: &[Key], name: &str) {
@@ -1260,6 +1553,84 @@ fn intray_clear_dark() {
     tray_after(wgpu_tray(empty_shell("intray_clear_dark"), Theme::Dark), &[], "intray_clear_dark");
 }
 
+/// The sample workspace with a tracker saved in Latin-1, as a spreadsheet's plain CSV export does.
+/// With `jobs_too`, the saved jobs file is cut off as well.
+fn failed_shell(name: &str, jobs_too: bool) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap();
+    if jobs_too {
+        fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap();
+    }
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), 1 + usize::from(jobs_too), "{:?}", snapshot.issues);
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+fn failed_tracker_shell(name: &str) -> Shell {
+    failed_shell(name, false)
+}
+
+#[test]
+fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
+    let mut harness = tray_harness(failed_tracker_shell("failed_tracker"));
+    assert!(is_shown(&harness, "Applications, could not be read"));
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "job_search_tracker.csv: not UTF-8 text, re-save it as CSV UTF-8"));
+    assert!(is_shown(&harness, "Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work."));
+    assert!(harness.query_by_label_contains("Applications are missing from this list.").is_some());
+    assert!(is_shown(&harness, "Application dates are missing until the file is fixed."));
+    assert!(is_shown(&harness, MERIDIAN), "the job cards still deal");
+    assert!(harness.query_by_label_contains("source could not be read").is_none(), "the count left the status bar");
+
+    harness.get_by_label("Open Setup").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
+    assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
+    assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
+}
+
+/// A decisions file that cannot be read joins the same alert, on every screen, and leaves Today's count alone.
+#[test]
+fn a_decisions_file_that_fails_joins_the_alert() {
+    let mut shell = shell(Screen::InTray, "failed_decisions");
+    let data = Path::new(env!("CARGO_TARGET_TMPDIR")).join("failed_decisions").join("data");
+    let _ = fs::remove_dir_all(&data);
+    fs::create_dir_all(&data).unwrap();
+    fs::write(data.join("decisions.json"), "{\"cut off").unwrap();
+    let workspace = data.join("ai-job-search");
+    *shell.tray_slot() = Some(jobdesk::intray::open_tray(data, &workspace));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Your decisions could not be saved or read."));
+    assert!(harness.query_by_label_contains("decisions.json: ").is_some());
+    assert!(is_shown(&harness, "Today still works, but what you decide may be gone after Jobdesk closes."));
+    assert!(harness.query_by_label_contains("could not be read").is_none(), "no tab is marked");
+
+    harness.get_by_label("Jobs").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Your decisions could not be saved or read."), "the alert shows on every screen");
+}
+
+/// Each sentence on what still works assumes one failure, so two failures show neither, and one button.
+#[test]
+fn two_failed_sources_share_one_alert_and_promise_nothing() {
+    let harness = tray_harness(failed_shell("failed_two", true));
+    assert!(is_shown(&harness, "Jobs, could not be read"));
+    assert!(is_shown(&harness, "Applications, could not be read"));
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "Your saved jobs could not be read."));
+    assert!(harness.query_by_label_contains("still work").is_none());
+    assert_eq!(harness.query_all_by_label("Open Setup").count(), 1);
+    assert!(harness.query_by_label_contains("Jobs and Applications are missing from this list.").is_some(), "in the alert's order");
+    assert!(is_shown(&harness, "Job and application dates are missing until the files are fixed."));
+}
+
+#[test]
+fn intray_failed_light() {
+    tray_after(wgpu_tray(failed_tracker_shell("intray_failed_light"), Theme::Light), &[], "intray_failed_light");
+}
+
 /// Every sample deadline, Nov 3 to 6, has passed by then.
 fn overdue_day() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()
@@ -1324,8 +1695,14 @@ impl ToolProber for FixedTools {
 }
 
 fn render_workspace(theme: Theme, name: &str) {
-    let mut shell = shell(Screen::Workspace, name);
-    *shell.environment_slot() = Some(EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {})));
+    render_probed(shell(Screen::Workspace, name), theme, name);
+}
+
+/// Renders once the tool check is back, so the status bar says whether Claude is installed. It starts as the app's does, at launch.
+fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
     let mut harness = Harness::builder()
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
@@ -1338,6 +1715,46 @@ fn render_workspace(theme: Theme, name: &str) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The sample folder, open but not read yet.
+fn loading_shell(name: &str) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    Shell::loading(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+#[test]
+fn loading_deals_no_card_and_ignores_keys() {
+    let mut shell = loading_shell("tray_loading");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Reading your job search…"));
+    assert!(is_shown(&harness, "Your first card appears in a moment."));
+    assert!(is_shown(&harness, "Saturday 31 October"), "the stamp is empty and reads as the date");
+
+    press(&mut harness, Key::Y);
+    press(&mut harness, Key::L);
+
+    assert!(!is_shown(&harness, "All commands"), "Y opens no launcher");
+    assert!(!is_shown(&harness, "Set aside until tomorrow"), "L sets nothing aside");
+    assert!(is_shown(&harness, "Reading your job search…"));
+}
+
+#[test]
+fn intray_loading_light() {
+    render_probed(loading_shell("intray_loading_light"), Theme::Light, "intray_loading_light");
+}
+
+#[test]
+fn intray_loading_dark() {
+    render_probed(loading_shell("intray_loading_dark"), Theme::Dark, "intray_loading_dark");
+}
+
+#[test]
+fn first_run_light() {
+    render_probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), Theme::Light, "first_run_light");
 }
 
 #[test]
@@ -1372,7 +1789,7 @@ fn dossier_prep_light() {
 
 #[test]
 fn dossier_outcome_dark() {
-    render_dossier(Some("Outcome and follow-ups"), Theme::Dark, "dossier_outcome_dark");
+    render_dossier(Some("Results and follow-ups"), Theme::Dark, "dossier_outcome_dark");
 }
 
 #[test]

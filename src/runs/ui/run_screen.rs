@@ -15,7 +15,7 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, markdown, muted, page_body, page_head, panel,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, markdown, muted, page_body, page_head, panel,
     panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
@@ -268,13 +268,13 @@ impl RunScreen {
             }
         }
         let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
-            page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+            page_head(ui, Title::Slab("Tasks"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
             page_body(ui, |ui| {
                 panel(ui, |ui| {
                     panel_body(ui, |ui| {
                         ui.set_width(ui.available_width());
                         strong(ui, "No runs yet");
-                        muted(ui, "Press Ask or run to start one.");
+                        muted(ui, "Press New task to start one.");
                     });
                 });
             });
@@ -399,7 +399,8 @@ impl RunScreen {
     fn story(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, view: &View, root: &str) {
         let reserved_id = footer_height_id(run);
         let input = has_footer(run);
-        let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
+        let kept = KeptHeight::read(ui, reserved_id, ui.available_height());
+        let reserved = if input { kept.height } else { 0.0 };
         let settled = settled(run);
         // A turn the user's reply began is followed from its end, once, even when the reply was sent before switching away.
         // A turn Claude began on its own moves nothing: the story follows it only when the view was already at the end.
@@ -408,29 +409,33 @@ impl RunScreen {
         let title = if run.status == RunStatus::Closed { "The run" } else { "The run so far" };
         panel(ui, |ui| {
             panel_header(ui, title, None);
-            let room = (ui.available_height() - reserved).max(0.0);
-            // While Claude works, the story follows it. Settled, it opens once on the newest message. Either way, the user's scrolling wins.
-            let area = ScrollArea::vertical().id_salt(("run_story", &run.id)).max_height(room).stick_to_bottom(!settled).auto_shrink([false, true]);
-            area.show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let anchor = self.story_rows(ui, run, view, root);
-                if resumed {
-                    let end = Rect::from_min_max(pos2(ui.min_rect().left(), ui.min_rect().bottom()), ui.min_rect().right_bottom());
-                    ui.scroll_to_rect_animation(end, Some(Align::BOTTOM), ScrollAnimation::none());
-                }
-                if let Some((index, rect)) = anchor.filter(|_| settled) {
-                    let key = (run.id.clone(), index);
-                    if self.opened_at.as_ref() != Some(&key) {
-                        ui.scroll_to_rect_animation(rect, Some(Align::TOP), ScrollAnimation::none());
-                        if !ui.ctx().will_discard() {
-                            self.opened_at = Some(key);
+            // The body sets the story in from the paper's edge. Its rows keep their own spacing.
+            panel_body(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let room = (ui.available_height() - reserved).max(0.0);
+                // While Claude works, the story follows it. Settled, it opens once on the newest message. Either way, the user's scrolling wins.
+                let area = ScrollArea::vertical().id_salt(("run_story", &run.id)).max_height(room).stick_to_bottom(!settled).auto_shrink([false, true]);
+                area.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let anchor = self.story_rows(ui, run, view, root);
+                    if resumed {
+                        let end = Rect::from_min_max(pos2(ui.min_rect().left(), ui.min_rect().bottom()), ui.min_rect().right_bottom());
+                        ui.scroll_to_rect_animation(end, Some(Align::BOTTOM), ScrollAnimation::none());
+                    }
+                    if let Some((index, rect)) = anchor.filter(|_| settled) {
+                        let key = (run.id.clone(), index);
+                        if self.opened_at.as_ref() != Some(&key) {
+                            ui.scroll_to_rect_animation(rect, Some(Align::TOP), ScrollAnimation::none());
+                            if !ui.ctx().will_discard() {
+                                self.opened_at = Some(key);
+                            }
                         }
                     }
-                }
+                });
             });
         });
         if input {
-            self.measured_footer(ui, desk, run, reserved);
+            self.measured_footer(ui, desk, run, kept);
         }
         if !ui.ctx().will_discard() {
             self.followed.insert(run.id.clone(), turn);
@@ -438,20 +443,13 @@ impl RunScreen {
     }
 
     /// The footer, and its height kept for the next frame.
-    fn measured_footer(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, reserved: f32) {
-        let reserved_id = footer_height_id(run);
+    fn measured_footer(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, kept: KeptHeight) {
         // The cursor moves past a gap after each item, so this counts the gap below the footer.
         // The gap above it, between the story and the cursor, is added.
         let start = ui.cursor().top();
         self.footer(ui, desk, run);
         let used = ui.cursor().top() - start + ui.spacing().item_spacing.y;
-        if (used - reserved).abs() > 0.5 {
-            ui.data_mut(|data| data.insert_temp(reserved_id, used));
-            // A discard redraws within this frame when a pass is left. The repaint covers the
-            // frames where none is, so an idle window still settles on the new measure.
-            ui.ctx().request_discard("the footer under the story changed height");
-            ui.ctx().request_repaint();
-        }
+        kept.keep(ui, used, "the footer under the story changed height");
     }
 
     /// One line per started step, each followed by its messages, notices and the user's replies.
@@ -461,7 +459,7 @@ impl RunScreen {
         let mut first = true;
         let mut anchor = None;
         if view.from > 0 {
-            panel_body(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
+            Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
             first = false;
         }
         for part in &view.parts {

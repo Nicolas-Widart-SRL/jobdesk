@@ -1,9 +1,11 @@
+use std::collections::{HashMap, HashSet};
+
 use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
-use crate::intray::application::compose::{Sources, derive_cards};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, HORIZON_DAYS, rank};
-use crate::shared_kernel::WebUrl;
+use crate::intray::application::compose::{Sources, derive_cards, guarded_job};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, HORIZON_WORDS, rank};
+use crate::shared_kernel::{LoadError, WebUrl};
 
 /// What a card asks of the rest of the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,15 +23,63 @@ pub struct Cleared {
     pub label: String,
 }
 
-/// A dated card on the horizon strip.
+/// A dated card in Coming up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mark {
     pub on: NaiveDate,
     pub label: String,
+    /// The card's own name, for a sentence that names the company.
+    pub name: String,
     pub key: String,
     pub kind: CardKind,
     /// False once decided. A card set aside still counts, so its date stays in view.
     pub active: bool,
+}
+
+/// How many Coming up rows show before the rest are counted.
+pub const AGENDA_ROWS: usize = 6;
+
+/// Today's decisions against the cards dealt today. Cards set aside are in neither number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayTally {
+    pub done: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowState {
+    /// A pending card whose date passed this many days ago.
+    Late(i64),
+    /// The card being read.
+    Now,
+    Done,
+    Waiting,
+}
+
+/// One dated line of Coming up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgendaRow {
+    pub on: NaiveDate,
+    pub text: String,
+    pub key: String,
+    pub state: RowState,
+}
+
+/// The cards set aside, which come back on the next day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Returning {
+    pub on: NaiveDate,
+    pub count: usize,
+    /// Each company once, in the order they first appear.
+    pub names: Vec<String>,
+}
+
+/// What Coming up shows: the return row, the dated rows, and the line that closes the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agenda {
+    pub returning: Option<Returning>,
+    pub rows: Vec<AgendaRow>,
+    pub closing: String,
 }
 
 /// The tray as dealt from one snapshot, top card first.
@@ -59,42 +109,9 @@ impl Queue {
         names
     }
 
-    pub fn set_aside_names(&self) -> String {
-        self.set_aside_distinct().join(", ")
-    }
-
     /// Pending cards whose date has passed. A card due today is not overdue.
     pub fn overdue(&self) -> usize {
         self.cards.iter().filter(|card| card.due.as_ref().is_some_and(|due| due.on < self.today)).count()
-    }
-
-    /// The two biggest kinds, most first. With more than two kinds the second line folds the rest into `None`, meaning other.
-    pub fn by_kind(&self) -> Vec<(usize, Option<CardKind>)> {
-        let mut counts: Vec<(usize, CardKind)> = Vec::new();
-        for card in &self.cards {
-            match counts.iter_mut().find(|(_, kind)| *kind == card.kind) {
-                Some((count, _)) => *count += 1,
-                None => counts.push((1, card.kind)),
-            }
-        }
-        counts.sort_by_key(|&(count, kind)| (std::cmp::Reverse(count), kind));
-        if counts.len() > 2 {
-            let rest = counts[1..].iter().map(|(count, _)| count).sum();
-            counts.truncate(1);
-            let mut lines: Vec<(usize, Option<CardKind>)> = counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect();
-            lines.push((rest, None));
-            return lines;
-        }
-        counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect()
-    }
-
-    /// Says so when nothing, set aside or not, is dated inside the horizon.
-    pub fn horizon_note(&self) -> Option<String> {
-        if !self.marks.is_empty() {
-            return None;
-        }
-        let other = if self.overdue() > 0 { "other " } else { "" };
-        Some(format!("No {other}deadlines in the next {HORIZON_DAYS} days"))
     }
 
     /// Today's log under the undo offer. A logged offer already stands for the newest entry, so that entry is left out.
@@ -102,15 +119,113 @@ impl Queue {
         let logged = self.undo.as_ref().is_some_and(|undo| undo.logged);
         self.cleared.get(usize::from(logged)..).unwrap_or(&[])
     }
+}
 
-    pub fn headline(&self) -> String {
-        let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
-        match self.cards.len() {
-            0 if self.set_aside.is_empty() => "Nothing needs you".to_owned(),
-            0 => format!("{} set aside", self.set_aside.len()),
-            1 => format!("1 decision, about {minutes} {}", if minutes == 1 { "minute" } else { "minutes" }),
-            count => format!("{count} decisions, about {minutes} minutes"),
+impl Queue {
+    pub fn tally(&self) -> DayTally {
+        let done = self.cleared.len();
+        DayTally { done, total: done + self.cards.len() }
+    }
+
+    /// With a source missing, an empty list may only mean its cards could not be dealt, so it claims nothing is left.
+    pub fn today_headline(&self, missing: &[&str]) -> String {
+        let count = self.cards.len();
+        if count == 0 && !missing.is_empty() {
+            "Nothing to show yet".to_owned()
+        } else if count == 0 {
+            "All done for today".to_owned()
+        } else if self.cards.iter().all(|card| card.kind == CardKind::Triage) {
+            if count == 1 { "1 new match to look at".to_owned() } else { format!("{count} new matches to look at") }
+        } else if count == 1 {
+            "1 thing needs you".to_owned()
+        } else {
+            format!("{count} things need you")
         }
+    }
+
+    /// `missing` names the sources that could not be read, as they should read at the start of a sentence.
+    pub fn today_subtitle(&self, missing: &[&str]) -> String {
+        let done = self.cleared.len();
+        let mut parts: Vec<String> = Vec::new();
+        let gone = missing.split_last().map(|(last, rest)| {
+            let names = if rest.is_empty() { (*last).to_owned() } else { format!("{} and {last}", rest.join(", ")) };
+            format!("{names} are missing from this list.")
+        });
+        if self.cards.is_empty() {
+            match done {
+                0 => {}
+                1 => parts.push("1 decision.".to_owned()),
+                _ => parts.push(format!("{done} decisions.")),
+            }
+            let next = self.marks.iter().filter(|mark| mark.active && mark.on >= self.today).min_by_key(|mark| mark.on);
+            match next {
+                Some(mark) => parts.push(format!("Your next deadline is {}, {}.", mark.on.format("%a %-d %b"), mark.name)),
+                // A source that could not be read may hold what waits, so the list never claims to be complete.
+                None if done == 0 && gone.is_none() => parts.push("Nothing waits on you.".to_owned()),
+                None => {}
+            }
+            parts.extend(gone);
+            return parts.join(" ");
+        }
+        let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
+        parts.push(format!("About {minutes} {}.", if minutes == 1 { "minute" } else { "minutes" }));
+        if done > 0 {
+            parts.push(format!("{done} done so far today."));
+        }
+        match self.overdue() {
+            0 => {}
+            1 => parts.push("1 is past its deadline.".to_owned()),
+            late => parts.push(format!("{late} are past their deadline.")),
+        }
+        if done == 0 && gone.is_none() && self.cards.iter().all(|card| card.due.is_none()) {
+            parts.push("Nothing has a deadline yet.".to_owned());
+        }
+        parts.extend(gone);
+        parts.join(" ")
+    }
+
+    /// Late cards first, then the dated marks day by day. Rows show up to `AGENDA_ROWS`, and the rest are counted.
+    pub fn agenda(&self) -> Agenda {
+        let mut late: Vec<AgendaRow> = self
+            .cards
+            .iter()
+            .filter_map(|card| {
+                let due = card.due.as_ref().filter(|due| due.on < self.today)?;
+                Some(AgendaRow { on: due.on, text: due.label.clone(), key: card.key.clone(), state: RowState::Late((self.today - due.on).num_days()) })
+            })
+            .collect();
+        late.sort_by_key(|row| row.on);
+        let position = |key: &str| self.cards.iter().position(|card| card.key == key).unwrap_or(usize::MAX);
+        let mut marks: Vec<&Mark> = self.marks.iter().collect();
+        marks.sort_by_key(|mark| (mark.on, position(&mark.key)));
+        let top = self.cards.first().map(|card| card.key.as_str());
+        let dated = marks.into_iter().map(|mark| {
+            let state = if !mark.active {
+                RowState::Done
+            } else if top == Some(mark.key.as_str()) {
+                RowState::Now
+            } else {
+                RowState::Waiting
+            };
+            AgendaRow { on: mark.on, text: mark.label.clone(), key: mark.key.clone(), state }
+        });
+        let mut rows: Vec<AgendaRow> = late.into_iter().chain(dated).collect();
+        let cut = rows.len().saturating_sub(AGENDA_ROWS);
+        rows.truncate(AGENDA_ROWS);
+        let until = (self.today + chrono::Duration::days(HORIZON_DAYS - 1)).format("%a %-d %b");
+        let closing = if rows.is_empty() {
+            format!("No deadlines in the next {}.", HORIZON_WORDS.1)
+        } else if cut > 0 {
+            format!("{cut} more before {until}.")
+        } else {
+            format!("Nothing else dated before {until}.")
+        };
+        let returning = (!self.set_aside.is_empty()).then(|| Returning {
+            on: self.today + chrono::Duration::days(1),
+            count: self.set_aside.len(),
+            names: self.set_aside_distinct().into_iter().map(str::to_owned).collect(),
+        });
+        Agenda { returning, rows, closing }
     }
 }
 
@@ -127,6 +242,33 @@ pub struct UndoOffer {
     pub reason: Option<SkipReason>,
 }
 
+/// What waits in Today, so the Jobs and Applications screens can mark it. Build it only where one of them is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Waiting {
+    /// The key of every job with a card pending.
+    pub jobs: HashSet<String>,
+    /// The role of every application with a card pending, by company, both lowercased as a card key is.
+    pub applications: HashMap<String, HashSet<String>>,
+}
+
+impl Queue {
+    pub fn waiting(&self) -> Waiting {
+        let mut waiting = Waiting::default();
+        for card in &self.cards {
+            match &card.subject {
+                Subject::Job(key) => {
+                    waiting.jobs.insert(key.clone());
+                }
+                Subject::Application { company, role } => {
+                    waiting.applications.entry(company.to_lowercase()).or_default().insert(role.to_lowercase());
+                }
+                Subject::Run(_) => {}
+            }
+        }
+        waiting
+    }
+}
+
 /// Owns the stored decisions and deals the queue from them.
 pub struct InTray {
     store: Option<Box<dyn DecisionStore>>,
@@ -138,7 +280,8 @@ pub struct InTray {
     returned_on: Option<NaiveDate>,
     /// Whether the last decision was on a card brought back, so undoing it puts the card back in front.
     undo_returned: bool,
-    issue: Option<String>,
+    /// Kept as a `LoadError`, whose text is already stripped of hidden characters.
+    issue: Option<LoadError>,
 }
 
 impl InTray {
@@ -146,7 +289,7 @@ impl InTray {
     pub fn new(store: Box<dyn DecisionStore>) -> Self {
         match store.load() {
             Ok(decisions) => Self { store: Some(store), decisions, ..Self::unsaved() },
-            Err(error) => Self { issue: Some(error.to_string()), ..Self::unsaved() },
+            Err(error) => Self { issue: Some(error), ..Self::unsaved() },
         }
     }
 
@@ -155,8 +298,8 @@ impl InTray {
         Self { store: None, decisions: Vec::new(), can_undo: false, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
     }
 
-    pub fn issue(&self) -> Option<&str> {
-        self.issue.as_deref()
+    pub fn issue(&self) -> Option<&LoadError> {
+        self.issue.as_ref()
     }
 
     fn is_cleared(&self, key: &str, today: NaiveDate) -> bool {
@@ -165,6 +308,12 @@ impl InTray {
 
     fn is_set_aside(&self, key: &str, today: NaiveDate) -> bool {
         self.decisions.iter().any(|decision| decision.key == key && decision.sets_aside(today))
+    }
+
+    /// The key of every job whose flagged ad the user kept, so Jobs words it as Today does.
+    pub fn kept_jobs(&self) -> HashSet<String> {
+        let kept = self.decisions.iter().filter(|decision| decision.outcome == Outcome::Kept);
+        kept.filter_map(|decision| guarded_job(&decision.key)).map(str::to_owned).collect()
     }
 
     fn was_kept(&self, key: &str) -> bool {
@@ -193,7 +342,7 @@ impl InTray {
             .filter(|card| card.is_on_horizon(today))
             .filter_map(|card| {
                 let due = card.due.as_ref()?;
-                Some(Mark { on: due.on, label: due.label.clone(), key: card.key.clone(), kind: card.kind, active: !self.is_cleared(&card.key, today) })
+                Some(Mark { on: due.on, label: due.label.clone(), name: card.name.clone(), key: card.key.clone(), kind: card.kind, active: !self.is_cleared(&card.key, today) })
             })
             .collect();
         let (aside, mut cards): (Vec<Card>, Vec<Card>) = derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
@@ -220,8 +369,8 @@ impl InTray {
         self.reading = None;
     }
 
-    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, today: NaiveDate) {
-        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, on: today });
+    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, task: Option<String>, today: NaiveDate) {
+        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, task, on: today });
         self.can_undo = true;
         self.reading = None;
         self.forget_returns_before(today);
@@ -230,9 +379,11 @@ impl InTray {
         self.save();
     }
 
+    /// With no store nothing is saved, so a load error stays until a real save succeeds.
     fn save(&mut self) {
-        let result = self.store.as_ref().map_or(Ok(()), |store| store.save(&self.decisions));
-        self.issue = result.err().map(|error| error.to_string());
+        if let Some(store) = &self.store {
+            self.issue = store.save(&self.decisions).err();
+        }
     }
 
     /// Drops the matching decisions. Undo stays on offer only if its decision is still the last.
@@ -265,12 +416,12 @@ impl InTray {
     }
 
     pub fn later(&mut self, card: &Card, today: NaiveDate) {
-        self.record(card, Outcome::Later, None, today);
+        self.record(card, Outcome::Later, None, None, today);
     }
 
     pub fn skip(&mut self, card: &Card, today: NaiveDate) {
         if card.can_skip {
-            self.record(card, Outcome::Skipped, None, today);
+            self.record(card, Outcome::Skipped, None, None, today);
         }
     }
 
@@ -278,15 +429,15 @@ impl InTray {
     pub fn follow(&mut self, card: &Card, action: &Action, today: NaiveDate) -> Option<Request> {
         match &action.effect {
             Effect::Command(line) => {
-                self.record(card, Outcome::Followed, None, today);
+                self.record(card, Outcome::Followed, None, action.task.map(str::to_owned), today);
                 Some(Request::Command(line.clone()))
             }
             Effect::Skip(reason) => {
-                self.record(card, Outcome::Skipped, Some(*reason), today);
+                self.record(card, Outcome::Skipped, Some(*reason), None, today);
                 None
             }
             Effect::Keep => {
-                self.record(card, Outcome::Kept, None, today);
+                self.record(card, Outcome::Kept, None, None, today);
                 None
             }
             Effect::Dossier(folder) => Some(Request::Dossier(folder.clone())),
@@ -304,12 +455,8 @@ impl InTray {
     fn undo_offer(&self, today: NaiveDate) -> Option<UndoOffer> {
         let last = self.undoable(today)?;
         let asks_reason = last.outcome == Outcome::Skipped;
-        let note = match last.outcome {
-            Outcome::Later => "Set aside until tomorrow".to_owned(),
-            _ if asks_reason && last.reason.is_none() => "Skipped. Why? Optional.".to_owned(),
-            _ => last.label(),
-        };
-        let spoken = format!("Last decision: {}, {}. Press U to undo.", last.outcome.verb(), last.name);
+        let note = last.note();
+        let spoken = format!("Last decision on {}: {}. Press U to undo.", last.name, note.trim_end_matches('.'));
         Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
@@ -342,7 +489,6 @@ impl InTray {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::rc::Rc;
 
     use super::*;
@@ -359,7 +505,7 @@ mod tests {
     fn job(company: &str, score: u8) -> JobView {
         let read = || GateReading { gate: Gate::Pass, value: "x".into() };
         JobView {
-            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None,
+            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None, found_on: None,
             deadline: None, days_to_deadline: None, score: Some(score), verdict: None, scraper_fit: None,
             location_gate: None, language_gate: None, language_note: None,
             freelance: FreelanceGates { contract: read(), day_rate: read(), commute: read() },
@@ -480,7 +626,8 @@ mod tests {
         assert_eq!(request, Some(Request::Command("/apply".into())));
         assert!(dealt(&tray, &jobs).is_empty());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Command opened"));
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Task opened: draft application"));
+        assert_eq!(offer.spoken, "Last decision on Acme: Task opened: draft application. Press U to undo.");
         tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
     }
@@ -508,16 +655,17 @@ mod tests {
         let reopened = InTray::new(Box::new(memory.clone()));
         assert!(dealt(&reopened, &jobs).is_empty());
         assert_eq!(memory.0.borrow()[0].reason, Some(SkipReason::Domain));
-        assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped, domain");
+        assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped for domain");
     }
 
     #[test]
     fn an_unreadable_store_reports_and_stays_untouched() {
         let mut tray = InTray::new(Box::new(Corrupt));
-        assert!(tray.issue().unwrap().contains("not JSON"));
+        assert!(tray.issue().unwrap().to_string().contains("not JSON"));
         let jobs = board(vec![job("Acme", 90)]);
         tray.skip(&top(&tray, &jobs), today());
         assert!(dealt(&tray, &jobs).is_empty());
+        assert!(tray.issue().is_some_and(|issue| issue.to_string().contains("not JSON")), "nothing was saved, so the alert stays");
     }
 
     #[test]
@@ -525,7 +673,7 @@ mod tests {
         let mut tray = InTray::unsaved();
         let on = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
         let jobs = board(vec![JobView { deadline: Some(on), days_to_deadline: Some(5), ..job("Meridian Rail", 80) }]);
-        assert_eq!(queue(&tray, &jobs, today()).marks[0].label, "Meridian closes");
+        assert_eq!(queue(&tray, &jobs, today()).marks[0].label, "Meridian Rail closes");
         let card = top(&tray, &jobs);
 
         tray.later(&card, today());
@@ -545,7 +693,7 @@ mod tests {
         let aside = queue(&tray, &jobs, today());
         assert!(aside.cards.is_empty() && aside.cleared.is_empty());
         assert_eq!(aside.set_aside, ["Acme"]);
-        assert_eq!(aside.headline(), "1 set aside");
+        assert_eq!(aside.today_headline(&[]), "All done for today");
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Set aside until tomorrow"));
     }
@@ -586,7 +734,7 @@ mod tests {
         let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
         tray.later(&top(&tray, &jobs), today());
         tray.later(&top(&tray, &jobs), today());
-        assert_eq!(queue(&tray, &jobs, today()).headline(), "2 set aside");
+        assert_eq!(queue(&tray, &jobs, today()).today_headline(&[]), "All done for today");
 
         tray.bring_back_all(today());
 
@@ -758,9 +906,9 @@ mod tests {
 
         tray.give_reason(SkipReason::Scope, today());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!(offer.note, "Skipped, scope");
+        assert_eq!(offer.note, "Skipped for scope");
         assert_eq!(offer.reason, Some(SkipReason::Scope));
-        assert_eq!(offer.spoken, "Last decision: Skipped, Acme. Press U to undo.");
+        assert_eq!(offer.spoken, "Last decision on Acme: Skipped for scope. Press U to undo.");
     }
 
     #[test]
@@ -771,7 +919,23 @@ mod tests {
         let offer = tray.undo_offer(today()).unwrap();
         assert!(!offer.logged);
         assert!(offer.note.contains("until tomorrow"), "{}", offer.note);
-        assert_eq!(offer.spoken, "Last decision: Set aside, Acme. Press U to undo.");
+        assert_eq!(offer.spoken, "Last decision on Acme: Set aside until tomorrow. Press U to undo.");
+    }
+
+    #[test]
+    fn the_spoken_offer_says_what_the_note_shows() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let hears = |note: &str| format!("Last decision on Acme: {note}. Press U to undo.");
+
+        let mut tray = InTray::unsaved();
+        tray.later(&top(&tray, &jobs), today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.note.as_str(), offer.spoken.as_str()), ("Set aside until tomorrow", hears("Set aside until tomorrow").as_str()));
+
+        let mut tray = InTray::unsaved();
+        tray.skip(&top(&tray, &jobs), today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.note.as_str(), offer.spoken.as_str()), ("Skipped. Why? Optional.", hears("Skipped. Why? Optional").as_str()));
     }
 
     #[test]
@@ -858,35 +1022,34 @@ mod tests {
 
         tray.later(&tray.queue(&sources).cards[0].clone(), today());
 
-        assert_eq!(tray.queue(&sources).headline(), "1 set aside");
+        assert_eq!(tray.queue(&sources).today_headline(&[]), "All done for today");
         assert!(runs[0].needs_user());
     }
 
     #[test]
-    fn headline_counts_minutes() {
-        let card = |kind| Card {
-            key: String::new(), kind, name: String::new(), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: None::<Due>, weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), trace: String::new(),
+    fn the_queue_names_the_jobs_and_applications_waiting_on_you() {
+        let tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90)]);
+        let offer = ApplicationCard {
+            company: "Beta".into(), role: "Dev".into(), sector: String::new(), channel: String::new(),
+            status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: None, deadline_state: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
+            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
+            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
+            archive_folder: None, outcome: None,
         };
-        let queue = |cards| Queue { cards, ..Default::default() };
-        assert_eq!(queue(vec![]).headline(), "Nothing needs you");
-        let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
-        assert_eq!(aside.headline(), "3 set aside");
-        assert_eq!(aside.set_aside_names(), "A, B");
-        assert_eq!(queue(vec![card(CardKind::Close)]).headline(), "1 decision, about 1 minute");
-        assert_eq!(queue(vec![card(CardKind::Send), card(CardKind::Close)]).headline(), "2 decisions, about 4 minutes");
+        let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
+        let queue = tray.queue(&Sources { board: &jobs, pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
+        let waiting = queue.waiting();
+        assert_eq!(waiting.jobs, HashSet::from(["acme".to_owned()]));
+        assert_eq!(waiting.applications, HashMap::from([("beta".to_owned(), HashSet::from(["dev".to_owned()]))]), "lowercased, as the card key is");
     }
 
     fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {
         Card {
-            key: String::new(), kind, name: String::new(), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), trace: String::new(),
+            key: String::new(), kind, name: String::new(), over: None, subject: Subject::Run(String::new()), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
+            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), command: None,
         }
-    }
-
-    fn of_kinds(kinds: &[(usize, CardKind)]) -> Queue {
-        let cards = kinds.iter().flat_map(|&(count, kind)| (0..count).map(move |_| pending(kind, None))).collect();
-        Queue { cards, ..Default::default() }
     }
 
     #[test]
@@ -900,35 +1063,9 @@ mod tests {
     }
 
     #[test]
-    fn kinds_sort_by_count_then_kind_order() {
-        assert_eq!(of_kinds(&[(5, CardKind::Triage), (2, CardKind::Send)]).by_kind(), [(5, Some(CardKind::Triage)), (2, Some(CardKind::Send))]);
-        assert_eq!(of_kinds(&[(1, CardKind::Triage), (1, CardKind::Send)]).by_kind(), [(1, Some(CardKind::Send)), (1, Some(CardKind::Triage))]);
-        assert_eq!(of_kinds(&[(3, CardKind::Close)]).by_kind(), [(3, Some(CardKind::Close))]);
-        assert_eq!(of_kinds(&[]).by_kind(), []);
-    }
-
-    #[test]
-    fn more_than_two_kinds_fold_into_other() {
-        let queue = of_kinds(&[(4, CardKind::Triage), (2, CardKind::Send), (1, CardKind::FollowUp), (1, CardKind::Close)]);
-        assert_eq!(queue.by_kind(), [(4, Some(CardKind::Triage)), (4, None)]);
-    }
-
-    #[test]
     fn set_aside_names_are_listed_once() {
         let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
         assert_eq!(aside.set_aside_distinct(), ["A", "B"]);
-    }
-
-    #[test]
-    fn the_note_shows_only_when_no_mark_is_in_the_window() {
-        let empty = Queue { today: today(), ..Default::default() };
-        assert_eq!(empty.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
-
-        let late = Queue { cards: vec![pending(CardKind::Triage, Some(today() - chrono::Duration::days(1)))], today: today(), ..Default::default() };
-        assert_eq!(late.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
-
-        let mark = Mark { on: today(), label: "Acme closes".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
-        assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
     }
 
     fn closing_in(company: &str, score: u8, days: i64) -> JobView {
@@ -942,13 +1079,13 @@ mod tests {
         let dealt_far = queue(&tray, &far, today());
         assert_eq!(dealt(&tray, &far), ["Plain", "Fourteen"]);
         assert!(dealt_far.marks.is_empty());
-        assert_eq!(dealt_far.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+        assert_eq!(dealt_far.agenda().closing, "No deadlines in the next two weeks.");
 
         let near = board(vec![job("Plain", 90), closing_in("Thirteen", 70, HORIZON_DAYS - 1)]);
         let dealt_near = queue(&tray, &near, today());
         assert_eq!(dealt(&tray, &near), ["Thirteen", "Plain"]);
         assert_eq!(dealt_near.marks.iter().map(|mark| mark.key.as_str()).collect::<Vec<_>>(), ["triage:thirteen"]);
-        assert_eq!(dealt_near.horizon_note(), None);
+        assert_eq!(dealt_near.agenda().rows.len(), 1);
     }
 
     #[test]
@@ -957,7 +1094,7 @@ mod tests {
         let offer = ApplicationCard {
             company: "Juniper".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
             status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: Some(today() - chrono::Days::new(2)), deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
             follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
             is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
             archive_folder: None, outcome: None,
@@ -969,13 +1106,160 @@ mod tests {
         let before = dealt(&tray);
         assert_eq!(before.overdue(), 1);
         assert!(before.marks.is_empty());
-        assert_eq!(before.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
+        assert_eq!(before.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::Late(2)]);
 
         tray.later(&before.cards[0], today());
 
         let after = dealt(&tray);
         assert_eq!(after.overdue(), 0);
         assert_eq!(after.set_aside, ["Juniper"]);
-        assert_eq!(after.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+        assert_eq!(after.agenda().closing, "No deadlines in the next two weeks.");
+    }
+
+    fn day(offset: i64) -> NaiveDate {
+        today() + chrono::Duration::days(offset)
+    }
+
+    fn named(key: &str, name: &str, kind: CardKind, due: Option<(i64, &str)>) -> Card {
+        let card = pending(kind, due.map(|(offset, _)| day(offset)));
+        Card { key: key.into(), name: name.into(), due: due.map(|(offset, label)| Due { on: day(offset), label: label.into() }), ..card }
+    }
+
+    fn marked(key: &str, name: &str, offset: i64, active: bool) -> Mark {
+        Mark { on: day(offset), label: format!("{name} closes"), name: name.into(), key: key.into(), kind: CardKind::Triage, active }
+    }
+
+    fn logged(count: usize) -> Vec<Cleared> {
+        (0..count).map(|at| Cleared { name: format!("Done {at}"), label: "Skipped".into() }).collect()
+    }
+
+    fn today_queue(cards: Vec<Card>) -> Queue {
+        Queue { cards, today: today(), ..Default::default() }
+    }
+
+    #[test]
+    fn today_headline_names_new_matches_when_every_card_is_one() {
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None)]).today_headline(&[]), "1 new match to look at");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Triage, None)]).today_headline(&[]), "2 new matches to look at");
+    }
+
+    #[test]
+    fn today_headline_counts_things_otherwise() {
+        assert_eq!(today_queue(vec![pending(CardKind::Send, None)]).today_headline(&[]), "1 thing needs you");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Close, None)]).today_headline(&[]), "2 things need you");
+    }
+
+    #[test]
+    fn today_headline_is_all_done_with_cards_set_aside() {
+        assert_eq!(today_queue(vec![]).today_headline(&[]), "All done for today");
+        let aside = Queue { set_aside: vec!["Acme".into()], ..today_queue(vec![]) };
+        assert_eq!(aside.today_headline(&[]), "All done for today");
+    }
+
+    #[test]
+    fn today_subtitle_counts_minutes_done_and_overdue() {
+        let due = |offset| Some((offset, "closes"));
+        let cards = vec![named("a", "A", CardKind::Send, due(-1)), named("b", "B", CardKind::Close, due(4))];
+        let one_late = Queue { cleared: logged(3), ..today_queue(cards) };
+        assert_eq!(one_late.today_subtitle(&[]), "About 4 minutes. 3 done so far today. 1 is past its deadline.");
+
+        let cards = vec![named("a", "A", CardKind::Close, due(-3)), named("b", "B", CardKind::Triage, due(-1))];
+        assert_eq!(today_queue(cards).today_subtitle(&[]), "About 2 minutes. 2 are past their deadline.");
+
+        let undated = today_queue(vec![pending(CardKind::Close, None)]);
+        assert_eq!(undated.today_subtitle(&[]), "About 1 minute. Nothing has a deadline yet.");
+
+        let undated_but_started = Queue { cleared: logged(1), ..undated };
+        assert_eq!(undated_but_started.today_subtitle(&[]), "About 1 minute. 1 done so far today.");
+    }
+
+    #[test]
+    fn today_subtitle_names_missing_sources() {
+        let queue = Queue { cleared: logged(1), ..today_queue(vec![pending(CardKind::Close, None)]) };
+        assert_eq!(queue.today_subtitle(&["Applications"]), "About 1 minute. 1 done so far today. Applications are missing from this list.");
+        assert_eq!(queue.today_subtitle(&["Applications", "Jobs"]), "About 1 minute. 1 done so far today. Applications and Jobs are missing from this list.");
+        assert_eq!(queue.today_subtitle(&["Applications", "Jobs", "Tasks"]), "About 1 minute. 1 done so far today. Applications, Jobs and Tasks are missing from this list.");
+    }
+
+    #[test]
+    fn clear_subtitle_names_the_next_deadline() {
+        let marks = vec![marked("late", "Harbor Bank", 1, false), marked("b", "Ardent Software", 6, true), marked("a", "Meridian Rail Systems", 5, true)];
+        let clear = Queue { cleared: logged(11), marks, ..today_queue(vec![]) };
+        assert_eq!(clear.today_subtitle(&[]), "11 decisions. Your next deadline is Thu 5 Nov, Meridian Rail Systems.");
+
+        let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
+        assert_eq!(one.today_subtitle(&[]), "1 decision.");
+
+        let only_deadline = Queue { marks: vec![marked("a", "Acme", 0, true)], ..today_queue(vec![]) };
+        assert_eq!(only_deadline.today_subtitle(&[]), "Your next deadline is Sat 31 Oct, Acme.");
+
+        assert_eq!(today_queue(vec![]).today_subtitle(&[]), "Nothing waits on you.");
+    }
+
+    #[test]
+    fn a_missing_source_holds_back_what_the_list_cannot_know() {
+        assert_eq!(today_queue(vec![]).today_headline(&["Applications"]), "Nothing to show yet");
+        assert_eq!(today_queue(vec![pending(CardKind::Close, None)]).today_headline(&["Applications"]), "1 thing needs you");
+        let undated = today_queue(vec![pending(CardKind::Close, None)]);
+        assert_eq!(undated.today_subtitle(&["Jobs"]), "About 1 minute. Jobs are missing from this list.");
+    }
+
+    #[test]
+    fn a_clear_list_with_a_missing_source_never_says_nothing_waits() {
+        assert_eq!(today_queue(vec![]).today_subtitle(&["Applications"]), "Applications are missing from this list.");
+        let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
+        assert_eq!(one.today_subtitle(&["Jobs", "Applications"]), "1 decision. Jobs and Applications are missing from this list.");
+    }
+
+    #[test]
+    fn tally_leaves_out_cards_set_aside() {
+        let queue = Queue { cleared: logged(3), set_aside: vec!["Acme".into(), "Beta".into()], ..today_queue(vec![pending(CardKind::Close, None), pending(CardKind::Close, None)]) };
+        assert_eq!(queue.tally(), DayTally { done: 3, total: 5 });
+        assert_eq!(today_queue(vec![]).tally(), DayTally { done: 0, total: 0 });
+    }
+
+    #[test]
+    fn agenda_puts_late_cards_first_and_marks_now_and_done() {
+        let cards = vec![
+            named("now", "Meridian", CardKind::Send, Some((5, "Meridian closes"))),
+            named("old", "Older", CardKind::Close, Some((-5, "Older closed"))),
+            named("recent", "Recent", CardKind::Close, Some((-1, "Recent closed"))),
+            named("wait", "Waiting", CardKind::Triage, Some((5, "Waiting closes"))),
+        ];
+        let marks = vec![marked("wait", "Waiting", 5, true), marked("gone", "Gone", 2, false), marked("now", "Meridian", 5, true)];
+        let agenda = Queue { marks, ..today_queue(cards) }.agenda();
+
+        let rows: Vec<(&str, RowState)> = agenda.rows.iter().map(|row| (row.key.as_str(), row.state)).collect();
+        assert_eq!(rows, [("old", RowState::Late(5)), ("recent", RowState::Late(1)), ("gone", RowState::Done), ("now", RowState::Now), ("wait", RowState::Waiting)]);
+        assert_eq!(agenda.rows[0].text, "Older closed");
+        assert_eq!(agenda.rows[0].on, day(-5));
+        assert_eq!(agenda.rows[3].text, "Meridian closes");
+        assert_eq!(agenda.closing, "Nothing else dated before Fri 13 Nov.");
+        assert_eq!(agenda.returning, None);
+    }
+
+    #[test]
+    fn agenda_caps_rows_and_counts_the_rest() {
+        let marks = (0..AGENDA_ROWS as i64 + 2).map(|offset| marked(&format!("k{offset}"), "Acme", offset, true)).collect();
+        let agenda = Queue { marks, ..today_queue(vec![]) }.agenda();
+        assert_eq!(agenda.rows.len(), AGENDA_ROWS);
+        assert_eq!(agenda.closing, "2 more before Fri 13 Nov.");
+
+        let exact = (0..AGENDA_ROWS as i64).map(|offset| marked(&format!("k{offset}"), "Acme", offset, true)).collect();
+        assert_eq!(Queue { marks: exact, ..today_queue(vec![]) }.agenda().closing, "Nothing else dated before Fri 13 Nov.");
+    }
+
+    #[test]
+    fn agenda_says_no_deadlines_when_nothing_is_dated() {
+        let agenda = today_queue(vec![pending(CardKind::Triage, None)]).agenda();
+        assert!(agenda.rows.is_empty());
+        assert_eq!(agenda.closing, "No deadlines in the next two weeks.");
+    }
+
+    #[test]
+    fn agenda_offers_tomorrows_return_row() {
+        let queue = Queue { set_aside: vec!["Acme".into(), "Beta".into(), "Acme".into()], ..today_queue(vec![]) };
+        let returning = queue.agenda().returning.unwrap();
+        assert_eq!(returning, Returning { on: day(1), count: 3, names: vec!["Acme".into(), "Beta".into()] });
     }
 }

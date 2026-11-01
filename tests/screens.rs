@@ -988,13 +988,36 @@ fn bring_them_back_refills_the_tray() {
     for _ in 0..TRAY_CARDS {
         press(&mut harness, Key::L);
     }
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
-    assert!(!is_shown(&harness, "Nothing needs you"));
+    assert!(is_shown(&harness, "All done for today"));
+    assert!(!is_shown(&harness, &format!("{TRAY_CARDS} set aside")));
 
     harness.get_by_label("Bring them back").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
+}
+
+/// Later leaves a card out of the count, a skip ticks one off the stamp.
+#[test]
+fn the_head_counts_what_needs_you() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_head"));
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} things need you")));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 0 of {TRAY_CARDS} decided today.")));
+    assert!(is_shown(&harness, &format!("1 of {TRAY_CARDS}")));
+    assert!(!is_shown(&harness, &format!("{} behind this one", TRAY_CARDS - 1)));
+
+    press(&mut harness, Key::L);
+    let left = TRAY_CARDS - 1;
+    assert!(is_shown(&harness, &format!("{left} things need you")));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 0 of {left} decided today.")));
+    assert!(is_shown(&harness, &format!("1 of {left}")));
+
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::N);
+    harness.get_by_label("Domain").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("{} things need you", left - 2)));
+    assert!(is_shown(&harness, &format!("Saturday 31 October. 1 of {} decided today.", left - 1)));
 }
 
 #[test]

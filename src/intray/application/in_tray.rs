@@ -150,16 +150,6 @@ impl Queue {
         let logged = self.undo.as_ref().is_some_and(|undo| undo.logged);
         self.cleared.get(usize::from(logged)..).unwrap_or(&[])
     }
-
-    pub fn headline(&self) -> String {
-        let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
-        match self.cards.len() {
-            0 if self.set_aside.is_empty() => "Nothing needs you".to_owned(),
-            0 => format!("{} set aside", self.set_aside.len()),
-            1 => format!("1 decision, about {minutes} {}", if minutes == 1 { "minute" } else { "minutes" }),
-            count => format!("{count} decisions, about {minutes} minutes"),
-        }
-    }
 }
 
 impl Queue {
@@ -713,7 +703,7 @@ mod tests {
         let aside = queue(&tray, &jobs, today());
         assert!(aside.cards.is_empty() && aside.cleared.is_empty());
         assert_eq!(aside.set_aside, ["Acme"]);
-        assert_eq!(aside.headline(), "1 set aside");
+        assert_eq!(aside.today_headline(), "All done for today");
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Set aside until tomorrow"));
     }
@@ -754,7 +744,7 @@ mod tests {
         let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
         tray.later(&top(&tray, &jobs), today());
         tray.later(&top(&tray, &jobs), today());
-        assert_eq!(queue(&tray, &jobs, today()).headline(), "2 set aside");
+        assert_eq!(queue(&tray, &jobs, today()).today_headline(), "All done for today");
 
         tray.bring_back_all(today());
 
@@ -1026,7 +1016,7 @@ mod tests {
 
         tray.later(&tray.queue(&sources).cards[0].clone(), today());
 
-        assert_eq!(tray.queue(&sources).headline(), "1 set aside");
+        assert_eq!(tray.queue(&sources).today_headline(), "All done for today");
         assert!(runs[0].needs_user());
     }
 
@@ -1046,21 +1036,6 @@ mod tests {
         let queue = tray.queue(&Sources { board: &jobs, pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
         assert_eq!(queue.waiting_jobs(), ["acme"]);
         assert_eq!(queue.waiting_applications(), [("Beta".to_owned(), "Dev".to_owned())]);
-    }
-
-    #[test]
-    fn headline_counts_minutes() {
-        let card = |kind| Card {
-            key: String::new(), kind, name: String::new(), over: None, subject: Subject::Run(String::new()), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: None::<Due>, weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), command: None,
-        };
-        let queue = |cards| Queue { cards, ..Default::default() };
-        assert_eq!(queue(vec![]).headline(), "Nothing needs you");
-        let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
-        assert_eq!(aside.headline(), "3 set aside");
-        assert_eq!(aside.set_aside_names(), "A, B");
-        assert_eq!(queue(vec![card(CardKind::Close)]).headline(), "1 decision, about 1 minute");
-        assert_eq!(queue(vec![card(CardKind::Send), card(CardKind::Close)]).headline(), "2 decisions, about 4 minutes");
     }
 
     fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {

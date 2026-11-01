@@ -1,10 +1,10 @@
-use egui::{Frame, Key, Margin, Modifiers, ScrollArea, Ui};
+use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
+    Ink, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, day_stamp, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
     horizon_mark as strip_mark, horizon_return,
-    key_button, muted, page_body, page_head, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, strong, tag, undo_row,
+    key_button, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, stamped_head, strong, tag, undo_row,
 };
 use crate::ui_kit::tokens::TRAY_RAIL;
 
@@ -88,8 +88,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
     }
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
 
-    let headline = queue.headline();
-    page_head(ui, Title::Lead(&headline), Some(Subtitle::Text("Paused runs come first, then deadlines, then the rest.")), |_| {});
+    head(ui, queue);
     page_body(ui, |ui| {
         if let Some(issue) = tray.issue() {
             alert(ui, issue);
@@ -100,7 +99,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| cleared(ui, queue, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match top {
-                Some(card) => stack(ui, card, queue.cards.len() - 1, &mut pressed),
+                Some(card) => stack(ui, card, queue.cards.len(), &mut pressed),
                 None => clear(ui, queue, &mut pressed),
             });
         });
@@ -109,6 +108,18 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
     let pressed = pressed?;
     ui.ctx().request_repaint();
     apply(tray, pressed, top, queue)
+}
+
+/// The day stamp ticks off today's decisions. Cards set aside with Later count on neither side.
+fn head(ui: &mut Ui, queue: &Queue) {
+    let tally = queue.tally();
+    let date = queue.today.format("%A %-d %B").to_string();
+    let spoken = if tally.total == 0 { date } else { format!("{date}. {} of {} decided today.", tally.done, tally.total) };
+    let stamp = |ui: &mut Ui| {
+        let day = |pattern| queue.today.format(pattern).to_string();
+        day_stamp(ui, &day("%a"), &day("%-d"), &day("%b"), tally.total, tally.done, &spoken);
+    };
+    stamped_head(ui, stamp, &queue.today_headline(), &queue.today_subtitle(&[]));
 }
 
 fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue) -> Option<Request> {
@@ -171,17 +182,19 @@ fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
     }
 }
 
-/// The top card on the visible edges of what is left. The edge count caps, the headline counts.
-fn stack(ui: &mut Ui, card: &Card, left: usize, pressed: &mut Option<Pressed>) {
+/// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
+fn stack(ui: &mut Ui, card: &Card, pending: usize, pressed: &mut Option<Pressed>) {
     let (kind, tone) = kind_tag(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
-    card_tab(ui, kind, tone, card.when.as_str());
+    ui.horizontal(|ui| {
+        card_tab(ui, kind, tone, card.when.as_str());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(rich(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted))
+                .on_hover_text("Claude's questions come first, then deadlines in the next two weeks, then the rest.");
+        });
+    });
     deal(ui, deal_frame(card.kind), |ui| card_face(ui, card, pressed));
-    stack_edges(ui, left);
-    ui.add_space(4.0);
-    if left > 0 {
-        faint_mono(ui, format!("{left} behind this one"));
-    }
+    stack_edges(ui, pending - 1);
 }
 
 fn card_face(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {

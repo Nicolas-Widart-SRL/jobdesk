@@ -854,7 +854,7 @@ impl RunScreen {
         });
     }
 
-    /// One run in the recent list. The picked run reads in full ink, the others muted. The status badge sits at the right edge so the badges line up, with the cost left of it.
+    /// One run in the recent list. The picked run reads in full ink, the others muted. The status badge sits at the right edge so the badges' right edges line up, with the cost left of it.
     fn recent_row(&self, ui: &mut Ui, run: &Run, on: bool) -> bool {
         let response = pick_row(ui, on, |ui| {
             ui.horizontal(|ui| {

@@ -214,8 +214,11 @@ pub fn reveal_command(ui: &mut Ui, line: &str) -> Response {
     ui.data_mut(|data| data.insert_temp(id, open));
     if open {
         code_box(ui, |ui| {
-            let line = rich(ui, line, Type::MONO, Ink::Text);
-            ui.add(egui::Label::new(line).wrap());
+            // A command reads from its start, wherever the link sits.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                let line = rich(ui, line, Type::MONO, Ink::Text);
+                ui.add(egui::Label::new(line).halign(egui::Align::Min).wrap());
+            });
         });
     }
     response

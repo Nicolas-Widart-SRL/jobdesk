@@ -1145,7 +1145,7 @@ fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
 
 /// The top of the dealt card's tab, which moves only when the tray scrolls.
 fn tab_top(harness: &Harness) -> f32 {
-    let kinds = ["Permission", "Question", "Your turn", "Send", "Triage", "Prep", "Offer", "Guard flag", "Follow-up", "Close"];
+    let kinds = ["Claude asks", "Your turn", "Ready to send", "New match", "Interview prep", "Offer", "Check this ad", "Follow up", "Close it?"];
     kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
 }
 
@@ -1161,6 +1161,46 @@ fn later_and_keep_leave_the_scroll_alone() {
     harness.run_steps(3);
     assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
     assert_eq!(tab_top(&harness), top);
+}
+
+fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {
+    let mut shell = shell(Screen::InTray, name);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 640.0])
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness
+}
+
+/// The footer sits outside the card's scroll, so a long triage card keeps its actions in view.
+#[test]
+fn the_card_actions_fit_the_smallest_window() {
+    let mut harness = smallest_tray("tray_actions_smallest", ScriptedGateway(SharedSink::default()));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert_in_window(&harness, [1040.0, 640.0], &["Draft application…", "Skip", "Later", "Open job ad", "Show the command"]);
+}
+
+/// The line is plain text to read: it opens no launcher and starts no run.
+#[test]
+fn show_the_command_reveals_the_line_and_starts_nothing() {
+    let started = SharedSink::default();
+    let mut harness = smallest_tray("tray_show_command", ScriptedGateway(Arc::clone(&started)));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    let line = "/apply https://meridian.example/jobs/1";
+    assert!(!is_shown(&harness, line));
+
+    harness.get_by_label("Show the command").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, line));
+    assert!(is_shown(&harness, "Hide the command"));
+    assert!(is_shown(&harness, MERIDIAN), "the card stays dealt");
+    assert!(!is_shown(&harness, "All commands"), "no launcher opens");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
 }
 
 /// The rail sits outside the card's scroll, so the row and its reasons show without scrolling.

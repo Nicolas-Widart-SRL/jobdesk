@@ -6,16 +6,18 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabInk, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
     check_tag, chrome_status, clear_panel, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
-    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
+    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
 const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
+/// The room a dealt card takes in the sheet, with its tab and the edges behind it.
+const DEALT_HEIGHT: f32 = 250.0;
 
 const TONES: [(&str, Tone); 8] = [
     ("Plain", Tone::Plain),
@@ -324,24 +326,33 @@ fn tray(ui: &mut Ui) {
         }
     });
     ui.add_space(10.0);
-    ui.spacing_mut().item_spacing.y = 0.0;
-    card_tab(ui, "Send", Tone::Drafted, "Due today");
-    deal(ui, None, |ui| {
-        ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
+    dealt(ui, "send", |ui| {
+        let tab = card_tab(ui, "Ready to send", TabInk::Tone(Tone::Drafted), "Due today");
+        deal(ui, tab, DealLook { key: "send", frame: None, behind: 3 }, |ui| {
+            ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
+        }, |ui| {
+            primary_key_button(ui, "Mark as sent…", "Y");
+            key_button(ui, "Later", "L");
+        });
     });
-    stack_edges(ui, 3);
     ui.add_space(10.0);
-    card_tab(ui, "Permission", Tone::Interview, "Paused run");
-    deal(ui, Some(Tone::Interview), |ui| {
-        ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
+    dealt(ui, "asks", |ui| {
+        let tab = card_tab(ui, "Claude asks", TabInk::Stamp, "Paused task");
+        deal(ui, tab, DealLook { key: "asks", frame: Some(Tone::Interview), behind: 9 }, |ui| {
+            ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
+        }, |ui| {
+            key_button(ui, "Later", "L");
+        });
     });
-    stack_edges(ui, 9);
     ui.add_space(10.0);
-    card_tab(ui, "Your turn", Tone::Turn, "Run waits");
-    deal(ui, Some(Tone::Turn), |ui| {
-        ui.label(rich(ui, "A card for a run that waits", Type::DEAL, Ink::Text));
+    dealt(ui, "turn", |ui| {
+        let tab = card_tab(ui, "Your turn", TabInk::Stamp, "Task waits");
+        deal(ui, tab, DealLook { key: "turn", frame: Some(Tone::Turn), behind: 1 }, |ui| {
+            ui.label(rich(ui, "A card for a task that waits", Type::DEAL, Ink::Text));
+        }, |ui| {
+            key_button(ui, "Later", "L");
+        });
     });
-    stack_edges(ui, 1);
     ui.add_space(10.0);
     ui.scope(|ui| {
         ui.set_max_width(SLIP);
@@ -440,6 +451,16 @@ const DOCUMENT: &str = "# Job fit evaluation: Tech Lead, Java Platform\n\nVerdic
 
 fn document_sample(ui: &mut Ui) {
     document(ui, &mut CommonMarkCache::default(), DOCUMENT);
+}
+
+/// A dealt card takes the height it is given, so each gets a fixed room and its own id for its footer.
+fn dealt(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
+    ui.push_id(id, |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), DEALT_HEIGHT), |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui);
+        });
+    });
 }
 
 fn postmark(ui: &mut Ui) {

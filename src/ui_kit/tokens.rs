@@ -68,6 +68,9 @@ pub const CARD_TAB_PADDING: (i8, i8) = (14, 6);
 pub const CARD_TAB_GAP: f32 = 10.0;
 pub const DEAL_PADDING: (i8, i8) = (22, 20);
 pub const DEAL_GAP: f32 = 16.0;
+pub const DEAL_FOOT_PADDING: (i8, i8) = (22, 12);
+/// The least width the note beside a card's actions takes before it moves under them.
+pub const DEAL_ASIDE_MIN: f32 = 240.0;
 /// The day stamp's size, its two ring radii, and a tick's inner radius, outer radius and width.
 pub const DAY_STAMP_SIZE: f32 = 84.0;
 pub const DAY_STAMP_RINGS: (f32, f32) = (40.4, 28.4);

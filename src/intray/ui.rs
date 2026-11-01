@@ -2,13 +2,15 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    Ink, Tone, Type, alert, button, card_tab, clear_panel, code_box, command_button, day_stamp, deal, divider, faint_mono, horizon as horizon_strip, horizon_count, horizon_day,
-    horizon_mark as strip_mark, horizon_return,
-    key_button, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, rich, side_column, slip, stack_edges, stamp, stamped_head, strong, tag, undo_row,
+    CheckMark, DealLook, Ink, TabInk, Tone, Type, alert, button, card_tab, check_tag, clear_panel, code_box, command_button, day_stamp, deal, divider, horizon as horizon_strip, horizon_count,
+    horizon_day, horizon_mark as strip_mark, horizon_return, key_button, lead_line, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, reveal_command, rich,
+    side_column, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::TRAY_RAIL;
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
+const GATE_CELL_GAP: f32 = 7.0;
+const STAMP_GAP: f32 = 14.0;
 const CODE_HEIGHT: f32 = 150.0;
 
 enum Pressed {
@@ -21,18 +23,26 @@ enum Pressed {
     BringAll,
 }
 
-fn kind_tag(kind: CardKind) -> (&'static str, Tone) {
+/// Only what Claude asks of the user takes the stamp: those cards hold a paused run.
+fn kind_tag(kind: CardKind) -> (&'static str, TabInk) {
     match kind {
-        CardKind::Permission => ("Permission", Tone::Interview),
-        CardKind::Question => ("Question", Tone::Interview),
-        CardKind::Turn => ("Your turn", Tone::Turn),
-        CardKind::Send => ("Send", Tone::Drafted),
-        CardKind::Triage => ("Triage", Tone::Closed),
-        CardKind::Prep => ("Prep", Tone::Interview),
-        CardKind::Offer => ("Offer", Tone::Offer),
-        CardKind::GuardFlag => ("Guard flag", Tone::Interview),
-        CardKind::FollowUp => ("Follow-up", Tone::Active),
-        CardKind::Close => ("Close", Tone::Plain),
+        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp),
+        CardKind::Turn => ("Your turn", TabInk::Stamp),
+        CardKind::Send => ("Ready to send", TabInk::Tone(Tone::Drafted)),
+        CardKind::Triage => ("New match", TabInk::Tone(Tone::Active)),
+        CardKind::Prep => ("Interview prep", TabInk::Tone(Tone::Interview)),
+        CardKind::Offer => ("Offer", TabInk::Tone(Tone::Offer)),
+        CardKind::GuardFlag => ("Check this ad", TabInk::Tone(Tone::Interview)),
+        CardKind::FollowUp => ("Follow up", TabInk::Tone(Tone::Active)),
+        CardKind::Close => ("Close it?", TabInk::Tone(Tone::Plain)),
+    }
+}
+
+/// A kind's colour on the strip, where the stamp does not go.
+fn kind_tone(kind: CardKind) -> Tone {
+    match kind_tag(kind).1 {
+        TabInk::Tone(tone) => tone,
+        TabInk::Stamp => Tone::Interview,
     }
 }
 
@@ -53,11 +63,11 @@ fn deal_frame(kind: CardKind) -> Option<Tone> {
     }
 }
 
-fn check_tag(check: Check) -> (&'static str, Tone) {
+fn check_mark(check: Check) -> CheckMark {
     match check {
-        Check::Pass => ("Pass", Tone::Hired),
-        Check::Flag => ("Flag", Tone::Interview),
-        Check::Fail => ("Fail", Tone::Closed),
+        Check::Pass => CheckMark::Ok,
+        Check::Flag => CheckMark::Unclear,
+        Check::Fail => CheckMark::Fails,
     }
 }
 
@@ -97,11 +107,11 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
         ui.add_space(12.0);
 
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| cleared(ui, queue, &mut pressed));
-        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match top {
-                Some(card) => stack(ui, card, queue.cards.len(), &mut pressed),
-                None => clear(ui, queue, &mut pressed),
-            });
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
+            Some(card) => stack(ui, card, queue.cards.len(), &mut pressed),
+            None => {
+                ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
+            }
         });
     });
 
@@ -176,28 +186,62 @@ fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pr
 }
 
 fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
-    let tone = mark.active.then(|| kind_tag(mark.kind).1);
+    let tone = mark.active.then(|| kind_tone(mark.kind));
     if strip_mark(ui, mark.label.as_str(), tone).clicked() {
         *pressed = Some(Pressed::Bring(mark.key.clone()));
     }
 }
 
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
+/// The card takes the height left, so its actions stay in view however long its body is.
 fn stack(ui: &mut Ui, card: &Card, pending: usize, pressed: &mut Option<Pressed>) {
-    let (kind, tone) = kind_tag(card.kind);
+    let (kind, ink) = kind_tag(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
-    ui.horizontal(|ui| {
-        card_tab(ui, kind, tone, card.when.as_str());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(rich(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted))
-                .on_hover_text("Claude's questions come first, then deadlines in the next two weeks, then the rest.");
-        });
-    });
-    deal(ui, deal_frame(card.kind), |ui| card_face(ui, card, pressed));
-    stack_edges(ui, pending - 1);
+    let tab = ui
+        .horizontal(|ui| {
+            let tab = card_tab(ui, kind, ink, card.when.as_str());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(rich(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted))
+                    .on_hover_text("Claude's questions come first, then deadlines in the next two weeks, then the rest.");
+            });
+            tab
+        })
+        .inner;
+    let look = DealLook { key: &card.key, frame: deal_frame(card.kind), behind: pending - 1 };
+    deal(ui, tab, look, |ui| card_face(ui, card), |ui| actions(ui, card, pressed));
 }
 
-fn card_face(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
+/// Any string here may come from a posting, a note or a report, so each shows as a plain label.
+fn card_face(ui: &mut Ui, card: &Card) {
+    match &card.body {
+        Body::Triage { score, band, gates, strengths, gaps } => {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = STAMP_GAP;
+                stamp(ui, &score.to_string(), score_tone(*score));
+                who(ui, card);
+            });
+            lead_line(ui, band, card.take.as_str());
+            checks(ui, gates);
+            ui.columns_const(|[left, right]| {
+                bullets(left, "Why it fits", strengths);
+                bullets(right, "What is missing", gaps);
+            });
+        }
+        body => {
+            who(ui, card);
+            ui.label(rich(ui, card.take.as_str(), Type::TAKE, Ink::Text));
+            match body {
+                Body::Lines(lines) => lines_body(ui, lines),
+                Body::Code { label, text } => code_body(ui, label, text),
+                Body::Options(options) => options_body(ui, options),
+                Body::Empty | Body::Triage { .. } => {}
+            }
+        }
+    }
+}
+
+/// The company over the role, then where it is.
+fn who(ui: &mut Ui, card: &Card) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         if let Some(over) = &card.over {
@@ -206,54 +250,36 @@ fn card_face(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
         ui.label(rich(ui, card.title.as_str(), Type::DEAL, Ink::Text));
         muted(ui, card.subtitle.as_str());
     });
-    ui.label(rich(ui, card.take.as_str(), Type::TAKE, Ink::Text));
-    match &card.body {
-        Body::Empty => {}
-        Body::Triage { score, band, gates, strengths, gaps } => triage_body(ui, *score, band, gates, strengths, gaps),
-        Body::Lines(lines) => lines_body(ui, lines),
-        Body::Code { label, text } => code_body(ui, label, text),
-        Body::Options(options) => options_body(ui, options),
-    }
-    actions(ui, card, pressed);
-    if let Some(command) = &card.command {
-        faint_mono(ui, command.as_str());
-    }
 }
 
-fn triage_body(ui: &mut Ui, score: u8, band: &str, gates: &[GateRow], strengths: &[String], gaps: &[String]) {
-    let tone = match score {
+fn score_tone(score: u8) -> Tone {
+    match score {
         75.. => Tone::Hired,
         60..=74 => Tone::Active,
         _ => Tone::Interview,
-    };
-    ui.horizontal(|ui| {
-        stamp(ui, &score.to_string(), tone);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            strong(ui, band);
-            muted(ui, "Triage score, from posting text only");
-        });
-    });
-    for row in gates.chunks(GATE_COLUMNS) {
-        ui.columns(GATE_COLUMNS, |columns| {
-            for (ui, gate) in columns.iter_mut().zip(row) {
-                gate_cell(ui, gate);
-            }
-        });
     }
-    ui.columns_const(|[left, right]| {
-        bullets(left, "Strengths", strengths);
-        bullets(right, "Gaps", gaps);
+}
+
+fn checks(ui: &mut Ui, gates: &[GateRow]) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for row in gates.chunks(GATE_COLUMNS) {
+            ui.columns(GATE_COLUMNS, |columns| {
+                for (ui, gate) in columns.iter_mut().zip(row) {
+                    gate_cell(ui, gate);
+                }
+            });
+        }
     });
 }
 
 fn gate_cell(ui: &mut Ui, gate: &GateRow) {
-    let (text, tone) = check_tag(gate.check);
     divider(ui);
+    ui.add_space(GATE_CELL_GAP);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            tag(ui, text, tone);
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            check_tag(ui, check_mark(gate.check));
+            ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.label(rich(ui, gate.label, Type::SMALL, Ink::Muted));
@@ -262,13 +288,20 @@ fn gate_cell(ui: &mut Ui, gate: &GateRow) {
             });
         });
     });
+    ui.add_space(GATE_CELL_GAP);
 }
 
 fn bullets(ui: &mut Ui, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
     ui.spacing_mut().item_spacing.y = 3.0;
     strong(ui, title);
     for item in items {
-        muted(ui, item);
+        ui.horizontal(|ui| {
+            ui.label("-");
+            ui.add(egui::Label::new(item.as_str()).wrap());
+        });
     }
 }
 
@@ -305,25 +338,39 @@ fn options_body(ui: &mut Ui, options: &[(String, String)]) {
     });
 }
 
+/// The keyed actions lead, then the rest. The note on what Y does sits on the right, or under them when the row is full.
+/// The command shows only on request, as plain text, and showing it starts nothing.
 fn actions(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
-    ui.horizontal_wrapped(|ui| {
-        if let Some(primary) = &card.primary
-            && primary_key_button(ui, &primary.label, "Y").clicked()
-        {
-            *pressed = Some(Pressed::Act(primary.clone()));
+    if let Some(primary) = &card.primary
+        && primary_key_button(ui, &primary.label, "Y").clicked()
+    {
+        *pressed = Some(Pressed::Act(primary.clone()));
+    }
+    if card.can_skip && key_button(ui, "Skip", "N").clicked() {
+        *pressed = Some(Pressed::Skip);
+    }
+    if key_button(ui, "Later", "L").clicked() {
+        *pressed = Some(Pressed::Later);
+    }
+    for action in &card.others {
+        if button(ui, &action.label).clicked() {
+            *pressed = Some(Pressed::Act(action.clone()));
         }
-        for action in &card.others {
-            if button(ui, &action.label).clicked() {
-                *pressed = Some(Pressed::Act(action.clone()));
-            }
+    }
+    if ui.available_size_before_wrap().x < DEAL_ASIDE_MIN {
+        ui.end_row();
+    }
+    ui.with_layout(Layout::top_down(Align::Max), |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        if card.command.is_none() {
+            // A note on its own centres on the buttons' row.
+            let height = wrapped_height(ui, &card.note, Type::NOTE, ui.available_width());
+            ui.add_space(((BUTTON_HEIGHT - height) / 2.0).max(0.0));
         }
-        if card.can_skip && key_button(ui, "Skip", "N").clicked() {
-            *pressed = Some(Pressed::Skip);
+        ui.add(egui::Label::new(rich(ui, card.note.as_str(), Type::NOTE, Ink::Muted)).halign(Align::Max).wrap());
+        if let Some(command) = &card.command {
+            reveal_command(ui, command);
         }
-        if key_button(ui, "Later", "L").clicked() {
-            *pressed = Some(Pressed::Later);
-        }
-        muted(ui, card.note.as_str());
     });
 }
 

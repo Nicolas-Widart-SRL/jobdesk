@@ -1,6 +1,6 @@
 //! The in-tray's parts: one decision at a time, on top of a visible stack of what is left.
 
-use egui::{CornerRadius, Frame, Label, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
+use egui::{CentralPanel, Color32, CornerRadius, Frame, Label, Margin, Panel, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
@@ -9,7 +9,7 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{divider, inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    AGENDA_DAY_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
+    AGENDA_DAY_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
     HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
     STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
@@ -114,48 +114,106 @@ pub fn horizon_mark(ui: &mut Ui, text: &str, tone: Option<Tone>) -> Response {
     response
 }
 
-/// The folder tab on top of the dealt card.
-pub fn card_tab(ui: &mut Ui, title: &str, tone: Tone, when: &str) {
-    let fill = Palette::of(ui).panel;
+/// What fills a card's tab: the card itself with the kind in a status tone, or the stamp for what Claude asks of the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabInk {
+    Tone(Tone),
+    Stamp,
+}
+
+/// Where a card's tab sits and what fills it, so the card under it can open its top edge there.
+#[derive(Debug, Clone, Copy)]
+#[must_use]
+pub struct CardTab {
+    rect: Rect,
+    fill: Color32,
+}
+
+/// The folder tab on top of the dealt card. Hand it to `deal`, which joins the two.
+pub fn card_tab(ui: &mut Ui, title: &str, ink: TabInk, when: &str) -> CardTab {
+    let p = Palette::of(ui);
+    let (fill, title_ink, when_ink) = match ink {
+        TabInk::Tone(tone) => (p.card, tone.color(&p), p.muted),
+        TabInk::Stamp => (p.stamp, p.on_stamp, p.on_stamp),
+    };
     let (x, y) = CARD_TAB_PADDING;
-    Frame::new().fill(fill).corner_radius(TAB_TOP).inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+    let shown = Frame::new().fill(fill).corner_radius(TAB_TOP).inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = CARD_TAB_GAP;
         ui.set_min_height(CARD_TAB_HEIGHT - 2.0 * y as f32);
         ui.horizontal(|ui| {
-            let title = rich(ui, title, Type::STRONG, tone);
-            ui.label(title);
-            crate::ui_kit::muted(ui, when);
+            ui.label(RichText::new(title).font(Type::STRONG.font()).color(title_ink));
+            ui.label(RichText::new(when).font(Type::BODY.font()).color(when_ink));
         });
     });
+    let rect = shown.response.rect;
+    if let TabInk::Tone(_) = ink {
+        ui.painter().rect_stroke(rect, TAB_TOP, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
+    }
+    CardTab { rect, fill }
 }
 
-/// The card being read. `frame` rings one that has no default and needs reading first, in the colour of why.
-pub fn deal<R>(ui: &mut Ui, frame: Option<Tone>, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// How the dealt card sits. `key` names it, so the next card's body opens at its top.
+/// `frame` rings one that has no default and needs reading first, in the colour of why. `behind` counts the cards under it.
+#[derive(Debug, Clone, Copy)]
+pub struct DealLook<'a> {
+    pub key: &'a str,
+    pub frame: Option<Tone>,
+    pub behind: usize,
+}
+
+/// The card being read, under its tab and on the edges of the cards behind it. It takes the height left in `ui`:
+/// the body scrolls, and the footer with the card's actions stays pinned under it.
+pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
     let p = Palette::of(ui);
-    let (x, y) = DEAL_PADDING;
-    let plain = Frame::new().fill(p.panel).corner_radius(DEAL_CORNERS).inner_margin(Margin::symmetric(x, y));
-    let ring = frame.map(|tone| tone.color(&p));
-    let framed = match ring {
-        Some(color) => plain.stroke(Stroke::new(HAIRLINE, color)).shadow(offset_shadow(ui, color)),
-        None => plain,
+    let ring = look.frame.map(|tone| tone.color(&p));
+    let shadow = if ring.is_some() { OFFSET_SHADOW as f32 } else { 0.0 };
+    let edges = look.behind.min(STACK_EDGES_SHOWN) as f32 * STACK_EDGE_HEIGHT;
+    // In a short window the body gives way first, so the footer and the edges stay inside it.
+    let height = (ui.available_height() - edges - shadow).max(0.0);
+    let frame = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, ring.unwrap_or(p.line))).corner_radius(DEAL_CORNERS);
+    let frame = match ring {
+        Some(color) => frame.shadow(offset_shadow(ui, color)),
+        None => frame,
     };
-    let inner = framed
-        .show(ui, |ui| {
+    let (x, y) = DEAL_PADDING;
+    let shown = ui.allocate_ui(vec2(ui.available_width(), height), |ui| {
+        frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = DEAL_GAP;
-            add(ui)
+            ui.set_height(ui.available_height());
+            Panel::bottom("deal_footer").show_separator_line(false).frame(Frame::new()).show(ui, |ui| deal_footer(ui, footer));
+            CentralPanel::default()
+                .frame(Frame::new())
+                .show(ui, |ui| {
+                    ScrollArea::vertical().id_salt(("deal_body", look.key)).auto_shrink([false, false]).show(ui, |ui| {
+                        Frame::new()
+                            .inner_margin(Margin::symmetric(x, y))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = DEAL_GAP;
+                                body(ui)
+                            })
+                            .inner
+                    })
+                    .inner
+                })
+                .inner
         })
-        .inner;
+    });
+    // The tab's foot and the card's top edge give way to the tab's fill, so the two read as one sheet.
+    let card = shown.inner.response.rect;
+    let join = Rect::from_x_y_ranges((tab.rect.left() + HAIRLINE)..=(tab.rect.right() - HAIRLINE), (tab.rect.bottom() - HAIRLINE)..=(card.top() + HAIRLINE));
+    ui.painter().rect_filled(join, 0.0, tab.fill);
     if ring.is_some() {
-        ui.add_space(OFFSET_SHADOW as f32);
+        ui.add_space(shadow);
     }
-    inner
+    stack_edges(ui, look.behind);
+    shown.inner.inner
 }
 
 /// The row under a card's body that holds its actions, ruled off on top.
 pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     divider(ui);
-    let (x, y) = DEAL_PADDING;
+    let (x, y) = DEAL_FOOT_PADDING;
     Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {

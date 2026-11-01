@@ -137,9 +137,7 @@ impl RunDesk {
     /// A finished run continues in its Claude session through a new process.
     /// One run works at a time: while another run is busy, the reply is refused, even on a live session.
     pub fn reply(&mut self, id: &str, text: &str) -> Result<(), StartError> {
-        let live = self.sessions.contains_key(id);
-        let another_is_busy = self.runs.iter().any(|run| run.id != id && run.is_busy());
-        if another_is_busy || (!live && self.is_busy()) {
+        if self.runs.iter().any(|run| run.id != id && run.is_busy()) {
             return Err(StartError::AnotherRunIsActive);
         }
         let Some(run) = self.run_mut(id) else { return Ok(()) };
@@ -152,10 +150,8 @@ impl RunDesk {
             started_at: run.started_at.clone(),
             resume_session: run.session_id.clone(),
         };
-        if live {
-            if let Some(session) = self.sessions.get_mut(id) {
-                session.send_message(text);
-            }
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.send_message(text);
         } else {
             let session = self.gateway.start(&request, self.sink_for(id));
             self.sessions.insert(id.to_owned(), session);

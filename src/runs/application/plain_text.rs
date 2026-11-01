@@ -17,6 +17,12 @@ pub fn first_line(text: &str) -> String {
     visible(text.lines().next().unwrap_or_default())
 }
 
+/// The first line of untrusted text that holds something, cleaned as `first_line` cleans one.
+/// A turn's result text opens with what went wrong.
+pub fn first_filled_line(text: &str) -> String {
+    text.lines().map(visible).find(|line| !line.is_empty()).unwrap_or_default()
+}
+
 /// The last line of untrusted text that holds something, cleaned as `first_line` cleans one.
 /// A failure reason ends on its error, so this is the line that says what went wrong.
 pub fn last_line(text: &str) -> String {
@@ -66,6 +72,12 @@ mod tests {
     fn the_last_line_is_the_error() {
         assert_eq!(last_line(STDERR), "error: auth expired");
         assert_eq!(last_line("\n \u{200b}\n"), "");
+    }
+
+    #[test]
+    fn the_first_filled_line_skips_blank_ones() {
+        assert_eq!(first_filled_line("\n  \nAPI Error: 401 invalid x-api-key\n\nPlease run /login"), "API Error: 401 invalid x-api-key");
+        assert_eq!(first_filled_line(" \u{200b}\n"), "");
     }
 
     #[test]

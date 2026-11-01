@@ -3,7 +3,7 @@ mod run_desk;
 mod story;
 mod turn;
 
-pub use plain_text::{NoticeText,command_word, first_line, last_line, notice_text};
+pub use plain_text::{command_word, first_filled_line, first_line, last_line, notice_text};
 pub use run_desk::{RunDesk, StartError, StartOptions};
 pub use story::{Band, BandText, BandTone, StepLine, StepState, action_noun, band, elapsed_text, short_path, step_lines, step_states};
 pub use turn::{ClosingQuestion, closing_question, stop_point, wants_reply};

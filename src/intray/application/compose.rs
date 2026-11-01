@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, Lane};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Check, Due, Effect, GateRow, SkipReason};
-use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point, wants_reply};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -124,18 +124,16 @@ fn paused_card(run: &Run) -> Option<Card> {
     }))
 }
 
-/// A run that waits for the user's reply: its turn ended on a stop point or a question, and nothing else works.
-/// Only a reply moves it on, so the card has no default. It stays away while another run works, because a reply would be blocked.
+/// A run that waits for the user's reply, as `wants_reply` says, with no prompt open: a prompt is `paused_card`'s.
+/// Only a reply moves it on, so the card has no default. It stays away while another run works, because a reply would be blocked,
+/// and once every step is done.
 fn turn_card(run: &Run, another_is_busy: bool) -> Option<Card> {
     let rail = run.steps.as_ref();
-    if another_is_busy || !run.awaits_reply() || rail.is_some_and(|rail| rail.is_complete()) {
+    if another_is_busy || run.needs_user() || !wants_reply(run) || rail.is_some_and(|rail| rail.is_complete()) {
         return None;
     }
     let stop = stop_point(run);
     let question = closing_question(run);
-    if stop.is_none() && question.is_none() {
-        return None;
-    }
     let (status, take) = match (stop, rail.and_then(|rail| rail.labels.get(rail.current))) {
         (Some(_), Some(step)) => (format!("stopped after {step}"), "Claude finished a step and waits for your reply."),
         _ => ("is waiting".into(), "Claude asked a question and waits for your reply."),
@@ -701,6 +699,16 @@ mod tests {
         run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
         let dealt = cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(&run));
         assert_eq!(dealt.iter().map(|card| card.kind).collect::<Vec<_>>(), [CardKind::Question]);
+        assert!(turn_card(&run, false).is_none(), "a pending prompt never deals a turn card, though wants_reply holds");
+    }
+
+    #[test]
+    fn a_stop_part_way_that_asks_nothing_deals_no_card() {
+        let mut run = run_of("r3", "/apply x");
+        says(&mut run, "The posting URL returned 404, so I could not fetch it.");
+        end_turn(&mut run, 0.2);
+        assert!(!run.steps.as_ref().unwrap().is_complete());
+        assert!(turn_card(&run, false).is_none());
     }
 
     #[test]

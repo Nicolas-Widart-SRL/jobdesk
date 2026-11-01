@@ -1,4 +1,4 @@
-use crate::runs::application::{closing_question, command_word, first_line, last_line, stop_point, wants_reply};
+use crate::runs::application::{closing_question, command_word, first_filled_line, first_line, last_line, stop_point, wants_reply};
 use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Run, RunStatus, ToolState, phrases_for};
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -57,8 +57,10 @@ pub fn step_states(run: &Run) -> Option<Vec<StepState>> {
         RunStatus::Failed(_) | RunStatus::Stopped => (StepState::Failed, StepState::Next),
         RunStatus::Closed => (StepState::Done, StepState::Next),
         _ if run.needs_user() => (StepState::Waiting, StepState::Next),
-        // Claude is done for now and asks nothing, so no step waits.
-        RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => (StepState::Done, StepState::Next),
+        // Claude is done for now and asks nothing, so no step waits. A step it left part-way is not lit, and not done either.
+        RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
+            if rail.is_complete() { (StepState::Done, StepState::Next) } else { (StepState::Next, StepState::Next) }
+        }
         RunStatus::AwaitingReply if !run.is_busy() => {
             if stop_point(run).is_some() { (StepState::Done, StepState::Waiting) } else { (StepState::Waiting, StepState::Next) }
         }
@@ -182,15 +184,15 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
     let resume = say("Reply to resume", "Or leave it. Files so far stay.", Plain);
     match &run.status {
         RunStatus::Failed(reason) => {
-            // A stderr tail ends on its error.
-            let reason = last_line(reason);
+            // A stderr tail ends on its error. A turn's result text opens with it.
+            let reason = if run.failed_on_stderr { last_line(reason) } else { first_filled_line(reason) };
             let reason = if reason.is_empty() { "The run ended with an error." } else { &reason };
             (say(&where_value(run, ", failed"), "", Failed), nobody(reason), resume)
         }
         RunStatus::Stopped => (say(&where_value(run, ", stopped"), "", Plain), nobody("You stopped this run"), resume),
         RunStatus::Closed => match rail {
             Some(rail) if rail.is_complete() => {
-                let finished = run.line.split_whitespace().next() == Some("/apply");
+                let finished = command_word(&run.line) == "/apply";
                 let next = if finished {
                     say("Read the documents", "Open the dossier, then send it yourself.", Plain)
                 } else {
@@ -209,7 +211,7 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
         RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
             let place = match rail {
                 Some(rail) if rail.is_complete() => format!("All {} steps", rail.labels.len()),
-                _ => where_value(run, ""),
+                _ => where_value(run, ", paused"),
             };
             (say(&place, "", Plain), nobody("Claude is done for now"), say("Reply to continue", "Or end the session.", Plain))
         }
@@ -376,13 +378,14 @@ mod tests {
     #[test]
     fn a_stop_without_a_question_is_nobodys_turn() {
         let mut run = started("/apply x");
-        says(&mut run, "Done for now.");
+        says(&mut run, "The posting URL returned 404, so I could not fetch it.");
         ends_turn(&mut run);
         let band = band(&run);
-        assert_eq!(band.place, cell("0 Fetch", "", BandTone::Plain));
+        assert_eq!(band.place, cell("0 Fetch, paused", "", BandTone::Plain));
         assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
         assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
-        assert_eq!(step_states(&run).unwrap()[..2], [StepState::Done, StepState::Next]);
+        assert_eq!(band.tally, "0 of 7 steps done");
+        assert_eq!(step_states(&run).unwrap()[..2], [StepState::Next, StepState::Next], "the step left part-way is not done");
     }
 
     #[test]
@@ -406,11 +409,11 @@ mod tests {
         says(&mut run, "Understood, stopping.");
         ends_turn(&mut run);
         let band = band(&run);
-        assert_eq!(band.place, cell("1 Evaluate", "", BandTone::Plain));
+        assert_eq!(band.place, cell("1 Evaluate, paused", "", BandTone::Plain));
         assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
         assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
-        assert_eq!(band.tally, "2 of 7 steps done");
-        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Done, StepState::Next]);
+        assert_eq!(band.tally, "1 of 7 steps done");
+        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Next, StepState::Next]);
         assert!(!band.marks.contains(&StepState::Waiting));
     }
 
@@ -455,14 +458,22 @@ mod tests {
     }
 
     #[test]
-    fn failed_names_the_step_and_the_last_line_of_the_reason() {
+    fn a_stderr_failure_names_its_last_line() {
+        let mut run = at_draft_working();
+        let reason = "Downloading 10%\nDownloading 100%\nerror:\u{202e} auth expired\n\n";
+        run.apply(AgentEvent::ProcessExited { failure: Some(reason.into()) });
+        assert_eq!(band(&run).who, cell("Nobody", "error: auth expired", BandTone::Plain));
+    }
+
+    #[test]
+    fn failed_names_the_step_and_the_first_line_of_the_result() {
         let mut run = at_draft_working();
         does(&mut run, "Bash", "lualatex main.tex");
-        let reason = "Downloading 10%\nDownloading 100%\nerror:\u{202e} auth expired\n\n";
+        let reason = "\nAPI Error: 401 invalid\u{202e} x-api-key\n\nPlease run /login";
         run.apply(AgentEvent::TurnEnded { failed: true, message: Some(reason.into()), cost_usd: 1.0, duration_ms: 1 });
         let band = band(&run);
         assert_eq!(band.place, cell("5 Compile, failed", "", BandTone::Failed));
-        assert_eq!(band.who, cell("Nobody", "error: auth expired", BandTone::Plain));
+        assert_eq!(band.who, cell("Nobody", "API Error: 401 invalid x-api-key", BandTone::Plain));
         assert_eq!(band.next, cell("Reply to resume", "Or leave it. Files so far stay.", BandTone::Plain));
         assert_eq!(step_states(&run).unwrap()[5], StepState::Failed);
     }

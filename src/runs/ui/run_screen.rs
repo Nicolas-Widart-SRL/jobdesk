@@ -188,13 +188,15 @@ fn cell_look(text: &BandText) -> CellLook {
 }
 
 /// "Show 3 actions", "so far" while the step can still gain some, or "Hide actions" once open.
-/// A step with no actions but other folded rows, such as allowances, reads "Show details".
-fn toggle_text(actions: usize, live: bool, open: bool) -> String {
-    match (actions, open) {
-        (0, true) => "Hide details".to_owned(),
-        (0, false) => "Show details".to_owned(),
-        (_, true) => "Hide actions".to_owned(),
-        (actions, false) => {
+/// A step whose actions were all cut, which opens on the count of them, reads "Show 3 earlier actions".
+/// A step with no actions at all but other folded rows, such as allowances, reads "Show details".
+fn toggle_text(actions: usize, cut: usize, live: bool, open: bool) -> String {
+    match (actions, cut, open) {
+        (0, 0, true) => "Hide details".to_owned(),
+        (0, 0, false) => "Show details".to_owned(),
+        (_, _, true) => "Hide actions".to_owned(),
+        (0, cut, false) => format!("Show {cut} earlier {}", action_noun(cut)),
+        (actions, _, false) => {
             let noun = action_noun(actions);
             if live { format!("Show {actions} {noun} so far") } else { format!("Show {actions} {noun}") }
         }
@@ -481,7 +483,8 @@ impl RunScreen {
         let key = (run.id.clone(), part.step);
         let open = self.opened.contains(&key);
         let live = part.line.as_ref().map_or(run.is_busy(), |line| line.live);
-        let toggle = (part.actions > 0 || !part.folded.is_empty()).then(|| toggle_text(part.actions, live, open));
+        // Tool rows fold too, so a step with actions always has folded rows.
+        let toggle = (!part.folded.is_empty()).then(|| toggle_text(part.actions, part.cut, live, open));
         let clicked = match &part.line {
             Some(line) => {
                 separate(ui, first);
@@ -491,7 +494,7 @@ impl RunScreen {
             }
             None => toggle.as_deref().and_then(|text| {
                 separate(ui, first);
-                step_line(ui, None, "Actions", "", Some((text, open)))
+                step_line(ui, None, if part.actions == 0 { "Details" } else { "Actions" }, "", Some((text, open)))
             }),
         };
         if clicked.is_some_and(|toggle| toggle.clicked()) {
@@ -988,13 +991,13 @@ fn background_note(count: usize) -> String {
     }
 }
 
-/// Under the summary, one plain label per line. Tool output can hold posting text, so it is never Markdown.
+/// Under the summary, one plain label per line, cleaned and capped as a notice is. Tool output can hold posting text, so it is never Markdown.
 fn failure_reason(ui: &mut Ui, reason: &str) {
     let indent = EVENT_WHO_WIDTH + EVENT_GAP;
     Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
-        let reason = plain(reason);
-        for line in reason.lines() {
-            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).truncate()).on_hover_text(&reason);
+        let reason = notice_text(reason);
+        for line in &reason.shown {
+            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).truncate()).on_hover_text(&reason.full);
         }
     });
 }
@@ -1020,4 +1023,20 @@ fn fact(ui: &mut Ui, label: &str, value: &str) {
 /// Untrusted text drawn as it is, not as Markdown: each line without hidden or control characters.
 fn plain(text: &str) -> String {
     text.lines().map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_toggle_says_what_it_opens() {
+        assert_eq!(toggle_text(3, 0, false, false), "Show 3 actions");
+        assert_eq!(toggle_text(1, 4, true, false), "Show 1 action so far");
+        assert_eq!(toggle_text(0, 4, false, false), "Show 4 earlier actions");
+        assert_eq!(toggle_text(0, 1, false, false), "Show 1 earlier action");
+        assert_eq!(toggle_text(0, 0, false, false), "Show details");
+        assert_eq!(toggle_text(0, 4, false, true), "Hide actions");
+        assert_eq!(toggle_text(0, 0, false, true), "Hide details");
+    }
 }

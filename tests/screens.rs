@@ -521,6 +521,39 @@ fn allowances_stay_folded_in_a_step_without_actions() {
     assert!(is_shown(&harness, "Hide details"));
 }
 
+/// A command without steps names its one row Details when it holds no actions.
+#[test]
+fn a_command_without_steps_folds_allowances_under_details() {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/outcome kestrel", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
+    emit_all(&sink, [permission_prompt()]);
+    let mut harness = tray_harness_with(desk, "no_rail_details");
+    assert!(is_shown(&harness, "Details"));
+    assert!(!is_shown(&harness, "Allowed Bash without asking."));
+    harness.get_by_label("Show details").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Allowed Bash without asking."));
+}
+
+/// A failed tool's reason is cleaned and capped as a notice is: its last lines, with no blank ones.
+#[test]
+fn a_failed_tool_shows_the_last_lines_of_its_reason() {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/outcome kestrel", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
+    let reason = (1..=10).map(|at| format!("Downloading {at}0%\n")).collect::<String>() + "\nerror:\u{202e} auth expired";
+    emit_all(&sink, [tool("1", "Bash", "bun run tools/cli.ts fetch", false), failed("1", &reason)]);
+    let mut harness = tray_harness_with(desk, "tool_reason_lines");
+    harness.get_by_label("Show 1 action so far").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "error: auth expired"));
+    assert!(is_shown(&harness, "Downloading 40%"));
+    for cut in ["Downloading 10%", "Downloading 30%"] {
+        assert!(!is_shown(&harness, cut), "{cut} is past the cap");
+    }
+}
+
 /// While another run works, the stop's replies wait, and the bar says why.
 #[test]
 fn replies_wait_while_another_run_works() {
@@ -678,7 +711,7 @@ fn a_failure_reason_shows_without_hidden_characters() {
 #[test]
 fn a_failure_reason_shows_its_last_lines() {
     let reason = "Downloading 10%\nDownloading 55%\n\nDownloading 100%\nerror: auth expired";
-    let failed = AgentEvent::TurnEnded { failed: true, message: Some(reason.into()), cost_usd: 1.4, duration_ms: 90_000 };
+    let failed = AgentEvent::ProcessExited { failure: Some(reason.into()) };
     let harness = tray_harness_with(apply_run_ending([failed]), "failure_reason_lines");
     for line in ["Downloading 10%", "Downloading 100%"] {
         assert!(is_shown(&harness, line), "{line} shows");

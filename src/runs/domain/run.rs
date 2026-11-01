@@ -67,6 +67,9 @@ pub struct Run {
     /// How the CLI authenticated. `none` means its own Claude login.
     pub api_key_source: Option<String>,
     pub status: RunStatus,
+    /// Whether the failure reason is the tail of the process's stderr, which ends on its error,
+    /// rather than the turn's result text, which opens with it.
+    pub failed_on_stderr: bool,
     pub activity: Vec<Activity>,
     pub streaming_text: String,
     pub prompts: VecDeque<Prompt>,
@@ -101,6 +104,7 @@ impl Run {
             model: None,
             api_key_source: None,
             status: RunStatus::Starting,
+            failed_on_stderr: false,
             rail_moved_at: 0,
             turn_started_at: activity.len(),
             turn_count: 1,
@@ -291,6 +295,7 @@ impl Run {
             let reason = message.unwrap_or_else(|| "The run ended with an error.".to_owned());
             self.notice(&reason);
             self.status = RunStatus::Failed(reason);
+            self.failed_on_stderr = false;
         } else {
             self.status = RunStatus::AwaitingReply;
         }
@@ -307,6 +312,7 @@ impl Run {
             Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped | RunStatus::Failed(_)) => {
                 self.notice(&reason);
                 self.status = RunStatus::Failed(reason);
+                self.failed_on_stderr = true;
             }
             _ if matches!(self.status, RunStatus::Stopping) => self.status = RunStatus::Stopped,
             _ if !matches!(self.status, RunStatus::Failed(_) | RunStatus::Stopped) => self.status = RunStatus::Closed,

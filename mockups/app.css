@@ -300,3 +300,222 @@ a.panel.card:hover { background: var(--raised); }
   .node:first-child { border-top: 0; }
   .node .arrow { display: none; }
 }
+
+/* Runs: where am I, and is it my turn (RunTurn.html).
+   Your turn takes the warning ink as a fill, so it never reads like running. Claude's turn stays active ink. */
+.tag.turn { background: var(--interview); border-color: var(--interview); color: var(--sheet); }
+.nav a.wait .count { color: var(--interview); font-weight: 600; }
+.nav a.wait .count::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: var(--interview); vertical-align: 1px; }
+.step.hold { background: var(--interview); color: var(--sheet); font-weight: 600; }
+.step.fail { box-shadow: inset 0 0 0 1px var(--closed); color: var(--closed); font-weight: 600; }
+.linkbtn { padding: 0; border: 0; background: none; color: var(--active); font-size: 13px; text-decoration: underline; cursor: pointer; }
+.lbl { font-size: 12.5px; color: var(--muted); }
+.app.fit.rt .head { padding-top: 20px; }
+.head .cmdline { font: 700 16px/1.3 var(--type); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.facts-line { display: none; font-size: 13px; }
+
+/* Shorter tool rows: the folder is faint, the file is ink. */
+.ev .dir { color: var(--faint); }
+.ev.you .who2 { color: var(--text); font-weight: 600; }
+.ev.msgrow { display: block; }
+.ev .stream { color: var(--muted); font-style: italic; }
+
+/* Claude's message: Markdown, with headings brought down to the section size. */
+.msg { padding: 2px 0 0; max-width: 76ch; }
+.msg h3 { font: 600 17px/1.3 var(--slab); margin: 0 0 6px; }
+.msg p { margin: 0 0 6px; }
+.msg p.h { font-weight: 600; margin-top: 8px; }
+.msg p.bl { position: relative; padding-left: 16px; margin-bottom: 3px; }
+.msg p.bl::before { content: ""; position: absolute; left: 4px; top: .62em; width: 5px; height: 5px; background: currentColor; }
+.msg p.q { padding-left: 10px; border-left: 3px solid var(--interview); }
+
+/* The dock: what happens next, under the activity and outside its scroll area. */
+.dock { flex: none; display: flex; flex-direction: column; gap: 10px; margin: 12px 5px 5px 0; padding: 14px 16px; border: 1px solid var(--interview); border-radius: 2px; background: var(--sheet); box-shadow: 5px 5px 0 var(--interview); }
+.dock.quiet { gap: 8px; margin: 0; padding: 10px 0 2px; border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+.dock.bad { border-color: var(--closed); box-shadow: 5px 5px 0 var(--closed); }
+.asks { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border-left: 3px solid var(--interview); background: var(--panel); }
+.asks .q { font-size: 15px; }
+.quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.compose { display: flex; align-items: flex-end; gap: 8px; }
+.compose textarea { height: 52px; resize: none; }
+.compose.one textarea { height: 34px; padding-top: 7px; }
+.optrow { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; cursor: pointer; }
+.optrow:first-child { border-top: 0; }
+.optrow:hover { background: var(--panel); }
+.radio { flex: none; width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--text); border-radius: 50%; background: var(--field); }
+.optrow.on .radio { box-shadow: inset 0 0 0 4px var(--field); background: var(--text); }
+
+/* End session asks first while a reply is expected. */
+.popwrap { position: relative; }
+.pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 4; display: flex; flex-direction: column; gap: 8px; width: 330px; padding: 12px 14px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); }
+
+/* Proposal B: the step rail stands on the left, and each step is a chapter of the activity. */
+.knot { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 2px; background: var(--panel); color: var(--muted); font: 600 12.5px/1 "Schibsted Grotesk", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.knot.done { background: var(--sheet); color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.knot.now { background: var(--pri); color: var(--on-pri); }
+.knot.hold { background: var(--interview); color: var(--sheet); }
+.knot.fail { background: var(--sheet); color: var(--closed); box-shadow: inset 0 0 0 1px var(--closed); }
+.knot.sm { width: auto; min-width: 18px; height: 18px; padding: 0 4px; font-size: 11.5px; }
+.vrail { display: flex; flex-direction: column; padding-top: 10px; }
+.rstep { position: relative; display: flex; align-items: flex-start; gap: 10px; min-height: 48px; padding: 0 0 8px; }
+.rstep::before { content: ""; position: absolute; left: 11px; top: 22px; bottom: 0; width: 1px; background: var(--line); }
+.rstep:last-child::before { display: none; }
+.rstep .vt { font-size: 13px; line-height: 22px; color: var(--muted); }
+.rstep .vm { font-size: 12.5px; line-height: 1.25; color: var(--faint); }
+.rstep.done .vt { color: var(--text); font-weight: 500; }
+.rstep.now .vt { color: var(--text); font-weight: 600; }
+.rstep.hold .vt { color: var(--interview); font-weight: 600; }
+.rstep.hold .vm { color: var(--text); }
+.rstep.fail .vt { color: var(--closed); font-weight: 600; }
+.rstep.on { margin-left: -8px; padding-left: 8px; border-radius: 3px; background: var(--panel); }
+.rstep.on::before { left: 19px; }
+.chap { border-top: 1px solid var(--line); }
+.chap:first-child { border-top: 0; }
+.chead { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 6px 0; }
+.chead .ct { font: 600 17px/1.3 var(--slab); white-space: nowrap; }
+.cbody { padding: 0 0 8px 32px; }
+.cbody .ev:first-child { border-top: 1px solid var(--line); }
+
+/* Proposal C: the conversation and the work, side by side. */
+.say { padding: 10px 0; border-top: 1px solid var(--line); }
+.say:first-child { border-top: 0; }
+.say .by { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.say.handoff { display: flex; align-items: center; gap: 8px; padding: 7px 0; color: var(--muted); font-size: 13px; }
+.wg { padding: 4px 0 6px; border-top: 1px solid var(--line); }
+.wg:first-child { border-top: 0; }
+.wg .gh { display: flex; align-items: center; gap: 8px; padding: 6px 0 2px; font-size: 13px; font-weight: 600; }
+.wg.next .gh { color: var(--faint); font-weight: 500; }
+.wg .ev { padding: 4px 0; border-top: 0; font-size: 13px; }
+.wg .ev .mono { font-size: 12.5px; }
+.wg .ev .who2 { flex-basis: 52px; font-size: 12.5px; }
+.wg .ev.sub { padding-left: 16px; }
+
+/* Proposal D: a band that answers three questions before anything else. */
+.turnband { flex: none; display: grid; grid-template-columns: 1fr 1fr 1.5fr; border-radius: 4px; background: var(--panel); }
+.tb { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 10px 16px 12px; border-left: 1px solid var(--line); }
+.tb:first-child { border-left: 0; border-radius: 4px 0 0 4px; }
+.tb .k { font-size: 13px; font-weight: 500; color: var(--muted); }
+.tb b { font: 600 24px/1.15 var(--slab); }
+.tb.yours { background: var(--interview); color: var(--sheet); }
+.tb.yours .k, .tb.yours .muted { color: var(--sheet); }
+.tb.claude b { color: var(--active); }
+.tb .tally { margin-top: 4px; }
+.tally i.now { background: var(--active); }
+.tally i.hold { background: var(--interview); }
+.qbar { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 20px; padding: 12px 16px; border: 1px solid var(--interview); border-radius: 2px; background: var(--sheet); box-shadow: 5px 5px 0 var(--interview); margin-right: 5px; }
+
+/* In fit mode the extra columns hold their width, and only the activity scrolls. */
+.app.fit .split > .r { flex: 0 0 168px; align-self: flex-start; }
+.app.fit .split > .w { flex: 0 0 470px; display: flex; flex-direction: column; min-height: 0; align-self: stretch; }
+.rt.fit .split > .w .scroll, .rt.fit .split > .a .scroll { padding-right: 10px; padding-bottom: 8px; }
+.rt.fit .body { gap: 14px; }
+.rt.fit .split > .b { align-self: stretch; min-height: 0; overflow-y: auto; padding-bottom: 12px; }
+.narrow-only { display: none; }
+@media (max-width: 1100px) {
+  .rt-B .facts-line { display: block; }
+  .rt-B .split > .b { display: none; }
+  .rt-B .narrow-only { display: inline-flex; }
+}
+.rt-C .facts-line { display: block; }
+
+/* Runs, round 1 (proposal D): the turn accent. One new pair, used only when the user is needed.
+   Stamp magenta: light #b0246a with #ffffff (6.4:1), dark #f48cc0 with #0d1a2b (7.8:1). */
+.app { --turn: #f48cc0; --on-turn: #0d1a2b; }
+.app[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; }
+@media (prefers-color-scheme: light) { .app[data-theme="system"] { --turn: #b0246a; --on-turn: #ffffff; } }
+.tag.yours { background: var(--turn); border-color: var(--turn-edge, var(--turn)); color: var(--on-turn); }
+.nav a.yours .count { color: var(--text); font-weight: 600; }
+.nav a.yours .count::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: var(--turn); box-shadow: 0 0 0 1px var(--turn-edge, var(--turn)); vertical-align: 1px; }
+.tally i.yours { background: var(--turn); }
+
+/* Head: the title, the status and the actions share one centre line, all 28px tall. */
+.dhead { align-items: center; padding-bottom: 4px; }
+.dhead .hrow { flex: 1 1 100%; display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
+.dhead .cmdline { flex: 1 1 auto; min-width: 0; }
+.hrow .tag { height: 28px; padding: 0 10px; }
+
+/* Band: three cells, each label, value and note, so the lines line up across cells. */
+.dband { flex: none; display: grid; grid-template-columns: 1fr 1fr 1.4fr; border-radius: 4px; background: var(--panel); }
+.dband .tb { display: grid; grid-template-rows: 20px auto auto; align-content: start; row-gap: 2px; padding: 10px 16px 12px; }
+.dband .tb .k { display: flex; align-items: center; gap: 10px; }
+.dband .tb .k .tally { margin: 0; min-height: 0; }
+.dband .tb .k .tally i { height: 12px; width: 5px; }
+.dband .tb.yours { background: var(--turn); color: var(--on-turn); box-shadow: inset 0 0 0 1px var(--turn-edge, var(--turn)); }
+.dband .tb.yours .k, .dband .tb.yours .muted { color: var(--on-turn); }
+
+/* Question bar: the question, then one 34px row of quick replies, field and Send. */
+.qbar2 { flex: none; display: flex; flex-direction: column; gap: 10px; margin-right: 5px; padding: 12px 16px 14px; border: 1px solid var(--turn-edge, var(--turn)); border-radius: 2px; background: var(--sheet); box-shadow: 5px 5px 0 var(--turn); }
+.qbar2 .qq { font-size: 15px; }
+.qbar2 .qq .by { color: var(--muted); }
+.qrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.qrow .field { flex: 1 1 240px; }
+.qrow .btn { height: 34px; }
+.qopts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+.qopts .optrow { border-top: 0; padding-inline: 0; }
+
+/* Claude's message as a document: Markdown, headings capped, a readable measure. */
+.doc { max-width: 68ch; padding: 14px 0 6px; font-size: 15px; line-height: 1.55; }
+.doc h1 { margin: 0 0 10px; font: 600 21px/1.25 var(--slab); }
+.doc h2 { margin: 18px 0 6px; font: 600 17px/1.3 var(--slab); }
+.doc p { margin: 0 0 10px; }
+.doc ul { margin: 0 0 10px; padding: 0; list-style: none; }
+.doc li { position: relative; margin: 0 0 4px; padding-left: 18px; }
+.doc li::before { content: ""; position: absolute; left: 4px; top: .66em; width: 5px; height: 5px; background: currentColor; }
+.dtable { display: grid; grid-template-columns: repeat(3, auto); justify-content: start; margin: 2px 0 12px; font-size: 14px; line-height: 1.4; }
+.dtr { display: contents; }
+.dtr > span { padding: 6px 24px 6px 0; border-bottom: 1px solid var(--line); }
+.dth > span { padding-top: 2px; border-bottom-color: var(--text); color: var(--muted); font-size: 13px; font-weight: 600; }
+.doc p.q { padding-left: 12px; border-left: 3px solid var(--turn); }
+.doc + .sline { border-top: 1px solid var(--line); }
+
+/* One plain line per step. The technical rows open under it on request. */
+.sline { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 7px 0; border-top: 1px solid var(--line); }
+.slist > .sline:first-child, .story > :first-child { border-top: 0; }
+.sline .sn { flex: 0 0 74px; font-weight: 600; }
+.sline .st { flex: 1 1 auto; min-width: 0; }
+.sline.next { min-height: 36px; color: var(--faint); }
+.sline.next .sn { font-weight: 500; }
+.sline.you .st { color: var(--text); }
+.sline.live .st { color: var(--text); }
+.sline.waits .sn { color: var(--turn); }
+.sline .btn.sm { flex: none; }
+.sdetail { padding: 0 0 8px 108px; }
+.sdetail .ev:first-child { border-top: 1px solid var(--line); }
+
+/* Accent comparison scene. */
+.acc { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; padding: 14px 32px 16px; }
+.acc h1 { font: 600 24px/1.2 var(--slab); }
+.agrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.app.spec { min-height: 0; gap: 9px; padding: 10px 12px 12px; border-radius: 4px; background: var(--sheet); box-shadow: inset 0 0 0 1px var(--line); }
+.spec .cap { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.spec .cap strong { font: 600 16px/1.2 var(--slab); }
+.spec .nav { flex: none; padding: 0; gap: 3px; }
+.spec .nav a { height: 30px; padding: 0 12px; font-size: 13px; }
+.spec .dband .tb { padding: 7px 10px 9px; }
+.spec .dband b { font-size: 18px; }
+.spec .dband .muted, .spec .dband .k { font-size: 12px; }
+.spec .qbar2 { gap: 7px; padding: 9px 10px 10px; }
+.spec .qbar2 .qq { font-size: 13px; }
+.spec .qrow .btn { height: 28px; padding: 0 8px; font-size: 13px; }
+.spec .qrow .field input { height: 28px; }
+.spec .verdict { font-size: 12.5px; color: var(--muted); }
+.knot.none { visibility: hidden; }
+.ktab.yours-ink { color: var(--turn); }
+.deal.wait.yours-frame { border-color: var(--turn); box-shadow: 5px 5px 0 var(--turn); }
+.spec .qrow .field { flex: 1 1 60px; }
+.spec .nav a { height: 26px; }
+.spec .dband .tb { row-gap: 0; }
+.acc { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+.acc .agrid { gap: 10px; }
+/* D in a small window: the side column folds behind Run details, and a short window keeps the band to one line. */
+@media (max-width: 1100px) {
+  .rt-D .split > .b { display: none; }
+  .rt-D .narrow-only { display: inline-flex; }
+}
+@media (max-height: 700px) {
+  .rt-D .dband .tb { display: flex; flex-direction: row; align-items: baseline; gap: 10px; padding: 9px 16px 10px; }
+  .rt-D .dband .tb .muted { display: none; }
+  .rt-D .dband b { font-size: 19px; }
+}
+.knot.yours { background: var(--turn); color: var(--on-turn); }
+.rt[data-theme="dark"] { color-scheme: dark; }

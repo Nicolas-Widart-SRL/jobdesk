@@ -16,7 +16,9 @@ When nothing is left to decide, Today offers Find new jobs…. It shows a loadin
 
 ## Jobs, Applications and Insights
 
-Today, Jobs, Applications and Insights update live as commands change your files. A file that fails to load raises one alert that names what failed and what still works, and marks its tab.
+Today, Jobs, Applications and Insights update live as commands change your files. A file that fails to load raises one alert that names what failed and what still works, and marks its tab. The screens it feeds say their content is hidden until the file is fixed, never that it is empty.
+
+Click anywhere on a job, an application or a run to open it. On Jobs, Up and Down move to the next job while a row or nothing has the focus, and Tab stops once on each row. A cut title shows in full under the pointer. Below 1100 pixels wide, the table leaves out Found on, which the detail still shows.
 
 ## Application dossier
 
@@ -30,11 +32,15 @@ A run reads like a report: Claude's messages come first, and each step is one pl
 
 When Claude waits on you, the Tasks tab counts it, Recent runs tags the run Your turn, Today deals a card that opens the task, and Claude's question sits above the reply box, with one-click replies at known stop points such as /apply's proceed with drafting. They wait while you write a reply of your own. When Claude finishes a turn without asking anything, the band says it is done for now and the reply box stays under the story.
 
-End session asks first, and Keep it open is the default. New task (Cmd+K, Ctrl+K on Windows) opens the command launcher, even while you type in a field.
+End session asks first, and Keep it open is the default. New task (Cmd+K, Ctrl+K on Windows) opens the command launcher, even while you type in a field. In the launcher, Cmd+Enter (Ctrl+Enter on Windows) runs the task, and Esc goes back.
 
 ## One run at a time
 
 Only one run works at a time, because two commands could overwrite each other's files. A session waiting for your reply lets a new run start only once its turn has ended and all its background agents have finished.
+
+## Copying text
+
+Text in Claude's messages and questions, your replies, error alerts, command lines, company research, archived postings and follow-up drafts can be selected and copied. A question cut to fit is not, and shows in full under the pointer. Copy says Copied.
 
 ## Setup and the status bar
 

@@ -16,7 +16,7 @@ use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
-use crate::runs::ui::{Launcher, RunScreen};
+use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
@@ -24,7 +24,8 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, desk, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, command_chord, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper,
+    primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -33,8 +34,10 @@ use crate::workspace::ui::WorkspaceAction;
 
 const WORKSPACE_KEY: &str = "workspace";
 
-/// The bundled fonts have no command key glyph, so macOS spells it out.
-const ASK_KEYS: [&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "K"] } else { ["Ctrl", "K"] };
+/// What the tabs and New task say while they wait for a folder.
+const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
+/// The keys that open the launcher.
+const ASK_KEYS: [&str; 2] = command_chord("K");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -92,6 +95,10 @@ pub struct Shell {
     tray: Option<InTray>,
     today: TodayScreen,
     confirm_quit: bool,
+    /// Keep working takes the focus once, on the frame the quit dialog opens.
+    quit_focus: bool,
+    /// Where Esc leaves the launcher for: the screen it was opened from.
+    launcher_from: Screen,
     dossier_screen: DossierScreen,
     pages: Option<PageStore>,
     open_dossier: Option<OpenDossier>,
@@ -123,6 +130,8 @@ impl Shell {
             tray: None,
             today: TodayScreen::default(),
             confirm_quit: false,
+            quit_focus: false,
+            launcher_from: screen.tab(),
             dossier_screen: DossierScreen::default(),
             pages: None,
             open_dossier: None,
@@ -156,6 +165,13 @@ impl Shell {
 
     pub fn environment_slot(&mut self) -> &mut Option<EnvironmentChecks> {
         &mut self.environment
+    }
+
+    /// Hands the shell snapshots as the folder watcher does, for tests.
+    pub fn snapshot_feed(&mut self) -> std::sync::mpsc::Sender<Snapshot> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.updates = Some(receiver);
+        sender
     }
 
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
@@ -209,6 +225,8 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
+                // The launcher no longer leads back into the last folder's screens.
+                self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
@@ -259,11 +277,12 @@ impl Shell {
         });
         if let Some(line) = take_command_request(ui.ctx()) {
             self.launcher.prefill(&line);
-            self.screen = Screen::Launcher;
+            self.open_launcher();
         }
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
         }
+        note_focus(ui.ctx());
     }
 
     /// Runs change between snapshots, so the queue is dealt again each frame.
@@ -281,7 +300,7 @@ impl Shell {
         match request {
             Request::Command(line) => {
                 self.launcher.prefill(&line);
-                self.screen = Screen::Launcher;
+                self.open_launcher();
             }
             Request::Dossier(folder) => self.show_dossier(folder),
             Request::Run(id) => {
@@ -293,24 +312,55 @@ impl Shell {
         }
     }
 
+    /// Opens the launcher and keeps where it came from, for Esc.
+    fn open_launcher(&mut self) {
+        if self.screen != Screen::Launcher {
+            self.launcher_from = self.screen;
+        }
+        self.screen = Screen::Launcher;
+    }
+
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
-        // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
-        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
-        if ask && self.workspace.is_some() {
-            self.screen = Screen::Launcher;
+        // While the quit dialog asks, the first Esc means Keep working, whatever is open or focused behind it,
+        // and the launcher's Cmd Enter starts nothing.
+        if self.confirm_quit {
+            let keep = ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            });
+            if keep {
+                self.confirm_quit = false;
+            }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         if ctx.input(|input| input.viewport().close_requested()) && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_focus |= !self.confirm_quit;
             self.confirm_quit = true;
+        }
+        // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
+        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
+        // While the quit dialog asks, no shortcut reaches the screens behind it.
+        if self.confirm_quit {
+            note_dialog(ctx);
+            return;
+        }
+        if ask && self.workspace.is_some() {
+            self.open_launcher();
         }
     }
 
+    /// Keep working is the default, and Esc keeps working too, as on End session's popover.
     fn quit_dialog(&mut self, ctx: &egui::Context) {
         egui::Window::new("Quit Jobdesk?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.label("A Claude session is still open. Quitting ends it. You can resume it later from Tasks.");
             ui.horizontal(|ui| {
-                if primary_button(ui, "Keep working").clicked() {
+                let keep = primary_button(ui, "Keep working");
+                if self.quit_focus && !ui.is_sizing_pass() {
+                    keep.request_focus();
+                    self.quit_focus = false;
+                }
+                if keep.clicked() {
                     self.confirm_quit = false;
                 }
                 if button(ui, "End session and quit").clicked() {
@@ -318,6 +368,7 @@ impl Shell {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.label(rich(ui, "Esc keeps working.", Type::NOTE, Ink::Faint));
         });
     }
 
@@ -334,20 +385,26 @@ impl Shell {
             ui.add_space(SHELL_GAP.0);
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
-                let failed = self.snapshot.issues.iter().any(|issue| source_place(issue.source).0 == Some(screen));
+                let failed = self.snapshot.issues.iter().find(|issue| source_place(issue.source).0 == Some(screen)).map(|issue| issue.source);
                 let mark = match screen {
-                    _ if failed => TabMark::Failed,
+                    _ if failed.is_some() => TabMark::Failed,
                     Screen::InTray => TabMark::Count(pending),
                     Screen::Runs => TabMark::Count(waiting),
                     _ => TabMark::None,
                 };
-                if ui.add_enabled_ui(open || screen == lit, |ui| folder_tab(ui, screen.title(), mark, screen == lit)).inner.clicked() {
+                let tab = enabled_when(ui, open || screen == lit, CHOOSE_FOLDER, |ui| folder_tab(ui, screen.title(), mark, screen == lit));
+                // The mark is a bare square, so the tab says what failed in the alert's words.
+                let tab = match failed {
+                    Some(source) => tab.on_hover_text(failed_words(source).0),
+                    None => tab,
+                };
+                if tab.clicked() {
                     picked = Some(screen);
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled_ui(open, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).inner.clicked() {
-                    self.screen = Screen::Launcher;
+                if enabled_when(ui, open, CHOOSE_FOLDER, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).clicked() {
+                    self.open_launcher();
                 }
             });
         });
@@ -423,7 +480,8 @@ impl Shell {
         }
     }
 
-    /// A source that could not be read frames an alert over every screen. Today draws it under its head.
+    /// A source that could not be read frames an alert on every screen. The screens with a head of their own draw it under the head,
+    /// and a screen whose source failed hides its content instead of showing it empty.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
         // The tray reports its own file. It is copied only while it fails, so the tray stays free to take decisions.
         let decisions = self.tray.as_ref().and_then(InTray::issue).cloned();
@@ -436,7 +494,27 @@ impl Shell {
                 open_setup.set(true);
             }
         };
-        if !failures.is_empty() && self.screen != Screen::InTray {
+        let loaded = self.loaded;
+        let unread: Vec<Source> = failures.iter().map(|(source, _)| *source).collect();
+        let failed = |source: Source| unread.contains(&source);
+        let load = |source: Source| {
+            if failed(source) {
+                Load::Failed
+            } else if loaded {
+                Load::Ready
+            } else {
+                Load::Reading
+            }
+        };
+        let whole = if loaded { Load::Ready } else { Load::Reading };
+        let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
+        // Each screen says where its alert goes, so a new one must choose.
+        let alert_over_head = match self.screen {
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Workspace => false,
+            // These keep it over their head until they take a `ScreenState` too.
+            Screen::Runs | Screen::Launcher | Screen::Dossier => true,
+        };
+        if !failures.is_empty() && alert_over_head {
             page_body(ui, alerts);
         }
         let snapshot = &self.snapshot;
@@ -444,7 +522,6 @@ impl Shell {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
                 let keys = !self.confirm_quit;
-                let failed = |source| failures.iter().any(|(failed, _)| *failed == source);
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
                 // In the alert's order, so the subtitle names them as the alert does.
                 let missing: Vec<&str> =
@@ -462,43 +539,66 @@ impl Shell {
             }
             Screen::Jobs => {
                 let kept = self.tray.as_ref().map(InTray::kept_jobs).unwrap_or_default();
-                self.jobs.show(ui, &snapshot.board, &queue.waiting().jobs, &kept);
+                self.jobs.show(ui, &state(load(Source::Jobs)), &snapshot.board, &queue.waiting().jobs, &kept);
             }
             Screen::Tracker => {
-                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline, &queue.waiting().applications) {
+                if let Some(folder) = self.tracker.show(ui, &state(load(Source::Applications)), &snapshot.pipeline, &queue.waiting().applications) {
                     self.show_dossier(folder);
                 }
             }
             Screen::Dossier => {
                 let today = snapshot.today;
+                let tracker_failed = failed(Source::Applications);
                 let view = self.refreshed_dossier();
                 match (view, &mut self.pages) {
                     (Some(view), Some(pages)) => {
                         self.dossier_screen.show(ui, &view, pages, today);
                     }
+                    // A failed tracker loads with no rows, so the application is only hidden, and comes back with the file.
+                    _ if tracker_failed => {
+                        page_body(ui, |ui| hidden_note(ui, insights::ui::TRACKER_HIDDEN));
+                    }
+                    _ if !self.loaded => {
+                        page_body(ui, |ui| muted(ui, "Reading your applications…"));
+                    }
+                    // The one place that decides a dossier has gone, whichever way it was reached: back to Applications.
                     _ => {
-                        page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));
+                        self.screen = Screen::Dossier.tab();
+                        ui.ctx().request_repaint();
                     }
                 }
             }
-            Screen::Insights => insights::ui::show(ui, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref()),
+            Screen::Insights => {
+                // Each failed source hides only the parts it feeds, so the screen as a whole never fails.
+                insights::ui::show(ui, &state(whole), &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref());
+            }
             Screen::Runs => {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
                 let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
-                if let Some(desk) = &mut self.desk {
-                    self.run_screen.show(ui, desk, &root);
+                if let Some(desk) = &mut self.desk && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask) {
+                    self.open_launcher();
                 }
             }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
-                let action = self.environment.as_mut().and_then(|environment| workspace::ui::show(ui, &name, &snapshot.workspace, environment));
+                // Only previews lack the tool check. They draw no Setup, but still the alert.
+                let action = match self.environment.as_mut() {
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
+                    None => {
+                        page_body(ui, alerts);
+                        None
+                    }
+                };
                 if action == Some(WorkspaceAction::ChangeFolder) {
                     let ctx = ui.ctx().clone();
                     self.choose_folder(&ctx);
                 }
             }
             Screen::Launcher => {
-                if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
+                if back_pressed(ui.ctx()) {
+                    self.screen = self.launcher_from;
+                    ui.ctx().request_repaint();
+                } else if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
                     self.run_screen.select(id);
                     self.screen = Screen::Runs;
                 }
@@ -598,7 +698,7 @@ fn source_alert(ui: &mut Ui, failures: &[(Source, &LoadError)], on_setup: bool) 
                         ui.spacing_mut().item_spacing.y = 2.0;
                         for (source, error) in failures {
                             ui.label(rich(ui, failed_words(*source).0, Type::STRONG, Tone::Closed));
-                            ui.add(Label::new(error.to_string()).wrap());
+                            copyable(ui, |ui| ui.add(Label::new(error.to_string()).wrap()));
                         }
                         if let [(only, _)] = failures {
                             ui.add(Label::new(failed_words(*only).1).wrap());

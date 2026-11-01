@@ -50,6 +50,8 @@ pub struct DayTally {
 pub enum RowState {
     /// A pending card whose date passed this many days ago.
     Late(i64),
+    /// The card being read, late by this many days.
+    LateNow(i64),
     /// The card being read.
     Now,
     Done,
@@ -186,19 +188,21 @@ impl Queue {
 
     /// Late cards first, then the dated marks day by day. Rows show up to `AGENDA_ROWS`, and the rest are counted.
     pub fn agenda(&self) -> Agenda {
+        let top = self.cards.first().map(|card| card.key.as_str());
         let mut late: Vec<AgendaRow> = self
             .cards
             .iter()
             .filter_map(|card| {
                 let due = card.due.as_ref().filter(|due| due.on < self.today)?;
-                Some(AgendaRow { on: due.on, text: due.label.clone(), key: card.key.clone(), state: RowState::Late((self.today - due.on).num_days()) })
+                let days = (self.today - due.on).num_days();
+                let state = if top == Some(card.key.as_str()) { RowState::LateNow(days) } else { RowState::Late(days) };
+                Some(AgendaRow { on: due.on, text: due.label.clone(), key: card.key.clone(), state })
             })
             .collect();
         late.sort_by_key(|row| row.on);
         let position = |key: &str| self.cards.iter().position(|card| card.key == key).unwrap_or(usize::MAX);
         let mut marks: Vec<&Mark> = self.marks.iter().collect();
         marks.sort_by_key(|mark| (mark.on, position(&mark.key)));
-        let top = self.cards.first().map(|card| card.key.as_str());
         let dated = marks.into_iter().map(|mark| {
             let state = if !mark.active {
                 RowState::Done
@@ -1106,7 +1110,7 @@ mod tests {
         let before = dealt(&tray);
         assert_eq!(before.overdue(), 1);
         assert!(before.marks.is_empty());
-        assert_eq!(before.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::Late(2)]);
+        assert_eq!(before.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::LateNow(2)]);
 
         tray.later(&before.cards[0], today());
 
@@ -1236,6 +1240,16 @@ mod tests {
         assert_eq!(agenda.rows[3].text, "Meridian closes");
         assert_eq!(agenda.closing, "Nothing else dated before Fri 13 Nov.");
         assert_eq!(agenda.returning, None);
+    }
+
+    /// A late card on top is the one being read: its row keeps its lateness and says so.
+    #[test]
+    fn agenda_marks_a_late_card_on_top_as_now() {
+        let cards = vec![named("top", "Harbor", CardKind::Close, Some((-4, "Harbor closed"))), named("next", "Quarry", CardKind::Close, Some((-2, "Quarry closed")))];
+        let agenda = today_queue(cards).agenda();
+
+        let rows: Vec<(&str, RowState)> = agenda.rows.iter().map(|row| (row.key.as_str(), row.state)).collect();
+        assert_eq!(rows, [("top", RowState::LateNow(4)), ("next", RowState::Late(2))]);
     }
 
     #[test]

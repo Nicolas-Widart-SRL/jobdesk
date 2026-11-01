@@ -1,13 +1,13 @@
 //! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{Area, Color32, CornerRadius, Frame, Margin, Order, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
+use crate::ui_kit::controls::{interactive_row, pick_look, pointer_over, pressed, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined, surface};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_text};
+use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, surface};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, cut_hover, line, paint_text};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
     ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
@@ -80,28 +80,13 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
     let (x, y) = DEAL_PADDING;
     let shown = ui.allocate_ui(vec2(ui.available_width(), height), |ui| {
         frame.show(ui, |ui| {
-            let inner = Rect::from_min_size(ui.cursor().min, ui.available_size());
-            ui.advance_cursor_after_rect(inner);
-            // The footer goes in first, at the foot of the card, so the body takes what it leaves.
-            // One height is kept for whichever card is dealt, so only a footer of a new height costs a pass.
-            let kept = KeptHeight::read(ui, ui.scope_id().with("deal_footer"), 0.0);
-            let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
-            let mut foot = ui.new_child(UiBuilder::new().id_salt("deal_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
-            foot.shrink_clip_rect(foot_rect);
-            deal_footer(&mut foot, footer);
-            kept.keep(ui, foot.min_rect().height().min(inner.height()), "a card's footer changed height");
             // A card that comes on top, new or back, opens its body at the top.
             let dealt = ui.scope_id().with("deal_shown");
             let fresh = ui.data(|data| data.get_temp::<String>(dealt)).as_deref() != Some(look.key);
             if fresh {
                 ui.data_mut(|data| data.insert_temp(dealt, look.key.to_owned()));
             }
-            let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
-            let mut body_ui = ui.new_child(UiBuilder::new().id_salt("deal_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
-            body_ui.shrink_clip_rect(body_rect);
-            let scroll = ScrollArea::vertical().id_salt("deal_body").auto_shrink([false, false]);
-            let scroll = if fresh { scroll.vertical_scroll_offset(0.0) } else { scroll };
-            scroll.show(&mut body_ui, |ui| {
+            let body = |ui: &mut Ui| {
                 Frame::new()
                     .inner_margin(Margin::symmetric(x, y))
                     .show(ui, |ui| {
@@ -110,8 +95,8 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
                         body(ui)
                     })
                     .inner
-            })
-            .inner
+            };
+            footed(ui, true, fresh, body, |ui| deal_footer(ui, footer))
         })
     });
     // The tab's foot and the card's top edge give way to the tab's fill, so the two read as one sheet.
@@ -139,27 +124,21 @@ pub fn departing(ui: &Ui, room: Rect, part: f32, add: impl FnOnce(&mut Ui)) {
 
 /// The row under a card's body that holds its actions, ruled off on top.
 pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    divider(ui);
-    let (x, y) = DEAL_FOOT_PADDING;
-    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
-            add(ui);
-        });
-    });
+    footer_row(ui, DEAL_FOOT_PADDING, add);
 }
 
 /// What closes an agenda row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgendaEnd<'a> {
     Nothing,
-    /// The row is the card being read.
+    /// The row is the card being read: it cannot be clicked.
     Now,
     /// The row's card is decided: the row reads faint and cannot be clicked.
     Done,
     /// How late the row is, such as "2 days late".
     Late(&'a str),
+    /// The card being read, and how late it is: it cannot be clicked.
+    LateNow(&'a str),
     Button(&'a str),
 }
 
@@ -174,10 +153,12 @@ pub struct AgendaPress {
 /// `text` may come from a posting, so it is painted as plain text, cut to the room left.
 pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> AgendaPress {
     let (pressed, response) = agenda_line(ui, day, text, end, first);
-    let role = if end == AgendaEnd::Done { Role::Label } else { Role::Button };
+    let role = if matches!(end, AgendaEnd::Done | AgendaEnd::Now | AgendaEnd::LateNow(_)) { Role::Label } else { Role::Button };
     let spoken = match end {
         AgendaEnd::Done => format!("{day}, {text}, done"),
+        AgendaEnd::Now => format!("{day}, {text}, now"),
         AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
+        AgendaEnd::LateNow(late) => format!("{day}, {text}, {late}, now"),
         _ => format!("{day}, {text}"),
     };
     response.widget_info(|| WidgetInfo::labeled(role, true, &spoken));
@@ -208,9 +189,11 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
         divider(ui);
     }
     let done = end == AgendaEnd::Done;
-    let sense = if done { Sense::hover() } else { Sense::click() };
+    // A decided row and the card being read have nothing to open: they take no click, light no fill and keep the arrow.
+    let inert = done || matches!(end, AgendaEnd::Now | AgendaEnd::LateNow(_));
+    let sense = if inert { Sense::hover() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
-    let fill = if !done && response.hovered() { p.raised } else { Color32::TRANSPARENT };
+    let fill = if inert { Color32::TRANSPARENT } else { pick_look(&p, false, pointer_over(&response), pressed(&response)).fill };
     ui.painter().rect_filled(rect, 0.0, fill);
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;
@@ -228,6 +211,11 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
         AgendaEnd::Late(late) => {
             add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
         }
+        // Right to left: the tag closes the row, and the lateness reads before it.
+        AgendaEnd::LateNow(late) => {
+            solid_tag(&mut end_ui, "Now", Tone::Turn);
+            add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
+        }
         AgendaEnd::Button(label) => pressed.button = small_button(&mut end_ui, label).clicked(),
     }
     let used = end_ui.min_rect().width();
@@ -239,9 +227,10 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let centred = |height: f32| rect.center().y - height / 2.0;
     let (dated_at, said_at) = (pos2(left, centred(dated.size().y)), pos2(text_left, centred(said.size().y)));
     paint_text(ui, dated_at, dated, day_ink, fill);
+    let response = cut_hover(response, &said, text);
     paint_text(ui, said_at, said, ink, fill);
-    if !done {
-        focus_ring(ui, &response, 0);
+    if !inert {
+        interactive_row(ui, &response, 0);
     }
     pressed.row = response.clicked();
     (pressed, response)
@@ -378,11 +367,12 @@ mod tests {
         harness.get_by_label("Tue 3, Harbor Bank deadline, done").click();
         harness.run();
         assert_eq!(*presses.borrow(), Vec::new());
-        harness.get_by_label("Thu 5, Meridian Rail closes").click();
+        harness.get_by_label("Thu 5, Meridian Rail closes, now").click();
         harness.run();
+        assert_eq!(*presses.borrow(), Vec::new());
         harness.get_by_label("Bring back").click();
         harness.run();
-        assert_eq!(*presses.borrow(), vec![(2, AgendaPress { row: true, button: false }), (0, AgendaPress { row: false, button: true })]);
+        assert_eq!(*presses.borrow(), vec![(0, AgendaPress { row: false, button: true })]);
     }
 
     #[test]

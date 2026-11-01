@@ -21,7 +21,7 @@ Each feature is a bounded context with its own language.
 Screen names differ from feature names: `intray` is Today, `tracking` is Applications, `runs` is Tasks, and `workspace` is Setup.
 
 `shared_kernel` holds the few value types every feature agrees on, plus the host `PATH` lookup that `runs` and `workspace` both need, `visible_text`, the filter that drops hidden characters from untrusted text, and `markdown::options()`, the one Markdown option set that the viewer and the closing-question parser share. `ui_kit` is the single owner of
-the Ledger design system: colour, spacing, radius, stroke and type tokens, plus every widget that paints them. Colour is for job status, plus one stamp ink for what waits on the user. The window is a gridded desk in both themes, and anything read in rows sits on paper. It knows no feature, and screens only arrange its widgets, which `tests/architecture.rs` enforces. `tests/ui_kit_gallery.rs` snapshots every component in both themes. `shell` is the composition root: it loads every feature into one
+the Ledger design system: colour, spacing, radius, stroke and type tokens, plus every widget that paints them. Colour is for job status, plus one stamp ink for what waits on the user. The window is a gridded desk in both themes, and anything read in rows sits on paper. It knows no feature, and screens only arrange its widgets, which `tests/architecture.rs` enforces. Every clickable kit widget shows the pointing hand, a hover, a pressed and a focus state, and paints its own disabled look with the reason on hover. A picked row or card adds an ink edge to the hover fill. Labels are not selectable, so a click on a row's text picks the row. Only documents, code boxes, alerts and load errors, your replies, Claude's questions shown whole and their choices, the research note, the archived posting and drafts can be selected and copied, and none of them sits inside something clickable. `tests/ui_kit_gallery.rs` snapshots every component in both themes. `shell` is the composition root: it loads every feature into one
 snapshot and owns the window.
 
 ## Layers
@@ -52,7 +52,7 @@ PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no P
 
 A worker thread rebuilds an immutable `Snapshot` when watched files change, every hour and at
 local midnight, and sends it to the UI thread. So the app's today changes at midnight, not up to an hour later. The UI never reads from disk. A feature that fails to load reports an issue and the
-others keep working. Its tab carries a mark, and an alert names what failed and what still works.
+others keep working. Its tab carries a mark, and an alert names what failed and what still works. Until the first snapshot arrives, every screen shows a loading view, not an empty one. A screen whose source failed shows the alert under its head and says its content is hidden, never that it is empty. The shell tells each screen both through `ScreenState`: whether its source is still being read, failed or ready, and which `Source`s failed, for a screen fed by more than one.
 
 Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout. A supervisor thread owns the child and a reader thread turns stdout lines into domain events. The UI thread applies them once per frame through `RunDesk::poll`. Dropping a session ends its process.
 

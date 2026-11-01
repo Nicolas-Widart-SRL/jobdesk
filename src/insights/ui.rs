@@ -2,25 +2,47 @@ use egui::{Align, Layout, ScrollArea, Ui};
 use egui_extras::{Column, TableBuilder};
 
 use crate::insights::application::{GapRow, SearchInsights, SkillGapView, WorkflowBand, gap_rows};
-use crate::ui_kit::tokens::{SCREEN_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
+use crate::shared_kernel::Source;
+use crate::ui_kit::tokens::{SCREEN_GAP, SKELETON_GAP, SKELETON_LINE, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FlowNode, Ink, Subtitle, Title, Tone, Type, command_action, command_button, flow_band, list_row, muted, note, page_body, page_head, panel, panel_body, panel_header,
-    primary_command_action, rich, slip, small_command_action, split, strong, table_cell, table_head, tag, tally_strip, wrapped_height,
+    CellRule, FlowNode, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note, list_row, muted, note, page_body, page_head,
+    panel, panel_body, panel_header, primary_command_action, rich, skeleton, skeleton_lines, slip, small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
 const GAP_COLUMNS: [f32; 4] = [0.34, 0.14, 0.12, 0.40];
 const ORDER_NUMBER_WIDTH: f32 = 12.0;
+/// What a part fed by the tracker says while the tracker cannot be read. An open dossier says it too.
+pub const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
+const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+/// The band's stages, in order.
+const STAGES: [&str; 6] = ["Profile", "Find", "Score", "Apply", "In progress", "Result"];
+const PANELS: [&str; 4] = ["Status", "Funnel", "By channel", "By sector"];
 
-pub fn show(ui: &mut Ui, report: &SearchInsights, band: &WorkflowBand, gaps: Option<&SkillGapView>) {
-    page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text("The whole workflow, search health and skill gaps, read live from your files")), |ui| {
-        primary_command_action(ui, "Find skill gaps", "/upskill");
+/// A failed source loads as nothing, so the parts it feeds say they are hidden instead of showing zeros.
+/// Until the first read, the band and the panels show their names over grey lines.
+pub fn show(ui: &mut Ui, state: &ScreenState, report: &SearchInsights, band: &WorkflowBand, gaps: Option<&SkillGapView>) {
+    let tracker = state.cannot_read(Source::Applications).then_some(TRACKER_HIDDEN);
+    // With no report to show, the skill gap section offers this action itself, so the head does not repeat it.
+    // The loading view offers nothing below, so the head keeps it while reading.
+    let offered_below = !state.reading() && gaps.is_none() && !state.cannot_read(Source::SkillGaps);
+    let subtitle = if state.reading() { "Reading your jobs, applications and reports…" } else { "The whole workflow, search health and skill gaps, read live from your files" };
+    page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text(subtitle)), |ui| {
+        if !offered_below {
+            primary_command_action(ui, "Find skill gaps", "/upskill");
+        }
         command_action(ui, "Rebuild dashboard", "/html-report");
     });
     page_body(ui, |ui| {
+        (state.alerts)(ui);
+        if state.reading() {
+            loading(ui);
+            return;
+        }
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            workflow(ui, band);
+            workflow(ui, band, tracker, state.cannot_read(Source::Jobs).then_some(JOBS_HIDDEN));
             ui.add_space(SCREEN_GAP);
+            // A failed tracker loads with no outcomes, so it never calibrates.
             if report.can_calibrate() {
                 calibration(ui, report);
                 ui.add_space(SCREEN_GAP);
@@ -28,19 +50,64 @@ pub fn show(ui: &mut Ui, report: &SearchInsights, band: &WorkflowBand, gaps: Opt
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = SCREEN_GAP;
                 ui.columns(4, |columns| {
-                    status_chart(&mut columns[0], report);
-                    funnel(&mut columns[1], report);
-                    counts(&mut columns[2], "By channel", &report.by_channel);
-                    counts(&mut columns[3], "By sector", &report.by_sector);
+                    status_chart(&mut columns[0], report, tracker);
+                    funnel(&mut columns[1], report, tracker);
+                    counts(&mut columns[2], "By channel", &report.by_channel, tracker);
+                    counts(&mut columns[3], "By sector", &report.by_sector, tracker);
                 });
             });
             ui.add_space(SCREEN_GAP);
-            skill_gaps(ui, gaps);
+            if state.cannot_read(Source::SkillGaps) {
+                empty_note(ui, "Skill gap report", "Your skill gap reports are hidden, not gone. They come back by themselves once the report file is fixed.");
+            } else {
+                skill_gaps(ui, gaps);
+            }
         });
     });
 }
 
-fn workflow(ui: &mut Ui, band: &WorkflowBand) {
+/// The screen before the first read: the band's stages and the panels by name, over grey lines where their counts go.
+fn loading(ui: &mut Ui) {
+    slip(ui, |ui| {
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.columns(STAGES.len(), |columns| {
+                for (ui, stage) in columns.iter_mut().zip(STAGES) {
+                    ui.spacing_mut().item_spacing.y = SKELETON_GAP;
+                    ui.label(rich(ui, stage, Type::TAB, Ink::Muted));
+                    skeleton(ui, 36.0, 28.0);
+                    skeleton(ui, 110.0, SKELETON_LINE);
+                }
+            });
+        });
+    });
+    ui.add_space(SCREEN_GAP);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = SCREEN_GAP;
+        ui.columns(PANELS.len(), |columns| {
+            for (ui, title) in columns.iter_mut().zip(PANELS) {
+                panel(ui, |ui| {
+                    panel_header(ui, title, None);
+                    panel_body(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        skeleton_lines(ui, &[160.0, 120.0, 140.0, 100.0], skeleton);
+                    });
+                });
+            }
+        });
+    });
+    ui.add_space(SCREEN_GAP);
+    panel(ui, |ui| {
+        panel_header(ui, "Skill gaps", None);
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            skeleton_lines(ui, &[420.0, 360.0, 390.0], skeleton);
+        });
+    });
+}
+
+/// `tracker` and `jobs` say why the stages they feed are hidden, if they are.
+fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Option<&str>) {
     let text = Some(Ink::Text);
     let nodes = [
         FlowNode {
@@ -48,26 +115,36 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand) {
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
             marks: vec![(band.profile_filled, text), (band.profile_total.saturating_sub(band.profile_filled), None)],
             note: format!("{} of {} profile parts filled", band.profile_filled, band.profile_total),
+            hidden: None,
         },
         FlowNode {
             label: "Find",
             figure: band.new_postings.to_string(),
             marks: vec![(band.new_postings, text), (band.seen.saturating_sub(band.new_postings), None)],
             note: format!("{} new of {} found", band.new_postings, band.seen),
+            hidden: jobs,
         },
-        FlowNode { label: "Score", figure: band.shortlisted.to_string(), marks: vec![(band.shortlisted, text)], note: "on shortlist".to_owned() },
-        FlowNode { label: "Apply", figure: band.drafted.to_string(), marks: vec![(band.drafted, Some(Tone::Drafted.into()))], note: "drafted, not sent".to_owned() },
+        FlowNode { label: "Score", figure: band.shortlisted.to_string(), marks: vec![(band.shortlisted, text)], note: "on shortlist".to_owned(), hidden: jobs },
+        FlowNode {
+            label: "Apply",
+            figure: band.drafted.to_string(),
+            marks: vec![(band.drafted, Some(Tone::Drafted.into()))],
+            note: "drafted, not sent".to_owned(),
+            hidden: tracker,
+        },
         FlowNode {
             label: "In progress",
             figure: (band.active + band.interview + band.offer).to_string(),
             marks: vec![(band.active, Some(Tone::Active.into())), (band.interview, Some(Tone::Interview.into())), (band.offer, Some(Tone::Offer.into()))],
             note: format!("{} applied, {} interview, {} offer", band.active, band.interview, band.offer),
+            hidden: tracker,
         },
         FlowNode {
             label: "Result",
             figure: (band.hired + band.closed).to_string(),
             marks: vec![(band.hired, Some(Tone::Hired.into())), (band.closed, Some(Tone::Closed.into()))],
             note: format!("{} hired, {} closed", band.hired, band.closed),
+            hidden: tracker,
         },
     ];
     flow_band(ui, &nodes);
@@ -99,7 +176,22 @@ fn tallied(ui: &mut Ui, label: &str, count: usize, ink: Ink) {
     });
 }
 
-fn status_chart(ui: &mut Ui, report: &SearchInsights) {
+/// A panel fed by a source that could not be read: its title, then why it is hidden, and no count.
+fn hidden_panel(ui: &mut Ui, title: &str, why: &str) {
+    panel(ui, |ui| {
+        panel_header(ui, title, None);
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            hidden_note(ui, why);
+        });
+    });
+}
+
+fn status_chart(ui: &mut Ui, report: &SearchInsights, hidden: Option<&str>) {
+    if let Some(why) = hidden {
+        hidden_panel(ui, "Status", why);
+        return;
+    }
     let tally = &report.tally;
     let rows = [
         ("Active", tally.active, Tone::Active),
@@ -124,7 +216,11 @@ fn status_chart(ui: &mut Ui, report: &SearchInsights) {
     });
 }
 
-fn funnel(ui: &mut Ui, report: &SearchInsights) {
+fn funnel(ui: &mut Ui, report: &SearchInsights, hidden: Option<&str>) {
+    if let Some(why) = hidden {
+        hidden_panel(ui, "Funnel", why);
+        return;
+    }
     let note = report.rejection_rate.map(|rate| format!("rejection rate {:.0}%", rate * 100.0));
     panel(ui, |ui| {
         panel_header(ui, "Funnel", note.as_deref());
@@ -140,7 +236,11 @@ fn funnel(ui: &mut Ui, report: &SearchInsights) {
     });
 }
 
-fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)]) {
+fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)], hidden: Option<&str>) {
+    if let Some(why) = hidden {
+        hidden_panel(ui, title, why);
+        return;
+    }
     panel(ui, |ui| {
         panel_header(ui, title, None);
         panel_body(ui, |ui| {
@@ -158,13 +258,8 @@ fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)]) {
 
 fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
     let Some(report) = report else {
-        panel(ui, |ui| {
-            panel_body(ui, |ui| {
-                ui.set_width(ui.available_width());
-                strong(ui, "No skill gap report yet");
-                muted(ui, "Run the analysis once you have ranked jobs or tracked applications.");
-                command_button(ui, "/upskill");
-            });
+        empty_state(ui, "No skill gap report yet", "Skill gaps are drawn from your ranked jobs and tracked applications. Run the analysis once you have some.", |ui| {
+            command_action(ui, "Find skill gaps", "/upskill");
         });
         return;
     };

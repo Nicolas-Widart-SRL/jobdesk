@@ -175,7 +175,11 @@ pub fn install_theme(ctx: &Context) {
             style.spacing.item_spacing = egui::vec2(ROW_GAP, ITEM_GAP);
             style.spacing.button_padding = egui::vec2(BUTTON_PADDING, 5.0);
             style.spacing.interact_size.y = 26.0;
+            // The bar floats and takes no room, but it stays drawn at rest, so a column that scrolls shows it before any hover.
+            style.spacing.scroll.dormant_handle_opacity = 0.6;
             style.spacing.scroll.fade.strength = 0.0;
+            // A label takes no click, so a click on a row's text picks the row. `copyable` turns selection back on.
+            style.interaction.selectable_labels = false;
         });
     }
 }
@@ -205,6 +209,8 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.selection.bg_fill = p.raised;
     visuals.selection.stroke = Stroke::new(HAIRLINE, p.text);
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
+    // egui fades a disabled ui to see-through, and the desk's grid shows through. The kit's controls paint their own disabled look.
+    visuals.disabled_alpha = 1.0;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
     // egui's own controls rest clear. None stands on the desk: the kit's buttons take the desk fill themselves,

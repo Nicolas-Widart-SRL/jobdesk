@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use egui::{Sense, Ui};
-use egui_extras::{Column, TableBuilder};
+use egui::Ui;
 
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
-use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
+use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT};
 use crate::ui_kit::{
-    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, muted, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
-    score, segmented, side_column, stamp, stamp_square, strong, table_cell, table_head, tag, title_over,
+    CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel,
+    panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented, skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
@@ -91,22 +90,38 @@ fn day_rate(job: &JobView) -> &str {
 
 fn score_jobs_label(new: usize) -> String {
     match new {
-        0 => "Score new jobs…".to_owned(),
-        1 => "Score 1 new job…".to_owned(),
-        new => format!("Score {new} new jobs…"),
+        0 => "Score new jobs".to_owned(),
+        1 => "Score 1 new job".to_owned(),
+        new => format!("Score {new} new jobs"),
     }
 }
 
 impl JobsScreen {
     /// `waiting` holds the key of every job with a card in Today, and `kept` every job whose flagged ad the user kept there.
-    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
-        let subtitle = Subtitle::Text("Scored from the job ad alone. Drafting an application also checks the company.");
+    /// While the saved jobs cannot be read, the list and its segments are hidden, never shown as empty.
+    /// Until the first read, the table's head and grey rows stand in for the jobs, so no lane reads as empty.
+    pub fn show(&mut self, ui: &mut Ui, state: &ScreenState, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
+        let subtitle = match state.load {
+            Load::Reading => "Reading your saved jobs…",
+            Load::Failed => "Not shown while your saved jobs cannot be read.",
+            Load::Ready => "Scored from the job ad alone. Drafting an application also checks the company.",
+        };
         let new = board.count(Lane::New);
-        page_head(ui, Title::Slab("Jobs"), Some(subtitle), |ui| {
+        page_head(ui, Title::Slab("Jobs"), Some(Subtitle::Text(subtitle)), |ui| {
             primary_command_action(ui, &score_jobs_label(new), "/rank");
-            command_action(ui, "Find new jobs…", "/scrape");
+            command_action(ui, "Find new jobs", "/scrape");
         });
-        page_body(ui, |ui| self.body(ui, board, waiting, kept));
+        page_body(ui, |ui| {
+            (state.alerts)(ui);
+            match state.load {
+                Load::Reading => loading(ui),
+                Load::Failed => {
+                    let body = "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
+                    empty_note(ui, "Your saved jobs are hidden, not gone", body);
+                }
+                Load::Ready => self.body(ui, board, waiting, kept),
+            }
+        });
     }
 
     fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
@@ -122,12 +137,7 @@ impl JobsScreen {
 
         let jobs = board.jobs_in(self.lane);
         if jobs.is_empty() {
-            panel(ui, |ui| {
-                panel_body(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    empty_state(ui, self.lane, board);
-                });
-            });
+            lane_empty(ui, self.lane, board);
             return;
         }
         if !self.selected.as_ref().is_some_and(|key| jobs.iter().any(|job| &job.key == key)) {
@@ -135,126 +145,195 @@ impl JobsScreen {
         }
         let selected = jobs.iter().find(|job| Some(&job.key) == self.selected.as_ref());
 
-        side_column("job_details", 340.0).show(ui, |ui| {
-            if let Some(job) = selected {
-                paper(ui, false, |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, job, kept.contains(&job.key)));
+        with_side_column(
+            ui,
+            340.0,
+            |ui| {
+                // The fixed columns overflow a narrow window, so the table scrolls sideways there.
+                panel(ui, |ui| {
+                    egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs, waiting));
                 });
-            }
-        });
-        egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
-            // The fixed columns overflow a narrow window, so the table scrolls sideways there.
-            panel(ui, |ui| {
-                egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs, waiting));
-            });
-            if jobs.iter().any(|job| waiting.contains(&job.key)) {
-                ui.add_space(ROW_GAP);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
-                    stamp_square(ui, WAITING);
-                    muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
-                });
-            }
-        });
+                if jobs.iter().any(|job| waiting.contains(&job.key)) {
+                    ui.add_space(ROW_GAP);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                        stamp_square(ui, WAITING);
+                        muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
+                    });
+                }
+            },
+            |ui| {
+                if let Some(job) = selected {
+                    paper_with_footer(ui, |ui| details(ui, job, kept.contains(&job.key)), |ui| actions(ui, job));
+                }
+            },
+        );
     }
 
     fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &HashSet<String>) {
-        let selected = self.selected.clone();
-        let last = jobs.len().saturating_sub(1);
-        // Cells pad themselves, so rules and the selected row run unbroken.
-        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        TableBuilder::new(ui)
-            .striped(false)
-            .sense(Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(60.0))
-            .column(Column::remainder().at_least(160.0).clip(true))
-            .column(Column::exact(112.0).clip(true))
-            .column(Column::exact(80.0).clip(true))
-            .column(Column::exact(96.0))
-            .column(Column::exact(168.0).clip(true))
-            .column(Column::exact(84.0).clip(true))
-            .column(Column::exact(24.0))
-            .header(TABLE_HEAD_HEIGHT, |mut header| {
-                for title in ["Score", "Job", "Where", "Day rate", "Closes", "Worth knowing", "Found on", ""] {
-                    header.col(|ui| {
-                        table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(58.0, jobs.len(), |mut row| {
-                    let index = row.index();
-                    let job = &jobs[index];
-                    let rule = if index == last { CellRule::Last } else { CellRule::Row };
-                    row.set_selected(selected.as_ref() == Some(&job.key));
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| score(ui, job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_words).to_owned(), |s| s.to_string())));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| title_over(ui, &job.title, &job.company));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, job.location.as_deref().unwrap_or(NOT_STATED), Type::BODY, Ink::Muted)).wrap()));
-                    });
-                    row.col(|ui| {
-                        let rate = day_rate(job);
-                        let ink = if rate == NOT_STATED { Ink::Faint } else { Ink::Text };
-                        table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, rate, Type::BODY, ink)).wrap()));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| match job.deadline {
-                            Some(deadline) => ui.label(deadline.format("%a %-d %b").to_string()),
-                            None => ui.label(rich(ui, "None", Type::BODY, Ink::Faint)),
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if let Some(signal) = job.signals.first() {
-                                let (text, tone) = signal_tag(signal);
-                                tag(ui, text, tone);
-                                if job.signals.len() > 1 {
-                                    muted(ui, format!("+{}", job.signals.len() - 1));
-                                }
-                            }
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if let Some(site) = &job.found_on {
-                                ui.add(egui::Label::new(site.as_str()).truncate());
-                            }
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if waiting.contains(&job.key) {
-                                stamp_square(ui, WAITING);
-                            }
-                        });
-                    });
-                    if row.response().clicked() {
-                        self.selected = Some(job.key.clone());
-                    }
-                });
-            });
+        let shown = shown_columns(ui);
+        let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
+        let picked = jobs.iter().position(|job| Some(&job.key) == self.selected.as_ref());
+        let table = PickTable { id_salt: "jobs_table", columns: &heads, row_height: ROW_HEIGHT, rows: jobs.len(), picked };
+        if let Some(row) = pick_table(ui, &table, |row| spoken(&jobs[row]), |ui, row, column| job_cell(ui, &jobs[row], shown[column].0, waiting)) {
+            self.selected = Some(jobs[row].key.clone());
+        }
     }
 }
 
-fn empty_state(ui: &mut Ui, lane: Lane, board: &JobBoard) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobColumn {
+    Score,
+    Job,
+    Where,
+    DayRate,
+    Closes,
+    WorthKnowing,
+    FoundOn,
+    Waiting,
+}
+
+const COLUMNS: [(JobColumn, TableColumn<'static>); 8] = [
+    (JobColumn::Score, TableColumn { head: "Score", width: ColumnWidth::Exact(60.0) }),
+    (JobColumn::Job, TableColumn { head: "Job", width: ColumnWidth::Rest { least: 160.0 } }),
+    (JobColumn::Where, TableColumn { head: "Where", width: ColumnWidth::Exact(112.0) }),
+    (JobColumn::DayRate, TableColumn { head: "Day rate", width: ColumnWidth::Exact(80.0) }),
+    (JobColumn::Closes, TableColumn { head: "Closes", width: ColumnWidth::Exact(96.0) }),
+    (JobColumn::WorthKnowing, TableColumn { head: "Worth knowing", width: ColumnWidth::Exact(168.0) }),
+    (JobColumn::FoundOn, TableColumn { head: "Found on", width: ColumnWidth::Exact(84.0) }),
+    (JobColumn::Waiting, TableColumn { head: "", width: ColumnWidth::Exact(24.0) }),
+];
+
+/// Below this window width the table drops its Found on column.
+const FOUND_ON_FROM_WIDTH: f32 = 1100.0;
+
+/// The columns the table shows. The detail names the site too, so a narrow window drops the column.
+fn shown_columns(ui: &Ui) -> Vec<(JobColumn, TableColumn<'static>)> {
+    let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
+    COLUMNS.into_iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect()
+}
+
+/// The table's row height, read or loading.
+const ROW_HEIGHT: f32 = 58.0;
+
+/// What a screen reader says for a job's row, such as "Tech Lead Java, Real-Time Traffic, Meridian Rail Systems, 84".
+fn spoken(job: &JobView) -> String {
+    let score = job.score.map_or_else(|| "not scored".to_owned(), |score| score.to_string());
+    format!("{}, {}, {score}", job.title, job.company)
+}
+
+fn job_cell(ui: &mut Ui, job: &JobView, column: JobColumn, waiting: &HashSet<String>) {
+    match column {
+        JobColumn::Score => {
+            score(ui, job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_words).to_owned(), |s| s.to_string()));
+        }
+        JobColumn::Job => {
+            title_over(ui, &job.title, &job.company);
+        }
+        JobColumn::Where => {
+            ui.add(egui::Label::new(rich(ui, job.location.as_deref().unwrap_or(NOT_STATED), Type::BODY, Ink::Muted)).wrap());
+        }
+        JobColumn::DayRate => {
+            let rate = day_rate(job);
+            let ink = if rate == NOT_STATED { Ink::Faint } else { Ink::Text };
+            ui.add(egui::Label::new(rich(ui, rate, Type::BODY, ink)).wrap());
+        }
+        JobColumn::Closes => {
+            match job.deadline {
+                Some(deadline) => ui.label(deadline.format("%a %-d %b").to_string()),
+                None => ui.label(rich(ui, "None", Type::BODY, Ink::Faint)),
+            };
+        }
+        JobColumn::WorthKnowing => {
+            if let Some((first, rest)) = job.signals.split_first() {
+                let (text, tone) = signal_tag(first);
+                tag(ui, text, tone);
+                if !rest.is_empty() {
+                    muted(ui, format!("+{}", rest.len())).on_hover_ui(|ui| {
+                        let also: Vec<_> = rest.iter().map(|signal| signal_tag(signal).0).collect();
+                        ui.label(format!("Also: {}", also.join(", ")));
+                    });
+                }
+            }
+        }
+        JobColumn::FoundOn => {
+            if let Some(site) = &job.found_on {
+                ui.add(egui::Label::new(site.as_str()).truncate());
+            }
+        }
+        JobColumn::Waiting => {
+            if waiting.contains(&job.key) {
+                stamp_square(ui, WAITING);
+            }
+        }
+    }
+}
+
+/// Grey blocks where each column's content goes, by the column.
+fn column_skeleton(column: JobColumn) -> &'static [f32] {
+    match column {
+        JobColumn::Score => &[32.0],
+        JobColumn::Job => &[190.0, 120.0],
+        JobColumn::Where => &[80.0],
+        JobColumn::DayRate => &[56.0],
+        JobColumn::Closes => &[64.0],
+        JobColumn::WorthKnowing => &[110.0],
+        JobColumn::FoundOn => &[56.0],
+        JobColumn::Waiting => &[],
+    }
+}
+
+const LOADING_ROWS: usize = 6;
+
+/// The shape of the screen before the first read: the segments, the table's head over grey rows, and the details beside it.
+fn loading(ui: &mut Ui) {
+    skeleton(ui, 520.0, SEGMENT_HEIGHT);
+    ui.add_space(SCREEN_GAP);
+    with_side_column(
+        ui,
+        340.0,
+        |ui| {
+            panel(ui, |ui| {
+                // In the same sideways scroll as the table, so the columns land where the rows will.
+                egui::ScrollArea::horizontal().id_salt("jobs_loading_x").auto_shrink([false, true]).show(ui, |ui| {
+                    let shown = shown_columns(ui);
+                    let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
+                    skeleton_table(ui, &heads, ROW_HEIGHT, LOADING_ROWS, |column| column_skeleton(shown[column].0));
+                });
+            });
+        },
+        |ui| {
+            panel(ui, |ui| {
+                panel_body(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = ROW_GAP;
+                        skeleton(ui, 62.0, 50.0);
+                        skeleton_lines(ui, &[120.0, 200.0, 160.0], skeleton);
+                    });
+                });
+                divider(ui);
+                panel_body(ui, |ui| skeleton_lines(ui, &[260.0, 230.0, 250.0, 200.0], skeleton));
+            });
+        },
+    );
+}
+
+fn lane_empty(ui: &mut Ui, lane: Lane, board: &JobBoard) {
     let new = board.count(Lane::New);
     match lane {
         Lane::Shortlist if new > 0 => {
-            strong(ui, if new == 1 { "1 new job waits for a score.".to_owned() } else { format!("{new} new jobs wait for a score.") });
-            primary_command_action(ui, &score_jobs_label(new), "/rank");
+            let title = if new == 1 { "1 new job waits for a score.".to_owned() } else { format!("{new} new jobs wait for a score.") };
+            empty_state(ui, &title, "", |ui| {
+                primary_command_action(ui, &score_jobs_label(new), "/rank");
+            });
         }
         Lane::Shortlist | Lane::New => {
-            strong(ui, "No jobs wait here. Search your job sites for new ones.");
-            command_action(ui, "Find new jobs…", "/scrape");
+            empty_state(ui, "No jobs wait here.", "Search your job sites for new ones.", |ui| {
+                command_action(ui, "Find new jobs", "/scrape");
+            });
         }
-        _ => {
-            strong(ui, format!("Nothing in {}.", lane_label(lane)));
-        }
+        _ => empty_note(ui, &format!("Nothing in {}.", lane_label(lane)), ""),
     }
 }
 
@@ -313,16 +392,14 @@ fn details(ui: &mut Ui, job: &JobView, kept: bool) {
             bullets(ui, "What is missing", &job.gaps);
         });
     }
-    divider(ui);
-    panel_body(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(ROW_GAP, ROW_GAP);
-            let apply = job.url.as_ref().map_or_else(|| "/apply".to_owned(), |url| format!("/apply {}", url.as_str()));
-            primary_command_action(ui, "Draft application…", &apply);
-            command_action(ui, "Find skill gaps…", "/upskill");
-            open_link(ui, "Open job ad", job.url.as_ref());
-        });
-    });
+}
+
+/// What the user can do with the job, pinned under its details.
+fn actions(ui: &mut Ui, job: &JobView) {
+    let apply = job.url.as_ref().map_or_else(|| "/apply".to_owned(), |url| format!("/apply {}", url.as_str()));
+    primary_command_action(ui, "Draft application", &apply);
+    command_action(ui, "Find skill gaps", "/upskill");
+    open_link(ui, "Open job ad", job.url.as_ref());
 }
 
 /// A check: its name on the left, what the posting says and the result on the right.

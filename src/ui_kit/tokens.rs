@@ -28,6 +28,8 @@ pub const SMALL_BUTTON_PADDING: f32 = 8.0;
 pub const TOGGLE_GAP: f32 = 4.0;
 pub const FOCUS_RING: f32 = 2.0;
 pub const FOCUS_OFFSET: f32 = 1.0;
+/// The least height of anything that takes a click, so a link's text is never the whole target.
+pub const MIN_HIT: f32 = 24.0;
 
 pub const TAG_HEIGHT: f32 = 22.0;
 pub const TAG_PADDING: f32 = 7.0;
@@ -59,6 +61,10 @@ pub const TALLY_FAT: TallySize = TallySize { width: 6.0, height: 18.0, gap: 3.0 
 pub const BAR_HEIGHT: f32 = 8.0;
 
 pub const CARD_PADDING: (i8, i8) = (11, 9);
+/// The room between grey lines while a screen loads.
+pub const SKELETON_GAP: f32 = 8.0;
+/// A grey line's height while a screen loads.
+pub const SKELETON_LINE: f32 = 12.0;
 pub const LANE_PADDING: (i8, i8, i8) = (8, 10, 12);
 pub const LANE_GAP: f32 = 6.0;
 
@@ -89,8 +95,12 @@ pub const AGENDA_DAY_WIDTH: f32 = 50.0;
 pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 /// The stamp-ink edge on a card that waits on the user.
 pub const WAITS_EDGE: f32 = 3.0;
+/// The ink edge at the leading side of a picked row.
+pub const PICK_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
+/// How much of its ink and border a disabled control keeps. egui's own fade is off, so the kit paints this.
+pub const DISABLED_OPACITY: f32 = 0.5;
 /// The room between a step's knot and its words.
 pub const KNOT_GAP: f32 = 20.0;
 pub const WELCOME_WIDTH: f32 = 620.0;
@@ -98,6 +108,10 @@ pub const WELCOME_WIDTH: f32 = 620.0;
 pub const OFFER_PADDING: i8 = 32;
 pub const OFFER_WIDTH: f32 = 480.0;
 pub const OFFER_GAP: f32 = 14.0;
+/// The empty state of a screen: its inset, the width of its sentence and the gap between its parts.
+pub const EMPTY_PADDING: i8 = 24;
+pub const EMPTY_WIDTH: f32 = 560.0;
+pub const EMPTY_GAP: f32 = 12.0;
 /// The welcome card's room above it, its padding, and the padding above and below each step.
 pub const WELCOME_TOP: f32 = 36.0;
 pub const WELCOME_PADDING: (i8, i8) = (27, 26);

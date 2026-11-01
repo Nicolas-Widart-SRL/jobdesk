@@ -4,10 +4,10 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
-    deal, divider, fat_tally, desk_label, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
-    slip, stamp, stamped_head, strong, undo_row, wrapped_height,
+    deal, divider, fat_tally, desk_label, key_button, lead_line, link, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    skeleton_lines, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -17,10 +17,6 @@ const SCORE_SOURCE: &str = "Job ad only";
 const CODE_HEIGHT: f32 = 150.0;
 /// The room above the line that closes Coming up.
 const CLOSING_GAP: f32 = 6.0;
-/// The room between grey lines while Today loads.
-const SKELETON_GAP: f32 = 8.0;
-/// A grey line's height while Today loads.
-const SKELETON_LINE: f32 = 12.0;
 
 enum Pressed {
     Act(Action),
@@ -177,16 +173,6 @@ pub fn loading(ui: &mut Ui, today: NaiveDate) {
                 ui.label(rich(ui, "Your first card appears in a moment.", Type::BODY, Ink::Text));
             });
         });
-    });
-}
-
-/// Grey lines in a column, `SKELETON_GAP` apart, drawn with `block`.
-fn skeleton_lines(ui: &mut Ui, widths: &[f32], block: fn(&mut Ui, f32, f32)) {
-    ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing.y = SKELETON_GAP;
-        for &width in widths {
-            block(ui, width, SKELETON_LINE);
-        }
     });
 }
 
@@ -464,19 +450,19 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             let intro = "Jobdesk can search your job sites for new ads and score them against your profile. Each opens as a task, and you start it there.";
             ui.label(rich(ui, intro, Type::BODY, Ink::Muted));
             ui.horizontal(|ui| {
-                primary_command_action(ui, "Find new jobs…", "/scrape");
+                primary_command_action(ui, "Find new jobs", "/scrape");
                 if queue.unranked > 0 {
                     let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
-                    command_action(ui, &format!("Score {jobs}…"), "/rank");
+                    command_action(ui, &format!("Score {jobs}"), "/rank");
                 }
             });
             if !queue.set_aside.is_empty() {
                 let n = queue.set_aside.len();
-                let (cards, verb, link) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
+                let (cards, verb, back) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.label(rich(ui, format!("{n} {cards} set aside with Later {verb} back tomorrow. "), Type::NOTE, Ink::Muted));
-                    if ui.add(egui::Link::new(rich(ui, link, Type::NOTE, Ink::Text).underline())).clicked() {
+                    if link(ui, back).clicked() {
                         *pressed = Some(Pressed::BringAll);
                     }
                 });
@@ -584,21 +570,22 @@ fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Op
     }
 }
 
-/// A row pulls its card back on top, unless the card is decided. The text names a company, so it shows as plain text.
+/// A row pulls its card back on top. The row being read and a decided row take no click. The text names a company, so it shows as plain text.
 fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<Pressed>) {
     let late = match row.state {
-        RowState::Late(1) => "1 day late".to_owned(),
-        RowState::Late(days) => format!("{days} days late"),
+        RowState::Late(1) | RowState::LateNow(1) => "1 day late".to_owned(),
+        RowState::Late(days) | RowState::LateNow(days) => format!("{days} days late"),
         _ => String::new(),
     };
     let end = match row.state {
         RowState::Late(_) => AgendaEnd::Late(&late),
+        RowState::LateNow(_) => AgendaEnd::LateNow(&late),
         RowState::Now => AgendaEnd::Now,
         RowState::Done => AgendaEnd::Done,
         RowState::Waiting => AgendaEnd::Nothing,
     };
     let press = agenda_row(ui, &row.on.format("%a %-d").to_string(), &row.text, end, first);
-    if press.row && row.state != RowState::Done {
+    if press.row {
         *pressed = Some(Pressed::Bring(row.key.clone()));
     }
 }

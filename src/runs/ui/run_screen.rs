@@ -15,8 +15,8 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, markdown, muted, page_body, page_head, panel,
-    panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel,
+    panel_body, panel_header, path_label, pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
 
@@ -24,7 +24,7 @@ const ACTIVITY_SHOWN: usize = 400;
 /// What the story keeps under the turn bar, its heading included, however much the bar asks for.
 /// A prompt's least heights win over it: when room is short, the story shrinks, not the prompt.
 const STORY_MIN_HEIGHT: f32 = 160.0;
-/// Claude's closing question is cut after this many lines, with the full text on hover.
+/// Claude's closing question is cut after this many lines, with the full text on hover. Only a whole question can be copied.
 const QUESTION_ROWS: usize = 3;
 const END_POPOVER_WIDTH: f32 = 320.0;
 const END_SESSION: &str = "End session…";
@@ -41,6 +41,13 @@ const CHOICES_MAX_HEIGHT: f32 = 260.0;
 const DETAIL_MIN_HEIGHT: f32 = 40.0;
 const DETAIL_MAX_HEIGHT: f32 = 180.0;
 const DETAIL_GAP: f32 = 4.0;
+
+/// What the run screen asks of the shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunScreenRequest {
+    /// Open the launcher with no command in it.
+    NewTask,
+}
 
 #[derive(Default)]
 pub struct RunScreen {
@@ -259,7 +266,8 @@ impl RunScreen {
     }
 
     /// `root` is the workspace folder, cut from the front of the paths the story shows.
-    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, root: &str) {
+    /// Returns what the screen asks of the shell, for a button that opens another screen.
+    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, root: &str) -> Option<RunScreenRequest> {
         let known = self.selected.as_ref().is_some_and(|id| desk.run(id).is_some());
         if !known {
             match desk.runs().first() {
@@ -269,16 +277,17 @@ impl RunScreen {
         }
         let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
             page_head(ui, Title::Slab("Tasks"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+            let mut request = None;
             page_body(ui, |ui| {
-                panel(ui, |ui| {
-                    panel_body(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        strong(ui, "No runs yet");
-                        muted(ui, "Press New task to start one.");
-                    });
+                let body = "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends.";
+                empty_state(ui, "No tasks yet", body, |ui| {
+                    primary_command_action(ui, "Find new jobs", "/scrape");
+                    if button(ui, "New task…").clicked() {
+                        request = Some(RunScreenRequest::NewTask);
+                    }
                 });
             });
-            return;
+            return request;
         };
         let narrow = ui.ctx().content_rect().width() < DETAILS_BELOW_WIDTH;
         // A run that stopped or failed can still hold its process, idle: its session can be ended too.
@@ -308,6 +317,7 @@ impl RunScreen {
         }
         let view = View::of(&run);
         page_body(ui, |ui| self.body(ui, desk, &run, &view, root, narrow));
+        None
     }
 
     /// Asks before the session ends. Keep it open is the default, and Esc keeps it open too.
@@ -495,7 +505,8 @@ impl RunScreen {
                 step_line(ui, None, if part.actions == 0 { "Details" } else { "Actions" }, "", Some((text, open)))
             }),
         };
-        if clicked.is_some_and(|toggle| toggle.clicked()) {
+        // A click anywhere on the step's line toggles it, as a click on its toggle does.
+        if clicked.is_some_and(|line| line.clicked()) {
             if open {
                 self.opened.remove(&key);
             } else {
@@ -552,7 +563,7 @@ impl RunScreen {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = EVENT_GAP;
                     who(ui, "You");
-                    ui.add(egui::Label::new(rich(ui, plain(text), Type::MONO, Ink::Text)).wrap());
+                    copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, plain(text), Type::MONO, Ink::Text)).wrap()));
                 });
             }
             ActivityKind::Claude(text) => {
@@ -643,7 +654,14 @@ impl RunScreen {
                     rich(ui, text, Type::BODY, ink).append_to(&mut job, &style, FontSelection::Default, Align::Min);
                 }
                 job.wrap.max_rows = rows;
-                ui.add(egui::Label::new(job).wrap()).on_hover_text(&question.text);
+                job.wrap.max_width = ui.available_width();
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                // Only whole text is copied: a cut question shows the whole on hover instead.
+                if galley.elided {
+                    ui.add(egui::Label::new(galley)).on_hover_text(&question.text);
+                } else {
+                    copyable(ui, |ui| ui.add(egui::Label::new(galley)));
+                }
             }
             None => {
                 muted(ui, "Claude finished this step. Read its message, then reply.");
@@ -671,7 +689,7 @@ impl RunScreen {
             for reply in replies {
                 // The words it sends show on hover, enabled or blocked. Why a run blocks it is the muted line's to say.
                 let why = if drafted { DRAFTED } else { reply.text };
-                let response = ui.add_enabled_ui(!blocked && !drafted, |ui| button(ui, reply.button)).inner.on_hover_text(reply.text).on_disabled_hover_text(why);
+                let response = enabled_when(ui, !blocked && !drafted, why, |ui| button(ui, reply.button)).on_hover_text(reply.text);
                 if response.clicked() {
                     *sent = Some(reply.text.to_owned());
                 }
@@ -697,7 +715,9 @@ impl RunScreen {
                 self.focused_for = Some(turn);
             }
             let typed = !self.reply.trim().is_empty();
-            let send = ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add_enabled_ui(typed && !blocked, |ui| primary_button(ui, "Send")).inner.clicked()).inner;
+            // While another run works, the muted line above says why, and the pointer says so again here.
+            let why = if blocked { BLOCKED } else { "Type a reply first." };
+            let send = ui.with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, typed && !blocked, why, |ui| primary_button(ui, "Send")).clicked()).inner;
             let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if (send || entered) && typed && !blocked {
                 sent = Some(self.reply.trim().to_owned());
@@ -724,7 +744,7 @@ impl RunScreen {
             // The choices sit in two columns, read across.
             let column = ((ui.available_width() - SCREEN_GAP) / 2.0).max(0.0);
             for (index, question) in questions.iter().enumerate() {
-                strong(ui, &question.text);
+                copyable(ui, |ui| strong(ui, &question.text));
                 let picked = self.picks.entry((prompt.request_id.clone(), question.text.clone())).or_default();
                 let grid = Grid::new(("run_choices", &prompt.request_id, index)).num_columns(2).min_col_width(column).max_col_width(column).spacing([SCREEN_GAP, ROW_GAP]);
                 grid.show(ui, |ui| {
@@ -733,9 +753,9 @@ impl RunScreen {
                             ui.spacing_mut().item_spacing.y = DETAIL_GAP;
                             let mut on = picked.contains(&option.label);
                             let changed = if question.multi_select {
-                                ui.checkbox(&mut on, &option.label).changed()
+                                hand(ui.checkbox(&mut on, &option.label)).changed()
                             } else {
-                                let clicked = ui.radio(on, &option.label).clicked();
+                                let clicked = hand(ui.radio(on, &option.label)).clicked();
                                 on |= clicked;
                                 clicked
                             };
@@ -743,7 +763,7 @@ impl RunScreen {
                                 // Under the choice's words, past its radio or checkbox.
                                 let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
                                 Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
-                                    ui.add(egui::Label::new(rich(ui, &option.description, Type::BODY, Ink::Muted)).wrap());
+                                    copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, &option.description, Type::BODY, Ink::Muted)).wrap()));
                                 });
                             }
                             if changed {
@@ -775,7 +795,7 @@ impl RunScreen {
             .collect();
         let complete = answers.len() == questions.len();
         ui.horizontal(|ui| {
-            if ui.add_enabled_ui(complete, |ui| primary_button(ui, "Send answer")).inner.clicked() {
+            if enabled_when(ui, complete, "Pick an answer for each question.", |ui| primary_button(ui, "Send answer")).clicked() {
                 desk.decide(&run.id, &prompt.request_id, Decision::Answer(answers.clone()));
                 self.picks.clear();
             }
@@ -835,16 +855,15 @@ impl RunScreen {
     }
 
     /// One run in the recent list. The picked run reads in full ink, the others muted.
-    /// Its labels take no clicks, so a click anywhere on the row picks the run.
     fn recent_row(&self, ui: &mut Ui, run: &Run, on: bool) -> bool {
         let response = pick_row(ui, on, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)).selectable(false));
+                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)));
                     status_tag(ui, run);
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let ink = if on { Ink::Text } else { Ink::Muted };
-                        ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate().selectable(false));
+                        ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());
                     });
                 });
             });
@@ -874,7 +893,7 @@ fn you_line(ui: &mut Ui, text: &str) {
             ui.set_min_width(STEP_NAME_WIDTH);
             ui.label(rich(ui, "You", Type::STRONG, Ink::Text));
         });
-        ui.add(egui::Label::new(rich(ui, format!("\u{201c}{}\u{201d}", plain(text)), Type::BODY, Ink::Text)).wrap());
+        copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, format!("\u{201c}{}\u{201d}", plain(text)), Type::BODY, Ink::Text)).wrap()));
     });
 }
 

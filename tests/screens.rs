@@ -5,13 +5,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime};
-use egui::{Key, Theme};
+use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
-use jobdesk::shell::{Screen, Shell, Snapshot, install_look};
+use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
@@ -201,6 +201,8 @@ fn stop_point() -> AgentEvent {
     AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.94, duration_ms: 401_000 }
 }
 
+/// The launcher's subtitle, which only the launcher shows. Its title, "New task", is also the menu button's label.
+const LAUNCHER: &str = "Pick a command. Nothing runs until you press Run.";
 const APPLY_LINE: &str = "/apply https://kestrel.example/jobs/2";
 const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestrel Payments\n\nVerdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week in Leuven | Pass |\n| Language | English, Dutch is a plus | Pass |\n| Salary | Not stated | Check |\n\nShall I go ahead and draft the CV and cover letter?";
 
@@ -345,9 +347,9 @@ fn a_command_button_leads_to_a_started_run() {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
-    harness.get_by_label("Tune scoring").click();
+    harness.get_by_label("Tune scoring…").click();
     harness.run_steps(3);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
 
     harness.get_by_label("Run").click();
     harness.run_steps(3);
@@ -472,6 +474,81 @@ fn a_quick_reply_waits_while_a_reply_is_drafted() {
 
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("Lead with the Kafka work"), "the draft stays");
     assert!(calls.lock().unwrap().sent.is_empty(), "nothing was sent");
+}
+
+/// A disabled control keeps the arrow, so the way to learn why it waits is to rest the pointer on it.
+#[test]
+fn a_disabled_send_says_why() {
+    let mut shell = shell(Screen::Runs, "disabled_send");
+    *shell.desk_slot() = Some(stop_after_evaluate(SharedCalls::default()));
+    let mut harness = tray_harness(shell);
+    let send = harness.get_by_label("Send");
+    assert!(send.accesskit_node().is_disabled(), "nothing is typed yet");
+    assert!(!is_shown(&harness, "Type a reply first."));
+    send.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Type a reply first."), "the pointer on a disabled Send says why");
+}
+
+/// A question's Send answer waits for a pick in every question.
+#[test]
+fn a_disabled_send_answer_says_why() {
+    let mut shell = shell(Screen::Runs, "disabled_send_answer");
+    *shell.desk_slot() = Some(apply_run(question_prompt()));
+    let mut harness = tray_harness(shell);
+    let send = harness.get_by_label("Send answer");
+    assert!(send.accesskit_node().is_disabled(), "no answer is picked yet");
+    send.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Pick an answer for each question."));
+}
+
+/// Until a folder is open, the tabs and New task wait and say what for.
+#[test]
+fn the_tabs_say_what_they_wait_for_before_a_folder_is_open() {
+    let mut harness = tray_harness(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()));
+    let new_task = harness.get_by_label("New task");
+    assert!(new_task.accesskit_node().is_disabled());
+    new_task.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Choose your job search folder first."));
+}
+
+/// Answers a probe once `release` is set, so a check stays running as long as a test wants.
+struct GatedTools(Arc<std::sync::atomic::AtomicBool>);
+
+impl ToolProber for GatedTools {
+    fn probe(&self, _: &ToolSpec) -> Option<String> {
+        while !self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Some("1.0".to_owned())
+    }
+}
+
+#[test]
+fn check_again_says_checking_while_it_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let release = Arc::new(AtomicBool::new(false));
+    let mut shell = shell(Screen::Workspace, "check_again_running");
+    let mut checks = EnvironmentChecks::new(Arc::new(GatedTools(Arc::clone(&release))), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Checking…"), "the button names what runs");
+    assert!(!is_shown(&harness, "Check again"));
+    assert!(harness.get_by_label("Checking…").accesskit_node().is_disabled());
+
+    release.store(true, Ordering::SeqCst);
+    for _ in 0..40 {
+        harness.run_steps(1);
+        if is_shown(&harness, "Check again") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(is_shown(&harness, "Check again"), "the label comes back with the results");
+    assert!(!harness.get_by_label("Check again").accesskit_node().is_disabled());
 }
 
 /// After Stop here and Claude's plain goodbye, the run is done for now: a reply is welcome, not awaited.
@@ -609,6 +686,26 @@ fn actions_open_only_when_asked() {
     assert_eq!(named(&harness), 0);
 }
 
+/// A step's whole line is its toggle's hit area: a click on its name opens its actions, and a second one closes them.
+#[test]
+fn a_click_on_a_step_name_opens_its_actions() {
+    let mut shell = shell(Screen::Runs, "step_name_click");
+    *shell.desk_slot() = Some(apply_run(stop_point()));
+    let mut harness = tray_harness(shell);
+    let file = "main_kestrel_solution_architect.tex";
+    let named = |harness: &Harness| harness.query_all_by_label_contains(file).count();
+    assert_eq!(named(&harness), 0, "nowhere while every toggle is closed");
+
+    harness.get_by_label("Draft").click();
+    harness.run_steps(3);
+    assert_eq!(named(&harness), 1, "Draft's Write row");
+    assert!(is_shown(&harness, "Hide actions"));
+
+    harness.get_by_label("Draft").click();
+    harness.run_steps(3);
+    assert_eq!(named(&harness), 0);
+}
+
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
 /// Both stories are taller than their room, so they have to scroll: the stop in the smallest window, and a long stop in the default one.
 #[test]
@@ -686,6 +783,24 @@ fn the_turn_bar_fits_the_smallest_window() {
     assert!(is_shown(&harness, "Another run is working. You can reply when it finishes."));
     assert!(!is_shown(&harness, "Recent runs"), "picking a run closes Run details");
     assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
+}
+
+/// Only whole text is copied: a question cut to fit takes no selection and shows in full on hover. A whole one can be copied.
+#[test]
+fn only_a_whole_question_can_be_copied() {
+    let asks = |question: &str| format!("Claude asks: {}", question.rsplit("\n\n").next().unwrap());
+    let (desk, _sink) = stop_with(SharedCalls::default(), LONG_QUESTION);
+    let mut harness = smallest_window(desk, "cut_question_copy");
+    let cut = asks(LONG_QUESTION);
+    harness.get_by_label(&cut).hover();
+    harness.run_steps(4);
+    assert_ne!(harness.output().platform_output.cursor_icon, CursorIcon::Text, "a cut question takes no selection");
+    assert!(harness.query_all_by_label_contains("or would you rather stop here").count() > 1, "the tooltip shows the whole question");
+
+    let mut harness = smallest_window(apply_stop_after_evaluate(), "whole_question_copy");
+    harness.get_by_label(&asks(STOP_EVALUATION)).hover();
+    harness.run_steps(2);
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Text, "a whole question can be selected");
 }
 
 /// The theme switch, which sits in the status line.
@@ -812,6 +927,296 @@ fn esc_keeps_the_session_open() {
     assert!(is_shown(&harness, "End session…"));
 }
 
+/// The window's close button asks first while a session is open. Keep working takes the focus, and Esc keeps working.
+#[test]
+fn esc_in_the_quit_dialog_keeps_working() {
+    let mut shell = shell(Screen::Runs, "quit_esc");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+    assert!(harness.get_by_label("Keep working").is_focused());
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+    assert!(harness.query_all_by_label("Your turn").count() > 0, "the session is still open");
+}
+
+/// The command key as the platform sends it: Cmd on macOS and Ctrl elsewhere, each with `command` set.
+const COMMAND: egui::Modifiers = egui::Modifiers { alt: false, ctrl: !cfg!(target_os = "macos"), shift: false, mac_cmd: cfg!(target_os = "macos"), command: true };
+
+fn cmd_enter(harness: &mut Harness) {
+    harness.key_press_modifiers(COMMAND, Key::Enter);
+    harness.run_steps(3);
+}
+
+fn recording_shell(screen: Screen, name: &str, calls: &SharedCalls) -> Shell {
+    let mut shell = shell(screen, name);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(calls))), Arc::new(|| {})));
+    shell
+}
+
+/// On /apply the posting is the multiline field, and the budget the only single line.
+fn posting<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::MultilineTextInput)
+}
+
+fn budget<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::TextInput)
+}
+
+/// Cmd or Ctrl Enter starts the run only while Run could, and a multiline field never takes it as a new line.
+#[test]
+fn cmd_enter_runs_only_when_run_is_enabled() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Launcher, "launcher_cmd_enter", &calls));
+    harness.get_by_label_contains("/apply").click();
+    harness.run_steps(3);
+    // An empty budget leaves Run disabled.
+    budget(&harness).focus();
+    harness.run_steps(2);
+    harness.key_press_modifiers(COMMAND, Key::A);
+    press(&mut harness, Key::Backspace);
+    posting(&harness).focus();
+    posting(&harness).type_text("Kestrel Payments");
+    harness.run_steps(2);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "no budget, so Run is disabled");
+    assert_eq!(posting(&harness).value().as_deref(), Some("Kestrel Payments"), "and the posting took no new line");
+
+    budget(&harness).focus();
+    budget(&harness).type_text("2");
+    harness.run_steps(2);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "Run was enabled, so the keys started the run");
+    harness.get_by_label("Recent runs");
+
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Launcher, "launcher_cmd_enter_reset", &calls));
+    harness.get_by_label_contains("/reset").scroll_to_me();
+    harness.run_steps(3);
+    harness.get_by_label_contains("/reset").click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "I understand is unticked");
+    harness.get_by_label(LAUNCHER);
+
+    harness.get_by_label("I understand").scroll_to_me();
+    harness.run_steps(3);
+    harness.get_by_label("I understand").click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "exactly one run");
+}
+
+#[test]
+fn cmd_enter_starts_nothing_outside_the_launcher() {
+    let calls = SharedCalls::default();
+    for screen in [Screen::InTray, Screen::Jobs, Screen::Tracker, Screen::Insights, Screen::Runs, Screen::Workspace] {
+        let mut harness = tray_harness(recording_shell(screen, "cmd_enter_elsewhere", &calls));
+        cmd_enter(&mut harness);
+        assert!(!is_shown(&harness, LAUNCHER), "{screen:?} stays");
+    }
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
+/// Esc goes back to the screen that opened the launcher, but an open list takes it first.
+#[test]
+fn esc_leaves_the_launcher_for_where_it_came_from() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_esc", &SharedCalls::default()));
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label(LAUNCHER);
+
+    harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Haiku"), "the model list is open");
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, "Haiku"), "Esc closed the list");
+    assert!(is_shown(&harness, LAUNCHER), "and left the launcher open");
+
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, LAUNCHER));
+    harness.get_by_label("Tune scoring…");
+}
+
+/// In a text field Esc only leaves the field, and keeps what was typed. A second Esc leaves the launcher.
+#[test]
+fn esc_in_a_field_leaves_the_field_first() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_esc_field", &SharedCalls::default()));
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label_contains("/apply").click();
+    harness.run_steps(3);
+    posting(&harness).focus();
+    posting(&harness).type_text("Kestrel Payments");
+    harness.run_steps(2);
+
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher stays");
+    assert!(!posting(&harness).is_focused(), "the field let go");
+    assert_eq!(posting(&harness).value().as_deref(), Some("Kestrel Payments"));
+
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, LAUNCHER));
+    harness.get_by_label("Tune scoring…");
+}
+
+const GRANITE_CARD: &str = "Granite Cloud, Platform Lead, No reply in 15 days, waits for you in Today";
+
+#[test]
+fn a_second_click_closes_the_application() {
+    let mut harness = tray_harness(shell(Screen::Tracker, "application_close"));
+    let open = |harness: &Harness| harness.query_all_by_label("Granite Cloud").count() == 2;
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(open(&harness), "the first click opens the details");
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(!open(&harness), "the second closes them");
+
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(!open(&harness), "Esc closes them too");
+}
+
+/// The snapshot a command leaves when it drops `company` from the sample tracker. The file is put back after.
+fn tracker_without(name: &str, company: &str) -> Snapshot {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let tracker = root.join("job_search_tracker.csv");
+    let full = fs::read_to_string(&tracker).unwrap();
+    let kept: Vec<&str> = full.lines().filter(|row| !row.contains(company)).collect();
+    fs::write(&tracker, kept.join("\n") + "\n").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    fs::write(&tracker, full).unwrap();
+    snapshot
+}
+
+fn tracker_again(name: &str) -> Snapshot {
+    Snapshot::load(&Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search"), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+/// A snapshot that misses the picked card hides its details, and they come back with the card. Esc stays free meanwhile.
+#[test]
+fn a_picked_application_comes_back_with_its_card() {
+    let name = "application_vanishes";
+    let mut shell = shell(Screen::Tracker, name);
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    let open = |harness: &Harness| harness.query_all_by_label("Granite Cloud").count() == 2;
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(open(&harness));
+
+    feed.send(tracker_without(name, "Granite Cloud")).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Granite Cloud"), "the card and its details are gone");
+    press(&mut harness, Key::Escape);
+
+    feed.send(tracker_again(name)).unwrap();
+    harness.run_steps(3);
+    assert!(open(&harness), "the details came back with the card");
+}
+
+/// However the user comes back to a dossier whose application has gone, Applications shows instead.
+#[test]
+fn a_gone_dossier_falls_back_to_applications() {
+    let name = "dossier_gone";
+    let mut shell = shell(Screen::Tracker, name);
+    let feed = shell.snapshot_feed();
+    shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    let applications = "Pick an application for its details and dossier.";
+    assert!(!is_shown(&harness, applications), "the dossier shows");
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label(LAUNCHER);
+
+    feed.send(tracker_without(name, "Tessel Group")).unwrap();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, applications), "Esc led to the dossier, which fell back");
+    assert!(!is_shown(&harness, "Tessel Group"));
+}
+
+fn request_close(harness: &mut Harness) {
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+    assert!(is_shown(harness, "Keep working"));
+}
+
+/// The quit dialog takes the first Esc, even from a field that had the focus when it opened.
+#[test]
+fn esc_keeps_working_from_a_focused_field() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "quit_from_field");
+    let reply = harness.get_by_role(egui::accesskit::Role::TextInput);
+    reply.focus();
+    reply.type_text("one more thing");
+    harness.run_steps(2);
+    request_close(&mut harness);
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+}
+
+/// And over an open popup: one Esc keeps working. The model list is a popup egui tracks, as Run details is not.
+#[test]
+fn esc_keeps_working_over_an_open_popup() {
+    let mut shell = shell(Screen::Launcher, "quit_over_popup");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Haiku"), "the model list is open");
+    request_close(&mut harness);
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+}
+
+/// While the quit dialog asks, Cmd K opens nothing behind it.
+#[test]
+fn cmd_k_waits_for_the_quit_dialog() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "quit_cmd_k");
+    request_close(&mut harness);
+
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+
+    assert!(!is_shown(&harness, LAUNCHER));
+    assert!(is_shown(&harness, "Keep working"));
+    press(&mut harness, Key::Escape);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "once it closes, Cmd K opens the launcher");
+}
+
+/// Cmd K from a focused reply leaves the field behind, so the next Esc already leaves the launcher.
+#[test]
+fn esc_leaves_a_launcher_opened_from_a_field() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "launcher_from_field");
+    let reply = harness.get_by_role(egui::accesskit::Role::TextInput);
+    reply.focus();
+    reply.type_text("one more thing");
+    harness.run_steps(2);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.step();
+    assert!(is_shown(&harness, LAUNCHER));
+
+    harness.key_press(Key::Escape);
+    harness.step();
+    harness.run_steps(2);
+
+    assert!(!is_shown(&harness, LAUNCHER));
+    assert!(is_shown(&harness, "Send"));
+}
+
 #[test]
 fn quick_replies_only_at_a_known_stop() {
     let mut shell = shell(Screen::Runs, "no_quick_replies");
@@ -878,7 +1283,7 @@ fn the_launcher_shortcut_works_while_typing() {
     harness.key_press(Key::Home);
     harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
     harness.run_steps(3);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
     harness.get_by_label("Tasks, 1 need you").click();
     harness.run_steps(3);
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
@@ -981,6 +1386,177 @@ fn applications_mark_what_waits_in_today() {
     assert!(is_shown(&harness, "Mosaic Data, Architect, You withdrew"));
     assert!(harness.query_by_label_contains("of them wait for you in Today.").is_some());
     assert!(is_shown(&harness, "A pink edge means the application waits for you in Today."));
+    assert!(is_shown(&harness, "Pick an application for its details and dossier."));
+}
+
+/// The hint that a card opens details shows even when nothing waits in Today, and then the pink edge goes unexplained.
+#[test]
+fn the_applications_legend_hints_at_details_when_nothing_waits() {
+    let mut harness = tray_harness(shell(Screen::InTray, "applications_legend_plain"));
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    harness.get_by_label_contains("Applications").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("wait for you in Today.").is_none(), "nothing waits in Today");
+    assert!(is_shown(&harness, "Pick an application for its details and dossier."));
+    assert!(!is_shown(&harness, "A pink edge means the application waits for you in Today."));
+}
+
+/// One action in the Setup header opens `/expand` in the launcher, and the rows carry none. No run starts.
+#[test]
+fn setup_offers_one_look_for_more_in_your_documents() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::Workspace, "setup_expand");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Look for more in your documents…").count(), 1, "one action, in the header, not one per row");
+    assert!(!is_shown(&harness, LAUNCHER));
+
+    harness.get_by_label("Look for more in your documents…").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/expand").count() > 0, "the line is /expand, with no file");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
+}
+
+/// Text in a row takes no click of its own, so a click on a job's title picks the job, and the pointer shows the hand.
+#[test]
+fn a_click_on_a_job_title_picks_the_job() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "job_title_click"));
+    let second = "Solution Architect, Event Sourcing";
+    assert_eq!(harness.query_all_by_label(second).count(), 1, "the table lists it, the detail shows another job");
+    harness.get_by_label(second).hover();
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand);
+
+    harness.get_by_label(second).click();
+    harness.run_steps(3);
+
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the job now");
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 1, "and no longer the first");
+}
+
+const MERIDIAN_ROW: &str = "Tech Lead Java, Real-Time Traffic, Meridian Rail Systems, 84";
+const KESTREL_ROW: &str = "Solution Architect, Event Sourcing, Kestrel Payments, 78";
+
+/// A job's row is one Tab stop, named for screen readers, and the table comes before the detail's actions.
+/// Every segment is its own stop, so Tab starts from the last one.
+#[test]
+fn tab_reaches_the_first_job_in_one_press() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_tab"));
+    harness.get_by_label_contains("Skipped").focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::Tab);
+    assert!(harness.get_by_label(MERIDIAN_ROW).is_focused(), "the first job takes the next stop");
+    press(&mut harness, Key::Tab);
+    assert!(harness.get_by_label(KESTREL_ROW).is_focused(), "the second job one stop further");
+    press(&mut harness, Key::Enter);
+    assert_eq!(harness.query_all_by_label("Solution Architect, Event Sourcing").count(), 2, "Enter picks the job");
+}
+
+/// Up and Down move the pick, and the focus goes with it.
+#[test]
+fn arrow_keys_move_the_pick() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_arrows"));
+    let second = "Solution Architect, Event Sourcing";
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the second job");
+    press(&mut harness, Key::ArrowUp);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "and the first again");
+
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert!(harness.get_by_label(KESTREL_ROW).is_focused(), "the focus follows the pick");
+    assert_eq!(harness.query_all_by_label(second).count(), 2);
+}
+
+/// A focused button keeps its arrows, and so does a dialog: only a row or no focus at all lets them move the pick.
+#[test]
+fn arrow_keys_leave_the_pick_alone_away_from_the_table() {
+    let mut shell = shell(Screen::Jobs, "jobs_arrows_held");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    let second = "Solution Architect, Event Sourcing";
+    harness.get_by_label("Draft application…").focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "the detail still shows the first job");
+    assert_eq!(harness.query_all_by_label(second).count(), 1);
+
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    request_close(&mut harness);
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "the quit dialog holds the pick");
+}
+
+/// A click leaves no keyboard focus behind on a segment, so the arrows still move the pick after one.
+#[test]
+fn arrow_keys_work_after_clicking_a_segment() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_arrows_clicked"));
+    let second = "Solution Architect, Event Sourcing";
+    harness.get_by_label_contains("Shortlist").click();
+    harness.run_steps(2);
+    assert!(!harness.get_by_label_contains("Shortlist").is_focused(), "the click leaves no focus on the segment");
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the second job");
+}
+
+/// The table cuts a long title, and the pointer on it shows the whole title. A row's text sits over the row's click,
+/// so it still takes the hover.
+#[test]
+fn a_cut_job_title_shows_in_full_on_hover() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_cut_title"));
+    let second = "Solution Architect, Event Sourcing";
+    assert_eq!(harness.query_all_by_label(second).count(), 1, "only the table lists it");
+    harness.get_by_label(second).hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the tooltip shows the title");
+
+    harness.get_by_label("+1").hover();
+    harness.run_steps(4);
+    assert!(harness.query_by_label_contains("Also: ").is_some(), "+1 names the other signal");
+}
+
+/// Coming up cuts a long line to the room it has, and the pointer on the row shows the whole line.
+#[test]
+fn a_cut_coming_up_row_shows_in_full_on_hover() {
+    let mut harness = tray_harness(shell_on(Screen::InTray, "tray_cut_row", overdue_day()));
+    assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 0, "only the row's name holds the line");
+    harness.get_by_label("Tue 3, Harbor Bank deadline, 4 days late, now").hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 1, "the tooltip shows the whole line");
+}
+
+/// The detail names the site, so a narrow window drops the column and keeps the rest in view.
+#[test]
+fn the_found_on_column_drops_below_1100() {
+    let mut narrow = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui({
+        let mut shell = shell(Screen::Jobs, "jobs_narrow");
+        move |ui| shell.show(ui)
+    });
+    narrow.run_steps(3);
+    assert!(!is_shown(&narrow, "Found on"));
+    let harness = tray_harness(shell(Screen::Jobs, "jobs_wide"));
+    assert!(is_shown(&harness, "Found on"));
+}
+
+/// The same holds for an application card: a click on its role opens the details.
+#[test]
+fn a_click_on_a_card_role_opens_its_details() {
+    let mut harness = tray_harness(shell(Screen::Tracker, "card_role_click"));
+    assert_eq!(harness.query_all_by_label("Granite Cloud").count(), 1, "only the card names the company");
+    harness.get_by_label("Platform Lead").click();
+    harness.run_steps(3);
+    assert_eq!(harness.query_all_by_label("Granite Cloud").count(), 2, "the detail slip names it too");
 }
 
 const TRAY_CARDS: usize = 10;
@@ -996,7 +1572,7 @@ fn y_leads_from_a_card_to_a_started_run() {
     assert!(is_shown(&harness, HARBOR));
 
     press(&mut harness, Key::Y);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
     harness.get_by_label("/outcome");
 
     harness.get_by_label("Run").click();
@@ -1063,12 +1639,12 @@ fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
     assert!(is_shown(&harness, "Want more to look at?"));
     assert!(is_shown(&harness, "Score 2 new jobs…"), "the sample board holds two unscored jobs");
     assert!(is_shown(&harness, &format!("{TRAY_CARDS} cards set aside with Later come back tomorrow. ")));
-    assert!(!is_shown(&harness, "All commands"));
+    assert!(!is_shown(&harness, LAUNCHER));
 
     harness.get_by_label("Find new jobs…").click();
     harness.run_steps(3);
 
-    assert!(is_shown(&harness, "All commands"), "the launcher opens");
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
     assert!(harness.query_all_by_label("/scrape").count() > 0, "the line is filled in");
     assert!(started.lock().unwrap().is_none(), "no run starts");
 }
@@ -1225,7 +1801,7 @@ fn bring_back_returns_set_aside_cards_without_a_run() {
     assert!(is_shown(&harness, HARBOR), "the card brought back is on top again");
     assert!(tallied(&harness, 0, TRAY_CARDS));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
-    assert!(!is_shown(&harness, "All commands"), "the row opens no launcher");
+    assert!(!is_shown(&harness, LAUNCHER), "the row opens no launcher");
     assert!(started.lock().unwrap().is_none(), "the row starts no run");
 }
 
@@ -1376,6 +1952,17 @@ fn the_card_actions_fit_the_smallest_window() {
     assert_in_window(&harness, [1040.0, 640.0], &["Draft application…", "Skip", "Later", "Open job ad", "Show the command"]);
 }
 
+/// The job's actions sit under the detail's scroll, so a long detail keeps them in view.
+#[test]
+fn the_job_actions_stay_in_view() {
+    for size in [[1280.0, 820.0], [1040.0, 640.0]] {
+        let mut shell = shell(Screen::Jobs, "job_actions_in_view");
+        let mut harness = Harness::builder().with_size(size).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+        harness.run_steps(3);
+        assert_in_window(&harness, size, &["Draft application…", "Find skill gaps…", "Open job ad"]);
+    }
+}
+
 /// The line is plain text to read: it opens no launcher and starts no run.
 #[test]
 fn show_the_command_reveals_the_line_and_starts_nothing() {
@@ -1391,7 +1978,7 @@ fn show_the_command_reveals_the_line_and_starts_nothing() {
     assert!(is_shown(&harness, line));
     assert!(is_shown(&harness, "Hide the command"));
     assert!(is_shown(&harness, MERIDIAN), "the card stays dealt");
-    assert!(!is_shown(&harness, "All commands"), "no launcher opens");
+    assert!(!is_shown(&harness, LAUNCHER), "no launcher opens");
     assert!(started.lock().unwrap().is_none(), "no run starts");
 
     press(&mut harness, Key::L);
@@ -1455,8 +2042,27 @@ fn a_logged_offer_shows_once_above_the_log() {
 #[test]
 fn overdue_cards_lead_coming_up() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
-    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late"));
+    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late, now"));
     assert!(is_shown(&harness, "Nothing else dated before Fri 20 Nov."), "late rows leave the next two weeks empty");
+}
+
+/// The card on top is the one being read, late or not, so its row takes no click. The late card under it can be pulled up,
+/// until it comes on top in turn.
+#[test]
+fn the_late_card_on_top_has_an_inert_row() {
+    let mut harness = tray_harness(shell_on(Screen::InTray, "tray_overdue_top", overdue_day()));
+    let late_row = |harness: &Harness, role| harness.query_all_by_label_contains("1 day late").any(|node| node.accesskit_node().role() == role);
+    let reading = "Tue 3, Harbor Bank deadline, 4 days late, now";
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Label, reading).is_some(), "the row is no button");
+    assert!(late_row(&harness, egui::accesskit::Role::Button), "the next late card can be pulled up");
+    harness.get_by_label(reading).hover();
+    harness.step();
+    assert_ne!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand);
+
+    press(&mut harness, Key::L);
+
+    assert!(late_row(&harness, egui::accesskit::Role::Label), "on top, it is read, not pulled up");
+    assert!(!late_row(&harness, egui::accesskit::Role::Button));
 }
 
 #[test]
@@ -1540,12 +2146,66 @@ fn intray_set_aside_dark() {
 
 /// A workspace with one command and no applications.
 fn empty_shell(name: &str) -> Shell {
+    empty_shell_on(Screen::InTray, name)
+}
+
+fn empty_shell_on(screen: Screen, name: &str) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join(".claude/commands")).unwrap();
     fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
     let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+    Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+/// An empty screen offers a verb, and the raw command stays in the hover text. Each button opens the launcher and starts nothing.
+#[test]
+fn empty_screens_offer_verbs_not_commands() {
+    for (screen, verb, command) in [(Screen::Tracker, "Draft an application…", "/apply"), (Screen::Insights, "Find skill gaps…", "/upskill")] {
+        let started = SharedSink::default();
+        let mut shell = empty_shell_on(screen, "empty_verbs");
+        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        // Tall, so Insights shows its skill gap section without scrolling.
+        let mut harness = Harness::builder().with_size([1280.0, 1400.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+        harness.run_steps(3);
+        assert!(is_shown(&harness, verb), "{verb} is shown, once");
+        assert!(harness.query_by_label_contains(command).is_none(), "{command} is not");
+
+        harness.get_by_label(verb).click();
+        harness.run_steps(3);
+        assert!(is_shown(&harness, LAUNCHER), "{verb} opens the launcher");
+        assert!(harness.query_all_by_label(command).count() > 0, "the line is filled in");
+        assert!(started.lock().unwrap().is_none(), "no run starts");
+    }
+}
+
+/// With no tasks, Find new jobs opens `/scrape` and New task opens the launcher empty. Neither starts a run.
+#[test]
+fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
+    for (button, line) in [("Find new jobs…", Some("/scrape")), ("New task…", None)] {
+        let started = SharedSink::default();
+        let mut shell = empty_shell_on(Screen::Runs, "empty_tasks");
+        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        let mut harness = tray_harness(shell);
+        assert!(is_shown(&harness, "No tasks yet"));
+        assert!(is_shown(&harness, "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends."));
+        assert!(!is_shown(&harness, LAUNCHER));
+
+        harness.get_by_label(button).click();
+        harness.run_steps(3);
+        assert!(is_shown(&harness, LAUNCHER), "{button} opens the launcher");
+        if line.is_some() {
+            assert!(harness.query_all_by_label("/scrape").count() > 0, "{button}: the line is filled in");
+        }
+        assert!(started.lock().unwrap().is_none(), "no run starts");
+    }
+}
+
+#[test]
+fn runs_empty_light() {
+    let mut shell = shell(Screen::Runs, "runs_empty_light");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    render_with(shell, Theme::Light, "runs_empty_light");
 }
 
 #[test]
@@ -1556,20 +2216,161 @@ fn intray_clear_dark() {
 /// The sample workspace with a tracker saved in Latin-1, as a spreadsheet's plain CSV export does.
 /// With `jobs_too`, the saved jobs file is cut off as well.
 fn failed_shell(name: &str, jobs_too: bool) -> Shell {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
-    let _ = fs::remove_dir_all(&root);
-    sample_workspace(&root);
-    fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap();
-    if jobs_too {
-        fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap();
-    }
-    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    assert_eq!(snapshot.issues.len(), 1 + usize::from(jobs_too), "{:?}", snapshot.issues);
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+    let broken: &[Source] = if jobs_too { &[Source::Applications, Source::Jobs] } else { &[Source::Applications] };
+    broken_shell(Screen::InTray, name, broken)
 }
 
 fn failed_tracker_shell(name: &str) -> Shell {
     failed_shell(name, false)
+}
+
+/// The sample workspace with each of `broken`'s files made unreadable, opened on `screen`.
+fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    for source in broken {
+        match source {
+            Source::Applications => fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap(),
+            Source::Jobs => fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap(),
+            Source::SkillGaps => fs::write(root.join("upskill/report-2026-10-28.md"), b"# Skill gaps\n\nCaf\xe9\n").unwrap(),
+            Source::Decisions => unreachable!("the tray reports its own file"),
+        }
+    }
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), broken.len(), "{:?}", snapshot.issues);
+    Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
+const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+
+/// Each screen a failed source reaches draws its head, then the alert, then hides what the source feeds instead of calling it empty.
+/// A screen that forgot its alert would still pass every snapshot, so this walks them all.
+#[test]
+fn every_failed_screen_shows_its_alert_under_its_head() {
+    struct Case {
+        screen: Screen,
+        broken: &'static [Source],
+        subtitle: &'static str,
+        alert: &'static str,
+        shown: &'static [&'static str],
+        not_shown: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            screen: Screen::Tracker,
+            broken: &[Source::Applications],
+            subtitle: "Not shown while the tracker cannot be read.",
+            alert: "Your applications could not be read.",
+            shown: &["Your applications are hidden, not gone", "Record a result…", "Check mail for replies…"],
+            not_shown: &["No applications yet", "Draft an application…", "Not sent yet"],
+        },
+        Case {
+            screen: Screen::Jobs,
+            broken: &[Source::Jobs],
+            subtitle: "Not shown while your saved jobs cannot be read.",
+            alert: "Your saved jobs could not be read.",
+            shown: &["Your saved jobs are hidden, not gone", "Find new jobs…"],
+            not_shown: &["No jobs wait here.", "Shortlist  0", "New  0"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::Applications],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your applications could not be read.",
+            shown: &[],
+            not_shown: &["No applications sent yet.", "0 sent", "drafted, not sent", "0 applied, 0 interview, 0 offer", "0 hired, 0 closed", "Tune scoring"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::Jobs],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your saved jobs could not be read.",
+            shown: &[],
+            not_shown: &["0 new of 0 found", "on shortlist"],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::SkillGaps],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Your skill gap reports could not be read.",
+            shown: &["Skill gap report", "Your skill gap reports are hidden, not gone. They come back by themselves once the report file is fixed."],
+            not_shown: &["No skill gap report yet"],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Applications],
+            subtitle: "ai-job-search",
+            alert: "Your applications could not be read.",
+            shown: &["Jobs seen"],
+            not_shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Jobs],
+            subtitle: "ai-job-search",
+            alert: "Your saved jobs could not be read.",
+            shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
+            not_shown: &["Jobs seen"],
+        },
+    ];
+    for (index, case) in cases.iter().enumerate() {
+        let mut shell = broken_shell(case.screen, &format!("failed_screen_{index}"), case.broken);
+        let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+        checks.ensure_started();
+        *shell.environment_slot() = Some(checks);
+        let harness = tray_harness(shell);
+        let subtitle = harness.get_by_label(case.subtitle).rect();
+        let alert = harness.get_by_label(case.alert).rect();
+        assert!(alert.top() > subtitle.bottom(), "{:?}: the alert {alert:?} sits under the subtitle {subtitle:?}", case.screen);
+        for text in case.shown {
+            assert!(is_shown(&harness, text), "{:?} shows {text}", case.screen);
+        }
+        for text in case.not_shown {
+            assert!(!is_shown(&harness, text), "{:?} hides {text}", case.screen);
+        }
+    }
+}
+
+/// An open dossier whose tracker fails stays open and says its application is hidden, not that it left the tracker.
+#[test]
+fn a_dossier_whose_tracker_fails_is_hidden_not_gone() {
+    let mut shell = broken_shell(Screen::Tracker, "dossier_tracker_failed", &[Source::Applications]);
+    shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "Hidden while the tracker cannot be read."));
+    assert!(!is_shown(&harness, "This application is no longer in the tracker."));
+}
+
+/// Insights hides only what the failed sources feed: each panel and band cell they feed says so, and the rest still counts.
+#[test]
+fn insights_hides_only_what_a_failed_source_feeds() {
+    let harness = tray_harness(broken_shell(Screen::Insights, "insights_hidden_parts", &[Source::Applications, Source::Jobs]));
+    assert_eq!(harness.query_all_by_label(TRACKER_HIDDEN).count(), 7, "Status, Funnel, By channel, By sector, Apply, In progress and Result");
+    assert_eq!(harness.query_all_by_label(JOBS_HIDDEN).count(), 2, "Find and Score");
+    assert!(harness.query_by_label_contains("profile parts filled").is_some(), "the profile still counts");
+    assert!(is_shown(&harness, "Skill gaps"), "the skill gap report still shows");
+
+    let harness = tray_harness(shell(Screen::Insights, "insights_nothing_hidden"));
+    assert!(harness.query_by_label(TRACKER_HIDDEN).is_none());
+    assert!(harness.query_by_label(JOBS_HIDDEN).is_none());
+}
+
+#[test]
+fn tracker_failed_light() {
+    tray_after(wgpu_tray(broken_shell(Screen::Tracker, "tracker_failed_light", &[Source::Applications]), Theme::Light), &[], "tracker_failed_light");
+}
+
+#[test]
+fn jobs_failed_dark() {
+    tray_after(wgpu_tray(broken_shell(Screen::Jobs, "jobs_failed_dark", &[Source::Jobs]), Theme::Dark), &[], "jobs_failed_dark");
+}
+
+#[test]
+fn insights_failed_light() {
+    tray_after(wgpu_tray(broken_shell(Screen::Insights, "insights_failed_light", &[Source::Applications]), Theme::Light), &[], "insights_failed_light");
 }
 
 #[test]
@@ -1589,6 +2390,33 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
     assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
     assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
+}
+
+/// The mark on a tab is a bare square, so the pointer on the tab says what failed, in the alert's words.
+#[test]
+fn a_failed_tab_says_what_failed() {
+    let name = "failed_gaps_tab";
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    fs::write(root.join("upskill/report-2026-10-29.md"), b"Caf\xe9 \xff\xfe").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), 1, "{:?}", snapshot.issues);
+    let shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Your skill gap reports could not be read.").count(), 1, "the alert says it once");
+    harness.get_by_label("Insights, could not be read").hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label("Your skill gap reports could not be read.").count(), 2, "the tab says it too");
+}
+
+/// Labels take no click, except where the user may copy: the alert's reason can be selected, a heading cannot.
+#[test]
+fn a_failed_sources_reason_can_be_selected() {
+    let harness = tray_harness(failed_tracker_shell("failed_selectable"));
+    let senses_click = |label: &str| harness.get_by_label(label).accesskit_node().data().supports_action(egui::accesskit::Action::Click);
+    assert!(senses_click("job_search_tracker.csv: not UTF-8 text, re-save it as CSV UTF-8"));
+    assert!(!senses_click("Your applications could not be read."));
 }
 
 /// A decisions file that cannot be read joins the same alert, on every screen, and leaves Today's count alone.
@@ -1719,10 +2547,58 @@ fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
 
 /// The sample folder, open but not read yet.
 fn loading_shell(name: &str) -> Shell {
+    loading_on(Screen::InTray, name)
+}
+
+/// The sample folder, open on `screen` but not read yet.
+fn loading_on(screen: Screen, name: &str) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    Shell::loading(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+    Shell::loading(screen, jobdesk::workspace::open(&root).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+}
+
+/// Until the first read, no screen says it has nothing: each says it is reading, and its head actions stay.
+#[test]
+fn loading_screens_promise_nothing() {
+    let empty = ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
+    let cases: [(Screen, &str, &[&str]); 4] = [
+        (Screen::Jobs, "Reading your saved jobs…", &["Find new jobs…", "Score", "Worth knowing"]),
+        (Screen::Tracker, "Reading your applications…", &["Record a result…", "Check mail for replies…", "Not sent yet", "Applied", "Closed"]),
+        (Screen::Insights, "Reading your jobs, applications and reports…", &["Find skill gaps…", "Rebuild dashboard…", "Profile", "Result", "Funnel", "By sector"]),
+        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Profile", "Environment", "Portals"]),
+    ];
+    for (screen, subtitle, shown) in cases {
+        let mut shell = loading_on(screen, &format!("loading_{screen:?}"));
+        let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+        checks.ensure_started();
+        *shell.environment_slot() = Some(checks);
+        let harness = tray_harness(shell);
+        assert!(is_shown(&harness, subtitle), "{screen:?} says it is reading");
+        for text in shown {
+            assert!(is_shown(&harness, text), "{screen:?} shows {text}");
+        }
+        for text in empty {
+            assert!(!is_shown(&harness, text), "{screen:?} promises {text}");
+        }
+    }
+    let harness = tray_harness(loading_on(Screen::Workspace, "loading_setup_name"));
+    assert!(!is_shown(&harness, "ai-job-search"), "the folder name waits for the read");
+}
+
+#[test]
+fn jobs_loading_light() {
+    render_probed(loading_on(Screen::Jobs, "jobs_loading_light"), Theme::Light, "jobs_loading_light");
+}
+
+#[test]
+fn tracker_loading_light() {
+    render_probed(loading_on(Screen::Tracker, "tracker_loading_light"), Theme::Light, "tracker_loading_light");
+}
+
+#[test]
+fn insights_loading_dark() {
+    render_probed(loading_on(Screen::Insights, "insights_loading_dark"), Theme::Dark, "insights_loading_dark");
 }
 
 #[test]
@@ -1737,7 +2613,7 @@ fn loading_deals_no_card_and_ignores_keys() {
     press(&mut harness, Key::Y);
     press(&mut harness, Key::L);
 
-    assert!(!is_shown(&harness, "All commands"), "Y opens no launcher");
+    assert!(!is_shown(&harness, LAUNCHER), "Y opens no launcher");
     assert!(!is_shown(&harness, "Set aside until tomorrow"), "L sets nothing aside");
     assert!(is_shown(&harness, "Reading your job search…"));
 }

@@ -5,8 +5,8 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
-    primary_button, primary_command_action, rich, side_column, slip, small_command_action, stamp_square, strong, tag,
+    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, back_pressed, blank_card, card_skeleton, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note,
+    open_link, page_body, page_head, panel_body, paper_with_footer, primary_button, primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
@@ -98,49 +98,71 @@ fn card_waits(card: &ApplicationCard, waiting: &Waiting) -> bool {
 impl TrackerScreen {
     /// `waiting` holds the company and role of every application with a card in Today.
     /// Returns the archive folder of a dossier the user asked to open.
-    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
+    /// While the tracker cannot be read, the board is hidden, never shown as empty.
+    pub fn show(&mut self, ui: &mut Ui, state: &ScreenState, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let open = pipeline.open_count();
         let waits = pipeline.cards().filter(|card| card_waits(card, waiting)).count();
         let mut subtitle = format!("{open} open, {} closed.", pipeline.cards().count() - open);
         if waits > 0 {
             subtitle.push_str(&format!(" {waits} of them wait for you in Today."));
         }
-        let subtitle = (!pipeline.is_empty()).then_some(subtitle);
-        page_head(ui, Title::Slab("Applications"), subtitle.as_deref().map(Subtitle::Text), |ui| {
-            primary_command_action(ui, "Record a result…", "/outcome");
-            command_action(ui, "Check mail for replies…", "/gmail-sync");
+        let subtitle = match state.load {
+            Load::Reading => Some("Reading your applications…"),
+            Load::Failed => Some("Not shown while the tracker cannot be read."),
+            Load::Ready => (!pipeline.is_empty()).then_some(subtitle.as_str()),
+        };
+        page_head(ui, Title::Slab("Applications"), subtitle.map(Subtitle::Text), |ui| {
+            primary_command_action(ui, "Record a result", "/outcome");
+            command_action(ui, "Check mail for replies", "/gmail-sync");
         });
-        page_body(ui, |ui| self.body(ui, pipeline, waiting))
+        page_body(ui, |ui| {
+            (state.alerts)(ui);
+            match state.load {
+                Load::Reading => {
+                    loading(ui);
+                    None
+                }
+                Load::Failed => {
+                    let body = "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
+                    empty_note(ui, "Your applications are hidden, not gone", body);
+                    None
+                }
+                Load::Ready => self.body(ui, pipeline, waiting),
+            }
+        })
     }
 
     fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let mut open = None;
         if pipeline.is_empty() {
-            panel(ui, |ui| {
-                panel_body(ui, |ui| {
-                    strong(ui, "No applications yet");
-                    muted(ui, "The tracker appears when /apply records your first application.");
-                    command_button(ui, "/apply");
-                });
+            empty_state(ui, "No applications yet", "Your tracker appears here once your first application is recorded.", |ui| {
+                command_action(ui, "Draft an application", "/apply");
             });
             return None;
         }
         action_bar(ui, pipeline);
-        let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
+        // The pick outlives a snapshot that misses its card: the details hide, and come back with the card.
+        // Esc closes only details on show, so a hidden pick leaves it free.
+        let mut selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
+        if selected.is_some() && back_pressed(ui.ctx()) {
+            selected = None;
+            self.selected = None;
+        }
         if let Some(card) = selected {
             side_column("application_details", 320.0).show(ui, |ui| {
-                slip(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
+                paper_with_footer(ui, |ui| open = details(ui, card), |ui| actions(ui, card));
             });
         }
-        if pipeline.cards().any(|card| card_waits(card, waiting)) {
-            let frame = Frame::new().inner_margin(egui::Margin { top: NOTE_GAP.1 as i8, ..Default::default() });
-            egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
-                ui.horizontal(|ui| {
+        let frame = Frame::new().inner_margin(egui::Margin { top: NOTE_GAP.1 as i8, ..Default::default() });
+        egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                desk_label(ui, "Pick an application for its details and dossier.", Type::NOTE, Ink::Muted);
+                if pipeline.cards().any(|card| card_waits(card, waiting)) {
                     stamp_square(ui, "Pink edge");
                     desk_label(ui, "A pink edge means the application waits for you in Today.", Type::NOTE, Ink::Muted);
-                });
+                }
             });
-        }
+        });
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.board(ui, pipeline, waiting));
         });
@@ -165,7 +187,9 @@ impl TrackerScreen {
                         });
                         for card in &lane.cards {
                             if self.card(ui, card, card_waits(card, waiting)) {
-                                self.selected = Some((card.company.clone(), card.role.clone()));
+                                let picked = Some((card.company.clone(), card.role.clone()));
+                                // A second click on the picked card closes its details.
+                                self.selected = if self.selected == picked { None } else { picked };
                             }
                         }
                     });
@@ -203,6 +227,28 @@ impl TrackerScreen {
     }
 }
 
+/// The lanes a board shows with no Hired card, and how many blank cards each holds while it loads.
+const LOADING_LANES: [(StatusBucket, usize); 5] =
+    [(StatusBucket::Drafted, 1), (StatusBucket::Active, 2), (StatusBucket::Interview, 1), (StatusBucket::Offer, 1), (StatusBucket::Closed, 2)];
+/// How tall a lane stands before the first read.
+const LOADING_LANE_HEIGHT: f32 = 400.0;
+
+/// The board before the first read: the lanes by their fixed names, holding blank cards.
+fn loading(ui: &mut Ui) {
+    ui.spacing_mut().item_spacing.x = BOARD_GAP;
+    ui.columns(LOADING_LANES.len(), |columns| {
+        for (ui, (bucket, cards)) in columns.iter_mut().zip(LOADING_LANES) {
+            lane_frame(ui, |ui| {
+                ui.set_min_height(LOADING_LANE_HEIGHT);
+                lane_title(ui, lane_name(bucket), bucket_tone(bucket));
+                for _ in 0..cards {
+                    blank_card(ui, |ui| skeleton_lines(ui, &[155.0, 123.0, 80.0], card_skeleton));
+                }
+            });
+        }
+    });
+}
+
 fn applications(count: usize) -> String {
     if count == 1 { "1 application has".into() } else { format!("{count} applications have") }
 }
@@ -225,10 +271,10 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
             ui.label(clauses.join(" "));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if stale > 0 {
-                    small_command_action(ui, "Close quiet ones…", "/outcome stale");
+                    small_command_action(ui, "Close quiet ones", "/outcome stale");
                 }
                 if due > 0 {
-                    small_command_action(ui, "Draft follow-ups…", "/outcome followup");
+                    small_command_action(ui, "Draft follow-ups", "/outcome followup");
                 }
             });
         });
@@ -270,15 +316,14 @@ fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
             muted(ui, card.notes.as_str());
         });
     }
-    divider(ui);
-    panel_body(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            small_command_action(ui, "Record a result…", &format!("/outcome {}", card.company.to_lowercase()));
-            small_command_action(ui, "Prepare for the interview…", &format!("/interview {}", card.company.to_lowercase()));
-            open_link(ui, "Open job ad", card.source.as_ref());
-        });
-    });
     open
+}
+
+/// What the user can do with the application, pinned under its details.
+fn actions(ui: &mut Ui, card: &ApplicationCard) {
+    small_command_action(ui, "Record a result", &format!("/outcome {}", card.company.to_lowercase()));
+    small_command_action(ui, "Prepare for the interview", &format!("/interview {}", card.company.to_lowercase()));
+    open_link(ui, "Open job ad", card.source.as_ref());
 }
 
 fn fact(ui: &mut Ui, label: &str, value: &str) {

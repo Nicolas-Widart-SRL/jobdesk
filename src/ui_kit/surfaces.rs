@@ -1,18 +1,20 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, WidgetText, pos2,
-    vec2,
+    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2,
+    WidgetInfo, WidgetText, pos2, vec2,
 };
 
+use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
+use crate::ui_kit::controls::{dialog_open, interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -27,6 +29,14 @@ const DESK: &str = "jobdesk_desk";
 pub fn desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     paint_grid(ui.painter(), ui.max_rect());
     ui.scope_builder(UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(DESK)), add).inner
+}
+
+/// Marks a `Ui` that takes a click as a whole, such as a row or a card. `copyable` text must never sit inside one.
+pub(in crate::ui_kit) const CLICKABLE: &str = "jobdesk_clickable";
+
+/// A child `Ui` that takes a click anywhere on it, tagged `CLICKABLE`.
+fn clickable() -> UiBuilder {
+    UiBuilder::new().sense(Sense::click()).ui_stack_info(UiStackInfo::default().with_tag(CLICKABLE))
 }
 
 /// Marks a `Ui` whose owner paints its own fill under it with the painter, not with a `Frame`, such as a row that lights up.
@@ -184,6 +194,43 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
     });
 }
 
+/// Where a screen's source stands. A failed source loads as nothing, so the screen must not read it as empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Load {
+    /// Not read yet.
+    Reading,
+    /// Could not be read: the screen hides what it would show and says so.
+    Failed,
+    Ready,
+}
+
+/// What the shell tells a screen beside its data: whether its source loaded, which sources could not be read,
+/// and the alert to draw under its head.
+/// Every screen draws `page_head`, then `alerts`, then its body, so the alert sits in the same place on each.
+#[derive(Clone, Copy)]
+pub struct ScreenState<'a> {
+    pub load: Load,
+    /// Every source that could not be read. A screen fed by more than one hides only the parts a failed one feeds.
+    pub unread: &'a [Source],
+    pub alerts: &'a dyn Fn(&mut Ui),
+}
+
+impl ScreenState<'_> {
+    pub fn reading(&self) -> bool {
+        self.load == Load::Reading
+    }
+
+    pub fn cannot_read(&self, source: Source) -> bool {
+        self.unread.contains(&source)
+    }
+}
+
+/// Why a part's figures are hidden, said in their place, so no zero reads as a real count.
+/// Left aligned even in a justified column, which would stretch the wrapped words apart.
+pub fn hidden_note(ui: &mut Ui, why: &str) -> Response {
+    ui.with_layout(Layout::top_down(Align::Min), |ui| add_text(ui, why, Type::BODY, Ink::Muted)).inner
+}
+
 /// The content of a screen, under its head.
 pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let (x, top, bottom) = SCREEN_PADDING;
@@ -199,6 +246,22 @@ pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// A fixed column beside a screen's content. Planes and gutters separate it, never a line.
 pub fn side_column(id: &'static str, width: f32) -> Panel {
     Panel::right(id).exact_size(width).resizable(false).show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: GUTTER, ..Default::default() }))
+}
+
+/// A screen's content with a fixed column `width` wide at its right, laid out as `side_column` lays one out beside a
+/// central panel. The content is built first, so Tab reaches it before the side column, where a panel would come first.
+pub fn with_side_column(ui: &mut Ui, width: f32, main: impl FnOnce(&mut Ui), side: impl FnOnce(&mut Ui)) {
+    let area = ui.available_rect_before_wrap();
+    let side_rect = Rect::from_min_max(pos2(area.right() - width.min(area.width()), area.top()), area.max);
+    let main_rect = Rect::from_min_max(area.min, pos2(side_rect.left(), area.bottom()));
+    let column = |rect: Rect, salt: &str| UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::top_down(Align::Min));
+    let mut main_ui = ui.new_child(column(main_rect, "with_side_main"));
+    main_ui.shrink_clip_rect(main_rect);
+    main(&mut main_ui);
+    let mut side_ui = ui.new_child(column(Rect::from_min_max(pos2(side_rect.left() + f32::from(GUTTER), side_rect.top()), side_rect.max), "with_side_side"));
+    side_ui.shrink_clip_rect(side_rect);
+    side(&mut side_ui);
+    ui.advance_cursor_after_rect(area);
 }
 
 /// A main column and a side column of slips, `SPLIT_GAP` apart, both starting at the top.
@@ -355,19 +418,185 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
     .inner
 }
 
-/// A whole row that picks something, such as a run in a list.
+/// A whole row that picks something, such as a run in a list. Picked, it takes an ink edge at its leading side.
 pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
-    ui.scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
-        let lit = on || ui.response().hovered();
-        let frame = Frame::new().corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
-        let frame = if lit { frame.fill(p.panel) } else { frame };
-        frame.show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui);
+    let response = ui
+        .scope_builder(clickable(), |ui| {
+            let row = ui.response();
+            let look = pick_look(&p, on, pointer_over(&row), pressed(&row));
+            let frame = Frame::new().fill(look.fill).corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
+            let shown = frame.show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+            if let Some(edge) = look.edge {
+                paint_pick_edge(ui, shown.response.rect, RADIUS_PANEL, edge);
+            }
+        })
+        .response;
+    interactive_row(ui, &response, RADIUS_PANEL);
+    response
+}
+
+/// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnWidth {
+    Exact(f32),
+    Rest { least: f32 },
+}
+
+/// A column of a `pick_table`: its head and its width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableColumn<'a> {
+    pub head: &'a str,
+    pub width: ColumnWidth,
+}
+
+/// What a `pick_table` lays out: its columns, the height of a row, how many rows and which one is picked.
+pub struct PickTable<'a> {
+    pub id_salt: &'a str,
+    pub columns: &'a [TableColumn<'a>],
+    pub row_height: f32,
+    pub rows: usize,
+    pub picked: Option<usize>,
+}
+
+/// A table whose every row picks something, such as a job. A row is one target under its cells: one Tab stop, named
+/// `spoken(row)` for screen readers, lit as every pickable thing is and ringed inside when it has focus. Its text takes
+/// no click, so a click on it picks the row, and a cut title or a mark beneath the pointer still shows its tooltip.
+/// Up and Down move the pick while a row or nothing has the focus. `cell(ui, row, column)` fills one cell.
+/// The head stays put while the rows scroll. Returns the row picked this frame.
+pub fn pick_table(ui: &mut Ui, table: &PickTable, spoken: impl Fn(usize) -> String, mut cell: impl FnMut(&mut Ui, usize, usize)) -> Option<usize> {
+    let p = Palette::of(ui);
+    let id = ui.make_persistent_id(table.id_salt);
+    let row_id = |row: usize| id.with(("pick_table_row", row));
+    let widths = column_widths(table.columns, ui.available_width());
+    let width: f32 = widths.iter().sum();
+    let is_row = |focused: egui::Id| (0..table.rows).any(|row| row_id(row) == focused);
+    let moved = arrow_pick(ui, table, is_row);
+    if let Some(row) = moved
+        && ui.memory(|mem| mem.focused()).is_some_and(is_row)
+    {
+        ui.memory_mut(|mem| mem.request_focus(row_id(row)));
+    }
+    let shown = moved.or(table.picked);
+    let mut clicked = None;
+    table_heads(ui, table.columns, &widths);
+    egui::ScrollArea::vertical().id_salt(id.with("rows")).auto_shrink([false, true]).show_rows(ui, table.row_height, table.rows, |ui, range| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        let top = ui.max_rect().top() - range.start as f32 * table.row_height;
+        if let Some(row) = moved {
+            ui.scroll_to_rect(Rect::from_min_size(pos2(ui.max_rect().left(), top + row as f32 * table.row_height), vec2(width, table.row_height)), None);
+        }
+        for row in range {
+            let rect = Rect::from_min_size(ui.cursor().min, vec2(width, table.row_height));
+            let rule = if row + 1 == table.rows { CellRule::Last } else { CellRule::Row };
+            let response = ui
+                .scope_builder(clickable().scope_id(row_id(row)).max_rect(rect), |ui| {
+                    let hit = ui.response();
+                    let look = pick_look(&p, shown == Some(row), pointer_over(&hit), pressed(&hit));
+                    ui.painter().rect_filled(rect, 0.0, look.fill);
+                    for (column, cell_rect) in column_rects(rect, &widths).enumerate() {
+                        table_cell_in(ui, cell_rect, rule, |ui| cell(ui, row, column));
+                    }
+                    if let Some(edge) = look.edge {
+                        paint_pick_edge(ui, rect, 0, edge);
+                    }
+                    ui.expand_to_include_rect(rect);
+                })
+                .response;
+            interactive_row(ui, &response, 0);
+            if response.has_focus() {
+                // Up and Down move the pick, and the focus with it, so egui must not move the focus on its own.
+                ui.memory_mut(|mem| mem.set_focus_lock_filter(response.id, EventFilter { vertical_arrows: true, ..EventFilter::default() }));
+            }
+            response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), shown == Some(row), spoken(row)));
+            if response.clicked() {
+                clicked = Some(row);
+            }
+        }
+    });
+    clicked.or(moved)
+}
+
+/// The shape of a `pick_table` before its rows are read: the same head and column widths over `rows` grey rows, each
+/// cell holding the lines `lines(column)` gives, as wide as it says. Nothing in it takes a click.
+pub fn skeleton_table<'a>(ui: &mut Ui, columns: &[TableColumn], row_height: f32, rows: usize, lines: impl Fn(usize) -> &'a [f32]) {
+    let widths = column_widths(columns, ui.available_width());
+    let width: f32 = widths.iter().sum();
+    table_heads(ui, columns, &widths);
+    for row in 0..rows {
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(width, row_height));
+        let rule = if row + 1 == rows { CellRule::Last } else { CellRule::Row };
+        for (column, cell_rect) in column_rects(rect, &widths).enumerate() {
+            let widths = lines(column);
+            let height = widths.len() as f32 * (SKELETON_LINE + SKELETON_GAP) - SKELETON_GAP;
+            // A box as tall as the lines, so the row centres them as it centres text.
+            table_cell_in(ui, cell_rect, rule, |ui| {
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), height.max(0.0)), Layout::top_down(Align::Min), |ui| skeleton_lines(ui, widths, skeleton));
+            });
+        }
+        ui.advance_cursor_after_rect(rect);
+    }
+}
+
+/// A table's head row, each head over its column. From here on cells pad themselves, so rules and a picked row run unbroken.
+fn table_heads(ui: &mut Ui, columns: &[TableColumn], widths: &[f32]) {
+    ui.spacing_mut().item_spacing = Vec2::ZERO;
+    let head = Rect::from_min_size(ui.cursor().min, vec2(widths.iter().sum(), TABLE_HEAD_HEIGHT));
+    for (column, rect) in column_rects(head, widths).enumerate() {
+        table_cell_in(ui, rect, CellRule::Head, |ui| {
+            table_head(ui, columns[column].head);
         });
+    }
+    ui.advance_cursor_after_rect(head);
+}
+
+/// The row Up or Down picks this frame, if either was pressed and the pick moves. The arrows are the table's only while
+/// one of its rows or nothing has the focus, so a field or a button keeps them, and never while a dialog asks.
+fn arrow_pick(ui: &mut Ui, table: &PickTable, is_row: impl Fn(egui::Id) -> bool) -> Option<usize> {
+    let focused = ui.memory(|mem| mem.focused());
+    if table.rows == 0 || focused.is_some_and(|focused| !is_row(focused)) || dialog_open(ui.ctx()) {
+        return None;
+    }
+    let (up, down) = ui.input_mut(|input| (input.consume_key(Modifiers::NONE, Key::ArrowUp), input.consume_key(Modifiers::NONE, Key::ArrowDown)));
+    let row = match (table.picked, up, down) {
+        (Some(row), true, false) => row.saturating_sub(1),
+        (Some(row), false, true) => (row + 1).min(table.rows - 1),
+        (None, true, _) | (None, _, true) => 0,
+        _ => return None,
+    };
+    (Some(row) != table.picked).then_some(row)
+}
+
+/// Each column's width: fixed ones as given, and the others sharing what is left of `room`.
+fn column_widths(columns: &[TableColumn], room: f32) -> Vec<f32> {
+    let fixed: f32 = columns.iter().filter_map(|column| if let ColumnWidth::Exact(width) = column.width { Some(width) } else { None }).sum();
+    let rest = columns.iter().filter(|column| matches!(column.width, ColumnWidth::Rest { .. })).count().max(1);
+    let share = (room - fixed) / rest as f32;
+    columns
+        .iter()
+        .map(|column| match column.width {
+            ColumnWidth::Exact(width) => width,
+            ColumnWidth::Rest { least } => share.max(least),
+        })
+        .collect()
+}
+
+fn column_rects(row: Rect, widths: &[f32]) -> impl Iterator<Item = Rect> + '_ {
+    widths.iter().scan(row.left(), move |left, width| {
+        let rect = Rect::from_min_size(pos2(*left, row.top()), vec2(*width, row.height()));
+        *left += width;
+        Some(rect)
     })
-    .response
+}
+
+/// A `table_cell` at `rect`, clipped to it, so a long value never runs into the next column.
+fn table_cell_in(ui: &mut Ui, rect: Rect, rule: CellRule, add: impl FnOnce(&mut Ui)) {
+    let mut cell = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+    cell.shrink_clip_rect(rect);
+    table_cell(&mut cell, rule, add);
 }
 
 /// A filled line across a screen, for a short message and its actions.
@@ -418,7 +647,7 @@ pub fn code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner_margin(margin(CODE_PADDING))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            add(ui)
+            copyable(ui, add)
         })
         .inner
 }
@@ -472,6 +701,84 @@ pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R 
         .inner
 }
 
+/// A sheet of paper whose body scrolls over its actions, pinned under a hairline. It takes only the height its body needs,
+/// up to what is left in `ui`, so a long body gives way first and the actions stay in view.
+pub fn paper_with_footer(ui: &mut Ui, body: impl FnOnce(&mut Ui), footer: impl FnOnce(&mut Ui)) {
+    paper(ui, false, |ui| {
+        footed(ui, false, false, body, |ui| {
+            let padding = (inset(ui), BODY_PADDING);
+            footer_row(ui, padding, footer);
+        })
+    });
+}
+
+/// A scrolling body over a footer pinned at its foot, inside a frame's content `ui`. `fill` takes all the height left,
+/// where otherwise the two take what the body needs, up to it. `fresh` opens the body at the top.
+pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
+    let room = ui.available_size();
+    let kept = KeptHeight::read(ui, ui.scope_id().with("footed_footer"), 0.0);
+    let needed = KeptHeight::read(ui, ui.scope_id().with("footed_body"), room.y);
+    let height = if fill { room.y } else { (needed.height + kept.height).min(room.y) };
+    let inner = Rect::from_min_size(ui.cursor().min, vec2(room.x, height));
+    ui.advance_cursor_after_rect(inner);
+    // The footer goes in first, at the foot, so the body takes what it leaves.
+    // One height is kept for whatever the body shows, so only a footer of a new height costs a pass.
+    let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
+    let mut foot = ui.new_child(UiBuilder::new().id_salt("footed_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
+    foot.shrink_clip_rect(foot_rect);
+    footer(&mut foot);
+    kept.keep(ui, foot.min_rect().height().min(room.y), "a footer changed height");
+    let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
+    let mut body_ui = ui.new_child(UiBuilder::new().id_salt("footed_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+    body_ui.shrink_clip_rect(body_rect);
+    let scroll = egui::ScrollArea::vertical().id_salt("footed_body").auto_shrink([false, false]);
+    let scroll = if fresh { scroll.vertical_scroll_offset(0.0) } else { scroll };
+    let shown = scroll.show(&mut body_ui, body);
+    if !fill {
+        needed.keep(ui, shown.content_size.y, "a body changed height");
+    }
+    shown.inner
+}
+
+/// The row under a body that holds its actions, ruled off on top and padded `(x, y)`.
+pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnOnce(&mut Ui)) {
+    divider(ui);
+    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
+            add(ui);
+        });
+    });
+}
+
+/// What a screen shows when it has nothing yet: a title, a sentence on what to do, then the actions, all on paper.
+/// The actions only open the launcher: the user starts the run there.
+pub fn empty_state(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui)) {
+    empty_sheet(ui, title, body, Some(actions));
+}
+
+/// The same with no actions, such as a lane that is empty with nothing to offer. A blank `body` leaves the sentence out.
+pub fn empty_note(ui: &mut Ui, title: &str, body: &str) {
+    empty_sheet(ui, title, body, None::<fn(&mut Ui)>);
+}
+
+fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>) {
+    paper(ui, false, |ui| {
+        Frame::new().inner_margin(Margin::same(EMPTY_PADDING)).show(ui, |ui| {
+            ui.set_max_width(EMPTY_WIDTH);
+            ui.spacing_mut().item_spacing.y = EMPTY_GAP;
+            add_text(ui, title, Type::SLIP_TITLE, Ink::Text);
+            if !body.is_empty() {
+                add_text(ui, body, Type::BODY, Ink::Muted);
+            }
+            if let Some(actions) = actions {
+                ui.horizontal(actions);
+            }
+        });
+    });
+}
+
 /// A grey block where content will be, while it loads. In a slip or a paper section it takes the raised plane.
 pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
     let p = Palette::of(ui);
@@ -484,6 +791,16 @@ pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
 pub fn card_skeleton(ui: &mut Ui, width: f32, height: f32) {
     let p = Palette::of(ui);
     block(ui, width, height, if p.card == p.panel { p.raised } else { p.panel });
+}
+
+/// Grey lines in a column, `SKELETON_GAP` apart, drawn with `block`: `skeleton`, or `card_skeleton` on a card.
+pub fn skeleton_lines(ui: &mut Ui, widths: &[f32], block: fn(&mut Ui, f32, f32)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = SKELETON_GAP;
+        for &width in widths {
+            block(ui, width, SKELETON_LINE);
+        }
+    });
 }
 
 fn block(ui: &mut Ui, width: f32, height: f32, fill: Color32) {
@@ -539,15 +856,18 @@ pub struct CardLook {
 }
 
 /// One application on a board. Clicking anywhere on it counts. `spoken` names the card for screen readers.
+/// Picked, its border takes ink, so its left edge stays free for the `turn` mark.
 pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let response = ui
-        .scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
+        .scope_builder(clickable(), |ui| {
             if look.faded {
                 ui.multiply_opacity(FADED_OPACITY);
             }
-            let fill = if look.on || ui.response().hovered() { p.raised } else { p.card };
-            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
+            let card = ui.response();
+            let pick = pick_look(&p, look.on, pointer_over(&card), pressed(&card));
+            let fill = if pick.fill == Color32::TRANSPARENT { p.card } else { pick.fill };
+            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, pick.edge.unwrap_or(p.line))).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 2.0;
                 add(ui);
@@ -560,9 +880,19 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             }
         })
         .response;
+    interactive_row(ui, &response, RADIUS_CARD);
     let spoken = if look.waits { format!("{spoken}, waits for you in Today") } else { spoken.to_owned() };
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &spoken));
     response
+}
+
+/// The shape of an index card while its board loads: the card's face, with nothing to pick.
+pub fn blank_card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let p = Palette::of(ui);
+    Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        add(ui);
+    });
 }
 
 pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadius) {
@@ -576,6 +906,8 @@ pub struct FlowNode<'a> {
     pub figure: String,
     pub marks: Vec<(usize, Option<Ink>)>,
     pub note: String,
+    /// Why the stage's counts are hidden. It shows in place of the figure, tally and note, so no zero reads as a real count.
+    pub hidden: Option<&'a str>,
 }
 
 /// A folder strip of counts, read left to right. Columns are equal, with a hairline between them.
@@ -595,6 +927,10 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = NODE_GAP;
                     add_text(ui, node.label, Type::TAB, Ink::Muted);
+                    if let Some(hidden) = node.hidden {
+                        hidden_note(ui, hidden);
+                        return;
+                    }
                     add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
                     let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
@@ -652,8 +988,9 @@ fn baseline(galley: &Galley) -> f32 {
 /// Paints `galley` at `at`, over the `under` fill, and names it for screen readers and tests.
 fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, under: Color32, text: &str) {
     let rect = Rect::from_min_size(at, galley.size());
+    let response = cut_hover(ui.interact(rect, id, Sense::hover()), &galley, text);
     paint_text(ui, at, galley, Palette::of(ui).text, under);
-    ui.interact(rect, id, Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
 }
 
 /// Where a run is, whose turn it is and what comes next: three cells on the folder plane, with a hairline between them.
@@ -750,11 +1087,19 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
 }
 
 /// One plain line for a step: its knot, its name, one sentence and an optional toggle on the right, such as "Show 3 actions".
-/// With no knot, its place stays empty, so names line up. Returns the toggle's response.
+/// With no knot, its place stays empty, so names line up.
+/// With a toggle, the whole line is its hit area: a click anywhere on it counts, and the line lights up under the pointer.
+/// The toggle stays the line's one keyboard stop and shows its state. Returns a response that reports a click on either.
 pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sentence: &str, toggle: Option<(&str, bool)>) -> Option<Response> {
     let width = ui.available_width();
     let name_ink = if knot.is_some_and(|(_, state)| state == KnotState::Waiting) { Ink::Status(Tone::Turn) } else { Ink::Text };
-    ui.allocate_ui_with_layout(vec2(width, STEP_LINE_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(width, STEP_LINE_HEIGHT));
+    // Sensed before the toggle is added, so the toggle sits on top and takes its own clicks.
+    // It takes no focus, because the toggle already gives the line its keyboard stop.
+    let line = toggle.map(|_| ui.interact(rect, ui.next_auto_id().with("step_line"), Sense::CLICK));
+    let fill = ui.painter().add(egui::Shape::Noop);
+    // The line paints its own fill under what it holds, so its toggle and text stand on a surface.
+    let shown = ui.scope_builder(surface().max_rect(rect).layout(Layout::right_to_left(Align::Center)), |ui| {
         ui.set_min_size(vec2(width, STEP_LINE_HEIGHT));
         ui.spacing_mut().item_spacing.x = STEP_LINE_GAP;
         let toggled = toggle.map(|(text, on)| crate::ui_kit::small_toggle(ui, text, on));
@@ -774,8 +1119,14 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
             add_cut_text(ui, sentence, Type::BODY, Ink::Text);
         });
         toggled
-    })
-    .inner
+    });
+    let (line, toggled) = (line?, shown.inner?);
+    let p = Palette::of(ui);
+    // Over the toggle, the line stays lit: the toggle is part of it.
+    let look = pick_look(&p, false, pointer_over(&line) || pointer_over(&toggled), pressed(&line));
+    ui.painter().set(fill, egui::epaint::RectShape::filled(rect, RADIUS_CARD, look.fill));
+    interactive(ui, &line, RADIUS_CARD);
+    Some(line.union(toggled))
 }
 
 #[cfg(test)]
@@ -859,19 +1210,34 @@ mod tests {
 
     #[test]
     fn a_step_line_reports_its_toggle() {
-        let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+        let clicked = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = std::rc::Rc::clone(&clicked);
         let mut harness = Harness::builder().with_size([700.0, 100.0]).with_context_setup(setup).build_ui(move |ui| {
-            if step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV.", Some(("Show 3 actions", false))).is_some_and(|toggle| toggle.clicked()) {
-                seen.set(true);
+            if step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV.", Some(("Show 3 actions", false))).is_some_and(|line| line.clicked()) {
+                seen.set(seen.get() + 1);
             }
         });
         harness.step();
         harness.get_by_label("2, working");
-        harness.get_by_label("Draft");
         harness.get_by_label("Show 3 actions").click();
         harness.run();
-        assert!(clicked.get());
+        assert_eq!(clicked.get(), 1, "a click on the toggle");
+        harness.get_by_label("Draft").click();
+        harness.run();
+        assert_eq!(clicked.get(), 2, "a click on the step's name");
+        harness.get_by_label("Wrote the CV.").click();
+        harness.run();
+        assert_eq!(clicked.get(), 3, "a click on its sentence");
+    }
+
+    #[test]
+    fn a_step_line_without_a_toggle_takes_no_click() {
+        let mut harness = Harness::builder().with_size([700.0, 100.0]).with_context_setup(setup).build_ui(|ui| {
+            assert!(step_line(ui, None, "You", "Yes, go ahead.", None).is_none());
+        });
+        harness.step();
+        harness.get_by_label("You").click();
+        harness.run();
     }
 
     #[test]

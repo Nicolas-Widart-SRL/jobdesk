@@ -3,9 +3,10 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
-    rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
+    hidden_note, rich, skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
+use crate::shared_kernel::Source;
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
 
 /// Environment rows sit closer than other list rows.
@@ -39,17 +40,30 @@ pub enum WorkspaceAction {
 }
 
 /// `name` is the checkout's folder name, never its full path.
-pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
+/// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
+/// so a failed one hides those counts. Until the first read, the slips show their names over grey lines.
+pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
-    page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
+    let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
+    let subtitle = if state.reading() { Subtitle::Text("Reading your profile, tools and portals…") } else { Subtitle::Typed(name) };
+    page_head(ui, Title::Slab("Setup"), Some(subtitle), |ui| {
         if button(ui, "Change folder").clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
         }
+        if has_documents {
+            command_action(ui, "Look for more in your documents", "/expand");
+        }
     });
     page_body(ui, |ui| {
+        (state.alerts)(ui);
         muted(ui, "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.");
         ui.add_space(SPLIT_GAP);
+        if state.reading() {
+            loading(ui);
+            return;
+        }
+        let jobs_failed = state.cannot_read(Source::Jobs);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
                 profile(main, view);
@@ -57,7 +71,7 @@ pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut Env
             });
             ui.add_space(SPLIT_GAP);
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
-                portals(main, view);
+                portals(main, view, jobs_failed);
                 templates(side, view);
                 side.add_space(12.0);
                 sync(side, view);
@@ -67,6 +81,30 @@ pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut Env
         });
     });
     action
+}
+
+/// A section's name over grey lines where its rows go.
+fn loading_lines(ui: &mut Ui, title: &str, note: Option<&str>, widths: &[f32]) {
+    panel_header(ui, title, note);
+    panel_body(ui, |ui| {
+        ui.set_width(ui.available_width());
+        skeleton_lines(ui, widths, skeleton);
+    });
+}
+
+/// The sections before the first read, in their places.
+fn loading(ui: &mut Ui) {
+    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| loading_lines(ui, "Profile", Some(".claude/skills/job-application-assistant"), &[220.0, 180.0, 240.0, 200.0, 170.0, 230.0, 190.0]));
+        slip(side, |ui| loading_lines(ui, "Environment", None, &[200.0, 170.0, 190.0, 160.0, 180.0]));
+    });
+    ui.add_space(SPLIT_GAP);
+    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| loading_lines(ui, "Portals", Some(".agents/skills"), &[180.0, 150.0, 200.0]));
+        slip(side, |ui| loading_lines(ui, "Templates", None, &[190.0, 160.0]));
+        side.add_space(12.0);
+        slip(side, |ui| loading_lines(ui, "Sync", None, &[200.0, 170.0]));
+    });
 }
 
 fn profile(ui: &mut Ui, view: &WorkspaceView) {
@@ -80,10 +118,9 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
                     faint_mono(ui, file.name.as_str());
                 });
                 right(ui, |ui| {
-                    match file.state {
-                        ProfileState::Filled => small_command_action(ui, "Look for more in your documents\u{2026}", "/expand"),
-                        ProfileState::NeedsSetup { .. } | ProfileState::Missing => small_command_action(ui, "Update", "/setup"),
-                    };
+                    if !matches!(file.state, ProfileState::Filled) {
+                        small_command_action(ui, "Update", "/setup");
+                    }
                     match file.state {
                         ProfileState::Filled => tag(ui, "Filled", Tone::Hired),
                         ProfileState::NeedsSetup { placeholders } => tag(ui, format!("{placeholders} to fill"), Tone::Interview),
@@ -95,22 +132,27 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
     });
 }
 
-fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
+/// Without `counted`, the Jobs seen column is left out: its counts would read zero.
+fn portal_table(ui: &mut Ui, portals: &[PortalRow], counted: bool) {
     let total = ui.available_width();
     let last = portals.len().saturating_sub(1);
+    let titles: &[&str] = if counted { &["Portal", "Jobs seen", "State"] } else { &["Portal", "State"] };
     // Cells pad themselves, so the rules run unbroken.
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .id_salt("workspace_portals")
             .vscroll(false)
             .striped(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true))
-            .column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true))
+            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true));
+        if counted {
+            table = table.column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true));
+        }
+        table
             .column(Column::remainder().clip(true))
             .header(TABLE_HEAD_HEIGHT, |mut header| {
-                for title in ["Portal", "Jobs seen", "State"] {
+                for &title in titles {
                     header.col(|ui| {
                         table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
                     });
@@ -124,9 +166,11 @@ fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
                     line.col(|ui| {
                         table_cell(ui, rule, |ui| ui.monospace(portal.name.as_str()));
                     });
-                    line.col(|ui| {
-                        table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
-                    });
+                    if counted {
+                        line.col(|ui| {
+                            table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
+                        });
+                    }
                     line.col(|ui| {
                         table_cell(ui, rule, |ui| if portal.enabled { tag(ui, "Enabled", Tone::Hired) } else { tag(ui, "Disabled", Tone::Plain) });
                     });
@@ -135,7 +179,8 @@ fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
     });
 }
 
-fn portals(ui: &mut Ui, view: &WorkspaceView) {
+/// The jobs seen on each portal come from the saved jobs, so they hide while those cannot be read.
+fn portals(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
     panel(ui, |ui| {
         panel_header(ui, "Portals", Some(".agents/skills"));
         if view.portals.is_empty() {
@@ -144,7 +189,13 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
                 muted(ui, "No portals installed.");
             });
         } else {
-            portal_table(ui, &view.portals);
+            portal_table(ui, &view.portals, !jobs_failed);
+            if jobs_failed {
+                panel_body(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    hidden_note(ui, "Jobs seen are hidden while your saved jobs cannot be read.");
+                });
+            }
         }
         Frame::new().inner_margin(Margin::symmetric(0, 12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -250,7 +301,8 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
         });
         panel_body(ui, |ui| {
             ui.horizontal(|ui| {
-                recheck = ui.add_enabled_ui(!running, |ui| small_button(ui, "Check again")).inner.clicked();
+                // A running check is its own reason: the label says so, and no hover is needed.
+                recheck = enabled_when(ui, !running, "Checking the tools now.", |ui| small_button(ui, if running { "Checking…" } else { "Check again" })).clicked();
             });
         });
     });

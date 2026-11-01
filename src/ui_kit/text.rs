@@ -8,7 +8,7 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
-use crate::ui_kit::surfaces::{backed, on_desk};
+use crate::ui_kit::surfaces::{CLICKABLE, backed, on_desk};
 use crate::ui_kit::tokens::{DOC_MEASURE, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
@@ -29,6 +29,17 @@ fn needs_backing(ui: &Ui, size: f32) -> bool {
 /// Every label in the kit is added here, with `size` read from the label's own text by the callers below.
 fn show_label(ui: &mut Ui, label: Label, size: f32) -> Response {
     if needs_backing(ui, size) { backed(ui, |ui| ui.add(label)) } else { ui.add(label) }
+}
+
+/// Text inside `add` can be selected and copied. Labels elsewhere take no click, so a click on a row's text picks the row.
+/// It never sits inside something clickable, because a selectable label would take that click.
+pub fn copyable<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    debug_assert!(!ui.stack().iter().any(|node| node.tags().contains(CLICKABLE)), "copyable text sits inside something clickable");
+    ui.scope(|ui| {
+        ui.style_mut().interaction.selectable_labels = true;
+        add(ui)
+    })
+    .inner
 }
 
 /// Text in `style` and `ink`, as a label that wraps as the `Ui` says.
@@ -74,7 +85,7 @@ pub fn strong(ui: &mut Ui, text: impl Into<String>) -> Response {
 
 /// Something went wrong. Closed is the one status that reads as failure.
 pub fn alert(ui: &mut Ui, text: impl Into<String>) -> Response {
-    add_text(ui, text, Type::BODY, crate::ui_kit::Tone::Closed)
+    copyable(ui, |ui| add_text(ui, text, Type::BODY, crate::ui_kit::Tone::Closed))
 }
 
 pub fn table_head(ui: &mut Ui, text: impl Into<String>) -> Response {
@@ -119,7 +130,7 @@ pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
     // The image pass runs once per distinct text, and is kept while the text stays on screen.
     let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<ImageFreeCache>().get(text).clone());
     let before = ui.ctx().output(|output| output.commands.len());
-    CommonMarkViewer::new().show(ui, cache, &text);
+    copyable(ui, |ui| CommonMarkViewer::new().show(ui, cache, &text));
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
 }
 
@@ -226,6 +237,11 @@ pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, 
     WidgetText::from(text).into_galley(ui, Some(TextWrapMode::Truncate), width, style.font())
 }
 
+/// A widget that paints its own cut text names the whole text on hover. `text` shows as plain text, never as Markdown.
+pub(in crate::ui_kit) fn cut_hover(response: Response, galley: &Galley, text: &str) -> Response {
+    if galley.elided { response.on_hover_text(text) } else { response }
+}
+
 /// Every galley a widget paints itself goes down here. `under` is the fill the widget painted beneath the text, if any:
 /// with none, small text straight on the desk gets a patch of the desk's base, so no grid line runs through it.
 pub(in crate::ui_kit) fn paint_text(ui: &Ui, at: Pos2, galley: Arc<Galley>, color: Color32, under: Color32) {
@@ -269,6 +285,36 @@ mod tests {
         harness.get_by_label(label).click();
         harness.run();
         opened.take()
+    }
+
+    #[test]
+    fn copyable_turns_selection_on_only_inside() {
+        let (outside, inside) = (Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None)));
+        let (seen_outside, seen_inside) = (Rc::clone(&outside), Rc::clone(&inside));
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
+            *seen_outside.borrow_mut() = Some(ui.add(Label::new("Plain label")).sense);
+            *seen_inside.borrow_mut() = Some(copyable(ui, |ui| ui.add(Label::new("Copyable label"))).sense);
+        });
+        harness.run();
+        let senses_click = |sense: Option<egui::Sense>| sense.is_some_and(|sense| sense.senses_click());
+        assert!(!senses_click(*outside.borrow()));
+        assert!(senses_click(*inside.borrow()));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "copyable text sits inside something clickable")]
+    fn copyable_inside_a_pick_row_panics() {
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).build_ui(|ui| {
+            crate::ui_kit::pick_row(ui, false, |ui| {
+                copyable(ui, |ui| ui.label("Copyable label"));
+            });
+        });
+        harness.run();
     }
 
     #[test]

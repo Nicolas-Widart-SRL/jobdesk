@@ -1,16 +1,17 @@
 //! One sheet showing every Ledger component, in both themes.
 
-use egui::{Grid, ScrollArea, Theme, Ui};
+use egui::{CursorIcon, Grid, Role, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, button, card_tab,
-    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab,
+    check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, faint_mono, fat_tally, figure,
+    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
-    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
+    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
@@ -31,6 +32,9 @@ const TONES: [(&str, Tone); 8] = [
 ];
 
 const SWATCHES_PER_ROW: usize = 7;
+
+/// The row the pointer rests on in the snapshots.
+const HOVERED_ROW: &str = "/match    Pick row, hovered";
 
 fn swatches(ui: &mut Ui) {
     let p = Palette::of(ui);
@@ -116,9 +120,20 @@ fn buttons(ui: &mut Ui) {
         key_button(ui, "Later", "L");
         primary_key_button(ui, "Send", "Y");
         command_button(ui, "/rank");
+        link(ui, "Show the command");
+        copy_button(ui, "A draft");
+    });
+    // Disabled keeps the opaque rest fill, with ink and border at half. A primary's fill is at half over the paper.
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        muted(ui, "Disabled");
         ui.add_enabled_ui(false, |ui| {
-            button(ui, "Off");
-            primary_button(ui, "Off");
+            button(ui, "Plain");
+            primary_button(ui, "Primary");
+            danger_button(ui, "Deny");
+            small_button(ui, "Small");
+            key_button(ui, "Later", "L");
+            primary_key_button(ui, "Send", "Y");
         });
     });
 }
@@ -206,6 +221,7 @@ fn sections(ui: &mut Ui) {
             divider(ui);
             select_row(ui, "/rank     Pick row, on", Type::MONO, true);
             select_row(ui, "/scrape   Pick row, off", Type::MONO, false);
+            select_row(ui, HOVERED_ROW, Type::MONO, false);
             command_row(ui, "/rank", "Score new postings", "seen_jobs.json", true);
             command_row(ui, "/apply", "Evaluate and draft", "cv, cover_letters, tracker", false);
             panel_body(ui, |ui| {
@@ -233,7 +249,7 @@ fn sections(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     let stages = [("Scrape", "15", vec![(9, Some(Ink::Text)), (6, None)], "new of 64 seen"), ("Rank", "5", vec![(5, Some(Ink::Text))], "on shortlist"), ("Apply", "2", vec![(2, Some(Ink::Text))], "drafted, not sent")];
-    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned() }).collect();
+    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned(), hidden: None }).collect();
     flow_band(ui, &nodes);
     ui.add_space(10.0);
     code_box(ui, |ui| {
@@ -250,6 +266,11 @@ fn sections(ui: &mut Ui) {
     ui.add_space(10.0);
     page_frame(ui, |ui| {
         ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
+    });
+    ui.add_space(10.0);
+    empty_state(ui, "Nothing here yet", "A sentence on what the screen holds and how to fill it, at most 560 px wide, then the actions that open the launcher.", |ui| {
+        primary_button(ui, "Find things…");
+        button(ui, "Something else…");
     });
 }
 
@@ -269,6 +290,7 @@ fn board(ui: &mut Ui) {
                 strong(ui, "Faded card");
                 ui.label(rich(ui, "fit 68", Type::SMALL, Ink::Muted));
             });
+            blank_card(ui, |ui| skeleton_lines(ui, &[150.0, 110.0, 80.0], card_skeleton));
         });
         Grid::new("table").spacing([24.0, 6.0]).show(right, |ui| {
             table_head(ui, "Score");
@@ -465,6 +487,7 @@ fn postmark(ui: &mut Ui) {
                     ui.label("Juniper Retail");
                 });
                 agenda_row(ui, "Tue 3", "Harbor Bank deadline", AgendaEnd::Done, false);
+                agenda_row(ui, "Mon 2", "Juniper Retail deadline", AgendaEnd::LateNow("3 days late"), false);
                 agenda_row(ui, "Wed 4", "Quarry Labs reply", AgendaEnd::Late("2 days late"), false);
                 agenda_row(ui, "Thu 5", "Meridian Rail closes", AgendaEnd::Now, false);
                 agenda_row(ui, "Fri 6", "Ardent Software offer reply", AgendaEnd::Nothing, false);
@@ -530,6 +553,9 @@ fn render(theme: Theme, name: &str) {
             jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
         });
     harness.run_steps(3);
+    // The pointer rests on one row, so the sheet shows hover beside picked.
+    harness.get_by_label(HOVERED_ROW).hover();
+    harness.run_steps(2);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 
@@ -541,4 +567,35 @@ fn ui_kit_gallery_dark() {
 #[test]
 fn ui_kit_gallery_light() {
     render(Theme::Light, "ui_kit_gallery_light");
+}
+
+/// Every clickable kit widget in the gallery shows the pointing hand under the pointer, and a disabled one keeps the arrow.
+#[test]
+fn every_clickable_widget_shows_the_hand() {
+    let mut harness = Harness::builder().with_size([1000.0, 7450.0]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(|ui| {
+        jobdesk::ui_kit::desk(ui, |ui| {
+            jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
+                ui.add_enabled_ui(false, |ui| button(ui, "Switched off"));
+                gallery(ui);
+            });
+        });
+    });
+    harness.run();
+    let mut clickable = Vec::new();
+    for role in [Role::Button, Role::Tab, Role::RadioButton, Role::Link] {
+        for node in harness.query_all_by_role(role) {
+            if !node.accesskit_node().is_disabled() {
+                clickable.push(node.rect().center());
+            }
+        }
+    }
+    assert!(clickable.len() > 20, "the gallery shows {} clickable widgets", clickable.len());
+    for at in clickable {
+        harness.hover_at(at);
+        harness.step();
+        assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
+    }
+    harness.get_by_label("Switched off").hover();
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default);
 }

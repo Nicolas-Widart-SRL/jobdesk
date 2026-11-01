@@ -681,6 +681,27 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_card_ranks_with_paused_runs() {
+        let request = RunRequest { run_id: "r2".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let mut waiting = Run::new(&request);
+        waiting.apply(AgentEvent::AssistantText { text: "Which posting first?".into(), nested: false });
+        waiting.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1 });
+        // A turn card waits for every run to be idle, so the run with the question asked after its turn ended.
+        let mut asking = Run::new(&RunRequest { run_id: "r1".into(), ..request.clone() });
+        asking.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1 });
+        asking.apply(AgentEvent::PromptRaised(Prompt { request_id: "p".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
+        let runs = [waiting, asking];
+        let jobs = board(vec![job("Acme", 80)]);
+        let pipeline = Pipeline::default();
+        let archives = HashMap::new();
+        let sources = Sources { board: &jobs, pipeline: &pipeline, archives: &archives, runs: &runs, today: today() };
+
+        let kinds: Vec<CardKind> = InTray::unsaved().queue(&sources).cards.into_iter().map(|card| card.kind).collect();
+
+        assert_eq!(kinds, [CardKind::Question, CardKind::Turn, CardKind::Triage]);
+    }
+
+    #[test]
     fn undoing_a_decision_on_a_card_brought_back_keeps_it_in_front() {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Top", 95), job("Acme", 80)]);

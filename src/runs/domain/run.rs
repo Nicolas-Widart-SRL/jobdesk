@@ -42,12 +42,16 @@ pub enum ActivityKind {
     Claude(String),
     Tool { id: String, name: String, summary: String, state: ToolState },
     Notice(String),
+    /// A tool Jobdesk allowed without asking. Routine, unlike a notice that explains the run.
+    Allowed(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Activity {
     pub kind: ActivityKind,
     pub nested: bool,
+    /// The step the rail was on when the row arrived. `None` for a command without a rail.
+    pub step: Option<usize>,
 }
 
 /// One command from start to finish, and any replies after it.
@@ -63,6 +67,9 @@ pub struct Run {
     /// How the CLI authenticated. `none` means its own Claude login.
     pub api_key_source: Option<String>,
     pub status: RunStatus,
+    /// Whether the failure reason is the tail of the process's stderr, which ends on its error,
+    /// rather than the turn's result text, which opens with it.
+    pub failed_on_stderr: bool,
     pub activity: Vec<Activity>,
     pub streaming_text: String,
     pub prompts: VecDeque<Prompt>,
@@ -71,15 +78,22 @@ pub struct Run {
     cost_of_ended_processes: f64,
     pub duration_ms: u64,
     pub steps: Option<StepRail>,
-    pub agents: Vec<String>,
     pub files_changed: Vec<String>,
     pub usage: Usage,
     /// Subagents still working after the turn that started them ended.
     pub background_agents: usize,
+    /// Index in `activity` of the tool that last moved the rail. 0, the command line, while it has never moved.
+    rail_moved_at: usize,
+    /// Index in `activity` of the first row of the current turn.
+    turn_started_at: usize,
+    /// How many `You` rows `activity` holds.
+    turn_count: usize,
 }
 
 impl Run {
     pub fn new(request: &RunRequest) -> Self {
+        let steps = StepRail::for_line(&request.line);
+        let activity = vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false, step: steps.as_ref().map(|rail| rail.current) }];
         Self {
             id: request.run_id.clone(),
             line: request.line.clone(),
@@ -90,14 +104,17 @@ impl Run {
             model: None,
             api_key_source: None,
             status: RunStatus::Starting,
-            activity: vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false }],
+            failed_on_stderr: false,
+            rail_moved_at: 0,
+            turn_started_at: activity.len(),
+            turn_count: 1,
+            activity,
             streaming_text: String::new(),
             prompts: VecDeque::new(),
             cost_usd: 0.0,
             cost_of_ended_processes: 0.0,
             duration_ms: 0,
-            steps: StepRail::for_line(&request.line),
-            agents: Vec::new(),
+            steps,
             files_changed: Vec::new(),
             usage: Usage::default(),
             background_agents: 0,
@@ -123,12 +140,35 @@ impl Run {
         !self.prompts.is_empty()
     }
 
+    /// Whether Claude's turn ended, nothing else still works and no prompt is open, so only a reply moves the run on.
+    pub fn awaits_reply(&self) -> bool {
+        self.status == RunStatus::AwaitingReply && !self.is_busy() && !self.needs_user()
+    }
+
+    /// How many messages the user has sent, the command line included.
+    pub fn turn_number(&self) -> usize {
+        self.turn_count
+    }
+
+    /// Index in `activity` of the tool that last moved the rail. 0, the command line, while it has never moved.
+    pub fn rail_moved_at(&self) -> usize {
+        self.rail_moved_at
+    }
+
+    /// Index in `activity` of the current turn's first row: the one after the user's last message,
+    /// or after the rows of the turn before when Claude began a turn on its own.
+    pub fn current_turn_start(&self) -> usize {
+        self.turn_started_at
+    }
+
     pub fn current_prompt(&self) -> Option<&Prompt> {
         self.prompts.front()
     }
 
     pub fn note_reply(&mut self, text: &str) {
-        self.activity.push(Activity { kind: ActivityKind::You(text.to_owned()), nested: false });
+        self.push(ActivityKind::You(text.to_owned()), false);
+        self.turn_started_at = self.activity.len();
+        self.turn_count += 1;
         self.status = RunStatus::Working;
     }
 
@@ -150,13 +190,19 @@ impl Run {
     pub fn allow_automatically(&mut self, request_id: &str) -> Option<Prompt> {
         let prompt = self.resolve_prompt(request_id, &Decision::Allow { remember: false })?;
         if let PromptKind::Permission { tool, .. } = &prompt.kind {
-            self.notice(&format!("Allowed {tool} without asking."));
+            self.push(ActivityKind::Allowed(format!("Allowed {tool} without asking.")), false);
         }
         Some(prompt)
     }
 
     pub fn notice(&mut self, text: &str) {
-        self.activity.push(Activity { kind: ActivityKind::Notice(text.to_owned()), nested: false });
+        self.push(ActivityKind::Notice(text.to_owned()), false);
+    }
+
+    /// Adds a row under the step the rail is on now.
+    fn push(&mut self, kind: ActivityKind, nested: bool) {
+        let step = self.steps.as_ref().map(|rail| rail.current);
+        self.activity.push(Activity { kind, nested, step });
     }
 
     /// With no process left, nothing can still be running.
@@ -186,14 +232,18 @@ impl Run {
                 self.model = Some(model);
                 self.api_key_source = Some(api_key_source);
                 // Each turn starts with this, including the one Claude takes on its own when a background agent reports.
-                if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply) {
+                if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply | RunStatus::Stopped | RunStatus::Failed(_)) {
+                    // The first turn begins with the command line. Any later one is Claude's own.
+                    if self.status != RunStatus::Starting {
+                        self.turn_started_at = self.activity.len();
+                    }
                     self.status = RunStatus::Working;
                 }
             }
             AgentEvent::TextDelta(text) => self.streaming_text.push_str(&text),
             AgentEvent::AssistantText { text, nested } => {
                 self.streaming_text.clear();
-                self.activity.push(Activity { kind: ActivityKind::Claude(text), nested });
+                self.push(ActivityKind::Claude(text), nested);
             }
             AgentEvent::ToolStarted { id, name, summary, nested } => self.tool_started(id, name, summary, nested),
             AgentEvent::ToolFinished { id, outcome } => {
@@ -220,15 +270,17 @@ impl Run {
     fn tool_started(&mut self, id: String, name: String, summary: String, nested: bool) {
         self.streaming_text.clear();
         if let Some(steps) = &mut self.steps {
+            let before = steps.current;
             steps.observe(&name, &summary);
+            if steps.current != before {
+                // The tool is pushed below, at the end of the activity.
+                self.rail_moved_at = self.activity.len();
+            }
         }
-        if matches!(name.as_str(), "Agent" | "Task") {
-            self.agents.push(summary.clone());
-        }
-        if matches!(name.as_str(), "Write" | "Edit") && !self.files_changed.contains(&summary) {
+        if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") && !self.files_changed.contains(&summary) {
             self.files_changed.push(summary.clone());
         }
-        self.activity.push(Activity { kind: ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested });
+        self.push(ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested);
     }
 
     fn turn_ended(&mut self, failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64) {
@@ -243,6 +295,7 @@ impl Run {
             let reason = message.unwrap_or_else(|| "The run ended with an error.".to_owned());
             self.notice(&reason);
             self.status = RunStatus::Failed(reason);
+            self.failed_on_stderr = false;
         } else {
             self.status = RunStatus::AwaitingReply;
         }
@@ -254,10 +307,12 @@ impl Run {
         self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
+        // A run that already failed keeps its first reason, said once.
         match failure {
-            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped) => {
+            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped | RunStatus::Failed(_)) => {
                 self.notice(&reason);
                 self.status = RunStatus::Failed(reason);
+                self.failed_on_stderr = true;
             }
             _ if matches!(self.status, RunStatus::Stopping) => self.status = RunStatus::Stopped,
             _ if !matches!(self.status, RunStatus::Failed(_) | RunStatus::Stopped) => self.status = RunStatus::Closed,
@@ -324,7 +379,16 @@ mod tests {
         run.apply(AgentEvent::PromptRaised(Prompt { kind: permission, ..prompt("a") }));
         assert!(run.allow_automatically("a").is_some());
         assert!(!run.needs_user());
-        assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Notice("Allowed Bash without asking.".into()));
+        assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Allowed("Allowed Bash without asking.".into()));
+    }
+
+    #[test]
+    fn turns_count_the_messages_you_sent() {
+        let mut run = run("/apply x");
+        assert_eq!(run.turn_number(), 1);
+        run.apply(turn(0.5));
+        run.note_reply("yes");
+        assert_eq!(run.turn_number(), 2);
     }
 
     #[test]
@@ -363,15 +427,32 @@ mod tests {
     }
 
     #[test]
-    fn tools_feed_steps_agents_and_files() {
+    fn tools_feed_steps_and_files() {
         let mut run = run("/apply x");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Write".into(), summary: "cv/main_a.tex".into(), nested: false });
         run.apply(AgentEvent::ToolStarted { id: "2".into(), name: "Agent".into(), summary: "application-reviewer: critique".into(), nested: false });
         run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Err(None) });
         assert_eq!(run.steps.as_ref().unwrap().current, 3);
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
-        assert_eq!(run.agents.len(), 1);
         assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed(None), .. }));
+    }
+
+    #[test]
+    fn a_failed_run_keeps_its_first_reason() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 });
+        run.apply(AgentEvent::ProcessExited { failure: Some("exit code 1".into()) });
+        assert_eq!(run.status, RunStatus::Failed("Budget cap reached.".into()));
+        let notices: Vec<_> = run.activity.iter().filter(|activity| matches!(activity.kind, ActivityKind::Notice(_))).collect();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, ActivityKind::Notice("Budget cap reached.".into()));
+    }
+
+    #[test]
+    fn multi_edit_counts_as_a_changed_file() {
+        let mut run = run("/apply x");
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "MultiEdit".into(), summary: "job_search_tracker.csv".into(), nested: false });
+        assert_eq!(run.files_changed, ["job_search_tracker.csv"]);
     }
 
     #[test]

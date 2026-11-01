@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, Lane};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Check, Due, Effect, GateRow, SkipReason};
-use crate::runs::application::{Prompt, PromptKind, Question, Run};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point, wants_reply};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -20,7 +20,8 @@ pub struct Sources<'a> {
 
 /// `kept` holds the guard cards the user cleared, so their postings can reach triage.
 pub fn derive_cards(sources: &Sources, kept: impl Fn(&str) -> bool) -> Vec<Card> {
-    let mut cards: Vec<Card> = sources.runs.iter().filter_map(paused_card).collect();
+    let a_run_works = sources.runs.iter().any(Run::is_busy);
+    let mut cards: Vec<Card> = sources.runs.iter().filter_map(|run| paused_card(run).or_else(|| turn_card(run, a_run_works))).collect();
     for lane in [Lane::Shortlist, Lane::BelowThreshold] {
         for job in sources.board.jobs_in(lane) {
             if sources.pipeline.cards().any(|card| is_tracked(card, job)) {
@@ -54,19 +55,48 @@ fn first_word(name: &str) -> &str {
     name.split_whitespace().next().unwrap_or(name)
 }
 
-fn command_word(line: &str) -> &str {
-    line.lines().next().and_then(|line| line.split_whitespace().next()).unwrap_or(line)
+/// The words of a card dealt for a run. `status` follows the command line in the subtitle.
+struct RunWords {
+    title: String,
+    status: String,
+    take: &'static str,
+    when: &'static str,
+    body: Body,
+    note: &'static str,
+    trace: &'static str,
+}
+
+/// A card for a run: it has no default and leads to the run. `words` gets the command word.
+fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> RunWords) -> Card {
+    let line = first_line(&run.line);
+    let command = command_word(&line);
+    let words = words(&command);
+    Card {
+        key,
+        kind,
+        name: command,
+        title: words.title,
+        subtitle: format!("{line} {}, ${:.2} of ${:.2} spent", words.status, run.cost_usd, run.budget_usd),
+        take: words.take.into(),
+        when: words.when.into(),
+        due: None,
+        weight: 0,
+        body: words.body,
+        primary: None,
+        others: vec![Action::new("Open run", Effect::Run(run.id.clone()))],
+        can_skip: false,
+        note: words.note.into(),
+        trace: words.trace.into(),
+    }
 }
 
 fn paused_card(run: &Run) -> Option<Card> {
     let prompt = run.current_prompt()?;
-    let line = run.line.lines().next().unwrap_or_default();
-    let command = command_word(line);
     let (kind, title, take, body, note, trace) = match &prompt.kind {
         PromptKind::Permission { tool, detail, .. } => (
             CardKind::Permission,
-            format!("{command}: allow {tool}?"),
-            "Claude wants to use a tool that is not on your allow list.".to_owned(),
+            format!("allow {tool}?"),
+            "Claude wants to use a tool that is not on your allow list.",
             Body::Code { label: "Claude wants to run".into(), text: detail.clone() },
             "No default here. Read it, then choose.",
             "Answers the control request of the paused run",
@@ -75,31 +105,52 @@ fn paused_card(run: &Run) -> Option<Card> {
             let question = questions.first();
             (
                 CardKind::Question,
-                format!("{command}: {}", question.map_or("a question", |question| question.text.as_str())),
-                "Claude needs an answer before the run can go on.".to_owned(),
+                question.map_or("a question", |question| question.text.as_str()).to_owned(),
+                "Claude needs an answer before the run can go on.",
                 question.map_or(Body::Empty, question_options),
                 "No default here. Answer it in the run.",
                 "Answers AskUserQuestion in the paused run",
             )
         }
     };
-    Some(Card {
-        key: prompt_key(run, prompt),
-        kind,
-        name: command.to_owned(),
-        title,
-        subtitle: format!("{line} is paused, ${:.2} of ${:.2} spent", run.cost_usd, run.budget_usd),
+    Some(run_card(run, kind, prompt_key(run, prompt), |command| RunWords {
+        title: format!("{command}: {title}"),
+        status: "is paused".into(),
         take,
-        when: "Run is paused".into(),
-        due: None,
-        weight: 0,
+        when: "Run is paused",
         body,
-        primary: None,
-        others: vec![Action::new("Open run", Effect::Run(run.id.clone()))],
-        can_skip: false,
-        note: note.into(),
-        trace: trace.into(),
-    })
+        note,
+        trace,
+    }))
+}
+
+/// A run that waits for the user's reply, as `wants_reply` says, with no prompt open: a prompt is `paused_card`'s.
+/// Only a reply moves it on, so the card has no default. It stays away while another run works, because a reply would be blocked,
+/// and once every step is done.
+fn turn_card(run: &Run, another_is_busy: bool) -> Option<Card> {
+    let rail = run.steps.as_ref();
+    if another_is_busy || run.needs_user() || !wants_reply(run) || rail.is_some_and(|rail| rail.is_complete()) {
+        return None;
+    }
+    let stop = stop_point(run);
+    let question = closing_question(run);
+    let (status, take) = match (stop, rail.and_then(|rail| rail.labels.get(rail.current))) {
+        (Some(_), Some(step)) => (format!("stopped after {step}"), "Claude finished a step and waits for your reply."),
+        _ => ("is waiting".into(), "Claude asked a question and waits for your reply."),
+    };
+    let key = format!("turn:{}:{}", run.id, run.current_turn_start());
+    Some(run_card(run, CardKind::Turn, key, |command| RunWords {
+        title: match stop {
+            Some(stop) => format!("{command}: {}?", stop.label),
+            None => format!("{command} is waiting for your reply"),
+        },
+        status,
+        take,
+        when: "Run is waiting",
+        body: question.map_or(Body::Empty, |question| Body::Code { label: "Claude asks".into(), text: question.text }),
+        note: "No default here. Reply in the run.",
+        trace: "Opens the run. Nothing is sent until you reply there.",
+    }))
 }
 
 fn prompt_key(run: &Run, prompt: &Prompt) -> String {
@@ -517,6 +568,147 @@ mod tests {
             assert_eq!(card.others[0].effect, Effect::Run("r1".into()));
             assert_eq!(card.key, "run:r1:p1");
         }
+    }
+
+    /// An `/apply` run that read the evaluation guide, said `message` and ended its turn.
+    fn waiting(message: &str) -> Run {
+        let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let mut run = Run::new(&request);
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Read".into(), summary: "skills/04-job-evaluation.md".into(), nested: false });
+        run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Ok(()) });
+        run.apply(AgentEvent::AssistantText { text: message.into(), nested: false });
+        end_turn(&mut run, 0.94);
+        run
+    }
+
+    fn end_turn(run: &mut Run, cost_usd: f64) {
+        run.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd, duration_ms: 1 });
+    }
+
+    fn turn_card_of(run: &Run) -> Option<Card> {
+        cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(run)).into_iter().next()
+    }
+
+    #[test]
+    fn a_waiting_run_deals_a_your_turn_card_with_no_default() {
+        let run = waiting("Fit 78.\n\nShall I proceed with drafting?");
+        let card = turn_card_of(&run).unwrap();
+        assert_eq!(card.kind, CardKind::Turn);
+        assert_eq!(card.title, "/apply: proceed with drafting?");
+        assert_eq!(card.subtitle, "/apply x stopped after Evaluate, $0.94 of $3.00 spent");
+        assert_eq!(card.body, Body::Code { label: "Claude asks".into(), text: "Shall I proceed with drafting?".into() });
+        assert_eq!(card.key, "turn:r1:1");
+        assert_eq!(card.primary, None);
+        assert!(!card.can_skip);
+        assert_eq!(card.others, [Action::new("Open run", Effect::Run("r1".into()))]);
+    }
+
+    fn run_of(id: &str, line: &str) -> Run {
+        Run::new(&RunRequest { run_id: id.into(), line: line.into(), model: None, budget_usd: 2.0, started_at: String::new(), resume_session: None })
+    }
+
+    fn says(run: &mut Run, text: &str) {
+        run.apply(AgentEvent::AssistantText { text: text.into(), nested: false });
+    }
+
+    #[test]
+    fn a_question_without_a_stop_point_deals_the_waiting_form() {
+        let mut run = run_of("r2", "/rank");
+        says(&mut run, "Rank all postings, or only the shortlist?");
+        end_turn(&mut run, 0.5);
+        let card = turn_card_of(&run).unwrap();
+        assert_eq!(card.title, "/rank is waiting for your reply");
+        assert_eq!(card.subtitle, "/rank is waiting, $0.50 of $2.00 spent");
+        assert_eq!(card.take, "Claude asked a question and waits for your reply.");
+        assert_eq!(card.body, Body::Code { label: "Claude asks".into(), text: "Rank all postings, or only the shortlist?".into() });
+    }
+
+    #[test]
+    fn a_stop_point_says_a_step_finished() {
+        let card = turn_card_of(&waiting("Shall I proceed with drafting?")).unwrap();
+        assert_eq!(card.take, "Claude finished a step and waits for your reply.");
+    }
+
+    #[test]
+    fn a_finished_run_with_nothing_to_answer_deals_no_card() {
+        let mut rank = run_of("r2", "/rank");
+        says(&mut rank, "Ranked 12 postings.");
+        end_turn(&mut rank, 0.5);
+        assert!(turn_card_of(&rank).is_none());
+
+        let mut apply = run_of("r3", "/apply x");
+        apply.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Edit".into(), summary: "job_search_tracker.csv".into(), nested: false });
+        says(&mut apply, "Drafted and tracked.");
+        end_turn(&mut apply, 0.5);
+        assert!(apply.steps.as_ref().unwrap().is_complete());
+        assert!(turn_card_of(&apply).is_none());
+    }
+
+    #[test]
+    fn a_question_after_the_last_step_deals_no_card() {
+        let mut apply = run_of("r3", "/apply x");
+        apply.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Edit".into(), summary: "job_search_tracker.csv".into(), nested: false });
+        says(&mut apply, "Anything else?");
+        end_turn(&mut apply, 0.5);
+        assert!(turn_card_of(&apply).is_none());
+    }
+
+    #[test]
+    fn no_turn_card_while_another_run_works() {
+        let waiting = waiting("Shall I proceed with drafting?");
+        let working = run_of("r2", "/rank");
+        assert!(working.is_busy());
+        let dealt = cards(&JobBoard::default(), vec![], ArchiveContents::default(), &[waiting, working]);
+        assert!(dealt.is_empty());
+    }
+
+    #[test]
+    fn a_turn_claude_starts_on_its_own_deals_a_new_key() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        let first = turn_card_of(&run).unwrap().key;
+        // The user sets the card aside. A background agent reports, and Claude asks again without being replied to.
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        says(&mut run, "The reviewer is done. Shall I proceed with drafting now?");
+        end_turn(&mut run, 1.2);
+        let second = turn_card_of(&run).unwrap();
+        assert_ne!(second.key, first);
+        assert_eq!(second.body, Body::Code { label: "Claude asks".into(), text: "The reviewer is done. Shall I proceed with drafting now?".into() });
+    }
+
+    #[test]
+    fn a_reply_ends_the_turn_card() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        assert!(turn_card_of(&run).is_some());
+        run.note_reply("Yes, proceed with drafting.");
+        assert!(turn_card_of(&run).is_none());
+    }
+
+    #[test]
+    fn a_later_stop_deals_a_new_key() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        let first = turn_card_of(&run).unwrap().key;
+        run.note_reply("Yes, proceed with drafting.");
+        says(&mut run, "The draft is ready. Should the cover letter be shorter?");
+        end_turn(&mut run, 1.5);
+        assert_ne!(turn_card_of(&run).unwrap().key, first);
+    }
+
+    #[test]
+    fn a_prompt_deals_its_own_card_and_not_a_turn_card() {
+        let mut run = waiting("Shall I proceed with drafting?");
+        run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
+        let dealt = cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(&run));
+        assert_eq!(dealt.iter().map(|card| card.kind).collect::<Vec<_>>(), [CardKind::Question]);
+        assert!(turn_card(&run, false).is_none(), "a pending prompt never deals a turn card, though wants_reply holds");
+    }
+
+    #[test]
+    fn a_stop_part_way_that_asks_nothing_deals_no_card() {
+        let mut run = run_of("r3", "/apply x");
+        says(&mut run, "The posting URL returned 404, so I could not fetch it.");
+        end_turn(&mut run, 0.2);
+        assert!(!run.steps.as_ref().unwrap().is_complete());
+        assert!(turn_card(&run, false).is_none());
     }
 
     #[test]

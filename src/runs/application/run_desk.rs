@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::NaiveDateTime;
 
+use crate::runs::application::turn::wants_reply;
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, PromptKind, Run, RunHistory, RunRequest};
 
 const HISTORY_LIMIT: usize = 50;
@@ -73,8 +74,14 @@ impl RunDesk {
         !self.sessions.is_empty()
     }
 
+    /// Whether the run's process is still up, so its session can be ended.
+    pub fn has_session(&self, id: &str) -> bool {
+        self.sessions.contains_key(id)
+    }
+
+    /// Runs where Claude waits on the user, as `wants_reply` says.
     pub fn waiting_count(&self) -> usize {
-        self.runs.iter().filter(|run| run.needs_user()).count()
+        self.runs.iter().filter(|run| wants_reply(run)).count()
     }
 
     /// Applies what arrived from the agent processes. Call once per frame.
@@ -128,9 +135,9 @@ impl RunDesk {
     }
 
     /// A finished run continues in its Claude session through a new process.
+    /// One run works at a time: while another run is busy, the reply is refused, even on a live session.
     pub fn reply(&mut self, id: &str, text: &str) -> Result<(), StartError> {
-        let live = self.sessions.contains_key(id);
-        if !live && self.is_busy() {
+        if self.runs.iter().any(|run| run.id != id && run.is_busy()) {
             return Err(StartError::AnotherRunIsActive);
         }
         let Some(run) = self.run_mut(id) else { return Ok(()) };
@@ -143,10 +150,8 @@ impl RunDesk {
             started_at: run.started_at.clone(),
             resume_session: run.session_id.clone(),
         };
-        if live {
-            if let Some(session) = self.sessions.get_mut(id) {
-                session.send_message(text);
-            }
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.send_message(text);
         } else {
             let session = self.gateway.start(&request, self.sink_for(id));
             self.sessions.insert(id.to_owned(), session);
@@ -231,6 +236,19 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_turn_keeps_its_session_until_closed() {
+        let (mut desk, _) = desk();
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        desk.event_sender.send((id.clone(), AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 })).unwrap();
+        desk.poll();
+        assert!(matches!(desk.run(&id).unwrap().status, RunStatus::Failed(_)));
+        assert!(desk.has_session(&id));
+        desk.close(&id);
+        assert!(!desk.has_session(&id));
+        assert!(!desk.has_session("unknown"));
+    }
+
+    #[test]
     fn a_run_keeps_the_time_its_caller_gave() {
         let (mut desk, _) = desk();
         let id = desk.start("/rank", &options(), now()).unwrap();
@@ -259,6 +277,44 @@ mod tests {
         assert_eq!(script.borrow().requests.len(), 1);
         assert_eq!(script.borrow().sent, ["yes"]);
         assert!(desk.is_busy());
+    }
+
+    #[test]
+    fn a_live_session_takes_no_reply_while_another_run_works() {
+        let (mut desk, script) = desk();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        let rank = desk.start("/rank", &options(), now()).unwrap();
+        desk.poll();
+        assert!(desk.has_session(&id) && desk.run(&rank).unwrap().is_busy());
+
+        assert_eq!(desk.reply(&id, "yes"), Err(StartError::AnotherRunIsActive));
+
+        assert!(script.borrow().sent.is_empty(), "nothing reached the live session");
+        assert_eq!(desk.run(&id).unwrap().turn_number(), 1, "the reply is not in the story");
+        desk.reply(&rank, "more").unwrap();
+        assert_eq!(script.borrow().sent, ["more"], "a busy run's own session still takes a message");
+    }
+
+    #[test]
+    fn a_stop_point_counts_as_waiting() {
+        let (mut desk, _) = desk();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&id)(AgentEvent::AssistantText { text: "Shall I draft it?".into(), nested: false });
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        assert_eq!(desk.waiting_count(), 1);
+
+        desk.reply(&id, "yes").unwrap();
+        assert_eq!(desk.waiting_count(), 0);
+
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.2, duration_ms: 1 });
+        desk.sink_for(&id)(AgentEvent::BackgroundTasksChanged { count: 1 });
+        desk.poll();
+        assert_eq!(desk.waiting_count(), 0, "background agents are still working");
     }
 
     #[test]

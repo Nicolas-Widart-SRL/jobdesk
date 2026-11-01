@@ -128,20 +128,24 @@ pub fn card_tab(ui: &mut Ui, title: &str, tone: Tone, when: &str) {
     });
 }
 
-/// The card being read. `waits` marks one that has no default and needs reading first.
-pub fn deal<R>(ui: &mut Ui, waits: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// The card being read. `frame` rings one that has no default and needs reading first, in the colour of why.
+pub fn deal<R>(ui: &mut Ui, frame: Option<Tone>, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     let (x, y) = DEAL_PADDING;
-    let frame = Frame::new().fill(p.panel).corner_radius(DEAL_CORNERS).inner_margin(Margin::symmetric(x, y));
-    let frame = if waits { frame.stroke(Stroke::new(HAIRLINE, p.interview)).shadow(offset_shadow(ui)) } else { frame };
-    let inner = frame
+    let plain = Frame::new().fill(p.panel).corner_radius(DEAL_CORNERS).inner_margin(Margin::symmetric(x, y));
+    let ring = frame.map(|tone| tone.color(&p));
+    let framed = match ring {
+        Some(color) => plain.stroke(Stroke::new(HAIRLINE, color)).shadow(offset_shadow(ui, color)),
+        None => plain,
+    };
+    let inner = framed
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = DEAL_GAP;
             add(ui)
         })
         .inner;
-    if waits {
+    if ring.is_some() {
         ui.add_space(OFFSET_SHADOW as f32);
     }
     inner

@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runs, where am I and is it my turn</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<div class="{{rootCls}}" data-theme="{{theme}}" tabIndex="-1">
+  <sc-if value="{{showShell}}" hint-placeholder-val="{{ true }}">
+  <header class="side">
+    <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>Jobdesk</div>
+    <button class="btn pri" type="button">Ask or run <span class="keys"><span>⌘</span><span>K</span></span></button>
+    <nav class="nav" aria-label="Main">
+      <sc-for list="{{nav}}" as="item" hint-placeholder-count="6">
+        <a class="{{item.cls}}" href="{{item.href}}" aria-label="{{item.aria}}">{{item.label}}<span class="count num">{{item.count}}</span></a>
+      </sc-for>
+    </nav>
+  </header>
+  </sc-if>
+  <main class="main">
+
+    <!-- Supporting scene: the In tray card for a run at a stop point -->
+    <sc-if value="{{isTray}}" hint-placeholder-val="{{ false }}">
+      <header class="head lead">
+        <div class="grow"><h1>5 decisions, about 7 minutes</h1><div class="muted">Paused runs come first, then deadlines, then the rest.</div></div>
+      </header>
+      <div class="body">
+        <div class="tbox lift">
+          <section class="horizon" aria-label="Next 14 days">
+            <sc-for list="{{days}}" as="d" hint-placeholder-count="14">
+              <div class="{{d.cls}}" style="grid-row: 1; grid-column: {{d.col}}">
+                <span class="d num">{{d.label}}</span>
+                <sc-if value="{{d.today}}" hint-placeholder-val="{{ false }}">
+                  <span class="hz-count num">5 to decide</span><span class="hz-kind num">4 triage</span><span class="hz-kind num">1 your turn</span>
+                </sc-if>
+              </div>
+            </sc-for>
+            <div class="hz-none"><span>No deadlines in the next 14 days</span></div>
+          </section>
+        </div>
+        <div class="split">
+          <section class="a" aria-label="Decision">
+            <div class="tabrow"><div class="{{trayTab}}">Your turn<span class="muted" style="font-weight: 500">Run is waiting</span></div></div>
+            <div class="scroll">
+              <article class="{{trayDeal}}">
+                <div class="col" style="gap: 2px"><h2>/apply: proceed with drafting?</h2><div class="muted mono" style="overflow-wrap: anywhere">{{cmdTail}} stopped after Evaluate, $1.12 of $3.00 spent</div></div>
+                <p class="take">Claude finished the evaluation and waits for your reply. Nothing happens until you answer in the run.</p>
+                <div>
+                  <div class="muted" style="font-size: 12px; margin-bottom: 4px">Claude asks, as plain text</div>
+                  <div class="code text">{{question}}</div>
+                </div>
+                <div class="actions">
+                  <a class="btn pri" href="RunTurn.html?proposal=B&amp;scene=turn">Open run</a>
+                  <button class="btn" type="button">Later <span class="kb">L</span></button>
+                  <span class="grow"></span>
+                  <span class="muted">No default here. Reply in the run.</span>
+                </div>
+                <div class="mono faint" style="overflow-wrap: anywhere">Opens the paused /apply session on the Runs page. It stays open until you reply or end it.</div>
+              </article>
+              <sc-for list="{{edges}}" as="e" hint-placeholder-count="4"><div class="edge" style="margin-inline: {{e.m}}px"></div></sc-for>
+              <div class="mono faint behind">4 behind this one</div>
+            </div>
+          </section>
+          <div class="col b" style="gap: 16px">
+            <section class="panel">
+              <div class="ph">Cleared today <span class="mono">2</span></div>
+              <div class="list">
+                <div class="li" style="padding-block: 6px"><span class="grow trunc">Saltmarsh Energy</span><span class="muted" style="white-space: nowrap">Skipped, domain</span></div>
+                <div class="li" style="padding-block: 6px"><span class="grow trunc">Juniper Retail</span><span class="muted" style="white-space: nowrap">Command opened</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- Empty: no run yet -->
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}">
+      <header class="head"><div class="grow"><h1>Runs</h1><div class="muted">Every command Jobdesk ran in this workspace</div></div></header>
+      <div class="body">
+        <section class="panel">
+          <div class="pb col" style="gap: 4px"><strong>No runs yet</strong><span class="muted">Press Ask or run to start one. When a run needs you, this tab shows a mark and the In tray deals a card.</span></div>
+        </section>
+      </div>
+    </sc-if>
+
+    <!-- D: the accent candidates, light and dark -->
+    <sc-if value="{{isAccents}}" hint-placeholder-val="{{ false }}">
+      <section class="acc" aria-label="Your turn accent candidates">
+        <div class="row" style="align-items: baseline; gap: 16px"><h1>Your turn: three accents</h1><span class="muted">Each shows the tab mark, the tags, the band and the question bar. Light on top, dark below.</span></div>
+        <div class="agrid">
+          <sc-for list="{{specs}}" as="c" hint-placeholder-count="6">
+            <div class="app spec" data-theme="{{c.theme}}" style="{{c.vars}}">
+              <div class="cap"><strong>{{c.name}}</strong><span class="muted">{{c.themeName}}</span><span class="grow"></span><span class="mono" style="font-size: 12.5px">{{c.hex}}</span></div>
+              <nav class="nav" aria-label="Tabs"><a href="#">In-tray<span class="count num">5</span></a><a class="on yours" href="#">Runs<span class="count num">1</span></a></nav>
+              <div class="row wrap" style="gap: 6px"><span class="tag yours">Your turn</span><span class="tag c-active">Claude's turn</span><span class="tag c-hired">Done</span><span class="tag c-closed">Failed</span><span class="tag c-offer">Offer</span></div>
+              <div class="dband"><div class="tb"><span class="k">Where</span><b>1 Evaluate</b><span class="muted">Draft waits</span></div><div class="tb yours"><span class="k">Whose turn</span><b>Yours</b><span class="muted">2 min ago</span></div><div class="tb"><span class="k">What next</span><b>Answer</b><span class="muted">Right below</span></div></div>
+              <div class="qbar2"><p class="qq"><span class="by">Claude asks:</span> Shall I go ahead and draft?</p><div class="qrow"><button class="btn" type="button">Go ahead</button><button class="btn" type="button">Stop here</button><div class="field"><input aria-label="Reply" placeholder="Your reply"></div><button class="btn pri" type="button">Send</button></div></div>
+              <div class="verdict">{{c.verdict}}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+    </sc-if>
+
+    <!-- A run -->
+    <sc-if value="{{isRun}}" hint-placeholder-val="{{ true }}">
+      <sc-if value="{{oldHead}}" hint-placeholder-val="{{ false }}">
+      <header class="head">
+        <div class="grow">
+          <h1 class="cmdline" title="{{cmd}}">{{cmd}}</h1>
+          <div class="facts-line muted">{{factsLine}}</div>
+        </div>
+        <span class="{{status.cls}}">{{status.text}}</span>
+        <sc-if value="{{head.recent}}" hint-placeholder-val="{{ false }}"><button class="{{head.recentCls}}" type="button">Recent runs</button></sc-if>
+        <sc-if value="{{head.stop}}" hint-placeholder-val="{{ false }}"><button class="btn bad" type="button">Stop run</button></sc-if>
+        <sc-if value="{{head.end}}" hint-placeholder-val="{{ false }}">
+          <span class="popwrap">
+            <button class="btn sm" type="button" aria-haspopup="dialog">End session…</button>
+            <sc-if value="{{confirm}}" hint-placeholder-val="{{ false }}">
+              <div class="pop" role="dialog" aria-label="End this session?">
+                <strong>End this session?</strong>
+                <span class="muted">Claude is waiting for your reply on drafting. Ending closes the session for good: to draft later, you start /apply again.</span>
+                <div class="row"><button class="btn pri" type="button">Keep it open</button><button class="btn bad" type="button">End session</button></div>
+                <span class="faint" style="font-size: 12.5px">Esc keeps it open.</span>
+              </div>
+            </sc-if>
+          </span>
+        </sc-if>
+        <sc-if value="{{head.dossier}}" hint-placeholder-val="{{ false }}"><a class="btn" href="Application.html">Open dossier</a></sc-if>
+      </header>
+      </sc-if>
+      <!-- D: the title, the status and the actions on one centre line, all 28px tall -->
+      <sc-if value="{{isD}}" hint-placeholder-val="{{ true }}">
+        <header class="head dhead">
+          <div class="hrow">
+            <h1 class="cmdline" title="{{cmd}}">{{cmd}}</h1>
+            <button class="btn sm narrow-only" type="button" aria-haspopup="dialog">Run details</button>
+            <sc-if value="{{head.stop}}" hint-placeholder-val="{{ false }}"><button class="btn sm bad" type="button">Stop run</button></sc-if>
+            <sc-if value="{{head.end}}" hint-placeholder-val="{{ false }}"><button class="btn sm" type="button" aria-haspopup="dialog">End session…</button></sc-if>
+            <sc-if value="{{head.dossier}}" hint-placeholder-val="{{ false }}"><a class="btn sm" href="Application.html">Open dossier</a></sc-if>
+          </div>
+        </header>
+      </sc-if>
+      <div class="body">
+
+        <!-- D: the turn band, then the question right under it -->
+        <sc-if value="{{isD}}" hint-placeholder-val="{{ false }}">
+          <section class="dband" aria-label="Where the run is">
+            <div class="tb"><span class="k">Where<span class="tally" aria-label="{{band.tallyLabel}}"><sc-for list="{{band.marks}}" as="m" hint-placeholder-count="7"><i class="{{m.cls}}"></i></sc-for></span></span><b>{{band.where}}</b><span class="muted">{{band.whereSub}}</span></div>
+            <div class="{{band.whoCls}}"><span class="k">Whose turn</span><b>{{band.who}}</b><span class="muted">{{band.whoSub}}</span></div>
+            <div class="tb"><span class="k">What next</span><b>{{band.next}}</b><span class="muted">{{band.nextSub}}</span></div>
+          </section>
+          <sc-if value="{{band.isQ}}" hint-placeholder-val="{{ false }}">
+            <section class="qbar2" aria-label="Your turn">
+              <p class="qq"><span class="by">Claude asks:</span> {{question}}</p>
+              <div class="qrow">
+                <sc-for list="{{quick}}" as="k" hint-placeholder-count="2"><button class="btn" type="button" title="{{k.sends}}">{{k.t}}</button></sc-for>
+                <div class="field"><input aria-label="Reply to Claude" placeholder="Or write your own reply"></div>
+                <button class="btn pri" type="button">Send <span class="keys"><span>↵</span></span></button>
+              </div>
+            </section>
+          </sc-if>
+          <sc-if value="{{band.isAsk}}" hint-placeholder-val="{{ false }}">
+            <section class="qbar2" aria-label="Question from Claude">
+              <p class="qq"><span class="by">Claude asks:</span> {{askQ}}</p>
+              <div class="qopts"><sc-for list="{{opts}}" as="o" hint-placeholder-count="2"><button class="{{o.cls}}" type="button"><span class="radio"></span><span><span style="font-weight: 500">{{o.label}}</span><br><span class="muted">{{o.desc}}</span></span></button></sc-for></div>
+              <div class="qrow"><button class="btn pri" type="button">Send answer</button><button class="btn" type="button">Decline</button></div>
+            </section>
+          </sc-if>
+        </sc-if>
+
+        <!-- A: the rail as today, with a hold cell -->
+        <sc-if value="{{isA}}" hint-placeholder-val="{{ false }}">
+          <div class="steps" aria-label="Command steps">
+            <sc-for list="{{hsteps}}" as="s" hint-placeholder-count="8"><span class="{{s.cls}}"><span class="num">{{s.n}}</span>{{s.label}}</span></sc-for>
+          </div>
+        </sc-if>
+
+        <div class="split">
+          <!-- B: the rail on the left -->
+          <sc-if value="{{isB}}" hint-placeholder-val="{{ false }}">
+            <nav class="r vrail" aria-label="Steps">
+              <sc-for list="{{vrail}}" as="s" hint-placeholder-count="8">
+                <div class="{{s.cls}}"><span class="knot {{s.knot}}">{{s.n}}</span><div class="col" style="gap: 0"><span class="vt">{{s.label}}</span><span class="vm">{{s.meta}}</span></div></div>
+              </sc-for>
+            </nav>
+          </sc-if>
+
+          <section class="a panel" aria-label="{{mainTitle}}">
+            <div class="ph">{{mainTitle}} <span class="mono">{{mainNote}}</span></div>
+            <div class="scroll">
+
+              <!-- D: Claude's message is the document. Each step is one plain line, with its actions folded. -->
+              <sc-if value="{{isD}}" hint-placeholder-val="{{ false }}">
+                <div class="story">
+                  <sc-for list="{{dflow}}" as="x" hint-placeholder-count="6">
+                    <sc-if value="{{x.isDoc}}" hint-placeholder-val="{{ false }}">
+                    <div class="{{x.docCls}}" aria-label="Message from Claude">
+                      <sc-for list="{{x.blocks}}" as="b" hint-placeholder-count="6">
+                        <sc-if value="{{b.h1}}" hint-placeholder-val="{{ false }}"><h1>{{b.t}}</h1></sc-if>
+                        <sc-if value="{{b.h2}}" hint-placeholder-val="{{ false }}"><h2>{{b.t}}</h2></sc-if>
+                        <sc-if value="{{b.p}}" hint-placeholder-val="{{ false }}"><p class="{{b.cls}}">{{b.t}}</p></sc-if>
+                        <sc-if value="{{b.ul}}" hint-placeholder-val="{{ false }}"><ul><sc-for list="{{b.items}}" as="li" hint-placeholder-count="2"><li>{{li.t}}</li></sc-for></ul></sc-if>
+                        <sc-if value="{{b.table}}" hint-placeholder-val="{{ false }}"><div class="dtable" role="table"><div class="dtr dth" role="row"><sc-for list="{{b.head}}" as="c" hint-placeholder-count="3"><span role="columnheader">{{c.t}}</span></sc-for></div><sc-for list="{{b.rows}}" as="r" hint-placeholder-count="3"><div class="dtr" role="row"><sc-for list="{{r.cells}}" as="c" hint-placeholder-count="3"><span role="cell">{{c.t}}</span></sc-for></div></sc-for></div></sc-if>
+                      </sc-for>
+                    </div>
+                    </sc-if>
+                    <sc-if value="{{x.isLine}}" hint-placeholder-val="{{ false }}">
+                    <div class="{{x.cls}}"><span class="knot sm {{x.knot}}">{{x.n}}</span><span class="sn">{{x.label}}</span><span class="st">{{x.text}}</span><sc-if value="{{x.hasToggle}}" hint-placeholder-val="{{ false }}"><button class="btn sm" type="button" aria-expanded="{{x.expanded}}">{{x.toggle}}</button></sc-if></div>
+                    <sc-if value="{{x.open}}" hint-placeholder-val="{{ false }}"><div class="sdetail"><sc-for list="{{x.rows}}" as="e" hint-placeholder-count="3"><div class="{{e.cls}}"><span class="who2">{{e.who}}</span><span class="mono grow trunc"><span class="dir">{{e.pre}}</span>{{e.main}}</span><span class="tag {{e.tone}}">{{e.tag}}</span></div></sc-for></div></sc-if>
+                    </sc-if>
+                  </sc-for>
+                </div>
+              </sc-if>
+
+              <!-- A and D: one flat log, with short rows -->
+              <sc-if value="{{isFlat}}" hint-placeholder-val="{{ false }}">
+                <sc-for list="{{flat}}" as="e" hint-placeholder-count="8">
+                  <sc-if value="{{e.isTool}}" hint-placeholder-val="{{ false }}"><div class="{{e.cls}}"><span class="who2">{{e.who}}</span><span class="mono grow trunc"><span class="dir">{{e.pre}}</span>{{e.main}}</span><sc-if value="{{e.hasTag}}" hint-placeholder-val="{{ false }}"><span class="tag {{e.tone}}">{{e.tag}}</span></sc-if></div></sc-if>
+                  <sc-if value="{{e.isYou}}" hint-placeholder-val="{{ false }}"><div class="ev you"><span class="who2">You</span><span class="mono grow">{{e.main}}</span></div></sc-if>
+                  <sc-if value="{{e.isNote}}" hint-placeholder-val="{{ false }}"><div class="ev"><span class="who2"></span><span class="{{e.ncls}}">{{e.main}}</span></div></sc-if>
+                  <sc-if value="{{e.isMsg}}" hint-placeholder-val="{{ false }}"><div class="ev msgrow"><div class="{{e.mcls}}"><h3>{{e.h}}</h3><sc-for list="{{e.blocks}}" as="p" hint-placeholder-count="4"><p class="{{p.cls}}">{{p.t}}</p></sc-for></div><sc-if value="{{e.clip}}" hint-placeholder-val="{{ false }}"><button class="linkbtn" type="button">{{e.more}}</button></sc-if></div></sc-if>
+                </sc-for>
+              </sc-if>
+
+              <!-- B: chapters, one per step -->
+              <sc-if value="{{isB}}" hint-placeholder-val="{{ false }}">
+                <sc-for list="{{chaps}}" as="c" hint-placeholder-count="3">
+                  <section class="chap" aria-label="{{c.label}}">
+                    <div class="chead"><span class="knot {{c.knot}}">{{c.n}}</span><span class="ct">{{c.label}}</span><span class="muted grow trunc">{{c.sum}}</span><span class="faint num">{{c.meta}}</span><button class="btn sm" type="button">{{c.toggle}}</button></div>
+                    <sc-if value="{{c.open}}" hint-placeholder-val="{{ false }}">
+                      <div class="cbody">
+                        <sc-for list="{{c.rows}}" as="e" hint-placeholder-count="4">
+                          <sc-if value="{{e.isTool}}" hint-placeholder-val="{{ false }}"><div class="{{e.cls}}"><span class="who2">{{e.who}}</span><span class="mono grow trunc"><span class="dir">{{e.pre}}</span>{{e.main}}</span><sc-if value="{{e.hasTag}}" hint-placeholder-val="{{ false }}"><span class="tag {{e.tone}}">{{e.tag}}</span></sc-if></div></sc-if>
+                          <sc-if value="{{e.isYou}}" hint-placeholder-val="{{ false }}"><div class="ev you"><span class="who2">You</span><span class="mono grow">{{e.main}}</span></div></sc-if>
+                          <sc-if value="{{e.isNote}}" hint-placeholder-val="{{ false }}"><div class="ev"><span class="who2"></span><span class="{{e.ncls}}">{{e.main}}</span></div></sc-if>
+                          <sc-if value="{{e.isMsg}}" hint-placeholder-val="{{ false }}"><div class="ev msgrow"><div class="{{e.mcls}}"><h3>{{e.h}}</h3><sc-for list="{{e.blocks}}" as="p" hint-placeholder-count="4"><p class="{{p.cls}}">{{p.t}}</p></sc-for></div><sc-if value="{{e.clip}}" hint-placeholder-val="{{ false }}"><button class="linkbtn" type="button">{{e.more}}</button></sc-if></div></sc-if>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                  </section>
+                </sc-for>
+              </sc-if>
+
+              <!-- C: only what you and Claude said, with hand-offs to the work -->
+              <sc-if value="{{isC}}" hint-placeholder-val="{{ false }}">
+                <sc-for list="{{convo}}" as="e" hint-placeholder-count="4">
+                  <sc-if value="{{e.isYou}}" hint-placeholder-val="{{ false }}"><div class="say"><div class="by">You</div><div class="mono">{{e.main}}</div></div></sc-if>
+                  <sc-if value="{{e.isMsg}}" hint-placeholder-val="{{ false }}"><div class="say"><div class="by">Claude</div><div class="{{e.mcls}}"><h3>{{e.h}}</h3><sc-for list="{{e.blocks}}" as="p" hint-placeholder-count="4"><p class="{{p.cls}}">{{p.t}}</p></sc-for></div><sc-if value="{{e.clip}}" hint-placeholder-val="{{ false }}"><button class="linkbtn" type="button">{{e.more}}</button></sc-if></div></sc-if>
+                  <sc-if value="{{e.isHand}}" hint-placeholder-val="{{ false }}"><div class="say handoff"><span class="knot sm {{e.knot}}">{{e.n}}</span><span class="grow">{{e.main}}</span><span class="faint num">{{e.meta}}</span></div></sc-if>
+                </sc-for>
+              </sc-if>
+            </div>
+
+            <!-- The dock: A, B and C. D asks at the top instead. -->
+            <sc-if value="{{dock.isTurn}}" hint-placeholder-val="{{ false }}">
+              <div class="dock" role="group" aria-label="Your turn">
+                <div class="row wrap"><span class="tag turn">Your turn</span><span class="grow" style="font-weight: 600">{{dock.head}}</span><span class="faint num" style="font-size: 13px">{{dock.since}}</span></div>
+                <div class="asks"><span class="lbl">Claude asks, at the end of its message</span><span class="q">{{question}}</span></div>
+                <div class="compose one">
+                  <sc-for list="{{quick}}" as="k" hint-placeholder-count="2"><button class="btn" type="button" title="{{k.sends}}">{{k.t}}</button></sc-for>
+                  <div class="field grow"><input aria-label="Reply to Claude" placeholder="Or write your own reply"></div>
+                  <button class="btn pri" type="button">Send <span class="keys"><span>↵</span></span></button>
+                </div>
+                <span class="faint" style="font-size: 12.5px">{{quickNote}}</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{dock.isAsk}}" hint-placeholder-val="{{ false }}">
+              <div class="dock" role="group" aria-label="Question from Claude">
+                <div class="row wrap"><span class="tag turn">Your turn</span><span class="grow" style="font-weight: 600">{{askQ}}</span></div>
+                <div class="list"><sc-for list="{{opts}}" as="o" hint-placeholder-count="2"><button class="{{o.cls}}" type="button"><span class="radio"></span><span><span style="font-weight: 500">{{o.label}}</span><br><span class="muted">{{o.desc}}</span></span></button></sc-for></div>
+                <div class="row wrap"><button class="btn pri" type="button">Send answer</button><button class="btn" type="button">Decline</button><span class="faint grow" style="font-size: 12.5px; text-align: right">Asked with AskUserQuestion. It always reaches you.</span></div>
+              </div>
+            </sc-if>
+            <sc-if value="{{dock.isWork}}" hint-placeholder-val="{{ false }}">
+              <div class="dock quiet" role="status"><div class="row wrap"><span class="tag c-active">Claude's turn</span><span class="grow">{{dock.text}}</span></div></div>
+            </sc-if>
+            <sc-if value="{{dock.isDone}}" hint-placeholder-val="{{ false }}">
+              <div class="dock quiet" role="status">
+                <div class="row wrap"><span class="tag c-plain">Finished</span><span class="grow">{{dock.text}}</span><a class="btn sm" href="Application.html">Open dossier</a><a class="btn sm" href="Tracker.html">Open in Tracker</a></div>
+                <div class="compose one"><div class="field grow"><input aria-label="Reply" placeholder="Reply to resume this session"></div><button class="btn" type="button">Send</button></div>
+              </div>
+            </sc-if>
+            <sc-if value="{{dock.isFail}}" hint-placeholder-val="{{ false }}">
+              <div class="dock bad" role="alert">
+                <div class="row wrap"><span class="tag c-closed">Failed</span><span class="grow" style="font-weight: 600">{{dock.head}}</span></div>
+                <span class="muted">{{dock.text}}</span>
+                <div class="compose one"><div class="field grow"><input aria-label="Reply" placeholder="Reply to resume this session"></div><button class="btn" type="button">Send</button></div>
+              </div>
+            </sc-if>
+          </section>
+
+          <!-- C: the work, grouped by step -->
+          <sc-if value="{{isC}}" hint-placeholder-val="{{ false }}">
+            <section class="w panel" aria-label="Work">
+              <div class="ph">Work <span class="mono">by step</span></div>
+              <div class="scroll">
+                <sc-for list="{{work}}" as="g" hint-placeholder-count="7">
+                  <div class="{{g.cls}}">
+                    <div class="gh"><span class="knot sm {{g.knot}}">{{g.n}}</span><span class="grow">{{g.label}}</span><span class="faint num" style="font-weight: 400">{{g.meta}}</span></div>
+                    <sc-for list="{{g.rows}}" as="e" hint-placeholder-count="2">
+                      <div class="{{e.cls}}"><span class="who2">{{e.who}}</span><span class="mono grow trunc"><span class="dir">{{e.pre}}</span>{{e.main}}</span><sc-if value="{{e.hasTag}}" hint-placeholder-val="{{ false }}"><span class="tag {{e.tone}}">{{e.tag}}</span></sc-if></div>
+                    </sc-for>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <!-- A, B and D: the side column, at a fixed width so it never leaves the window -->
+          <sc-if value="{{hasSide}}" hint-placeholder-val="{{ true }}">
+            <div class="col b" style="gap: 12px">
+              <section class="panel">
+                <div class="ph">This run</div>
+                <div class="pb col" style="gap: 8px">
+                  <div class="row"><span class="muted grow">Cost</span><span class="num">{{facts.cost}}</span></div>
+                  <div class="bar"><i style="width: {{facts.pct}}%"></i></div>
+                  <div class="row"><span class="muted grow">Elapsed</span><span class="num">{{facts.elapsed}}</span></div>
+                  <sc-if value="{{facts.hasSession}}" hint-placeholder-val="{{ true }}">
+                    <div class="row"><span class="muted grow">Model</span><span class="num">claude-opus-5-5</span></div>
+                    <div class="row"><span class="muted grow">Session</span><span class="num">3f9a21c0</span></div>
+                  </sc-if>
+                </div>
+              </section>
+              <sc-if value="{{showAgents}}" hint-placeholder-val="{{ false }}">
+                <section class="panel">
+                  <div class="ph">Agents</div>
+                  <div class="list"><sc-for list="{{agents}}" as="g" hint-placeholder-count="1"><div class="li"><span class="grow mono trunc">{{g.t}}</span><span class="tag {{g.tone}}">{{g.tag}}</span></div></sc-for></div>
+                </section>
+              </sc-if>
+              <section class="panel">
+                <div class="ph">Recent runs</div>
+                <sc-if value="{{histErr}}" hint-placeholder-val="{{ false }}">
+                  <div class="pb" style="color: var(--closed)">Older runs could not be read: one run log is not valid JSON. This run is not affected.</div>
+                </sc-if>
+                <div class="list">
+                  <sc-for list="{{recent}}" as="r" hint-placeholder-count="4">
+                    <div class="li"><span class="{{r.cmdCls}}">{{r.cmd}}</span><span class="tag {{r.tone}}">{{r.tag}}</span><span class="num faint">{{r.cost}}</span></div>
+                  </sc-for>
+                </div>
+              </section>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <footer class="status">
+      <span class="row"><span class="dot"></span>Claude CLI 2.1.308</span>
+      <span>5-hour usage 8%</span><span>7-day usage 25%</span>
+      <div class="seg" role="group" aria-label="Theme" style="margin-left: auto"><sc-for list="{{themes}}" as="t" hint-placeholder-count="3"><button class="{{t.cls}}" type="button" onClick="{{t.pick}}">{{t.label}}</button></sc-for></div>
+      <span class="faint">{{label}}</span>
+    </footer>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["system","light","dark"],"default":"system"},"proposal":{"editor":"enum","options":["A","B","C","D"],"default":"B"},"scene":{"editor":"enum","options":["working","turn","ask","finished","starting","failed","confirm","nolog","empty","tray"],"default":"turn"},"$preview":{"width":1280,"height":820}}'>
+// Runs: where am I, and is it my turn. D (the Turn band, Stamp magenta, the Story layout) is the chosen design.
+// A, B and C were explored and not chosen. They stay drawable for reference.
+// ?proposal=A|B|C|D picks the layout, ?scene= the state, ?theme=light|dark the theme.
+// Scenes: working (in Draft), details (working, with Draft's actions open), turn (stopped after Evaluate, waiting
+// for a reply), ask (AskUserQuestion in Draft), finished, accents (the accent candidates), tray (the In tray card),
+// and for B also starting, failed, confirm, nolog and empty. All data is fictional.
+const CMD = '/apply jobs.marlowe.example/postings/tech-lead-java-platform-2291';
+const STEPS = ['Fetch', 'Evaluate', 'Draft', 'Review', 'Revise', 'Compile', 'Finish'];
+const SK = '.claude/skills/job-application-assistant/';
+const QUESTION = 'Shall I go ahead and draft the CV and cover letter for this role, or stop here?';
+const ASK_Q = 'Which CV template should this application use?';
+const P = (t) => ({ cls: '', t }), H = (t) => ({ cls: 'h', t }), L = (t) => ({ cls: 'bl', t }), Q = (t) => ({ cls: 'q', t });
+const EVAL = {
+  h: 'Job fit evaluation: Tech Lead, Java Platform at Marlowe Systems', lines: 31,
+  blocks: [P('Verdict: Good Fit, 74 out of 100. Every hard gate passes.'), H('Strengths'),
+    L('Eight years of Java and Spring Boot, the core stack in the posting.'), L('Led a platform team of six. This role leads five.'),
+    H('Gaps'), L('Kotlin is asked for. Your profile lists it as basic.'), L('Your profile names no on-call rota.'),
+    H('Salary'), P('The Ghent band in salary_data.json tops out about 4% under your floor.'), Q(QUESTION)],
+};
+const FINAL = {
+  h: 'Application ready: Marlowe Systems, Tech Lead', lines: 6,
+  blocks: [P('The CV (2 pages) and the cover letter (1 page) compiled, and both checks passed.'),
+    L('7 reviewer edits applied, 1 skipped as not grounded in your profile.'), L('Tracker row added as Drafted.'),
+    P('Read both PDFs in the dossier, then send it yourself.')],
+};
+// Round 1, proposal D. Claude's messages as documents, in the Markdown blocks the app renders.
+const D1 = (t) => ({ h1: true, t }), D2 = (t) => ({ h2: true, t }), DP = (t, cls) => ({ p: true, t, cls: cls || '' });
+const DU = (...items) => ({ ul: true, items: items.map((t) => ({ t })) });
+const DT = (head, rows) => ({ table: true, head: head.map((t) => ({ t })), rows: rows.map((r) => ({ cells: r.map((t) => ({ t })) })) });
+const DOC_EVAL = [
+  D1('Job fit evaluation: Tech Lead, Java Platform at Marlowe Systems'),
+  DP('Verdict: Good Fit, 74 out of 100. Every hard gate passes, and the two gaps are small.'),
+  D2('Gates'),
+  DT(['Gate', 'In the posting', 'Result'], [['Contract', 'Permanent, full time', 'Pass'], ['Work mode', 'Hybrid, 2 days a week in Ghent', 'Pass'], ['Language', 'English, Dutch is a plus', 'Pass'], ['Salary', 'Not stated', 'Check']]),
+  D2('Strengths'),
+  DU('Eight years of Java and Spring Boot, the core stack in the posting.', 'You led a platform team of six. This role leads five.', 'Your event-store migration matches the first item on their roadmap.'),
+  D2('Gaps'),
+  DU('Kotlin is asked for. Your profile lists it as basic.', 'Your profile names no on-call rota.'),
+  D2('Salary'),
+  DP('The Ghent band in the salary data tops out about 4% under your floor. Ask for the range before the first call.'),
+  DP(QUESTION, 'q'),
+];
+const DOC_FINAL = [
+  D1('Application ready: Marlowe Systems, Tech Lead'),
+  DP('The CV (2 pages) and the cover letter (1 page) are built, and both checks passed.'),
+  D2('What changed after review'),
+  DU('7 reviewer edits applied. 1 was skipped because your profile does not back it.', 'The letter now opens with the event-store migration.'),
+  D2('Next'),
+  DU('Read both PDFs in the dossier.', 'Send it yourself. Jobdesk never sends applications.', 'The tracker lists it as Drafted.'),
+];
+// One plain sentence per step, from a fixed table keyed by tool and path. Never from Claude's text.
+const PLAIN = [
+  'Fetched the posting and checked it for hidden instructions.',
+  'Read your profile and the evaluation guide, then looked up salary data.',
+  'Wrote the CV and the cover letter.',
+  'Had the reviewer research the company and critique both documents.',
+  "Applied the reviewer's edits to the CV and the cover letter.",
+  'Built both PDFs and checked their pages and layout.',
+  'Updated the tracker and archived the posting.',
+];
+const PLAIN_NOW = { working: 'Wrote the CV. Writing the cover letter now.', nolog: 'Wrote the CV. Writing the cover letter now.', details: 'Wrote the CV. Writing the cover letter now.', ask: 'Read the two CV templates, then stopped to ask which one to use.', starting: 'Starting.' };
+const CANDIDATES = [
+  { name: 'Stamp magenta', light: ['#b0246a', '#ffffff'], dark: ['#f48cc0', '#0d1a2b'],
+    vl: 'Chosen. White on the fill 6.4:1. Nearest tone is Closed, ΔE 24.', vd: 'Navy on the fill 7.8:1. Nearest tones are Closed and Offer, ΔE 20.' },
+  { name: 'Highlighter lemon', light: ['#f7ea3c', '#12263f', '#12263f'], dark: ['#e9ef5c', '#0d1a2b'],
+    vl: 'Navy on the fill 12.2:1, but the fill is 1.1:1 on the sheet, so it needs an ink outline.', vd: 'Navy on the fill 14.1:1. Nearest tone is the Interview amber, ΔE 18.' },
+  { name: 'Signal cyan', light: ['#00788f', '#ffffff'], dark: ['#3fe0f2', '#0d1a2b'],
+    vl: 'White on the fill 5.1:1. Nearest tone is Drafted, ΔE 15.', vd: 'Navy on the fill 11.0:1. Nearest tone is Drafted, ΔE 18.' },
+];
+const SPECS = ['light', 'dark'].flatMap((theme) => CANDIDATES.map((c) => {
+  const [turn, on, edge] = c[theme];
+  return { name: c.name, theme, themeName: theme === 'light' ? 'Light' : 'Dark', hex: turn + ' with ' + on, verdict: theme === 'light' ? c.vl : c.vd,
+    vars: '--turn: ' + turn + '; --on-turn: ' + on + (edge ? '; --turn-edge: ' + edge : '') };
+}));
+const T = (who, pre, main, state, nested) => ({ kind: 'tool', who, pre, main, state: state || 'done', nested: !!nested });
+const Y = (t) => ({ kind: 'you', main: t });
+const N = (t, stream) => ({ kind: 'note', main: t, stream: !!stream });
+const M = (m) => ({ kind: 'msg', m });
+const REPLY = 'Yes, proceed with drafting.';
+
+// Each step's summary is mechanical: agents, files and counts. Nothing is lifted from Claude's text.
+const CH = [
+  { sum: 'posting-fetcher, 3 tools', meta: '41s' },
+  { sum: '3 tools, then a message', meta: '2m 05s' },
+  { sum: 'wrote main_marlowe_tech_lead.tex and cover_marlowe_tech_lead.tex', meta: '3m 10s' },
+  { sum: 'application-reviewer, 3 tools', meta: '2m 40s' },
+  { sum: '2 files edited', meta: '1m 15s' },
+  { sum: '3 tools', meta: '1m 30s' },
+  { sum: '2 tools, then a message', meta: '40s' },
+];
+
+function rows(n, scene) {
+  switch (n) {
+    case 0:
+      if (scene === 'starting') return [N('Starting the claude CLI…')];
+      return [T('Agent', '', 'posting-fetcher: fetch and check the posting'),
+        T('Bash', '', 'bun run .agents/skills/portal-search/cli/src/cli.ts detail jobs.marlowe.example/postings/tech-lead-java-platform-2291', 'done', true),
+        T('Bash', '', 'python3 tools/posting_guard.py --text --json', 'done', true)];
+    case 1:
+      return [T('Read', SK, '04-job-evaluation.md'), T('Read', SK, '01-candidate-profile.md'),
+        T('Bash', '', 'python3 salary_lookup.py "Marlowe Systems" --city Ghent --json'), M(EVAL)];
+    case 2:
+      if (scene === 'ask') {
+        return [Y(REPLY), T('Read', SK, '05-cv-tailoring.md'), T('Read', 'cv/templates/', 'lead_two_page.tex'), T('Read', 'cv/templates/', 'architect_one_page.tex'),
+          T('Ask', '', 'AskUserQuestion: ' + ASK_Q, 'wait')];
+      }
+      return [Y(REPLY), T('Read', SK, '05-cv-tailoring.md'), T('Write', 'cv/', 'main_marlowe_tech_lead.tex'),
+        T('Write', 'cover_letters/', 'cover_marlowe_tech_lead.tex', scene === 'working' || scene === 'nolog' ? 'run' : 'done'),
+        ...(scene === 'working' || scene === 'nolog' ? [N('Opening the letter with the event-store migration you led…', true)] : [])];
+    case 3:
+      return [T('Agent', '', 'application-reviewer: research and critique'), T('WebFetch', '', 'marlowe.example/about', 'done', true), T('WebFetch', '', 'marlowe.example/engineering', 'done', true)];
+    case 4:
+      return [T('Edit', 'cv/', 'main_marlowe_tech_lead.tex'), T('Edit', 'cover_letters/', 'cover_marlowe_tech_lead.tex')];
+    case 5:
+      if (scene === 'failed') {
+        return [T('Bash', '', 'lualatex -interaction=nonstopmode main_marlowe_tech_lead.tex'), T('Bash', '', 'python3 tools/verify_pdf.py --pages 2'),
+          T('Bash', '', 'python3 tools/verify_layout.py cv/main_marlowe_tech_lead.pdf', 'fail'), N('Budget cap reached: $3.00 of $3.00 spent.')];
+      }
+      return [T('Bash', '', 'lualatex -interaction=nonstopmode main_marlowe_tech_lead.tex'), T('Bash', '', 'python3 tools/verify_pdf.py --pages 2'),
+        T('Bash', '', 'python3 tools/verify_layout.py cv/main_marlowe_tech_lead.pdf')];
+    default:
+      return [T('Edit', '', 'job_search_tracker.csv'), T('Write', 'documents/applications/marlowe-tech-lead/', 'job_posting.md'), M(FINAL)];
+  }
+}
+
+// Where the run is, per scene. mode: now (Claude works on cur), stop (cur is done, your turn before the next),
+// ask (a question inside cur), fail (cur failed), done (all done).
+const SCENES = {
+  starting: { cur: 0, mode: 'now', cost: 0.02, elapsed: '4s', status: ['Starting', 'tag c-active'] },
+  working: { cur: 2, mode: 'now', cost: 1.38, elapsed: '7m 12s', status: ["Claude's turn", 'tag c-active'] },
+  turn: { cur: 1, mode: 'stop', cost: 1.12, elapsed: '5m 03s', status: ['Your turn', 'tag turn'] },
+  ask: { cur: 2, mode: 'ask', cost: 1.52, elapsed: '8m 40s', status: ['Your turn', 'tag turn'] },
+  finished: { cur: 6, mode: 'done', cost: 2.41, elapsed: '14m 20s', status: ['Finished', 'tag c-plain'] },
+  failed: { cur: 5, mode: 'fail', cost: 3.0, elapsed: '12m 55s', status: ['Failed', 'tag c-closed'] },
+};
+SCENES.confirm = { ...SCENES.turn, confirm: true };
+SCENES.nolog = { ...SCENES.working, histErr: true };
+SCENES.details = { ...SCENES.working, expand: 2 };
+
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    this.state = {
+      proposal: this.pick('proposal', p, ['A', 'B', 'C', 'D'], 'B'),
+      scene: this.pick('scene', p, ['working', 'turn', 'ask', 'finished', 'starting', 'failed', 'confirm', 'nolog', 'details', 'empty', 'tray', 'accents'], 'turn'),
+    };
+  }
+  componentDidMount() { this.stick(); setTimeout(() => this.stick(), 400); setTimeout(() => this.stick(), 1500); }
+  componentDidUpdate() { this.stick(); }
+  stick() {
+    try {
+      const el = document.querySelector('.rt .split > .a .scroll');
+      if (!el) return;
+      const at = el.querySelector('.anchor');
+      if (at) el.scrollTop = at.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 2;
+      else el.scrollTop = el.scrollHeight;
+    } catch (e) {}
+  }
+  pick(key, p, options, fallback) {
+    let q = null;
+    try { q = new URLSearchParams(window.location.search).get(key); } catch (e) {}
+    const v = q || (p || {})[key] || fallback;
+    const hit = options.find((o) => o.toLowerCase() === String(v).toLowerCase());
+    return hit || fallback;
+  }
+  themeVals() {
+    let url = null;
+    try { url = new URLSearchParams(window.location.search).get('theme'); } catch (e) {}
+    const theme = url || (this.state || {}).theme || this.props.theme || 'system';
+    const themes = ['System', 'Light', 'Dark'].map((label) => ({ label, cls: label.toLowerCase() === theme ? 'on' : '', pick: () => this.setState({ theme: label.toLowerCase() }) }));
+    return { theme, themes };
+  }
+  stepState(s, i) {
+    if (s.mode === 'done') return 'done';
+    if (i < s.cur || (s.mode === 'stop' && i === s.cur)) return 'done';
+    if (i === s.cur) return { now: 'now', ask: 'hold', fail: 'fail' }[s.mode];
+    return 'next';
+  }
+  // A row for the templates. allTags keeps today's Done tags (A and D). B and C tag only what is news.
+  row(r, allTags) {
+    if (r.kind === 'tool') {
+      const [tag, tone] = { done: ['Done', 'c-hired'], run: ['Running', 'c-active'], fail: ['Failed', 'c-closed'], wait: ['Waiting for you', 'c-interview'] }[r.state];
+      return { isTool: true, who: r.who, pre: r.pre, main: r.main, cls: 'ev' + (r.nested ? ' sub' : ''), tag, tone, hasTag: allTags || r.state !== 'done' };
+    }
+    if (r.kind === 'you') return { isYou: true, main: r.main };
+    if (r.kind === 'note') return { isNote: true, main: r.main, ncls: r.stream ? 'stream grow' : 'muted grow' };
+    // A long message shows its first blocks whole, never a line cut in half.
+    const clip = r.m.lines > 8;
+    return { isMsg: true, h: r.m.h, blocks: clip ? r.m.blocks.slice(0, 3) : r.m.blocks, clip, mcls: 'msg', more: 'Show the whole message, ' + r.m.lines + ' lines' };
+  }
+  dTitle(s) {
+    return [s.mode === 'done' ? 'The run' : 'The run so far', 'in reading order'];
+  }
+  // One plain line per started step. Its actions open under it, as today's technical rows.
+  dline(i, s, scene, states) {
+    const st = states[i];
+    const tools = rows(i, scene).filter((r) => r.kind === 'tool');
+    const live = st === 'now' || st === 'hold';
+    const open = s.expand === i;
+    const n = tools.length;
+    const count = n + (n === 1 ? ' action' : ' actions') + (live ? ' so far' : '');
+    return {
+      isLine: true, n: i, label: STEPS[i], knot: st === 'next' ? '' : st === 'hold' ? 'yours' : st,
+      cls: 'sline' + (st === 'now' ? ' live' : st === 'hold' ? ' waits' : ''),
+      text: live ? (PLAIN_NOW[scene] || PLAIN[i]) : st === 'fail' ? 'Stopped: the budget cap was reached.' : PLAIN[i],
+      hasToggle: n > 0, toggle: open ? 'Hide actions' : 'Show ' + count, expanded: open ? 'true' : 'false', open,
+      rows: tools.map((r) => this.row(r, true)),
+    };
+  }
+  dflow(s, scene, states) {
+    const started = STEPS.map((_, i) => i).filter((i) => i <= s.cur && (states[i] !== 'next'));
+    const replied = ['working', 'nolog', 'details', 'ask', 'finished', 'failed'].includes(scene);
+    const you = { isLine: true, n: '', label: 'You', knot: 'none', cls: 'sline you', text: '“' + REPLY + '”', hasToggle: false };
+    const doc = (blocks, anchor) => ({ isDoc: true, blocks, docCls: 'doc' + (anchor ? ' anchor' : '') });
+    const out = [];
+    const anchorDoc = s.mode === 'stop' || s.mode === 'done';
+    started.forEach((i) => {
+      out.push(this.dline(i, s, scene, states));
+      if (i === 1 && states[1] === 'done') out.push(doc(DOC_EVAL, anchorDoc && s.mode === 'stop'));
+      if (i === 1 && replied) out.push(you);
+      if (i === 6 && s.mode === 'done') out.push(doc(DOC_FINAL, true));
+    });
+    return out;
+  }
+  renderVals() {
+    const { proposal, scene } = this.state;
+    const base = { showShell: scene !== 'accents', ...this.themeVals(), question: QUESTION, askQ: ASK_Q, cmd: CMD, cmdTail: CMD.replace('/apply ', ''), label: 'Proposal ' + proposal + ', sample data' };
+    const waits = ['turn', 'ask', 'confirm', 'tray', 'accents'].includes(scene);
+    const mark = proposal === 'D' ? ' yours' : ' wait';
+    const nav = [['In-tray', 'Tray.html', waits ? '5' : '4'], ['Jobs', 'Jobs.html', '15'], ['Tracker', 'Tracker.html', '12'], ['Insights', 'Insights.html', ''],
+      ['Runs', 'RunTurn.html', waits ? '1' : ''], ['Workspace', 'Workspace.html', '']]
+      .map(([label, href, count]) => {
+        const on = scene === 'tray' ? label === 'In-tray' : label === 'Runs';
+        const wait = label === 'Runs' && waits;
+        return { label, href, count, cls: (on ? 'on' : '') + (wait ? mark : ''), aria: wait ? 'Runs, 1 run waits for you' : label };
+      });
+    if (scene === 'tray') {
+      const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const days = Array.from({ length: 14 }, (_, i) => ({ label: names[i % 7] + ' ' + (i + 1), col: i + 1, cls: 'hz' + (i === 0 ? ' today' : ''), today: i === 0 }));
+      return { ...base, rootCls: 'app fit rt', nav, isTray: true, trayTab: proposal === 'D' ? 'ktab yours-ink' : 'ktab c-interview', trayDeal: proposal === 'D' ? 'deal wait yours-frame' : 'deal wait', days, edges: Array.from({ length: 4 }, (_, i) => ({ m: (i + 1) * 5 })), label: 'Supporting scene, sample data' };
+    }
+    if (scene === 'accents') return { ...base, rootCls: 'app rt', nav, isAccents: true, specs: SPECS, label: 'Accent candidates, sample data' };
+    if (scene === 'empty') return { ...base, rootCls: 'app fit rt', nav, isEmpty: true, label: 'Sample data' };
+
+    const s = SCENES[scene];
+    const isA = proposal === 'A', isB = proposal === 'B', isC = proposal === 'C', isD = proposal === 'D';
+    const states = STEPS.map((_, i) => this.stepState(s, i));
+    const started = STEPS.map((_, i) => i).filter((i) => i <= s.cur);
+    const openAt = s.cur;
+    const allTags = isA || isD;
+
+    // A: today's rail, plus a hold cell after the step that stopped.
+    const hsteps = [];
+    STEPS.forEach((label, i) => {
+      const st = states[i];
+      hsteps.push({ n: i, label, cls: 'step' + (st === 'done' ? ' done' : st === 'now' ? ' now' : st === 'hold' ? ' hold' : st === 'fail' ? ' fail' : '') });
+      if (s.mode === 'stop' && i === s.cur) hsteps.push({ n: '', label: 'Your turn', cls: 'step hold' });
+    });
+
+    // B: the vertical rail. The open chapter is lit, and a stop adds its own Your turn stop.
+    const vrail = [];
+    STEPS.forEach((label, i) => {
+      const st = states[i];
+      const meta = st === 'done' ? CH[i].meta : st === 'now' ? (scene === 'starting' ? 'Starting' : 'Working, 1m 50s') : st === 'hold' ? 'Answer below' : st === 'fail' ? 'Budget cap' : '';
+      vrail.push({ n: i, label, meta, knot: st === 'next' ? '' : st, cls: 'rstep ' + st + (i === openAt && s.mode !== 'stop' ? ' on' : '') });
+      if (s.mode === 'stop' && i === s.cur) vrail.push({ n: '', label: 'Your turn', meta: 'Reply below to go on', knot: 'hold', cls: 'rstep hold on' });
+    });
+    const chaps = started.map((i) => {
+      const open = i === openAt;
+      const rs = rows(i, scene);
+      const tools = rs.filter((r) => r.kind === 'tool').length;
+      const st = states[i];
+      const sum = !open || st === 'done' ? CH[i].sum : st === 'now' ? (scene === 'starting' ? 'Starting' : 'Working, ' + tools + ' tools so far') : st === 'hold' ? 'Waiting for your answer' : 'Stopped: budget cap reached';
+      return { n: i, label: STEPS[i], knot: st === 'next' ? '' : st, open, sum, meta: st === 'done' ? CH[i].meta : '', toggle: open ? 'Hide' : 'Show ' + tools, rows: rs.map((r) => this.row(r, false)) };
+    });
+
+    // A and D: the flat log.
+    const flat = [];
+    started.forEach((i) => rows(i, scene).forEach((r) => flat.push(this.row(r, allTags))));
+
+    // C: the conversation, with hand-offs that point at the work.
+    const hand = (n, main, meta, knot) => ({ isHand: true, n, main, meta, knot });
+    const convo = [{ isYou: true, main: CMD }];
+    if (scene === 'starting') convo.push(hand(0, 'Claude is starting', '', 'now'));
+    else {
+      convo.push(hand('0–1', 'Claude fetched the posting and evaluated the fit', '6 tools in Work', 'done'));
+      convo.push(this.row(M(EVAL), false));
+    }
+    if (['working', 'nolog', 'ask', 'finished', 'failed'].includes(scene)) convo.push({ isYou: true, main: REPLY });
+    if (scene === 'working' || scene === 'nolog') convo.push(hand(2, 'Claude is drafting', '4 tools so far', 'now'));
+    if (scene === 'ask') convo.push(hand(2, 'Claude is drafting, and stopped to ask', '4 tools so far', 'hold'));
+    if (scene === 'failed') convo.push(hand('2–5', 'Claude drafted, reviewed and revised, then failed to compile', '12 tools in Work', 'fail'));
+    if (scene === 'finished') { convo.push(hand('2–6', 'Claude drafted, reviewed, revised, compiled and filed it', '13 tools in Work', 'done')); convo.push(this.row(M(FINAL), false)); }
+    const work = STEPS.map((label, i) => {
+      const st = states[i];
+      const shown = i === openAt && st !== 'next';
+      const rs = st === 'next' ? [] : rows(i, scene).filter((r) => r.kind === 'tool');
+      return { n: i, label, knot: st === 'next' ? '' : st, cls: 'wg' + (st === 'next' ? ' next' : ''),
+        meta: st === 'next' ? '' : shown ? (st === 'done' ? CH[i].meta : '') : rs.length + ' tools · ' + CH[i].meta,
+        rows: shown ? rs.map((r) => this.row(r, false)) : [] };
+    });
+
+    // D: three answers, read left to right.
+    const marks = states.map((st) => ({ cls: st === 'done' ? '' : st === 'now' ? 'now' : st === 'hold' ? 'yours' : 'off' }));
+    if (s.mode === 'stop') marks[s.cur + 1].cls = 'yours';
+    const doneCount = states.filter((st) => st === 'done').length;
+    const bands = {
+      starting: { where: '0 Fetch', whereSub: 'Starting the CLI', who: "Claude's", whoSub: 'Just started', next: 'Nothing for now', nextSub: 'You can leave. The Runs tab marks it when it needs you.' },
+      working: { where: '2 Draft', whereSub: '2 of 7 steps done', who: "Claude's", whoSub: 'Working for 1m 50s', next: 'Nothing for now', nextSub: 'You can leave. The Runs tab marks it when it needs you.' },
+      turn: { where: '1 Evaluate, done', whereSub: 'Draft waits for your go', who: 'Yours', whoSub: 'Claude stopped 2 min ago', next: 'Answer Claude', nextSub: 'Its question is right below.' },
+      ask: { where: '2 Draft', whereSub: 'Paused inside the step', who: 'Yours', whoSub: 'Claude asked 1 min ago', next: 'Pick a CV template', nextSub: 'The choices are right below.' },
+      finished: { where: 'All 7 steps', whereSub: 'Finished in 14m 20s', who: 'Nobody', whoSub: 'The session is closed', next: 'Read the documents', nextSub: 'Open the dossier, then send it yourself.' },
+      failed: { where: '5 Compile', whereSub: 'Failed inside the step', who: 'Yours', whoSub: 'The run stopped', next: 'Reply to resume', nextSub: 'Or leave it: files so far stay.' },
+    };
+    const b0 = bands[scene] || bands[s.mode === 'stop' ? 'turn' : 'working'];
+    const yours = s.mode === 'stop' || s.mode === 'ask';
+    const band = { ...b0, marks, whoCls: 'tb' + (yours ? ' yours' : s.mode === 'now' ? ' claude' : ''), isQ: s.mode === 'stop', isAsk: s.mode === 'ask', tallyLabel: doneCount + ' of 7 steps done' };
+    const dflow = isD ? this.dflow(s, scene, states) : [];
+
+    const dock = {
+      isTurn: !isD && s.mode === 'stop', isAsk: !isD && s.mode === 'ask', isWork: !isD && s.mode === 'now', isDone: !isD && s.mode === 'done', isFail: !isD && s.mode === 'fail',
+      head: 'Evaluate is done. Claude waits for your go before it drafts.', since: 'Waiting 2 min',
+      text: scene === 'starting' ? 'Starting the claude CLI. Nothing to do yet.' : s.mode === 'done' ? 'In 14m 20s for $2.41. 2 documents written, tracker updated.'
+        : s.mode === 'fail' ? 'Files written so far stay. A reply resumes the same session from here.'
+        : 'Nothing to do yet. The Runs tab and the In tray show when Claude needs you.',
+    };
+    if (s.mode === 'fail') dock.head = 'Compile stopped: the $3.00 budget cap was reached.';
+    const quick = [{ t: 'Go ahead with the draft', sends: 'Sends: ' + REPLY }, { t: 'Stop here', sends: 'Sends: No, stop here. Do not draft.' }];
+    const opts = [
+      { label: 'Two-page lead template (Recommended)', desc: 'Matches the tech lead role and your last two applications.', cls: 'optrow on' },
+      { label: 'One-page architect template', desc: 'Shorter, and puts the platform work first.', cls: 'optrow' },
+    ];
+
+    const pct = Math.round((s.cost / 3) * 100);
+    const facts = { cost: '$' + s.cost.toFixed(2) + ' of $3.00', pct, elapsed: s.elapsed, hasSession: scene !== 'starting' };
+    const recent = [
+      { cmd: CMD, tag: s.status[0], tone: s.status[1].replace('tag ', ''), cost: '$' + s.cost.toFixed(2), cmdCls: 'mono grow trunc' },
+      { cmd: '/rank --limit 10', tag: 'Finished', tone: 'c-plain', cost: '$0.62', cmdCls: 'mono grow trunc muted' },
+      { cmd: '/scrape', tag: 'Finished', tone: 'c-plain', cost: '$0.41', cmdCls: 'mono grow trunc muted' },
+      { cmd: '/outcome tessel', tag: 'Finished', tone: 'c-plain', cost: '$0.09', cmdCls: 'mono grow trunc muted' },
+    ];
+    if (isD) recent[0].tone = recent[0].tone.replace('turn', 'yours');
+    const agentState = (n) => states[n] === 'done' ? ['Done', 'c-hired'] : ['Running', 'c-active'];
+    const agents = [{ t: 'posting-fetcher', tag: agentState(0)[0], tone: agentState(0)[1] }];
+    if (s.cur >= 3) agents.push({ t: 'application-reviewer', tag: agentState(3)[0], tone: agentState(3)[1] });
+    const head = {
+      stop: ['now', 'ask'].includes(s.mode), end: s.mode === 'stop', dossier: s.mode === 'done' && !isC,
+      recent: isB || isC, recentCls: isB ? 'btn narrow-only' : 'btn',
+    };
+    const titles = { A: ['Activity', 'live'], B: ['Activity', 'by step'], C: ['Conversation', 'what you and Claude said'], D: ['Activity', 'live'] };
+
+    return {
+      ...base, rootCls: 'app fit rt rt-' + proposal, nav, isRun: true, isA, isB, isC, isD, isFlat: isA, oldHead: !isD, dflow,
+      hsteps, vrail, chaps, flat, convo, work, band, dock, quick, opts, facts, recent, agents, head,
+      status: { text: s.status[0], cls: s.status[1] }, confirm: !!s.confirm, histErr: !!s.histErr,
+      hasSide: !isC, showAgents: isA,
+      mainTitle: isD ? this.dTitle(s)[0] : titles[proposal][0],
+      mainNote: isD ? this.dTitle(s)[1] : titles[proposal][1] === 'live' && s.mode !== 'now' ? '' : titles[proposal][1],
+      quickNote: 'Each button sends its words as your reply, as if you typed them. Hover a button to read them.',
+      factsLine: facts.cost + ' · ' + s.elapsed + ' · claude-opus-5-5 · session 3f9a21c0',
+    };
+  }
+}
+</script>
+</body>
+</html>

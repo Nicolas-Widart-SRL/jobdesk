@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextWrapMode, Ui, WidgetText};
+use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::shared_kernel::WebUrl;
+use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
-use crate::ui_kit::tokens::Type;
+use crate::ui_kit::tokens::{DOC_MEASURE, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
 pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> RichText {
@@ -75,6 +75,18 @@ pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
 }
 
+/// A message as a document: one readable column that never grows past the space it has, with headings held to the
+/// section size. It goes through `markdown`, so ARCHITECTURE.md#trust holds.
+pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width().min(DOC_MEASURE));
+        let styles = &mut ui.style_mut().text_styles;
+        styles.insert(TextStyle::Heading, Type::SECTION.font());
+        styles.insert(TextStyle::Body, Type::TAKE.font());
+        markdown(ui, cache, text);
+    });
+}
+
 #[derive(Default)]
 struct ImageFree;
 
@@ -96,11 +108,6 @@ fn keep_web_links(commands: &mut Vec<OutputCommand>, from: usize) {
     });
 }
 
-/// Same extensions as the viewer, so both read the same images.
-fn markdown_options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES | Options::ENABLE_DEFINITION_LIST
-}
-
 /// Every ASCII punctuation mark escaped, so the text cannot form Markdown again.
 fn escaped(text: &str) -> String {
     text.chars().fold(String::new(), |mut out, c| {
@@ -116,7 +123,7 @@ fn escaped(text: &str) -> String {
 fn replace_images(text: &str) -> Option<String> {
     let mut out = String::new();
     let (mut copied, mut depth, mut alt, mut found) = (0, 0, String::new(), false);
-    for (event, range) in Parser::new_ext(text, markdown_options()).into_offset_iter() {
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Image { .. }) => {
                 if depth == 0 {
@@ -186,13 +193,15 @@ mod tests {
 
     use super::*;
 
+    type Render = fn(&mut Ui, &mut CommonMarkCache, &'static str);
+
     /// Clicks the link named `label` and returns every url a frame asked to open.
-    fn opened_by_click(source: &'static str, label: &str) -> Vec<String> {
+    fn opened_through(render: Render, source: &'static str, label: &str) -> Vec<String> {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&opened);
         let mut cache = CommonMarkCache::default();
         let mut harness = Harness::builder().with_size([400.0, 200.0]).build_ui(move |ui| {
-            markdown(ui, &mut cache, source);
+            render(ui, &mut cache, source);
             let urls: Vec<String> = ui.ctx().output(|output| {
                 output.commands.iter().filter_map(|command| if let OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
             });
@@ -206,9 +215,9 @@ mod tests {
 
     #[test]
     fn markdown_links_open_only_for_the_web() {
-        assert_eq!(opened_by_click("[terminal](file:///Applications/Utilities/Terminal.app)", "terminal"), Vec::<String>::new());
-        assert_eq!(opened_by_click("[script](javascript:alert(1))", "script"), Vec::<String>::new());
-        assert_eq!(opened_by_click("[posting](https://tessel.example/jobs/1)", "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+        assert_eq!(opened_through(markdown, "[terminal](file:///Applications/Utilities/Terminal.app)", "terminal"), Vec::<String>::new());
+        assert_eq!(opened_through(markdown, "[script](javascript:alert(1))", "script"), Vec::<String>::new());
+        assert_eq!(opened_through(markdown, "[posting](https://tessel.example/jobs/1)", "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
     }
 
     #[test]
@@ -226,5 +235,67 @@ mod tests {
         let code = "Use `![a](b)` here.\n\n```\n![logo](file:///x.png)\n```\n";
         assert_eq!(without_images(code), code);
         assert_eq!(without_images("`![a](b)` and ![c](d)"), "`![a](b)` and c");
+    }
+
+    fn unmarked(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+        document(ui, cache, text);
+    }
+
+    #[test]
+    fn document_keeps_only_web_links() {
+        let source = "[terminal](file:///Applications/Utilities/Terminal.app) and [posting](https://tessel.example/jobs/1)\n\n[script](javascript:alert(1)) and [role](https://tessel.example/jobs/2)";
+        assert_eq!(opened_through(unmarked, source, "terminal"), Vec::<String>::new());
+        assert_eq!(opened_through(unmarked, source, "script"), Vec::<String>::new());
+        assert_eq!(opened_through(unmarked, source, "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+        assert_eq!(opened_through(unmarked, source, "role"), vec!["https://tessel.example/jobs/2".to_owned()]);
+    }
+
+    #[test]
+    fn document_shows_images_as_alt_text() {
+        let source: &'static str = "First ![company logo](https://x.example/l.png) paragraph.\n\nThen ![your badge](file:///etc/badge.png) now.";
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([600.0, 200.0]).build_ui(move |ui| unmarked(ui, &mut cache, source));
+        harness.run();
+        assert!(harness.query_by_label_contains("company logo").is_some());
+        assert!(harness.query_by_label_contains("your badge").is_some());
+        assert!(harness.query_by_label_contains("x.example").is_none());
+        assert!(harness.query_by_label_contains("badge.png").is_none());
+    }
+
+    #[test]
+    fn document_caps_the_top_heading() {
+        let line = Rc::new(RefCell::new(0.0));
+        let seen = Rc::clone(&line);
+        let mut cache = CommonMarkCache::default();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([800.0, 300.0]).with_context_setup(setup).build_ui(move |ui| {
+            *seen.borrow_mut() = wrapped_height(ui, "Fit", Type::SECTION, f32::INFINITY);
+            document(ui, &mut cache, "# Fit\n\nBody text of the evaluation.");
+        });
+        harness.run();
+        let heading = harness.get_by_label("Fit").rect().height();
+        assert!(heading <= *line.borrow() + 2.0, "heading is {heading} px, one section line is {}", line.borrow());
+    }
+
+    #[test]
+    fn document_never_grows_past_its_column() {
+        let long = "word ".repeat(300);
+        let mut cache = CommonMarkCache::default();
+        let (narrow, wide) = (Rc::new(RefCell::new(0.0)), Rc::new(RefCell::new(0.0)));
+        let (seen_narrow, seen_wide) = (Rc::clone(&narrow), Rc::clone(&wide));
+        let mut harness = Harness::builder().with_size([1200.0, 800.0]).build_ui(move |ui| {
+            ui.scope(|ui| {
+                ui.set_max_width(400.0);
+                *seen_narrow.borrow_mut() = ui.scope(|ui| document(ui, &mut cache, &long)).response.rect.width();
+            });
+            let mut cache = CommonMarkCache::default();
+            *seen_wide.borrow_mut() = ui.scope(|ui| document(ui, &mut cache, &long)).response.rect.width();
+        });
+        harness.run();
+        assert!(*narrow.borrow() <= 400.0, "in a 400 px parent the document is {} px", narrow.borrow());
+        assert!(*wide.borrow() <= DOC_MEASURE, "in a wide parent the document is {} px", wide.borrow());
     }
 }

@@ -24,6 +24,8 @@ pub struct Palette {
     pub offer: Color32,
     pub hired: Color32,
     pub closed: Color32,
+    pub turn: Color32,
+    pub on_turn: Color32,
     pub page: Color32,
     pub page_line: Color32,
     pub page_head: Color32,
@@ -52,6 +54,8 @@ const DARK: Palette = Palette {
     offer: hex(0xcdbffc),
     hired: hex(0x7bdda3),
     closed: hex(0xf7a697),
+    turn: hex(0xf48cc0),
+    on_turn: hex(0x0d1a2b),
     page: hex(0xf7f9fc),
     page_line: hex(0xc7d3e0),
     page_head: hex(0x35495f),
@@ -76,6 +80,8 @@ const LIGHT: Palette = Palette {
     offer: hex(0x5535a6),
     hired: hex(0x17643a),
     closed: hex(0x9a2a1a),
+    turn: hex(0xb0246a),
+    on_turn: hex(0xffffff),
     page: hex(0xffffff),
     page_line: hex(0xd0dae6),
     page_head: hex(0x35495f),
@@ -94,7 +100,7 @@ impl Palette {
     }
 }
 
-/// Colour is for job status only.
+/// Colour is for job status only, except `Turn`, which marks that a run needs you.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Plain,
@@ -104,6 +110,7 @@ pub enum Tone {
     Offer,
     Hired,
     Closed,
+    Turn,
 }
 
 impl Tone {
@@ -116,6 +123,7 @@ impl Tone {
             Self::Offer => p.offer,
             Self::Hired => p.hired,
             Self::Closed => p.closed,
+            Self::Turn => p.turn,
         }
     }
 }

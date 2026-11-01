@@ -7,7 +7,7 @@ use crate::ui_kit::controls::{interactive_row, pick_look, pointer_over, pressed,
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, surface};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_text};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, cut_hover, line, paint_text};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
     ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
@@ -219,6 +219,7 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let centred = |height: f32| rect.center().y - height / 2.0;
     let (dated_at, said_at) = (pos2(left, centred(dated.size().y)), pos2(text_left, centred(said.size().y)));
     paint_text(ui, dated_at, dated, day_ink, fill);
+    let response = cut_hover(response, &said, text);
     paint_text(ui, said_at, said, ink, fill);
     if !inert {
         interactive_row(ui, &response, 0);

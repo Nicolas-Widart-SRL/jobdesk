@@ -336,14 +336,20 @@ impl Shell {
             ui.add_space(SHELL_GAP.0);
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
-                let failed = self.snapshot.issues.iter().any(|issue| source_place(issue.source).0 == Some(screen));
+                let failed = self.snapshot.issues.iter().find(|issue| source_place(issue.source).0 == Some(screen)).map(|issue| issue.source);
                 let mark = match screen {
-                    _ if failed => TabMark::Failed,
+                    _ if failed.is_some() => TabMark::Failed,
                     Screen::InTray => TabMark::Count(pending),
                     Screen::Runs => TabMark::Count(waiting),
                     _ => TabMark::None,
                 };
-                if enabled_when(ui, open || screen == lit, CHOOSE_FOLDER, |ui| folder_tab(ui, screen.title(), mark, screen == lit)).clicked() {
+                let tab = enabled_when(ui, open || screen == lit, CHOOSE_FOLDER, |ui| folder_tab(ui, screen.title(), mark, screen == lit));
+                // The mark is a bare square, so the tab says what failed in the alert's words.
+                let tab = match failed {
+                    Some(source) => tab.on_hover_text(failed_words(source).0),
+                    None => tab,
+                };
+                if tab.clicked() {
                     picked = Some(screen);
                 }
             }

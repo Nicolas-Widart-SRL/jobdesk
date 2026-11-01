@@ -9,7 +9,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text, table_head};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
@@ -898,8 +898,9 @@ fn baseline(galley: &Galley) -> f32 {
 /// Paints `galley` at `at`, over the `under` fill, and names it for screen readers and tests.
 fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, under: Color32, text: &str) {
     let rect = Rect::from_min_size(at, galley.size());
+    let response = cut_hover(ui.interact(rect, id, Sense::hover()), &galley, text);
     paint_text(ui, at, galley, Palette::of(ui).text, under);
-    ui.interact(rect, id, Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
 }
 
 /// Where a run is, whose turn it is and what comes next: three cells on the folder plane, with a hairline between them.

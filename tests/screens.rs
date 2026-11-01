@@ -1146,6 +1146,16 @@ fn a_cut_job_title_shows_in_full_on_hover() {
     assert!(harness.query_by_label_contains("Also: ").is_some(), "+1 names the other signal");
 }
 
+/// Coming up cuts a long line to the room it has, and the pointer on the row shows the whole line.
+#[test]
+fn a_cut_coming_up_row_shows_in_full_on_hover() {
+    let mut harness = tray_harness(shell_on(Screen::InTray, "tray_cut_row", overdue_day()));
+    assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 0, "only the row's name holds the line");
+    harness.get_by_label("Tue 3, Harbor Bank deadline, 4 days late").hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 1, "the tooltip shows the whole line");
+}
+
 /// The detail names the site, so a narrow window drops the column and keeps the rest in view.
 #[test]
 fn the_found_on_column_drops_below_1100() {
@@ -1840,6 +1850,24 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
     assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
     assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
+}
+
+/// The mark on a tab is a bare square, so the pointer on the tab says what failed, in the alert's words.
+#[test]
+fn a_failed_tab_says_what_failed() {
+    let name = "failed_gaps_tab";
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    fs::write(root.join("upskill/report-2026-10-29.md"), b"Caf\xe9 \xff\xfe").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), 1, "{:?}", snapshot.issues);
+    let shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Your skill gap reports could not be read.").count(), 1, "the alert says it once");
+    harness.get_by_label("Insights, could not be read").hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label("Your skill gap reports could not be read.").count(), 2, "the tab says it too");
 }
 
 /// Labels take no click, except where the user may copy: the alert's reason can be selected, a heading cannot.

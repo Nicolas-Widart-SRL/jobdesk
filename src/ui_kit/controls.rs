@@ -8,7 +8,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::marks::{CountChip, paint_key};
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
-use crate::ui_kit::text::{add_text, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
@@ -455,6 +455,7 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
         (false, false, false) => Color32::TRANSPARENT,
     };
     ui.painter().rect_filled(rect, look.radius, fill);
+    let response = cut_hover(response, &galley, label);
     paint_centred(ui, rect, galley, ink, fill);
     interactive(ui, &response, look.radius);
     response.widget_info(|| WidgetInfo::selected(Role::Tab, enabled, on, label));
@@ -536,6 +537,7 @@ pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: boo
     let summed = line(ui, summary, Type::BODY, p.text, room);
     let centred = |galley: &Arc<Galley>, x: f32| egui::pos2(x, rect.center().y - galley.size().y / 2.0);
     let (named_at, summed_at, written_at) = (centred(&named, left), centred(&summed, summary_left), centred(&written, right - written.size().x));
+    let response = cut_hover(cut_hover(cut_hover(response, &named, name), &summed, summary), &written, writes);
     paint_text(ui, named_at, named, p.text, fill);
     paint_text(ui, summed_at, summed, p.text, fill);
     paint_text(ui, written_at, written, p.faint, fill);

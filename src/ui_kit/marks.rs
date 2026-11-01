@@ -261,7 +261,7 @@ pub fn stamp_square(ui: &mut Ui, spoken: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, color);
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, spoken));
-    response
+    response.on_hover_text(spoken)
 }
 
 /// How one check on a posting came out.

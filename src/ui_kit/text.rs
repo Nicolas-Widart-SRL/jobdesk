@@ -237,6 +237,11 @@ pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, 
     WidgetText::from(text).into_galley(ui, Some(TextWrapMode::Truncate), width, style.font())
 }
 
+/// A widget that paints its own cut text names the whole text on hover. `text` shows as plain text, never as Markdown.
+pub(in crate::ui_kit) fn cut_hover(response: Response, galley: &Galley, text: &str) -> Response {
+    if galley.elided { response.on_hover_text(text) } else { response }
+}
+
 /// Every galley a widget paints itself goes down here. `under` is the fill the widget painted beneath the text, if any:
 /// with none, small text straight on the desk gets a patch of the desk's base, so no grid line runs through it.
 pub(in crate::ui_kit) fn paint_text(ui: &Ui, at: Pos2, galley: Arc<Galley>, color: Color32, under: Color32) {

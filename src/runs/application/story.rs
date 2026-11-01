@@ -1,4 +1,4 @@
-use crate::runs::application::{closing_question, stop_point};
+use crate::runs::application::{closing_question, command_word, first_line, last_line, stop_point, wants_reply};
 use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Run, RunStatus, ToolState, phrases_for};
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -57,6 +57,8 @@ pub fn step_states(run: &Run) -> Option<Vec<StepState>> {
         RunStatus::Failed(_) | RunStatus::Stopped => (StepState::Failed, StepState::Next),
         RunStatus::Closed => (StepState::Done, StepState::Next),
         _ if run.needs_user() => (StepState::Waiting, StepState::Next),
+        // Claude is done for now and asks nothing, so no step waits.
+        RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => (StepState::Done, StepState::Next),
         RunStatus::AwaitingReply if !run.is_busy() => {
             if stop_point(run).is_some() { (StepState::Done, StepState::Waiting) } else { (StepState::Waiting, StepState::Next) }
         }
@@ -154,20 +156,11 @@ fn say(value: &str, note: &str, tone: BandTone) -> BandText {
     BandText { value: value.to_owned(), note: note.to_owned(), tone }
 }
 
-/// The plain text of a line of untrusted text: its first line, without hidden or control characters.
-fn first_line(text: &str) -> String {
-    visible_chars(text.lines().next().unwrap_or_default()).collect::<String>().trim().to_owned()
-}
-
-fn command_word(run: &Run) -> String {
-    first_line(run.line.split_whitespace().next().unwrap_or_default())
-}
-
 /// "2 Draft" with an optional ending, or the command word when the command has no rail.
 fn where_value(run: &Run, ending: &str) -> String {
     match run.steps.as_ref().and_then(|rail| rail.labels.get(rail.current).map(|label| (rail.current, label))) {
         Some((at, label)) => format!("{at} {label}{ending}"),
-        None => command_word(run),
+        None => command_word(&run.line),
     }
 }
 
@@ -189,7 +182,8 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
     let resume = say("Reply to resume", "Or leave it. Files so far stay.", Plain);
     match &run.status {
         RunStatus::Failed(reason) => {
-            let reason = first_line(reason);
+            // A stderr tail ends on its error.
+            let reason = last_line(reason);
             let reason = if reason.is_empty() { "The run ended with an error." } else { &reason };
             (say(&where_value(run, ", failed"), "", Failed), nobody(reason), resume)
         }
@@ -211,6 +205,13 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
             let place_note = if rail.is_some() { "Paused inside the step" } else { "" };
             let asked = run.current_prompt().map(what_is_asked).unwrap_or_default();
             (say(&where_value(run, ""), place_note, Plain), say("Yours", "Claude asked", Yours), say(&asked, "The choices are right below.", Plain))
+        }
+        RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
+            let place = match rail {
+                Some(rail) if rail.is_complete() => format!("All {} steps", rail.labels.len()),
+                _ => where_value(run, ""),
+            };
+            (say(&place, "", Plain), nobody("Claude is done for now"), say("Reply to continue", "Or end the session.", Plain))
         }
         RunStatus::AwaitingReply if !run.is_busy() => {
             let (place, place_note) = match (stop_point(run), rail) {
@@ -373,11 +374,44 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_without_a_question_asks_for_a_reply() {
+    fn a_stop_without_a_question_is_nobodys_turn() {
         let mut run = started("/apply x");
         says(&mut run, "Done for now.");
         ends_turn(&mut run);
-        assert_eq!(band(&run).next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
+        let band = band(&run);
+        assert_eq!(band.place, cell("0 Fetch", "", BandTone::Plain));
+        assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
+        assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
+        assert_eq!(step_states(&run).unwrap()[..2], [StepState::Done, StepState::Next]);
+    }
+
+    #[test]
+    fn a_finished_rank_that_asks_nothing_is_done_for_now() {
+        let mut run = started("/rank");
+        does(&mut run, "Bash", "python3 rank_state.py apply");
+        says(&mut run, "Ranked 12 postings.");
+        ends_turn(&mut run);
+        let band = band(&run);
+        assert_eq!(band.place, cell("All 3 steps", "", BandTone::Plain));
+        assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
+        assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
+        assert_eq!(band.tally, "3 of 3 steps done");
+        assert!(band.marks.iter().all(|mark| *mark == StepState::Done));
+    }
+
+    #[test]
+    fn stop_here_leaves_evaluate_done_and_nothing_waiting() {
+        let mut run = at_the_stop();
+        run.note_reply("No, stop here. Do not draft.");
+        says(&mut run, "Understood, stopping.");
+        ends_turn(&mut run);
+        let band = band(&run);
+        assert_eq!(band.place, cell("1 Evaluate", "", BandTone::Plain));
+        assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
+        assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
+        assert_eq!(band.tally, "2 of 7 steps done");
+        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Done, StepState::Next]);
+        assert!(!band.marks.contains(&StepState::Waiting));
     }
 
     #[test]
@@ -421,13 +455,14 @@ mod tests {
     }
 
     #[test]
-    fn failed_names_the_step_and_the_first_line_of_the_reason() {
+    fn failed_names_the_step_and_the_last_line_of_the_reason() {
         let mut run = at_draft_working();
         does(&mut run, "Bash", "lualatex main.tex");
-        run.apply(AgentEvent::TurnEnded { failed: true, message: Some("Compile\u{202e} broke.\nsecond line".into()), cost_usd: 1.0, duration_ms: 1 });
+        let reason = "Downloading 10%\nDownloading 100%\nerror:\u{202e} auth expired\n\n";
+        run.apply(AgentEvent::TurnEnded { failed: true, message: Some(reason.into()), cost_usd: 1.0, duration_ms: 1 });
         let band = band(&run);
         assert_eq!(band.place, cell("5 Compile, failed", "", BandTone::Failed));
-        assert_eq!(band.who, cell("Nobody", "Compile broke.", BandTone::Plain));
+        assert_eq!(band.who, cell("Nobody", "error: auth expired", BandTone::Plain));
         assert_eq!(band.next, cell("Reply to resume", "Or leave it. Files so far stay.", BandTone::Plain));
         assert_eq!(step_states(&run).unwrap()[5], StepState::Failed);
     }
@@ -485,6 +520,10 @@ mod tests {
         assert_eq!(working.place, cell("/outcome", "", BandTone::Plain));
         assert_eq!(working.tally, "");
         assert!(working.marks.is_empty() && step_states(&run).is_none() && step_lines(&run).is_empty());
+        ends_turn(&mut run);
+        assert_eq!(band(&run).who, cell("Nobody", "Claude is done for now", BandTone::Plain));
+        run.note_reply("Log the offer.");
+        says(&mut run, "Shall I log it?");
         ends_turn(&mut run);
         assert_eq!(band(&run).who.tone, BandTone::Yours);
         run.apply(AgentEvent::ProcessExited { failure: None });

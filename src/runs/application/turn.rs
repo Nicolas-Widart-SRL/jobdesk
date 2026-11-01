@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::runs::domain::{ActivityKind, Run, RunStatus, StopPoint, stop_points};
+use crate::runs::domain::{ActivityKind, Run, StopPoint, stop_points};
 use crate::shared_kernel::markdown;
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -33,22 +33,11 @@ pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
     (!answered).then_some(stop)
 }
 
-/// Claude ended its turn and wants something from the user: a known stop, a closing question,
-/// or a stop part-way through the command's steps. An open prompt always does.
-/// A run that ended its last step, or has no steps, without asking anything is done, not waiting.
-/// A run being stopped waits only on a prompt, because AskUserQuestion always reaches the user.
+/// Claude ended its turn and wants something from the user: a known stop or a closing question. An open prompt always does,
+/// even while the run is being stopped, because AskUserQuestion always reaches the user.
+/// A turn that ends without either is done for now, not waiting, wherever the rail stands: a reply is welcome, not awaited.
 pub fn wants_reply(run: &Run) -> bool {
-    if run.needs_user() {
-        return true;
-    }
-    if run.status == RunStatus::Stopping {
-        return false;
-    }
-    if !run.awaits_reply() {
-        return false;
-    }
-    let unfinished = run.steps.as_ref().is_some_and(|rail| !rail.is_complete());
-    unfinished || stop_point(run).is_some() || closing_question(run).is_some()
+    run.needs_user() || (run.awaits_reply() && (stop_point(run).is_some() || closing_question(run).is_some()))
 }
 
 /// The last paragraph of this turn's last top-level message, when it asks something.
@@ -110,7 +99,7 @@ fn ends_blocks(tag: &TagEnd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest};
+    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest, RunStatus};
 
     fn run(line: &str) -> Run {
         Run::new(&RunRequest { run_id: "1".into(), line: line.into(), model: None, budget_usd: 1.0, started_at: String::new(), resume_session: None })
@@ -336,11 +325,36 @@ mod tests {
     }
 
     #[test]
+    fn an_unfinished_rail_alone_does_not_want_a_reply() {
+        let mut run = run("/apply x");
+        reads(&mut run, "notes.md");
+        says(&mut run, "Read the notes.");
+        ends_turn(&mut run);
+        assert!(!run.steps.as_ref().unwrap().is_complete());
+        assert!(!wants_reply(&run));
+    }
+
+    #[test]
+    fn a_stop_answered_with_stop_here_is_done_for_now() {
+        let mut run = run("/apply https://x.example");
+        reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
+        says(&mut run, "Shall I proceed with drafting?");
+        ends_turn(&mut run);
+        assert!(wants_reply(&run));
+        run.note_reply("No, stop here. Do not draft.");
+        says(&mut run, "Understood, stopping.");
+        ends_turn(&mut run);
+        assert_eq!(stop_point(&run), None);
+        assert!(!wants_reply(&run));
+    }
+
+    #[test]
     fn wants_reply_follows_the_turn() {
         let mut run = run("/apply x");
         assert!(!wants_reply(&run));
+        says(&mut run, "Shall I go on?");
         ends_turn(&mut run);
-        assert!(wants_reply(&run), "the rail is unfinished");
+        assert!(wants_reply(&run), "the turn closed on a question");
         run.apply(AgentEvent::BackgroundTasksChanged { count: 1 });
         assert!(!wants_reply(&run));
         run.apply(AgentEvent::PromptRaised(prompt()));

@@ -135,9 +135,11 @@ impl RunDesk {
     }
 
     /// A finished run continues in its Claude session through a new process.
+    /// One run works at a time: while another run is busy, the reply is refused, even on a live session.
     pub fn reply(&mut self, id: &str, text: &str) -> Result<(), StartError> {
         let live = self.sessions.contains_key(id);
-        if !live && self.is_busy() {
+        let another_is_busy = self.runs.iter().any(|run| run.id != id && run.is_busy());
+        if another_is_busy || (!live && self.is_busy()) {
             return Err(StartError::AnotherRunIsActive);
         }
         let Some(run) = self.run_mut(id) else { return Ok(()) };
@@ -282,10 +284,30 @@ mod tests {
     }
 
     #[test]
+    fn a_live_session_takes_no_reply_while_another_run_works() {
+        let (mut desk, script) = desk();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        let rank = desk.start("/rank", &options(), now()).unwrap();
+        desk.poll();
+        assert!(desk.has_session(&id) && desk.run(&rank).unwrap().is_busy());
+
+        assert_eq!(desk.reply(&id, "yes"), Err(StartError::AnotherRunIsActive));
+
+        assert!(script.borrow().sent.is_empty(), "nothing reached the live session");
+        assert_eq!(desk.run(&id).unwrap().turn_number(), 1, "the reply is not in the story");
+        desk.reply(&rank, "more").unwrap();
+        assert_eq!(script.borrow().sent, ["more"], "a busy run's own session still takes a message");
+    }
+
+    #[test]
     fn a_stop_point_counts_as_waiting() {
         let (mut desk, _) = desk();
         let id = desk.start("/apply x", &options(), now()).unwrap();
         desk.poll();
+        desk.sink_for(&id)(AgentEvent::AssistantText { text: "Shall I draft it?".into(), nested: false });
         desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
         desk.poll();
         assert_eq!(desk.waiting_count(), 1);

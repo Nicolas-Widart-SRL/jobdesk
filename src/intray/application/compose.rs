@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, Lane};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Check, Due, Effect, GateRow, SkipReason};
-use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, stop_point};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -55,10 +55,6 @@ fn first_word(name: &str) -> &str {
     name.split_whitespace().next().unwrap_or(name)
 }
 
-fn command_word(line: &str) -> &str {
-    line.lines().next().and_then(|line| line.split_whitespace().next()).unwrap_or(line)
-}
-
 /// The words of a card dealt for a run. `status` follows the command line in the subtitle.
 struct RunWords {
     title: String,
@@ -72,13 +68,13 @@ struct RunWords {
 
 /// A card for a run: it has no default and leads to the run. `words` gets the command word.
 fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> RunWords) -> Card {
-    let line = run.line.lines().next().unwrap_or_default();
-    let command = command_word(line);
-    let words = words(command);
+    let line = first_line(&run.line);
+    let command = command_word(&line);
+    let words = words(&command);
     Card {
         key,
         kind,
-        name: command.to_owned(),
+        name: command,
         title: words.title,
         subtitle: format!("{line} {}, ${:.2} of ${:.2} spent", words.status, run.cost_usd, run.budget_usd),
         take: words.take.into(),

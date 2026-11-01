@@ -426,8 +426,6 @@ fn a_quick_reply_is_sent_as_a_reply() {
     *shell.desk_slot() = Some(desk);
     let mut harness = tray_harness(shell);
     let lines = harness.query_all_by_label(APPLY_LINE).count();
-    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("half typed");
-    harness.run_steps(2);
 
     harness.get_by_label("Go ahead with the draft").click();
     harness.run_steps(3);
@@ -449,7 +447,78 @@ fn a_quick_reply_is_sent_as_a_reply() {
     harness.run_steps(3);
     assert!(is_shown(&harness, "Send"));
     let field = harness.get_by_role(egui::accesskit::Role::TextInput);
-    assert_eq!(field.value().as_deref().unwrap_or_default(), "", "the field is cleared");
+    assert_eq!(field.value().as_deref().unwrap_or_default(), "", "the field is empty");
+}
+
+/// A quick reply never wipes a draft: while the field holds text, the quick replies wait.
+#[test]
+fn a_quick_reply_waits_while_a_reply_is_drafted() {
+    let mut shell = shell(Screen::Runs, "quick_reply_draft");
+    let calls = SharedCalls::default();
+    *shell.desk_slot() = Some(stop_after_evaluate(Arc::clone(&calls)));
+    let mut harness = tray_harness(shell);
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("Lead with the Kafka work");
+    harness.run_steps(2);
+    for label in ["Go ahead with the draft", "Stop here"] {
+        assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label} waits for the draft");
+    }
+    assert!(!harness.get_by_label("Send").accesskit_node().is_disabled(), "the draft can be sent");
+
+    harness.get_by_label("Go ahead with the draft").click();
+    harness.run_steps(3);
+
+    assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("Lead with the Kafka work"), "the draft stays");
+    assert!(calls.lock().unwrap().sent.is_empty(), "nothing was sent");
+}
+
+/// After Stop here and Claude's plain goodbye, the run is done for now: a reply is welcome, not awaited.
+#[test]
+fn stop_here_ends_your_turn() {
+    let mut shell = shell(Screen::Runs, "stop_here");
+    let (desk, sink) = stop_with(SharedCalls::default(), STOP_EVALUATION);
+    *shell.desk_slot() = Some(desk);
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Stop here").click();
+    harness.run_steps(3);
+    emit_all(&sink, [
+        AgentEvent::AssistantText { text: "Understood, stopping. The evaluation stays in the tracker.".into(), nested: false },
+        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.2, duration_ms: 4_000 },
+    ]);
+    harness.run_steps(3);
+
+    assert!(harness.query_all_by_label("Your turn").count() == 0, "no run is tagged Your turn");
+    assert!(harness.query_all_by_label("Ready for reply").count() > 0, "the tag reads Ready for reply");
+    assert!(is_shown(&harness, "Claude is done for now"));
+    assert!(harness.query_by_label_contains("waits for you").is_none(), "the Runs tab has no mark");
+    assert!(harness.query_by_label_contains("needs you").is_none());
+    assert!(is_shown(&harness, "Send"), "the reply field stays under the story");
+    assert!(!is_shown(&harness, "Go ahead with the draft"));
+}
+
+/// Allowances fold behind their step's toggle, even in a step with no actions.
+#[test]
+fn allowances_stay_folded_in_a_step_without_actions() {
+    let mut shell = shell(Screen::Runs, "allowance_folded");
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
+    emit_all(&sink, [
+        AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+        permission_prompt(),
+        tool("1", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
+        done("1"),
+    ]);
+    *shell.desk_slot() = Some(desk);
+    let mut harness = tray_harness(shell);
+    let allowed = "Allowed Bash without asking.";
+    assert!(!is_shown(&harness, allowed), "folded while the toggle is closed");
+
+    harness.get_by_label("Show details").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, allowed));
+    assert!(is_shown(&harness, "Hide details"));
 }
 
 /// While another run works, the stop's replies wait, and the bar says why.
@@ -605,6 +674,19 @@ fn a_failure_reason_shows_without_hidden_characters() {
     }
 }
 
+/// A stderr tail shows whole in the story, so the error at its end is never hidden behind its first line.
+#[test]
+fn a_failure_reason_shows_its_last_lines() {
+    let reason = "Downloading 10%\nDownloading 55%\n\nDownloading 100%\nerror: auth expired";
+    let failed = AgentEvent::TurnEnded { failed: true, message: Some(reason.into()), cost_usd: 1.4, duration_ms: 90_000 };
+    let harness = tray_harness_with(apply_run_ending([failed]), "failure_reason_lines");
+    for line in ["Downloading 10%", "Downloading 100%"] {
+        assert!(is_shown(&harness, line), "{line} shows");
+    }
+    // The story's notice, and the band's note, which keeps the last line.
+    assert_eq!(harness.query_all_by_label("error: auth expired").count(), 2);
+}
+
 /// A turn Claude begins on its own leaves the reader where they were.
 #[test]
 fn a_turn_claude_begins_alone_does_not_move_the_story() {
@@ -728,7 +810,7 @@ fn a_reply_shows_an_image_as_its_alt_text() {
 #[test]
 fn the_launcher_shortcut_works_while_typing() {
     let mut shell = shell(Screen::Runs, "shortcut_typing");
-    *shell.desk_slot() = Some(apply_run(stop_point()));
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
     let mut harness = tray_harness(shell);
     let field = harness.get_by_role(egui::accesskit::Role::TextInput);
     field.focus();
@@ -791,6 +873,12 @@ fn tray_harness(mut shell: Shell) -> Harness<'static> {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
+}
+
+fn tray_harness_with(desk: RunDesk, name: &str) -> Harness<'static> {
+    let mut shell = shell(Screen::Runs, name);
+    *shell.desk_slot() = Some(desk);
+    tray_harness(shell)
 }
 
 fn press(harness: &mut Harness, key: Key) {

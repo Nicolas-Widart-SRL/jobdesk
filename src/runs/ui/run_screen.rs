@@ -7,7 +7,7 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
     Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine, StepState, ToolState,
-    action_noun, band, closing_question, elapsed_text, short_path, step_lines, stop_point, wants_reply,
+    action_noun, band, closing_question, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point, wants_reply,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
@@ -84,6 +84,8 @@ struct Head {
 
 /// Why replies wait while another run works.
 const BLOCKED: &str = "Another run is working. You can reply when it finishes.";
+/// Why the quick replies wait while the field holds a reply.
+const DRAFTED: &str = "Send or clear your reply first.";
 
 /// Whose turn it is, in words and tone.
 fn status(run: &Run) -> (&str, Tone) {
@@ -186,12 +188,17 @@ fn cell_look(text: &BandText) -> CellLook {
 }
 
 /// "Show 3 actions", "so far" while the step can still gain some, or "Hide actions" once open.
+/// A step with no actions but other folded rows, such as allowances, reads "Show details".
 fn toggle_text(actions: usize, live: bool, open: bool) -> String {
-    if open {
-        return "Hide actions".to_owned();
+    match (actions, open) {
+        (0, true) => "Hide details".to_owned(),
+        (0, false) => "Show details".to_owned(),
+        (_, true) => "Hide actions".to_owned(),
+        (actions, false) => {
+            let noun = action_noun(actions);
+            if live { format!("Show {actions} {noun} so far") } else { format!("Show {actions} {noun}") }
+        }
     }
-    let noun = action_noun(actions);
-    if live { format!("Show {actions} {noun} so far") } else { format!("Show {actions} {noun}") }
 }
 
 /// One part of the story: a step, or the whole run for a command without steps. Rows are indices into `Run::activity`.
@@ -474,7 +481,7 @@ impl RunScreen {
         let key = (run.id.clone(), part.step);
         let open = self.opened.contains(&key);
         let live = part.line.as_ref().map_or(run.is_busy(), |line| line.live);
-        let toggle = (part.actions > 0).then(|| toggle_text(part.actions, live, open));
+        let toggle = (part.actions > 0 || !part.folded.is_empty()).then(|| toggle_text(part.actions, live, open));
         let clicked = match &part.line {
             Some(line) => {
                 separate(ui, first);
@@ -494,10 +501,10 @@ impl RunScreen {
                 self.opened.insert(key);
             }
         }
-        // With no action to count, there is no toggle, so the step's other rows show as they are.
+        // Folded rows show only behind an open toggle, whether the step has actions or not.
         // Only an open toggle says how many of its actions were cut: a step cut whole is covered by the story's own note.
         let cut = if open { part.cut } else { 0 };
-        if (open || part.actions == 0) && (cut > 0 || !part.folded.is_empty()) {
+        if open && (cut > 0 || !part.folded.is_empty()) {
             let indent = KNOT_SIZE_SMALL + STEP_NAME_WIDTH + STEP_LINE_GAP * 2.0;
             Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
                 if cut > 0 {
@@ -653,14 +660,17 @@ impl RunScreen {
         if blocked {
             muted(ui, BLOCKED);
         }
+        // A quick reply never replaces what the user is writing: it waits until the field is sent or cleared.
+        let drafted = !self.reply.trim().is_empty();
         let gap = ui.spacing().item_spacing.x;
         let send_width = button_width(ui, "Send");
         let inline = inline_replies(ui, replies);
         let mut sent = None;
         let quick_replies = |ui: &mut Ui, sent: &mut Option<String>| {
             for reply in replies {
-                // The words it sends show on hover, enabled or not. Why it waits is the muted line's to say.
-                let response = ui.add_enabled_ui(!blocked, |ui| button(ui, reply.button)).inner.on_hover_text(reply.text).on_disabled_hover_text(reply.text);
+                // The words it sends show on hover, enabled or blocked. Why a run blocks it is the muted line's to say.
+                let why = if drafted { DRAFTED } else { reply.text };
+                let response = ui.add_enabled_ui(!blocked && !drafted, |ui| button(ui, reply.button)).inner.on_hover_text(reply.text).on_disabled_hover_text(why);
                 if response.clicked() {
                     *sent = Some(reply.text.to_owned());
                 }
@@ -690,11 +700,10 @@ impl RunScreen {
             let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if (send || entered) && typed && !blocked {
                 sent = Some(self.reply.trim().to_owned());
+                self.reply.clear();
             }
         });
         if let Some(text) = sent {
-            // A quick reply clears the field as Send does.
-            self.reply.clear();
             let _ = desk.reply(&run.id, &text);
         }
     }
@@ -868,12 +877,15 @@ fn you_line(ui: &mut Ui, text: &str) {
     });
 }
 
-/// A notice in the story, such as why the run failed: its first line, muted, under the step names' column, wrapped.
+/// A notice in the story, such as why the run failed: its last lines, muted, under the step names' column, each wrapped.
+/// A stderr tail ends on its error, so the lines past the cap are the first ones, and the whole notice shows on hover.
 fn notice_line(ui: &mut Ui, text: &str) {
-    let text = first_line(text);
+    let notice = notice_text(text);
     let indent = KNOT_SIZE_SMALL + STEP_LINE_GAP;
     Frame::new().inner_margin(Margin { left: indent as i8, right: 0, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 }).show(ui, |ui| {
-        ui.add(egui::Label::new(rich(ui, text, Type::BODY, Ink::Muted)).wrap());
+        for line in &notice.shown {
+            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).wrap()).on_hover_text(&notice.full);
+        }
     });
 }
 
@@ -1003,11 +1015,6 @@ fn fact(ui: &mut Ui, label: &str, value: &str) {
             ui.add(egui::Label::new(rich(ui, value, Type::BODY, Ink::Text)).truncate());
         });
     });
-}
-
-/// The first line of untrusted text, without the characters that could hide or reorder what it says.
-fn first_line(text: &str) -> String {
-    visible_chars(text.lines().next().unwrap_or_default()).collect()
 }
 
 /// Untrusted text drawn as it is, not as Markdown: each line without hidden or control characters.

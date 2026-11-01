@@ -9,8 +9,8 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{code_box, hairline};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
-    SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
+    SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -45,8 +45,9 @@ fn look_colors(p: &Palette, look: Look, hovered: bool) -> (Color32, Color32) {
         Look::On => (p.text, p.text),
         Look::Plain if hovered => (p.raised, p.line),
         Look::Danger if hovered => (p.raised, p.closed),
-        Look::Plain => (Color32::TRANSPARENT, p.line),
-        Look::Danger => (Color32::TRANSPARENT, p.closed),
+        // Opaque, so the desk's grid never runs behind a label.
+        Look::Plain => (p.card, p.line),
+        Look::Danger => (p.card, p.closed),
     }
 }
 
@@ -131,18 +132,18 @@ pub fn primary_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, Some(key))
 }
 
-/// A button on the navy frame that names its keyboard shortcut. The keys are plain glyphs, with no box.
+/// A plain button in the menu that names its keyboard shortcut. The keys are plain glyphs, with no box.
 pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let p = Palette::of(ui);
-    let ink = p.chrome_ink;
+    let ink = p.text;
     let label = line(ui, text, NORMAL.font, ink, f32::INFINITY);
-    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, p.chrome_muted, f32::INFINITY)).collect();
+    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, p.muted, f32::INFINITY)).collect();
     let glyphs_width = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
     // The keys sit 2px further out than a button's own gap.
     let lead = if glyphs.is_empty() { 0.0 } else { BUTTON_GAP + 2.0 };
     let size = vec2(NORMAL.padding * 2.0 + label.size().x + lead + glyphs_width, NORMAL.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    ui.painter().rect(rect, RADIUS_BUTTON, p.chrome_tab, Stroke::new(HAIRLINE, p.chrome_line), StrokeKind::Inside);
+    ui.painter().rect(rect, RADIUS_BUTTON, p.card, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(NORMAL.padding, (NORMAL.height - label.size().y) / 2.0), label.size());
     if response.hovered() {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
@@ -152,7 +153,7 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     for glyph in glyphs {
         let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
         x += glyph.size().x + KEYS_GAP;
-        ui.painter().galley(at, glyph, p.chrome_muted);
+        ui.painter().galley(at, glyph, p.muted);
     }
     focus_ring(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
@@ -251,12 +252,13 @@ pub enum TabMark {
     Failed,
 }
 
-fn tab_look(ui: &Ui, response: &Response, on: bool) -> (Color32, Color32) {
+/// The highlighter under a tab's label: `mark` with a `turn` rule when open, `raised` with no rule under the pointer.
+fn tab_swipe(ui: &Ui, response: &Response, on: bool) -> Option<(Color32, Option<Color32>)> {
     let p = Palette::of(ui);
     match (on, response.hovered()) {
-        (true, _) => (p.sheet, p.text),
-        (false, true) => (p.chrome_tab, p.chrome_ink),
-        (false, false) => (Color32::TRANSPARENT, p.chrome_muted),
+        (true, _) => Some((p.mark, Some(p.turn))),
+        (false, true) => Some((p.raised, None)),
+        (false, false) => None,
     }
 }
 
@@ -269,13 +271,16 @@ fn tab_info(label: &str, mark: TabMark, on: bool) -> WidgetInfo {
     WidgetInfo::selected(Role::Tab, true, on, title)
 }
 
-/// A folder tab on the navy frame. The active tab takes the sheet's fill, and its mark the darker stamp.
+/// A tab in the menu, on the desk. The open tab's label is highlighted: a pale swipe over a stamp-ink rule.
+/// Its mark sits after the label, outside the swipe.
 pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response {
     let p = Palette::of(ui);
     let font = if on { Type::TAB_ON } else { Type::TAB };
-    let width = line(ui, label, font, p.chrome_muted, f32::INFINITY).size().x;
+    let ink = if on { p.text } else { p.muted };
+    let text = line(ui, label, font, ink, f32::INFINITY);
+    let width = text.size().x;
     let chip = match mark {
-        TabMark::Count(n) if n > 0 => Some(CountChip::layout(ui, n, !on)),
+        TabMark::Count(n) if n > 0 => Some(CountChip::layout(ui, n)),
         _ => None,
     };
     let mark_width = match (&chip, mark) {
@@ -283,23 +288,31 @@ pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response
         (None, TabMark::Failed) => STATUS_DOT,
         _ => 0.0,
     };
-    let lead = if mark_width > 0.0 { BUTTON_GAP } else { 0.0 };
+    // The mark clears the swipe by 2px, so a count never stacks on the highlighter.
+    let lead = if mark_width > 0.0 { MARK_OVERHANG + 2.0 } else { 0.0 };
     let size = vec2(width + lead + mark_width + NAV_TAB_PADDING * 2.0, NAV_TAB_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, ink) = tab_look(ui, &response, on);
-    ui.painter().rect_filled(rect, TAB_TOP, fill);
-    let text = line(ui, label, font, ink, f32::INFINITY);
     let left = rect.left() + NAV_TAB_PADDING;
     let mark_left = left + width + lead;
-    ui.painter().galley(egui::pos2(left, rect.center().y - text.size().y / 2.0), text, ink);
+    let at = egui::pos2(left, rect.center().y - text.size().y / 2.0);
+    if let Some((fill, rule)) = tab_swipe(ui, &response, on) {
+        // The swipe runs under the lower part of the label, its bottom 1px under the label's line box.
+        let bottom = rect.center().y + MARK_LINE / 2.0 + 1.0;
+        let swipe = Rect::from_min_max(egui::pos2(left - MARK_OVERHANG, bottom - MARK_HEIGHT), egui::pos2(left + width + MARK_OVERHANG, bottom));
+        ui.painter().rect_filled(swipe, 0.0, fill);
+        if let Some(rule) = rule {
+            ui.painter().rect_filled(Rect::from_min_max(egui::pos2(swipe.left(), swipe.bottom() - MARK_RULE), swipe.max), 0.0, rule);
+        }
+    }
+    ui.painter().galley(at, text, ink);
     if let Some(chip) = chip {
         let chip_rect = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - CHIP_HEIGHT / 2.0), chip.size());
         chip.paint(ui, chip_rect);
     } else if mark == TabMark::Failed {
         let square = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - STATUS_DOT / 2.0), vec2(STATUS_DOT, STATUS_DOT));
-        ui.painter().rect_filled(square, 0.0, if on { p.closed } else { p.chrome_alert });
+        ui.painter().rect_filled(square, 0.0, p.closed);
     }
-    focus_ring(ui, &response, TAB_TOP);
+    focus_ring(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| tab_info(label, mark, on));
     response
 }
@@ -344,7 +357,7 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
     let look = SegmentLook { height: SEGMENT_HEIGHT, padding: SEGMENT_PADDING, radius: SEGMENT_TOP, font: Type::TAB, font_on: Type::TAB_ON };
     let mut picked = None;
     ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing = vec2(NAV_TAB_GAP, 0.0);
+        ui.spacing_mut().item_spacing = vec2(SEGMENT_GAP, 0.0);
         ui.horizontal_wrapped(|ui| {
             for (value, label) in options {
                 if segment(ui, label, *value == current, look, SegmentInks { on: (p.text, p.sheet), off: p.muted, hover: p.panel }).clicked() {
@@ -357,14 +370,14 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
     picked
 }
 
-/// The small switch that lives in the status bar, on the navy frame.
+/// The small switch that lives in the status strip.
 pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, String)]) -> Option<T> {
     let p = Palette::of(ui);
-    let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::SMALL };
-    let inks = SegmentInks { on: (p.chrome_tab, p.chrome_ink), off: p.chrome_muted, hover: p.chrome_line };
+    let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::TAG };
+    let inks = SegmentInks { on: (p.raised, p.text), off: p.muted, hover: p.panel };
     let mut picked = None;
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
+        ui.spacing_mut().item_spacing.x = SEGMENT_GAP;
         for (value, label) in options {
             if segment(ui, label, *value == current, look, inks).clicked() {
                 picked = Some(*value);

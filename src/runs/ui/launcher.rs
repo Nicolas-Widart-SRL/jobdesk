@@ -65,7 +65,7 @@ impl Launcher {
     /// Each group's heading stands on the hairline of its first row.
     fn list(&mut self, ui: &mut Ui) {
         for group in CommandGroup::ALL {
-            Frame::new().inner_margin(Margin::symmetric(0, HEADER_PADDING)).show(ui, |ui| {
+            Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
                 ui.label(rich(ui, group.label(), Type::SECTION, Ink::Text));
             });
             for command in CATALOG.iter().filter(|command| command.group == group) {

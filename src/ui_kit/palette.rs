@@ -3,7 +3,7 @@ use egui::{Color32, Context, CornerRadius, CursorIcon, FontFamily, Shadow, Strok
 use crate::ui_kit::tokens::{BUTTON_PADDING, HAIRLINE, ITEM_GAP, RADIUS_BUTTON, RADIUS_PANEL, ROW_GAP, Type, WINDOW_SHADOW};
 
 /// The Ledger tokens from `project/app.css`, one set per theme.
-/// Depth comes from three flat planes: desk (`bg`), folder (`panel`), sheet (`sheet`).
+/// Depth comes from a gridded desk (`sheet` with `grid` lines), folders (`panel`) and paper (`card`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub bg: Color32,
@@ -29,17 +29,10 @@ pub struct Palette {
     pub page: Color32,
     pub page_line: Color32,
     pub page_head: Color32,
-    /// The fixed navy frame, the same in both themes.
-    pub chrome: Color32,
-    pub chrome_tab: Color32,
-    pub chrome_ink: Color32,
-    pub chrome_muted: Color32,
-    pub chrome_line: Color32,
-    /// The failed-source square on a chrome tab.
-    pub chrome_alert: Color32,
-    /// `turn`, the stamp ink, where it sits on the navy frame.
-    pub turn_on_chrome: Color32,
-    pub on_turn_chrome: Color32,
+    /// The squared lines on the desk, a step off `sheet`.
+    pub grid: Color32,
+    /// The highlighter under the open tab: a tint of `turn`.
+    pub mark: Color32,
     /// The fill of deal, job slip and application cards.
     pub card: Color32,
 }
@@ -72,14 +65,8 @@ const DARK: Palette = Palette {
     page: hex(0xf7f9fc),
     page_line: hex(0xc7d3e0),
     page_head: hex(0x35495f),
-    chrome: hex(0x0d1a2b),
-    chrome_tab: hex(0x1a2f49),
-    chrome_ink: hex(0xe6edf5),
-    chrome_muted: hex(0xb3c4d6),
-    chrome_line: hex(0x33506f),
-    chrome_alert: hex(0xf7a697),
-    turn_on_chrome: hex(0xf48cc0),
-    on_turn_chrome: hex(0x0d1a2b),
+    grid: hex(0x1e3554),
+    mark: hex(0x5c3057),
     card: hex(0x1a2f49),
 };
 
@@ -107,14 +94,8 @@ const LIGHT: Palette = Palette {
     page: hex(0xffffff),
     page_line: hex(0xd0dae6),
     page_head: hex(0x35495f),
-    chrome: hex(0x12263f),
-    chrome_tab: hex(0x233b59),
-    chrome_ink: hex(0xe6edf5),
-    chrome_muted: hex(0xb3c4d6),
-    chrome_line: hex(0x33506f),
-    chrome_alert: hex(0xf7a697),
-    turn_on_chrome: hex(0xf48cc0),
-    on_turn_chrome: hex(0x0d1a2b),
+    grid: hex(0xd4dee9),
+    mark: hex(0xf4c2db),
     card: hex(0xffffff),
 };
 
@@ -229,8 +210,9 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
+    // A plain button is opaque, so the desk's grid never runs behind its label.
     for (state, fill, control) in [
-        (&mut visuals.widgets.inactive, Color32::TRANSPARENT, p.field),
+        (&mut visuals.widgets.inactive, p.card, p.field),
         (&mut visuals.widgets.hovered, p.raised, p.raised),
         (&mut visuals.widgets.active, p.raised, p.raised),
         (&mut visuals.widgets.open, p.raised, p.raised),
@@ -263,19 +245,44 @@ mod tests {
     }
 
     #[test]
-    fn stamp_and_chrome_inks_read_on_their_fills() {
+    fn stamp_and_highlighter_inks_read_on_their_fills() {
         for theme in [Theme::Dark, Theme::Light] {
             let p = Palette::for_theme(theme);
             for (name, ink, fill) in [
                 ("on_turn on turn", p.on_turn, p.turn),
-                ("on_turn_chrome on turn_on_chrome", p.on_turn_chrome, p.turn_on_chrome),
-                ("chrome_ink on chrome", p.chrome_ink, p.chrome),
-                ("chrome_muted on chrome", p.chrome_muted, p.chrome),
-                ("chrome_ink on chrome_tab", p.chrome_ink, p.chrome_tab),
-                ("chrome_muted on chrome_line", p.chrome_muted, p.chrome_line),
+                ("text on mark", p.text, p.mark),
+                ("text on raised", p.text, p.raised),
+                ("muted on panel", p.muted, p.panel),
             ] {
                 let ratio = contrast(ink, fill);
                 assert!(ratio >= 4.5, "{name} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+            }
+            // The rule under the highlighter is a mark, not text: it needs 3:1 on the swipe and on the desk.
+            for (name, ink, fill) in [("turn on mark", p.turn, p.mark), ("turn on sheet", p.turn, p.sheet)] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 3.0, "{name} in {theme:?} reads at {ratio:.2}:1, under 3:1");
+            }
+        }
+    }
+
+    /// Every ink that sets text straight on the desk reads on its base and where a grid line crosses the glyphs.
+    #[test]
+    fn inks_on_the_grid_read_on_the_base_and_the_lines() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let p = Palette::for_theme(theme);
+            for (name, ink) in [
+                ("text", p.text),
+                ("muted", p.muted),
+                ("faint", p.faint),
+                ("active", p.active),
+                ("turn", p.turn),
+                ("closed", p.closed),
+                ("hired", p.hired),
+            ] {
+                for (ground, fill) in [("sheet", p.sheet), ("grid", p.grid)] {
+                    let ratio = contrast(ink, fill);
+                    assert!(ratio >= 4.5, "{name} on {ground} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+                }
             }
         }
     }

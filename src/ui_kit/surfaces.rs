@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2,
+    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2,
     vec2,
 };
 
@@ -10,9 +10,9 @@ use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -24,20 +24,50 @@ pub fn desk_frame(ui: &Ui) -> Frame {
     Frame::new().fill(Palette::of(ui).bg)
 }
 
-/// The sheet plane, where a screen's content sits.
-pub fn sheet_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).sheet)
+/// The gridded desk under the whole window: `sheet`, ruled every `GRID_PITCH` in `grid`.
+/// The lines start at the window's origin, so they hold still while content scrolls over them.
+pub fn paint_grid(painter: &Painter, rect: Rect) {
+    let p = Palette::for_theme(painter.ctx().theme());
+    painter.rect_filled(rect, 0.0, p.sheet);
+    let stroke = Stroke::new(HAIRLINE, p.grid);
+    // On pixel centres, so each line stays one crisp row of pixels.
+    let first = |from: f32| (from / GRID_PITCH).ceil() * GRID_PITCH;
+    let mut x = first(rect.left());
+    while x <= rect.right() {
+        painter.vline(painter.round_to_pixel_center(x), rect.y_range(), stroke);
+        x += GRID_PITCH;
+    }
+    let mut y = first(rect.top());
+    while y <= rect.bottom() {
+        painter.hline(rect.x_range(), painter.round_to_pixel_center(y), stroke);
+        y += GRID_PITCH;
+    }
 }
 
-/// The navy strip above the sheet, where the brand and the folder tabs stand.
-pub fn shell_top_frame(ui: &Ui) -> Frame {
+/// Where a screen's content sits: straight on the desk, with no fill of its own.
+pub fn sheet_frame(_ui: &Ui) -> Frame {
+    Frame::new()
+}
+
+/// The menu on the desk: brand, tabs and New task in one row.
+pub fn shell_top_frame(_ui: &Ui) -> Frame {
     let (x, top, bottom) = SHELL_PADDING;
-    Frame::new().fill(Palette::of(ui).chrome).inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
+    Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
 }
 
-/// The navy strip under the sheet, for the status line.
+/// The strip at the desk's bottom edge, for the status line. The shell draws its top hairline as the panel's separator.
 pub fn status_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).chrome).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
+    Frame::new().fill(Palette::of(ui).sheet).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
+}
+
+/// Backs small text that sits straight on the desk with the desk's base, so no grid line runs through it.
+/// The backing is the size of what `add` lays out, and is painted under it.
+pub fn on_desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let backing = ui.painter().add(Shape::Noop);
+    let shown = ui.scope(add);
+    let fill = Palette::of(ui).sheet;
+    ui.painter().set(backing, Shape::rect_filled(shown.response.rect, 0.0, fill));
+    shown.inner
 }
 
 /// The big line at the top of a screen. The voice says what the line is.
@@ -84,6 +114,8 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             Title::Typed(text) => (text, Type::HEAD_COMMAND),
         };
         let title = line(ui, title, style, Palette::of(ui).text, room);
+        // A typed subtitle is a path in thin mono type, so it gets the desk's base behind it.
+        let typed = matches!(subtitle, Some(Subtitle::Typed(_)));
         let subtitle = subtitle.map(|subtitle| {
             let (text, style) = match subtitle {
                 Subtitle::Text(text) => (text, Type::BODY),
@@ -104,7 +136,11 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
                 ui.spacing_mut().item_spacing.y = line_gap;
                 ui.add(egui::Label::new(title));
                 if let Some(subtitle) = subtitle {
-                    ui.add(egui::Label::new(subtitle));
+                    if typed {
+                        on_desk(ui, |ui| ui.add(egui::Label::new(subtitle)));
+                    } else {
+                        ui.add(egui::Label::new(subtitle));
+                    }
                 }
             })
             .response
@@ -196,17 +232,12 @@ fn stacked<R>(ui: &mut Ui, inset: i8, add: impl FnOnce(&mut Ui) -> R) -> R {
     inner
 }
 
-/// A section: a heavy rule on the sheet, with no fill of its own. Its content sits flush with the column.
+/// A section of rows, on paper so no grid line runs between them. Its content sits `INSET` in.
 pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let color = Palette::of(ui).text;
-    let shown = Frame::new().inner_margin(Margin { top: SECTION_RULE as i8, ..Default::default() }).show(ui, |ui| stacked(ui, 0, add));
-    let mut rule = shown.response.rect;
-    rule.set_height(SECTION_RULE);
-    ui.painter().rect_filled(rule, 0.0, color);
-    shown.inner
+    paper(ui, false, |ui| stacked(ui, INSET, add))
 }
 
-/// A side slip: the only kind of section with a fill. Its content sits `INSET` in.
+/// A side slip: a section in the folder plane. Its content sits `INSET` in.
 pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let fill = Palette::of(ui).panel;
     Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, INSET, add)).inner
@@ -418,10 +449,10 @@ pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R 
         .inner
 }
 
-/// A grey block where content will be, while it loads. On a slip it takes the slip's raised plane.
+/// A grey block where content will be, while it loads. In a slip or a paper section it takes the raised plane.
 pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
     let p = Palette::of(ui);
-    // Only a slip's content sits `INSET` in, so that inset says the block is on a slip.
+    // Only a section's content sits `INSET` in, so that inset says the block is on a filled surface.
     let on_slip = ui.data(|data| data.get_temp::<i8>(inset_id())) == Some(INSET);
     block(ui, width, height, if on_slip { p.raised } else { p.panel });
 }

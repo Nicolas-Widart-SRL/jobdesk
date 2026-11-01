@@ -1,4 +1,4 @@
-//! The Ledger design system: tokens and generic widgets. Colour is for job status, plus one stamp ink for what waits on the user. The frame is a fixed navy in both themes.
+//! The Ledger design system: tokens and generic widgets. Colour is for job status, plus one stamp ink for what waits on the user. The window is a gridded desk in both themes, and anything read in rows sits on paper.
 //! Every colour, measure and painted shape lives here. No widget knows about a feature.
 
 mod controls;

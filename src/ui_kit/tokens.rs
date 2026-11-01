@@ -9,7 +9,6 @@ pub const ROW_GAP: f32 = 8.0;
 pub const INSET: i8 = 14;
 pub const GUTTER: i8 = 12;
 
-pub const SECTION_RULE: f32 = 2.0;
 pub const HAIRLINE: f32 = 1.0;
 
 pub const HEADER_PADDING: i8 = 8;
@@ -36,9 +35,16 @@ pub const KEY_SIZE: f32 = 18.0;
 pub const KEY_PADDING: f32 = 4.0;
 
 pub const NAV_TAB_HEIGHT: f32 = 38.0;
-pub const NAV_TAB_PADDING: f32 = 18.0;
-pub const NAV_TAB_GAP: f32 = 3.0;
+pub const NAV_TAB_PADDING: f32 = 10.0;
+pub const NAV_TAB_GAP: f32 = 6.0;
+/// The highlighter under the open tab: its height, the rule along its bottom, and how far it reaches past the label.
+pub const MARK_HEIGHT: f32 = 14.0;
+pub const MARK_RULE: f32 = 2.0;
+pub const MARK_OVERHANG: f32 = 6.0;
+/// The line box of a tab's label, centred in the tab. The swipe's bottom sits 1px under it.
+pub const MARK_LINE: f32 = 20.0;
 pub const SEGMENT_HEIGHT: f32 = 34.0;
+pub const SEGMENT_GAP: f32 = 3.0;
 pub const SEGMENT_PADDING: f32 = 12.0;
 pub const STATUS_SEGMENT_HEIGHT: f32 = 24.0;
 pub const STATUS_SEGMENT_PADDING: f32 = 8.0;
@@ -125,9 +131,10 @@ pub const BAND_ROW_GAP: f32 = 2.0;
 pub const BAND_GAP: f32 = 10.0;
 pub const TALLY_BAND: TallySize = TallySize { width: 5.0, height: 12.0, gap: 2.0 };
 
-pub const SHELL_PADDING: (f32, f32, f32) = (28.0, 12.0, 0.0);
+/// The side of a square on the desk's grid.
+pub const GRID_PITCH: f32 = 20.0;
+pub const SHELL_PADDING: (f32, f32, f32) = (28.0, 14.0, 4.0);
 pub const SHELL_GAP: (f32, f32) = (20.0, 8.0);
-pub const NAV_TOP: f32 = 4.0;
 pub const HEAD_PADDING: (f32, f32, f32) = (32.0, 26.0, 6.0);
 pub const HEAD_GAP: (f32, f32) = (16.0, 10.0);
 pub const HEAD_TITLE_MIN: f32 = 240.0;

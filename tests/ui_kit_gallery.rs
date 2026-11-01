@@ -7,11 +7,11 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
-    check_tag, chrome_status, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
+    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
-    stamp_square, stamped_head, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -58,14 +58,8 @@ fn swatches(ui: &mut Ui) {
         ("page", p.page),
         ("page_line", p.page_line),
         ("page_head", p.page_head),
-        ("chrome", p.chrome),
-        ("chrome_tab", p.chrome_tab),
-        ("chrome_ink", p.chrome_ink),
-        ("chrome_muted", p.chrome_muted),
-        ("chrome_line", p.chrome_line),
-        ("chrome_alert", p.chrome_alert),
-        ("turn_on_chrome", p.turn_on_chrome),
-        ("on_turn_chrome", p.on_turn_chrome),
+        ("grid", p.grid),
+        ("mark", p.mark),
         ("card", p.card),
     ];
     for row in colors.chunks(SWATCHES_PER_ROW) {
@@ -145,13 +139,13 @@ fn shell(ui: &mut Ui) {
             brand(ui);
             ui.add_space(24.0);
             shortcut_button(ui, "New task", &["Cmd", "K"]);
-            attention_count(ui, 8, true);
+            attention_count(ui, 8);
         });
     });
     status_frame(ui).show(ui, |ui| {
         ui.horizontal(|ui| {
-            chrome_status(ui, true, "Claude is ready");
-            chrome_status(ui, false, "Claude Code is not installed");
+            status_line(ui, true, "Claude is ready");
+            status_line(ui, false, "Claude Code is not installed");
         });
     });
     page_head(ui, Title::Slab("All commands"), Some(Subtitle::Text("Every action is the unchanged slash command.")), |ui| {
@@ -542,6 +536,7 @@ fn render(theme: Theme, name: &str) {
         .with_context_setup(install_look)
         .wgpu()
         .build_ui(|ui| {
+            jobdesk::ui_kit::paint_grid(ui.painter(), ui.max_rect());
             jobdesk::ui_kit::sheet_frame(ui).inner_margin(24).show(ui, gallery);
         });
     harness.run_steps(3);

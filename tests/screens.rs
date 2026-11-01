@@ -609,15 +609,15 @@ fn actions_open_only_when_asked() {
 }
 
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
+/// The smallest window, so the story is taller than its room and has to scroll.
 #[test]
 fn a_stop_opens_on_the_newest_message() {
-    let mut shell = shell(Screen::Runs, "stop_opens_on_message");
-    *shell.desk_slot() = Some(apply_stop_after_evaluate());
-    let harness = tray_harness(shell);
+    let harness = smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message");
     let story = harness.get_by_label("The run so far").rect();
     let heading = harness.get_by_label_contains("Job fit evaluation").rect();
     assert!(heading.top() > story.bottom(), "{heading:?} is under the story's heading at {story:?}");
-    assert!(heading.top() < story.bottom() + 40.0, "{heading:?} opens at the top of the story under {story:?}");
+    // The story's body padding and the message's own gap sit between them, under one row's height.
+    assert!(heading.top() < story.bottom() + 56.0, "{heading:?} opens at the top of the story under {story:?}");
 }
 
 #[test]

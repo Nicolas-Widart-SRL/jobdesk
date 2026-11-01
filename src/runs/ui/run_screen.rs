@@ -409,25 +409,29 @@ impl RunScreen {
         let title = if run.status == RunStatus::Closed { "The run" } else { "The run so far" };
         panel(ui, |ui| {
             panel_header(ui, title, None);
-            let room = (ui.available_height() - reserved).max(0.0);
-            // While Claude works, the story follows it. Settled, it opens once on the newest message. Either way, the user's scrolling wins.
-            let area = ScrollArea::vertical().id_salt(("run_story", &run.id)).max_height(room).stick_to_bottom(!settled).auto_shrink([false, true]);
-            area.show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let anchor = self.story_rows(ui, run, view, root);
-                if resumed {
-                    let end = Rect::from_min_max(pos2(ui.min_rect().left(), ui.min_rect().bottom()), ui.min_rect().right_bottom());
-                    ui.scroll_to_rect_animation(end, Some(Align::BOTTOM), ScrollAnimation::none());
-                }
-                if let Some((index, rect)) = anchor.filter(|_| settled) {
-                    let key = (run.id.clone(), index);
-                    if self.opened_at.as_ref() != Some(&key) {
-                        ui.scroll_to_rect_animation(rect, Some(Align::TOP), ScrollAnimation::none());
-                        if !ui.ctx().will_discard() {
-                            self.opened_at = Some(key);
+            // The body sets the story in from the paper's edge. Its rows keep their own spacing.
+            panel_body(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let room = (ui.available_height() - reserved).max(0.0);
+                // While Claude works, the story follows it. Settled, it opens once on the newest message. Either way, the user's scrolling wins.
+                let area = ScrollArea::vertical().id_salt(("run_story", &run.id)).max_height(room).stick_to_bottom(!settled).auto_shrink([false, true]);
+                area.show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let anchor = self.story_rows(ui, run, view, root);
+                    if resumed {
+                        let end = Rect::from_min_max(pos2(ui.min_rect().left(), ui.min_rect().bottom()), ui.min_rect().right_bottom());
+                        ui.scroll_to_rect_animation(end, Some(Align::BOTTOM), ScrollAnimation::none());
+                    }
+                    if let Some((index, rect)) = anchor.filter(|_| settled) {
+                        let key = (run.id.clone(), index);
+                        if self.opened_at.as_ref() != Some(&key) {
+                            ui.scroll_to_rect_animation(rect, Some(Align::TOP), ScrollAnimation::none());
+                            if !ui.ctx().will_discard() {
+                                self.opened_at = Some(key);
+                            }
                         }
                     }
-                }
+                });
             });
         });
         if input {
@@ -455,7 +459,7 @@ impl RunScreen {
         let mut first = true;
         let mut anchor = None;
         if view.from > 0 {
-            panel_body(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
+            Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
             first = false;
         }
         for part in &view.parts {

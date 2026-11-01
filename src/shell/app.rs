@@ -21,11 +21,11 @@ use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
-    BUTTON_HEIGHT, HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
+    HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, chrome_note, chrome_status, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich, sheet_frame,
-    shell_top_frame, shortcut_button, status_frame, status_segmented, strong, take_command_request,
+    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paint_grid, paper, primary_button, prompt_box_tone, rich,
+    sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
 use crate::workspace::application::{AuthMode, EnvironmentChecks, WorkspaceRoot, auth_mode};
@@ -244,8 +244,11 @@ impl Shell {
         }
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
+        // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
+        paint_grid(ui.painter(), ui.max_rect());
         Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame(ui)).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
-        Panel::bottom("status_bar").show_separator_line(false).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
+        // Its separator is the strip's top hairline, in `line`.
+        Panel::bottom("status_bar").show_separator_line(true).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default().frame(sheet_frame(ui)).show(ui, |ui| {
             if self.workspace.is_some() {
                 self.content(ui, &queue);
@@ -317,24 +320,17 @@ impl Shell {
         });
     }
 
-    /// The desk strip: brand and New task, then the folder tabs. The active tab stands on the sheet.
+    /// The menu on the desk, in one row: brand, the tabs, and New task at the right. The open tab is highlighted.
     /// Before a folder is open, only the lit Today tab answers: the rest have nothing to show yet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
         let open = self.workspace.is_some();
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
-            brand(ui);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled_ui(open, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).inner.clicked() {
-                    self.screen = Screen::Launcher;
-                }
-            });
-        });
-        ui.add_space(SHELL_GAP.1 + NAV_TOP);
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         let lit = self.screen.tab();
         let mut picked = None;
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), NAV_TAB_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
+            brand(ui);
+            ui.add_space(SHELL_GAP.0);
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
                 let failed = self.snapshot.issues.iter().any(|issue| source_place(issue.source).0 == Some(screen));
@@ -348,6 +344,11 @@ impl Shell {
                     picked = Some(screen);
                 }
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add_enabled_ui(open, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).inner.clicked() {
+                    self.screen = Screen::Launcher;
+                }
+            });
         });
         if let Some(screen) = picked {
             self.screen = screen;
@@ -367,7 +368,7 @@ impl Shell {
         }
     }
 
-    /// The status line on the navy frame. What waits on the user shows on the tabs, not here.
+    /// The status strip at the desk's bottom edge. What waits on the user shows on the tabs, not here.
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = STATUS_GAP.0;
@@ -380,11 +381,11 @@ impl Shell {
                     (true, false) => "Claude is installed. Jobdesk uses its sign-in and stores no passwords.",
                     (false, _) => "Claude Code is not installed",
                 };
-                chrome_status(ui, ready, text);
+                status_line(ui, ready, text);
             }
             // Setup always says how tasks sign in, as docs/auth-review.md promises.
             if let Some(note) = self.screen_note() {
-                chrome_note(ui, &note, false);
+                status_note(ui, &note, false);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let current = ui.ctx().options(|options| options.theme_preference);
@@ -400,7 +401,7 @@ impl Shell {
         });
     }
 
-    /// The first run: a card centred on the sheet with the three steps to a first card. Only the folder can be chosen here.
+    /// The first run: a card centred on the desk with the three steps to a first card. Only the folder can be chosen here.
     fn welcome(&mut self, ui: &mut Ui) {
         ui.add_space(WELCOME_TOP);
         let width = (WELCOME_WIDTH + f32::from(WINDOW_SHADOW)).min(ui.available_width());

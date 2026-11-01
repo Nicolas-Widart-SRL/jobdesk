@@ -217,7 +217,8 @@ pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usiz
     let filled = ui.ctx().animate_value_with_time(response.id.with(("lit", ticks)), lit as f32, MOTION_TIME);
     let full = !empty && lit == ticks;
     let settled = ui.ctx().animate_bool_with_time(response.id.with(("full", ticks)), full, MOTION_TIME);
-    let mut shapes = Vec::new();
+    // A disc of the desk's base under the outer ring, so no grid line crosses the date.
+    let mut shapes = vec![Shape::circle_filled(centre, DAY_STAMP_RINGS.0, p.sheet)];
     let (inner, outer, width) = DAY_STAMP_TICK;
     for index in 0..ticks {
         let angle = -std::f32::consts::FRAC_PI_2 + (index as f32 + 0.5) * std::f32::consts::TAU / ticks as f32;
@@ -320,13 +321,13 @@ pub fn brand_mark(ui: &mut Ui) -> Response {
     paint_brand_mark(ui, p.text, p.bg)
 }
 
-/// The mark and the name, on the navy frame.
+/// The mark and the name, in the menu on the desk.
 pub fn brand(ui: &mut Ui) -> Response {
     let p = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BRAND_GAP;
-        paint_brand_mark(ui, p.chrome_ink, p.chrome);
-        ui.label(line(ui, "Jobdesk", Type::BRAND, p.chrome_ink, f32::INFINITY));
+        paint_brand_mark(ui, p.text, p.sheet);
+        ui.label(line(ui, "Jobdesk", Type::BRAND, p.text, f32::INFINITY));
     })
     .response
 }
@@ -339,22 +340,22 @@ pub fn status_dot(ui: &mut Ui, tone: Tone) -> Response {
     response
 }
 
-/// The status line on the navy frame: a square that says whether all is well, then the words.
-pub fn chrome_status(ui: &mut Ui, ok: bool, text: &str) -> Response {
+/// The status line in the status strip: a square that says whether all is well, then the words.
+pub fn status_line(ui: &mut Ui, ok: bool, text: &str) -> Response {
     let p = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, if ok { p.hired } else { p.chrome_alert });
-        ui.label(line(ui, text, Type::NOTE, p.chrome_muted, f32::INFINITY));
+        ui.painter().rect_filled(rect, 0.0, if ok { p.hired } else { p.closed });
+        ui.label(line(ui, text, Type::NOTE, p.muted, f32::INFINITY));
     })
     .response
 }
 
-/// A note on the navy frame. `alert` says something could not be read.
-pub fn chrome_note(ui: &mut Ui, text: &str, alert: bool) -> Response {
+/// A note in the status strip. `alert` says something could not be read.
+pub fn status_note(ui: &mut Ui, text: &str, alert: bool) -> Response {
     let p = Palette::of(ui);
-    ui.label(line(ui, text, Type::NOTE, if alert { p.chrome_alert } else { p.chrome_muted }, f32::INFINITY))
+    ui.label(line(ui, text, Type::NOTE, if alert { p.closed } else { p.muted }, f32::INFINITY))
 }
 
 /// The stamp-ink chip that counts what waits on the user, laid out but not yet placed.
@@ -365,10 +366,9 @@ pub(in crate::ui_kit) struct CountChip {
 }
 
 impl CountChip {
-    /// `on_chrome` takes the lighter stamp that reads on the navy frame.
-    pub(in crate::ui_kit) fn layout(ui: &Ui, n: usize, on_chrome: bool) -> Self {
+    pub(in crate::ui_kit) fn layout(ui: &Ui, n: usize) -> Self {
         let p = Palette::of(ui);
-        let (fill, ink) = if on_chrome { (p.turn_on_chrome, p.on_turn_chrome) } else { (p.turn, p.on_turn) };
+        let (fill, ink) = (p.turn, p.on_turn);
         Self { galley: line(ui, &n.to_string(), Type::TAG, ink, f32::INFINITY), fill, ink }
     }
 
@@ -383,8 +383,8 @@ impl CountChip {
 }
 
 /// How many things wait on the user, in the stamp ink.
-pub fn attention_count(ui: &mut Ui, n: usize, on_chrome: bool) -> Response {
-    let chip = CountChip::layout(ui, n, on_chrome);
+pub fn attention_count(ui: &mut Ui, n: usize) -> Response {
+    let chip = CountChip::layout(ui, n);
     let (rect, response) = ui.allocate_exact_size(chip.size(), Sense::hover());
     chip.paint(ui, rect);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{n} need you")));

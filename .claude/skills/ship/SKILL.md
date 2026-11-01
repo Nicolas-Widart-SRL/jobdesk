@@ -181,6 +181,6 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
 ## Other agents on call
 
 - `designer` draws HTML canvases for a new screen in `mockups/`. It runs in its own session, through the `designer` skill.
-  When the task names canvases, give their `README.md` to the planner.
+  When the task names canvases, give the planner the index `mockups/README.md` and their handoff file in `mockups/handoff/`.
 
 Use cheap models only for work that is fully written down.

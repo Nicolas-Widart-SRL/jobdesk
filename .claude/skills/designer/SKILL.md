@@ -14,7 +14,7 @@ Design: $ARGUMENTS
 ## Steps
 
 1. **Brief.** Find the screen's feature in the Features table of `ARCHITECTURE.md`,
-   its section in `docs/guide.md`, and the nearest canvases in `mockups/`. Read only their names and titles.
+   its section in `docs/guide.md`, and the index `mockups/README.md`, which names each canvas and the handoff file for each screen. Read only the lines that match.
 2. **Draw.** Spawn `designer` with a brief that stands alone:
    - what to design, in the user's words;
    - the folder to write in, and the nearest canvases to start from;
@@ -26,15 +26,15 @@ Design: $ARGUMENTS
    Show the canvas PNGs in the thread as images.
 4. **Iterate.** Spawn a fresh `designer` for each round of feedback.
    Never send feedback to an earlier designer with SendMessage, because its context grows with each round.
-   Its brief: the user's feedback word for word, the folder and its `README.md`,
+   Its brief: the user's feedback word for word, the folder, the index and the round's handoff file,
    the canvases to change, and what to keep. Stop when the user approves the canvases.
 
 ## After approval
 
-The canvases and their `README.md` are the handoff: the brief, the states, the new widgets and the doc changes.
+The canvases and their handoff file in `mockups/handoff/` are the handoff: the brief, the states, the rules, the new widgets and the doc changes.
 Commit them only when the user asks.
 The design session ends at approval. Tell the user to run `/clear` or start a new session,
-then run `ship` with the canvas paths there. The planner reads the README and puts the doc changes in a docs step.
+then run `ship` with the canvas paths and the handoff file there. The planner reads that file and puts its doc changes in a docs step, which also deletes the file's Doc changes section.
 
 ## Claude Design
 

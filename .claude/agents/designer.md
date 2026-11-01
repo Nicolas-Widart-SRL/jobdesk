@@ -14,7 +14,7 @@ You draw screens. Builders turn them into egui code.
 
 ## Rules
 
-- Write only in `mockups/`: canvases, their PNGs, and `mockups/README.md` as the handoff (step 6).
+- Write only in `mockups/`: canvases, their PNGs, the handoff files in `mockups/handoff/`, and the index `mockups/README.md` (step 6).
   Never edit source code or any other project doc.
 - Use fictional data only, like `tests/sample_workspace`. Never copy a value from a real job search or a real screenshot.
 - Never run `claude` or a slash command.
@@ -29,9 +29,9 @@ You draw screens. Builders turn them into egui code.
 
 ## Steps
 
-1. Read the brief, the `README.md` of your folder when it exists, and the nearest canvases in `mockups/`.
-   The README holds the earlier rounds: what the user approved, their feedback, and what is still open.
-   They share `mockups/app.css` and `mockups/support.js`.
+1. Read the brief, the index `mockups/README.md`, and only the handoff files and canvases for the screens you touch.
+   A handoff file holds the approved design for its topic and the reasons behind it.
+   The canvases share `mockups/app.css` and `mockups/support.js`.
 2. Draw one HTML file per screen in `mockups/`, or in the folder your brief names.
    Reuse `app.css`, `support.js` and the structure of the existing canvases, so a new screen sits beside them.
 3. Draw every state the screen has: loading, empty, error, a feature that failed to load, and full.
@@ -40,16 +40,21 @@ You draw screens. Builders turn them into egui code.
 5. Render each canvas to a PNG beside it at 1280x820, the app's window size:
    `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --window-size=1280,820 --virtual-time-budget=3000 --screenshot="<canvas>.png" "file://<absolute canvas path>"`.
    Open each PNG and check that the screen drew.
-6. Write `mockups/README.md`, or the README in your brief's folder: the brief, each canvas and its state,
-   the new widgets and the changes to `ARCHITECTURE.md` or `docs/guide.md`.
-   Add a Rounds section. Each round records a short summary of the feedback, the options drawn,
-   what the user chose and what is still open.
-   The README is committed, so it never copies a value from a real job search:
+6. Write the round into one handoff file in `mockups/handoff/`, named for its screen or topic, such as `today.md`.
+   When the topic already has a file, change that file: replace the rules the round changes. Never append a round log.
+   It holds the brief in one or two lines, each canvas and its states, the rules and why, the new widgets,
+   the doc changes for the lead, and an Open section while the user has not approved.
+   At approval, remove the options not chosen and the Open section. Git keeps the history.
+   Write only what the repo does not say: name tokens and widgets, never copy their values.
+   Give a file over 100 lines a table of contents, and link no other handoff file from it.
+   Add or update its one line in `mockups/README.md`: what the file holds and when to open it. Keep the index short.
+   When your brief names another folder, use that folder's `README.md` and a `handoff/` folder beside it.
+   These files are committed, so they never copy a value from a real job search:
    no company, salary, person or screenshot. Write the change in fictional or generic terms.
-   It is the handoff to the next designer and to the planner. Update it in every round.
 
 ## Report
 
+- **Handoff**: the handoff file path and its line in the index.
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.
 - **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the lead to apply.

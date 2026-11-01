@@ -17,9 +17,9 @@ impl LoadError {
 }
 
 /// Line breaks become spaces, so words on two lines do not run together.
-/// Unicode's next line, line and paragraph separators break lines too.
+/// Vertical tab, form feed and Unicode's next line, line and paragraph separators break lines too.
 fn one_line(text: &str) -> String {
-    text.split(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}']).map(|line| visible_chars(line).collect::<String>()).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join(" ")
+    text.split(['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}']).map(|line| visible_chars(line).collect::<String>()).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 impl fmt::Display for LoadError {
@@ -37,6 +37,6 @@ mod tests {
         let error = LoadError::new("job_search_tracker.csv", "line 3: \u{1b}[31mbad\u{1b}[0m field \u{202E}vsc.exe\nsee row 4");
         assert_eq!(error.reason, "line 3: bad field vsc.exe see row 4");
         assert_eq!(LoadError::new("notes\u{200B}.md", "x").source, "notes.md");
-        assert_eq!(LoadError::new("f", "one\u{85}two\u{2028}three\u{2029}four").reason, "one two three four");
+        assert_eq!(LoadError::new("f", "one\u{85}two\u{2028}three\u{2029}four\u{b}five\u{c}six").reason, "one two three four five six");
     }
 }

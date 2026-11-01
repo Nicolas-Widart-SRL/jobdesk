@@ -1497,6 +1497,27 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
 }
 
+/// A decisions file that cannot be read joins the same alert, on every screen, and leaves Today's count alone.
+#[test]
+fn a_decisions_file_that_fails_joins_the_alert() {
+    let mut shell = shell(Screen::InTray, "failed_decisions");
+    let data = Path::new(env!("CARGO_TARGET_TMPDIR")).join("failed_decisions").join("data");
+    let _ = fs::remove_dir_all(&data);
+    fs::create_dir_all(&data).unwrap();
+    fs::write(data.join("decisions.json"), "{\"cut off").unwrap();
+    let workspace = data.join("ai-job-search");
+    *shell.tray_slot() = Some(jobdesk::intray::open_tray(data, &workspace));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Your decisions could not be saved or read."));
+    assert!(harness.query_by_label_contains("decisions.json: ").is_some());
+    assert!(is_shown(&harness, "Today still works, but what you decide may be gone after Jobdesk closes."));
+    assert!(harness.query_by_label_contains("could not be read").is_none(), "no tab is marked");
+
+    harness.get_by_label("Jobs").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Your decisions could not be saved or read."), "the alert shows on every screen");
+}
+
 /// Each sentence on what still works assumes one failure, so two failures show neither, and one button.
 #[test]
 fn two_failed_sources_share_one_alert_and_promise_nothing() {
@@ -1507,7 +1528,7 @@ fn two_failed_sources_share_one_alert_and_promise_nothing() {
     assert!(is_shown(&harness, "Your saved jobs could not be read."));
     assert!(harness.query_by_label_contains("still work").is_none());
     assert_eq!(harness.query_all_by_label("Open Setup").count(), 1);
-    assert!(harness.query_by_label_contains("Applications and Jobs are missing from this list.").is_some());
+    assert!(harness.query_by_label_contains("Jobs and Applications are missing from this list.").is_some(), "in the alert's order");
     assert!(is_shown(&harness, "Job and application dates are missing until the files are fixed."));
 }
 

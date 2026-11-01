@@ -129,9 +129,12 @@ impl Queue {
         DayTally { done, total: done + self.cards.len() }
     }
 
-    pub fn today_headline(&self) -> String {
+    /// With a source missing, an empty list may only mean its cards could not be dealt, so it claims nothing is left.
+    pub fn today_headline(&self, missing: &[&str]) -> String {
         let count = self.cards.len();
-        if count == 0 {
+        if count == 0 && !missing.is_empty() {
+            "Nothing to show yet".to_owned()
+        } else if count == 0 {
             "All done for today".to_owned()
         } else if self.cards.iter().all(|card| card.kind == CardKind::Triage) {
             if count == 1 { "1 new match to look at".to_owned() } else { format!("{count} new matches to look at") }
@@ -176,7 +179,7 @@ impl Queue {
             1 => parts.push("1 is past its deadline.".to_owned()),
             late => parts.push(format!("{late} are past their deadline.")),
         }
-        if done == 0 && self.cards.iter().all(|card| card.due.is_none()) {
+        if done == 0 && gone.is_none() && self.cards.iter().all(|card| card.due.is_none()) {
             parts.push("Nothing has a deadline yet.".to_owned());
         }
         parts.extend(gone);
@@ -675,7 +678,7 @@ mod tests {
         let aside = queue(&tray, &jobs, today());
         assert!(aside.cards.is_empty() && aside.cleared.is_empty());
         assert_eq!(aside.set_aside, ["Acme"]);
-        assert_eq!(aside.today_headline(), "All done for today");
+        assert_eq!(aside.today_headline(&[]), "All done for today");
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Set aside until tomorrow"));
     }
@@ -716,7 +719,7 @@ mod tests {
         let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
         tray.later(&top(&tray, &jobs), today());
         tray.later(&top(&tray, &jobs), today());
-        assert_eq!(queue(&tray, &jobs, today()).today_headline(), "All done for today");
+        assert_eq!(queue(&tray, &jobs, today()).today_headline(&[]), "All done for today");
 
         tray.bring_back_all(today());
 
@@ -1004,7 +1007,7 @@ mod tests {
 
         tray.later(&tray.queue(&sources).cards[0].clone(), today());
 
-        assert_eq!(tray.queue(&sources).today_headline(), "All done for today");
+        assert_eq!(tray.queue(&sources).today_headline(&[]), "All done for today");
         assert!(runs[0].needs_user());
     }
 
@@ -1120,21 +1123,21 @@ mod tests {
 
     #[test]
     fn today_headline_names_new_matches_when_every_card_is_one() {
-        assert_eq!(today_queue(vec![pending(CardKind::Triage, None)]).today_headline(), "1 new match to look at");
-        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Triage, None)]).today_headline(), "2 new matches to look at");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None)]).today_headline(&[]), "1 new match to look at");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Triage, None)]).today_headline(&[]), "2 new matches to look at");
     }
 
     #[test]
     fn today_headline_counts_things_otherwise() {
-        assert_eq!(today_queue(vec![pending(CardKind::Send, None)]).today_headline(), "1 thing needs you");
-        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Close, None)]).today_headline(), "2 things need you");
+        assert_eq!(today_queue(vec![pending(CardKind::Send, None)]).today_headline(&[]), "1 thing needs you");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Close, None)]).today_headline(&[]), "2 things need you");
     }
 
     #[test]
     fn today_headline_is_all_done_with_cards_set_aside() {
-        assert_eq!(today_queue(vec![]).today_headline(), "All done for today");
+        assert_eq!(today_queue(vec![]).today_headline(&[]), "All done for today");
         let aside = Queue { set_aside: vec!["Acme".into()], ..today_queue(vec![]) };
-        assert_eq!(aside.today_headline(), "All done for today");
+        assert_eq!(aside.today_headline(&[]), "All done for today");
     }
 
     #[test]
@@ -1175,6 +1178,14 @@ mod tests {
         assert_eq!(only_deadline.today_subtitle(&[]), "Your next deadline is Sat 31 Oct, Acme.");
 
         assert_eq!(today_queue(vec![]).today_subtitle(&[]), "Nothing waits on you.");
+    }
+
+    #[test]
+    fn a_missing_source_holds_back_what_the_list_cannot_know() {
+        assert_eq!(today_queue(vec![]).today_headline(&["Applications"]), "Nothing to show yet");
+        assert_eq!(today_queue(vec![pending(CardKind::Close, None)]).today_headline(&["Applications"]), "1 thing needs you");
+        let undated = today_queue(vec![pending(CardKind::Close, None)]);
+        assert_eq!(undated.today_subtitle(&["Jobs"]), "About 1 minute. Jobs are missing from this list.");
     }
 
     #[test]

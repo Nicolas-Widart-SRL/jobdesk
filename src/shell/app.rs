@@ -17,7 +17,8 @@ use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
-use crate::shell::{Issue, Snapshot, Source, live_snapshot};
+use crate::shared_kernel::LoadError;
+use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     BUTTON_HEIGHT, HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
@@ -336,7 +337,7 @@ impl Shell {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
-                let failed = self.snapshot.issues.iter().any(|issue| source_screen(issue.source) == screen);
+                let failed = self.snapshot.issues.iter().any(|issue| source_place(issue.source).0 == Some(screen));
                 let mark = match screen {
                     _ if failed => TabMark::Failed,
                     Screen::InTray => TabMark::Count(pending),
@@ -422,15 +423,18 @@ impl Shell {
 
     /// A source that could not be read frames an alert over every screen. Today draws it under its head.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
-        let issues = &self.snapshot.issues;
+        // The tray reports its own file. It is copied only while it fails, so the tray stays free to take decisions.
+        let decisions = self.tray.as_ref().and_then(InTray::issue).cloned();
+        let failures: Vec<(Source, &LoadError)> =
+            self.snapshot.issues.iter().map(|issue| (issue.source, &issue.error)).chain(decisions.iter().map(|error| (Source::Decisions, error))).collect();
         let open_setup = Cell::new(false);
         let on_setup = self.screen == Screen::Workspace;
         let alerts = |ui: &mut Ui| {
-            if !issues.is_empty() && source_alert(ui, issues, on_setup) {
+            if !failures.is_empty() && source_alert(ui, &failures, on_setup) {
                 open_setup.set(true);
             }
         };
-        if !issues.is_empty() && self.screen != Screen::InTray {
+        if !failures.is_empty() && self.screen != Screen::InTray {
             page_body(ui, alerts);
         }
         let snapshot = &self.snapshot;
@@ -438,9 +442,11 @@ impl Shell {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
                 let keys = !self.confirm_quit;
-                let failed = |source| issues.iter().any(|issue: &Issue| issue.source == source);
+                let failed = |source| failures.iter().any(|(failed, _)| *failed == source);
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
-                let missing: Vec<&str> = [(applications, Screen::Tracker), (jobs, Screen::Jobs)].into_iter().filter(|(gone, _)| *gone).map(|(_, screen)| screen.title()).collect();
+                // In the alert's order, so the subtitle names them as the alert does.
+                let missing: Vec<&str> =
+                    failures.iter().filter_map(|(source, _)| match source_place(*source) { (Some(screen), true) => Some(screen.title()), _ => None }).collect();
                 let missing_dates = match (jobs, applications) {
                     (true, true) => Some("Job and application dates are missing until the files are fixed."),
                     (true, false) => Some("Job closing dates are missing until the file is fixed."),
@@ -547,12 +553,14 @@ fn welcome_step(ui: &mut Ui, number: usize, title: &str, detail: &str, next: boo
     pressed
 }
 
-/// The screen whose tab a source's failure marks.
-fn source_screen(source: Source) -> Screen {
+/// The tab a source's failure marks, if any, and whether Today deals cards from it.
+/// Decisions mark no tab: Today's count stays, and the alert says what failed.
+fn source_place(source: Source) -> (Option<Screen>, bool) {
     match source {
-        Source::Jobs => Screen::Jobs,
-        Source::Applications => Screen::Tracker,
-        Source::SkillGaps => Screen::Insights,
+        Source::Jobs => (Some(Screen::Jobs), true),
+        Source::Applications => (Some(Screen::Tracker), true),
+        Source::SkillGaps => (Some(Screen::Insights), false),
+        Source::Decisions => (None, false),
     }
 }
 
@@ -568,13 +576,14 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
             "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.",
         ),
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
+        Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }
 
 /// Every source that could not be read, in one frame: what failed and why, then what still works.
 /// Each sentence on what still works assumes its source failed alone, so with more than one failure none shows.
 /// A reason quotes a file, so it shows as plain text only. Returns whether Open Setup was pressed. Setup itself has no button.
-fn source_alert(ui: &mut Ui, issues: &[Issue], on_setup: bool) -> bool {
+fn source_alert(ui: &mut Ui, failures: &[(Source, &LoadError)], on_setup: bool) -> bool {
     prompt_box_tone(ui, Tone::Closed, |ui| {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -582,12 +591,12 @@ fn source_alert(ui: &mut Ui, issues: &[Issue], on_setup: bool) -> bool {
                 ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        for issue in issues {
-                            ui.label(rich(ui, failed_words(issue.source).0, Type::STRONG, Tone::Closed));
-                            ui.add(Label::new(issue.error.to_string()).wrap());
+                        for (source, error) in failures {
+                            ui.label(rich(ui, failed_words(*source).0, Type::STRONG, Tone::Closed));
+                            ui.add(Label::new(error.to_string()).wrap());
                         }
-                        if let [only] = issues {
-                            ui.add(Label::new(failed_words(only.source).1).wrap());
+                        if let [(only, _)] = failures {
+                            ui.add(Label::new(failed_words(*only).1).wrap());
                         }
                     });
                 });

@@ -4,7 +4,7 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp,
-    deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, prompt_box_tone, reveal_command, rich, side_column, skeleton,
+    deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
@@ -117,10 +117,6 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     head(ui, queue, context.missing);
     page_body(ui, |ui| {
         (context.alerts)(ui);
-        if let Some(issue) = tray.issue() {
-            // The message quotes a file, so it shows as plain text, already stripped of hidden characters by `LoadError`.
-            prompt_box_tone(ui, Tone::Closed, |ui| ui.add(egui::Label::new(issue.to_string()).wrap()));
-        }
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.missing_dates, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
             Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
@@ -139,7 +135,7 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 fn head(ui: &mut Ui, queue: &Queue, missing: &[&str]) {
     let tally = queue.tally();
     let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
-    stamped_head(ui, stamp, &queue.today_headline(), &queue.today_subtitle(missing));
+    stamped_head(ui, stamp, &queue.today_headline(missing), &queue.today_subtitle(missing));
 }
 
 /// With nothing dealt, the stamp's ring is empty and it reads as the date alone.
@@ -513,7 +509,7 @@ fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 }
 
 /// Rows and the return row only reorder the queue: none opens the launcher or starts a run.
-/// Without a source the closing line would claim nothing else is dated, so it says which dates are missing.
+/// When a source is missing, a line after the closing says which dates are. It replaces "No deadlines…", which it would contradict.
 fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
     let agenda = queue.agenda();
     slip(ui, |ui| {
@@ -531,12 +527,14 @@ fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&st
                 divider(ui);
                 ui.add_space(CLOSING_GAP);
             }
-            let closing = missing_dates.unwrap_or(&agenda.closing);
-            // The line starts under the rows' day column.
-            ui.horizontal(|ui| {
-                ui.add_space(PICK_ROW_INLINE);
-                ui.add(egui::Label::new(rich(ui, closing, Type::NOTE, Ink::Muted)).wrap());
-            });
+            let closing = (missing_dates.is_none() || !agenda.rows.is_empty()).then_some(agenda.closing.as_str());
+            for line in closing.into_iter().chain(missing_dates) {
+                // The line starts under the rows' day column.
+                ui.horizontal(|ui| {
+                    ui.add_space(PICK_ROW_INLINE);
+                    ui.add(egui::Label::new(rich(ui, line, Type::NOTE, Ink::Muted)).wrap());
+                });
+            }
         });
     });
 }

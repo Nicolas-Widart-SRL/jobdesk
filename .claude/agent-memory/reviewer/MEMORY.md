@@ -26,3 +26,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 11 `.claude/agents/designer.md`: Rounds section could copy real job-search values from feedback into a committed README. Class: untrusted text.
 - PR 11 `.claude/skills/ship/SKILL.md`: an interrupted CodeRabbit answer reran the builder or posted duplicate replies; a review id counted as handled after one of its findings. Class: state over time.
 - PR 11 `scripts/pr-feedback.sh`: output and count silently cut at 100 threads, 100 reviews and 20 comments. Class: copy claims more than the data.
+- PR 18 `.claude/agents/designer.md`: step 1 limited reads to "only" handoff files and touched canvases while step 2 required `Grid.html`, `app.css` and `support.js`. Class: contradiction between steps.

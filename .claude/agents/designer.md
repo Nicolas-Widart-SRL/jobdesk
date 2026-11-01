@@ -30,11 +30,11 @@ You draw screens. Builders turn them into egui code.
 
 ## Steps
 
-1. Read the brief, the index, and only the handoff files and canvases for the screens you touch.
+1. Read the brief, the index, and the shared base: `app.css`, `support.js` and `Grid.html`, which sit in the index's folder.
+   Of the rest, read only the handoff files and canvases for the screens you touch.
    The index is `mockups/README.md`. When your brief names another folder, it is that folder's own `README.md`,
    and the handoff files sit in that folder's `handoff/` subfolder in place of `mockups/handoff/`.
    A handoff file holds the approved design for its topic and the reasons behind it.
-   The canvases share `mockups/app.css` and `mockups/support.js`.
 2. Draw one HTML file per screen in `mockups/`, or in the folder your brief names.
    Start from `Grid.html`'s scoped styles on top of `app.css`, and reuse `support.js` and the structure of the existing canvases,
    so a new screen sits beside them. `app.css` still carries pre-Postmark values, which those scoped styles override.

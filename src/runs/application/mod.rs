@@ -1,7 +1,9 @@
 mod run_desk;
+mod story;
 mod turn;
 
 pub use run_desk::{RunDesk, StartError, StartOptions};
+pub use story::{Band, BandText, BandTone, StepLine, StepState, band, elapsed_text, short_path, step_lines, step_states};
 pub use turn::{ClosingQuestion, closing_question, stop_point};
 
 pub use crate::runs::domain::{

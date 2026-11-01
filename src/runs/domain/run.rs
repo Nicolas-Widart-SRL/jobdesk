@@ -48,6 +48,8 @@ pub enum ActivityKind {
 pub struct Activity {
     pub kind: ActivityKind,
     pub nested: bool,
+    /// The step the rail was on when the row arrived. `None` for a command without a rail.
+    pub step: Option<usize>,
 }
 
 /// One command from start to finish, and any replies after it.
@@ -86,7 +88,8 @@ pub struct Run {
 
 impl Run {
     pub fn new(request: &RunRequest) -> Self {
-        let activity = vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false }];
+        let steps = StepRail::for_line(&request.line);
+        let activity = vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false, step: steps.as_ref().map(|rail| rail.current) }];
         Self {
             id: request.run_id.clone(),
             line: request.line.clone(),
@@ -106,7 +109,7 @@ impl Run {
             cost_usd: 0.0,
             cost_of_ended_processes: 0.0,
             duration_ms: 0,
-            steps: StepRail::for_line(&request.line),
+            steps,
             agents: Vec::new(),
             files_changed: Vec::new(),
             usage: Usage::default(),
@@ -164,7 +167,7 @@ impl Run {
     }
 
     pub fn note_reply(&mut self, text: &str) {
-        self.activity.push(Activity { kind: ActivityKind::You(text.to_owned()), nested: false });
+        self.push(ActivityKind::You(text.to_owned()), false);
         self.turn_started_at = self.activity.len();
         self.turn_count += 1;
         self.status = RunStatus::Working;
@@ -194,7 +197,13 @@ impl Run {
     }
 
     pub fn notice(&mut self, text: &str) {
-        self.activity.push(Activity { kind: ActivityKind::Notice(text.to_owned()), nested: false });
+        self.push(ActivityKind::Notice(text.to_owned()), false);
+    }
+
+    /// Adds a row under the step the rail is on now.
+    fn push(&mut self, kind: ActivityKind, nested: bool) {
+        let step = self.steps.as_ref().map(|rail| rail.current);
+        self.activity.push(Activity { kind, nested, step });
     }
 
     /// With no process left, nothing can still be running.
@@ -235,7 +244,7 @@ impl Run {
             AgentEvent::TextDelta(text) => self.streaming_text.push_str(&text),
             AgentEvent::AssistantText { text, nested } => {
                 self.streaming_text.clear();
-                self.activity.push(Activity { kind: ActivityKind::Claude(text), nested });
+                self.push(ActivityKind::Claude(text), nested);
             }
             AgentEvent::ToolStarted { id, name, summary, nested } => self.tool_started(id, name, summary, nested),
             AgentEvent::ToolFinished { id, outcome } => {
@@ -275,7 +284,7 @@ impl Run {
         if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") &&!self.files_changed.contains(&summary) {
             self.files_changed.push(summary.clone());
         }
-        self.activity.push(Activity { kind: ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested });
+        self.push(ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested);
     }
 
     fn turn_ended(&mut self, failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64) {

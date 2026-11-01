@@ -1,3 +1,5 @@
+use crate::runs::domain::Match;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandGroup {
     Find,
@@ -109,6 +111,52 @@ pub fn stop_points(line: &str) -> &'static [StopPoint] {
     }
 }
 
+/// What one kind of tool call is called in a step's sentence. Both texts are fixed here, so no run text reaches the sentence.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StepPhrase {
+    pub on: Match,
+    /// A lowercase clause for a finished call: "read your profile".
+    pub done: &'static str,
+    /// A full sentence for a call still running.
+    pub now: &'static str,
+}
+
+const fn phrase(on: Match, done: &'static str, now: &'static str) -> StepPhrase {
+    StepPhrase { on, done, now }
+}
+
+const EDIT: &[&str] = &["Edit", "MultiEdit"];
+
+const APPLY_PHRASES: &[StepPhrase] = &[
+    phrase(Match::Agent(&["posting-fetcher"]), "fetched the posting", "Fetching the posting now."),
+    phrase(Match::Program { names: &["posting_guard"], args: &[] }, "checked it for hidden instructions", "Checking the posting now."),
+    phrase(Match::Program { names: &["cli.ts"], args: &[] }, "read it from the job board", "Reading the job board now."),
+    phrase(Match::File { tools: &["Read"], any_of: &["01-candidate-profile"] }, "read your profile", "Reading your profile now."),
+    phrase(Match::File { tools: &["Read"], any_of: &["04-job-evaluation"] }, "read the evaluation guide", "Reading the evaluation guide now."),
+    phrase(Match::Program { names: &["salary_lookup"], args: &[] }, "looked up salary data", "Looking up salary data now."),
+    phrase(Match::File { tools: &["Read"], any_of: &["05-cv-tailoring"] }, "read the CV guide", "Reading the CV guide now."),
+    phrase(Match::File { tools: &["Read"], any_of: &["cv/templates/"] }, "read the CV templates", "Reading the CV templates now."),
+    phrase(Match::File { tools: &["Write"], any_of: &["cv/main_"] }, "wrote the CV", "Writing the CV now."),
+    phrase(Match::File { tools: &["Write"], any_of: &["cover_letters/cover_"] }, "wrote the cover letter", "Writing the cover letter now."),
+    phrase(Match::Agent(&["application-reviewer"]), "had the reviewer critique both documents", "The reviewer is reading both documents now."),
+    phrase(Match::File { tools: &["WebFetch"], any_of: &[""] }, "read the company's web pages", "Reading the company's web pages now."),
+    phrase(Match::File { tools: EDIT, any_of: &["cv/main_"] }, "edited the CV", "Editing the CV now."),
+    phrase(Match::File { tools: EDIT, any_of: &["cover_letters/cover_"] }, "edited the cover letter", "Editing the cover letter now."),
+    phrase(Match::Program { names: &["lualatex", "xelatex"], args: &[] }, "built the PDFs", "Building the PDFs now."),
+    phrase(Match::Program { names: &["verify_pdf"], args: &[] }, "checked the page count", "Checking the page count now."),
+    phrase(Match::Program { names: &["verify_layout"], args: &[] }, "checked the layout", "Checking the layout now."),
+    phrase(Match::File { tools: &["Write", "Edit", "MultiEdit"], any_of: &["job_search_tracker.csv"] }, "updated the tracker", "Updating the tracker now."),
+    phrase(Match::File { tools: &["Write"], any_of: &["job_posting.md"] }, "archived the posting", "Archiving the posting now."),
+];
+
+/// The phrases of the command on `line`, found by its command word like `spec_for_line`. A command without any has no step sentences.
+pub fn phrases_for(line: &str) -> &'static [StepPhrase] {
+    match line.split_whitespace().next() {
+        Some("/apply") => APPLY_PHRASES,
+        _ => &[],
+    }
+}
+
 /// One user message. Only multi-line fields may carry line breaks.
 pub fn compose_line(spec: &CommandSpec, value_of: impl Fn(&FieldSpec) -> String) -> String {
     let mut line = spec.name.to_owned();
@@ -161,6 +209,20 @@ mod tests {
             assert!(stop_points(spec.name).iter().all(|stop| labels.contains(&stop.after)), "{}", spec.name);
         }
         assert!(!stop_points("/apply x").is_empty());
+    }
+
+    #[test]
+    fn only_apply_has_step_phrases() {
+        assert_eq!(phrases_for("/apply x").len(), 19);
+        assert!(phrases_for("/rank").is_empty() && phrases_for("").is_empty());
+    }
+
+    #[test]
+    fn phrase_clauses_are_lowercase_and_sentences_end_in_a_stop() {
+        for phrase in phrases_for("/apply") {
+            assert!(phrase.done.starts_with(char::is_lowercase) && !phrase.done.ends_with('.'), "{}", phrase.done);
+            assert!(phrase.now.starts_with(char::is_uppercase) && phrase.now.ends_with('.'), "{}", phrase.now);
+        }
     }
 
     #[test]

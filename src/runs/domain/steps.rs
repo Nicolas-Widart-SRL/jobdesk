@@ -21,7 +21,7 @@ const fn rule(step: usize, on: Match) -> Rule {
 
 /// What a tool call must do to move the rail: it is matched on the action, not on any text in the summary.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Match {
+pub enum Match {
     /// tool is one of `tools`, and the summary (a file path) contains a needle
     File { tools: &'static [&'static str], any_of: &'static [&'static str] },
     /// tool is "Bash", and some command segment runs a program whose file name contains a name, directly or behind a runner.

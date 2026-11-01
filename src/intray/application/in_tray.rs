@@ -3,7 +3,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::Lane;
 use crate::intray::application::compose::{Sources, derive_cards};
 use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, rank};
-use crate::shared_kernel::WebUrl;
+use crate::shared_kernel::{LoadError, WebUrl};
 
 /// What a card asks of the rest of the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +146,10 @@ impl Queue {
     pub fn today_subtitle(&self, missing: &[&str]) -> String {
         let done = self.cleared.len();
         let mut parts: Vec<String> = Vec::new();
+        let gone = missing.split_last().map(|(last, rest)| {
+            let names = if rest.is_empty() { (*last).to_owned() } else { format!("{} and {last}", rest.join(", ")) };
+            format!("{names} are missing from this list.")
+        });
         if self.cards.is_empty() {
             match done {
                 0 => {}
@@ -155,9 +159,11 @@ impl Queue {
             let next = self.marks.iter().filter(|mark| mark.active && mark.on >= self.today).min_by_key(|mark| mark.on);
             match next {
                 Some(mark) => parts.push(format!("Your next deadline is {}, {}.", mark.on.format("%a %-d %b"), mark.name)),
-                None if done == 0 => parts.push("Nothing waits on you.".to_owned()),
+                // A source that could not be read may hold what waits, so the list never claims to be complete.
+                None if done == 0 && gone.is_none() => parts.push("Nothing waits on you.".to_owned()),
                 None => {}
             }
+            parts.extend(gone);
             return parts.join(" ");
         }
         let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
@@ -173,10 +179,7 @@ impl Queue {
         if done == 0 && self.cards.iter().all(|card| card.due.is_none()) {
             parts.push("Nothing has a deadline yet.".to_owned());
         }
-        if let Some((last, rest)) = missing.split_last() {
-            let names = if rest.is_empty() { (*last).to_owned() } else { format!("{} and {last}", rest.join(", ")) };
-            parts.push(format!("{names} are missing from this list."));
-        }
+        parts.extend(gone);
         parts.join(" ")
     }
 
@@ -267,7 +270,8 @@ pub struct InTray {
     returned_on: Option<NaiveDate>,
     /// Whether the last decision was on a card brought back, so undoing it puts the card back in front.
     undo_returned: bool,
-    issue: Option<String>,
+    /// Kept as a `LoadError`, whose text is already stripped of hidden characters.
+    issue: Option<LoadError>,
 }
 
 impl InTray {
@@ -275,7 +279,7 @@ impl InTray {
     pub fn new(store: Box<dyn DecisionStore>) -> Self {
         match store.load() {
             Ok(decisions) => Self { store: Some(store), decisions, ..Self::unsaved() },
-            Err(error) => Self { issue: Some(error.to_string()), ..Self::unsaved() },
+            Err(error) => Self { issue: Some(error), ..Self::unsaved() },
         }
     }
 
@@ -284,8 +288,8 @@ impl InTray {
         Self { store: None, decisions: Vec::new(), can_undo: false, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
     }
 
-    pub fn issue(&self) -> Option<&str> {
-        self.issue.as_deref()
+    pub fn issue(&self) -> Option<&LoadError> {
+        self.issue.as_ref()
     }
 
     fn is_cleared(&self, key: &str, today: NaiveDate) -> bool {
@@ -361,7 +365,7 @@ impl InTray {
 
     fn save(&mut self) {
         let result = self.store.as_ref().map_or(Ok(()), |store| store.save(&self.decisions));
-        self.issue = result.err().map(|error| error.to_string());
+        self.issue = result.err();
     }
 
     /// Drops the matching decisions. Undo stays on offer only if its decision is still the last.
@@ -640,7 +644,7 @@ mod tests {
     #[test]
     fn an_unreadable_store_reports_and_stays_untouched() {
         let mut tray = InTray::new(Box::new(Corrupt));
-        assert!(tray.issue().unwrap().contains("not JSON"));
+        assert!(tray.issue().unwrap().to_string().contains("not JSON"));
         let jobs = board(vec![job("Acme", 90)]);
         tray.skip(&top(&tray, &jobs), today());
         assert!(dealt(&tray, &jobs).is_empty());
@@ -1171,6 +1175,13 @@ mod tests {
         assert_eq!(only_deadline.today_subtitle(&[]), "Your next deadline is Sat 31 Oct, Acme.");
 
         assert_eq!(today_queue(vec![]).today_subtitle(&[]), "Nothing waits on you.");
+    }
+
+    #[test]
+    fn a_clear_list_with_a_missing_source_never_says_nothing_waits() {
+        assert_eq!(today_queue(vec![]).today_subtitle(&["Applications"]), "Applications are missing from this list.");
+        let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
+        assert_eq!(one.today_subtitle(&["Jobs", "Applications"]), "1 decision. Jobs and Applications are missing from this list.");
     }
 
     #[test]

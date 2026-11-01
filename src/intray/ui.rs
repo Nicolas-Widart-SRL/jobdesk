@@ -77,8 +77,8 @@ pub struct TodayScreen {
 pub struct TodayContext<'a> {
     /// The screens whose source could not be read, so their cards are missing from this list.
     pub missing: &'a [&'a str],
-    /// The tracker could not be read, so Coming up has no application dates.
-    pub dates_missing: bool,
+    /// Which dates Coming up lacks because their source could not be read, as a sentence.
+    pub missing_dates: Option<&'a str>,
     /// Draws the alerts for sources that could not be read, under the head.
     pub alerts: &'a dyn Fn(&mut Ui),
 }
@@ -118,10 +118,10 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     page_body(ui, |ui| {
         (context.alerts)(ui);
         if let Some(issue) = tray.issue() {
-            // The message quotes a file, so it shows as plain text.
-            prompt_box_tone(ui, Tone::Closed, |ui| ui.add(egui::Label::new(issue).wrap()));
+            // The message quotes a file, so it shows as plain text, already stripped of hidden characters by `LoadError`.
+            prompt_box_tone(ui, Tone::Closed, |ui| ui.add(egui::Label::new(issue.to_string()).wrap()));
         }
-        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.dates_missing, &mut pressed));
+        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.missing_dates, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
             Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
             None => {
@@ -465,11 +465,11 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 
 /// Done today over Coming up. The rail sits outside the card's scroll, so the undo row at its top stays in view.
 /// It scrolls on its own when a long log pushes Coming up past the window. `active` is off while a dialog covers the tray.
-fn rail(ui: &mut Ui, queue: &Queue, active: bool, dates_missing: bool, pressed: &mut Option<Pressed>) {
+fn rail(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
     ScrollArea::vertical().id_salt("tray_rail").auto_shrink([false, false]).show(ui, |ui| {
         done_today(ui, queue, pressed);
         ui.add_space(RAIL_GAP);
-        coming_up(ui, queue, active, dates_missing, pressed);
+        coming_up(ui, queue, active, missing_dates, pressed);
     });
 }
 
@@ -513,8 +513,8 @@ fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 }
 
 /// Rows and the return row only reorder the queue: none opens the launcher or starts a run.
-/// Without the tracker the closing line would claim nothing else is dated, so it says the dates are missing.
-fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, dates_missing: bool, pressed: &mut Option<Pressed>) {
+/// Without a source the closing line would claim nothing else is dated, so it says which dates are missing.
+fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
     let agenda = queue.agenda();
     slip(ui, |ui| {
         panel_header(ui, "Coming up", Some("2 weeks"));
@@ -531,7 +531,7 @@ fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, dates_missing: bool, pres
                 divider(ui);
                 ui.add_space(CLOSING_GAP);
             }
-            let closing = if dates_missing { "Application dates are missing until the file is fixed." } else { agenda.closing.as_str() };
+            let closing = missing_dates.unwrap_or(&agenda.closing);
             // The line starts under the rows' day column.
             ui.horizontal(|ui| {
                 ui.add_space(PICK_ROW_INLINE);

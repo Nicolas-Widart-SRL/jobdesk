@@ -7,7 +7,6 @@ use crate::discovery::application::JobBoard;
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
 use crate::shared_kernel::LoadError;
-use crate::shell::Screen;
 use crate::tracking::application::Pipeline;
 use crate::workspace::application::{WorkspaceView, workspace_view};
 use crate::{discovery, dossier, insights, tracking, workspace};
@@ -26,10 +25,18 @@ pub struct Snapshot {
     pub today: NaiveDate,
 }
 
-/// A source that could not be read, and the screen it feeds.
+/// A source the snapshot reads that can fail on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Jobs,
+    Applications,
+    SkillGaps,
+}
+
+/// A source that could not be read, and why.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Issue {
-    pub screen: Screen,
+    pub source: Source,
     pub error: LoadError,
 }
 
@@ -38,15 +45,15 @@ impl Snapshot {
     pub fn load(root: &Path, today: NaiveDate) -> Self {
         let mut issues = Vec::new();
         let board = discovery::load_board(root, today).unwrap_or_else(|error| {
-            issues.push(Issue { screen: Screen::Jobs, error });
+            issues.push(Issue { source: Source::Jobs, error });
             JobBoard::default()
         });
         let pipeline = tracking::load_pipeline(root, today).unwrap_or_else(|error| {
-            issues.push(Issue { screen: Screen::Tracker, error });
+            issues.push(Issue { source: Source::Applications, error });
             Pipeline::default()
         });
         let skill_gaps = insights::load_skill_gaps(root).unwrap_or_else(|error| {
-            issues.push(Issue { screen: Screen::Insights, error });
+            issues.push(Issue { source: Source::SkillGaps, error });
             None
         });
         let archives = pipeline

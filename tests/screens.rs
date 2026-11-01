@@ -1460,14 +1460,22 @@ fn intray_clear_dark() {
 }
 
 /// The sample workspace with a tracker saved in Latin-1, as a spreadsheet's plain CSV export does.
-fn failed_tracker_shell(name: &str) -> Shell {
+/// With `jobs_too`, the saved jobs file is cut off as well.
+fn failed_shell(name: &str, jobs_too: bool) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
     fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap();
+    if jobs_too {
+        fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap();
+    }
     let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    assert_eq!(snapshot.issues.len(), 1, "{:?}", snapshot.issues);
+    assert_eq!(snapshot.issues.len(), 1 + usize::from(jobs_too), "{:?}", snapshot.issues);
     Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+fn failed_tracker_shell(name: &str) -> Shell {
+    failed_shell(name, false)
 }
 
 #[test]
@@ -1486,6 +1494,21 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     harness.run_steps(3);
     assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
     assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
+    assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
+}
+
+/// Each sentence on what still works assumes one failure, so two failures show neither, and one button.
+#[test]
+fn two_failed_sources_share_one_alert_and_promise_nothing() {
+    let harness = tray_harness(failed_shell("failed_two", true));
+    assert!(is_shown(&harness, "Jobs, could not be read"));
+    assert!(is_shown(&harness, "Applications, could not be read"));
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "Your saved jobs could not be read."));
+    assert!(harness.query_by_label_contains("still work").is_none());
+    assert_eq!(harness.query_all_by_label("Open Setup").count(), 1);
+    assert!(harness.query_by_label_contains("Applications and Jobs are missing from this list.").is_some());
+    assert!(is_shown(&harness, "Job and application dates are missing until the files are fixed."));
 }
 
 #[test]

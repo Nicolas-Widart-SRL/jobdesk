@@ -11,6 +11,8 @@ use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, TRAY_RAIL};
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
 const STAMP_GAP: f32 = 14.0;
+/// Under every score, whatever the take says: the score rests on the job ad and nothing else.
+const SCORE_SOURCE: &str = "Job ad only";
 const CODE_HEIGHT: f32 = 150.0;
 
 enum Pressed {
@@ -23,26 +25,20 @@ enum Pressed {
     BringAll,
 }
 
-/// Only what Claude asks of the user takes the stamp: those cards hold a paused run.
-fn kind_tag(kind: CardKind) -> (&'static str, TabInk) {
+/// A kind's name, its tab's ink and its colour on the strip.
+/// Only what Claude asks of the user takes the stamp, on the tab: those cards hold a paused run. The strip keeps status tones.
+fn kind_look(kind: CardKind) -> (&'static str, TabInk, Tone) {
+    let toned = |name, tone| (name, TabInk::Tone(tone), tone);
     match kind {
-        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp),
-        CardKind::Turn => ("Your turn", TabInk::Stamp),
-        CardKind::Send => ("Ready to send", TabInk::Tone(Tone::Drafted)),
-        CardKind::Triage => ("New match", TabInk::Tone(Tone::Active)),
-        CardKind::Prep => ("Interview prep", TabInk::Tone(Tone::Interview)),
-        CardKind::Offer => ("Offer", TabInk::Tone(Tone::Offer)),
-        CardKind::GuardFlag => ("Check this ad", TabInk::Tone(Tone::Interview)),
-        CardKind::FollowUp => ("Follow up", TabInk::Tone(Tone::Active)),
-        CardKind::Close => ("Close it?", TabInk::Tone(Tone::Plain)),
-    }
-}
-
-/// A kind's colour on the strip, where the stamp does not go.
-fn kind_tone(kind: CardKind) -> Tone {
-    match kind_tag(kind).1 {
-        TabInk::Tone(tone) => tone,
-        TabInk::Stamp => Tone::Interview,
+        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp, Tone::Interview),
+        CardKind::Turn => ("Your turn", TabInk::Stamp, Tone::Turn),
+        CardKind::Send => toned("Ready to send", Tone::Drafted),
+        CardKind::Triage => toned("New match", Tone::Active),
+        CardKind::Prep => toned("Interview prep", Tone::Interview),
+        CardKind::Offer => toned("Offer", Tone::Offer),
+        CardKind::GuardFlag => toned("Check this ad", Tone::Interview),
+        CardKind::FollowUp => toned("Follow up", Tone::Active),
+        CardKind::Close => toned("Close it?", Tone::Plain),
     }
 }
 
@@ -50,7 +46,7 @@ fn kind_tone(kind: CardKind) -> Tone {
 fn count_noun(kind: CardKind, n: usize) -> String {
     match kind {
         CardKind::Turn => (if n == 1 { "reply" } else { "replies" }).to_owned(),
-        _ => kind_tag(kind).0.to_lowercase(),
+        _ => kind_look(kind).0.to_lowercase(),
     }
 }
 
@@ -96,6 +92,7 @@ pub fn show(ui: &mut Ui, tray: &mut InTray, queue: &Queue, keys: bool) -> Option
     if let Some(top) = top {
         tray.read(&top.key);
     }
+    close_command_off_top(ui, top);
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
 
     head(ui, queue);
@@ -186,7 +183,7 @@ fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pr
 }
 
 fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
-    let tone = mark.active.then(|| kind_tone(mark.kind));
+    let tone = mark.active.then(|| kind_look(mark.kind).2);
     if strip_mark(ui, mark.label.as_str(), tone).clicked() {
         *pressed = Some(Pressed::Bring(mark.key.clone()));
     }
@@ -195,7 +192,7 @@ fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
 /// The card takes the height left, so its actions stay in view however long its body is.
 fn stack(ui: &mut Ui, card: &Card, pending: usize, pressed: &mut Option<Pressed>) {
-    let (kind, ink) = kind_tag(card.kind);
+    let (kind, ink, _) = kind_look(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     let tab = ui
         .horizontal(|ui| {
@@ -217,7 +214,11 @@ fn card_face(ui: &mut Ui, card: &Card) {
         Body::Triage { score, band, gates, strengths, gaps } => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = STAMP_GAP;
-                stamp(ui, &score.to_string(), score_tone(*score));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    stamp(ui, &score.to_string(), score_tone(*score));
+                    ui.label(rich(ui, SCORE_SOURCE, Type::SMALL, Ink::Muted)).on_hover_text("Scored from the job ad alone.");
+                });
                 who(ui, card);
             });
             lead_line(ui, band, card.take.as_str());
@@ -291,16 +292,17 @@ fn gate_cell(ui: &mut Ui, gate: &GateRow) {
     ui.add_space(GATE_CELL_GAP);
 }
 
+/// Items come from a report, so each is a plain label. An empty list keeps its heading and says so.
 fn bullets(ui: &mut Ui, title: &str, items: &[String]) {
-    if items.is_empty() {
-        return;
-    }
     ui.spacing_mut().item_spacing.y = 3.0;
     strong(ui, title);
+    if items.is_empty() {
+        muted(ui, "None");
+    }
     for item in items {
         ui.horizontal(|ui| {
-            ui.label("-");
-            ui.add(egui::Label::new(item.as_str()).wrap());
+            ui.label(rich(ui, "-", Type::BODY, Ink::Muted));
+            ui.add(egui::Label::new(rich(ui, item.as_str(), Type::BODY, Ink::Text)).wrap());
         });
     }
 }
@@ -357,21 +359,50 @@ fn actions(ui: &mut Ui, card: &Card, pressed: &mut Option<Pressed>) {
             *pressed = Some(Pressed::Act(action.clone()));
         }
     }
-    if ui.available_size_before_wrap().x < DEAL_ASIDE_MIN {
+    let beside = ui.available_size_before_wrap().x >= DEAL_ASIDE_MIN;
+    if !beside {
         ui.end_row();
     }
     ui.with_layout(Layout::top_down(Align::Max), |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        if card.command.is_none() {
-            // A note on its own centres on the buttons' row.
+        if beside && card.command.is_none() {
+            // A note on its own centres on the buttons beside it.
             let height = wrapped_height(ui, &card.note, Type::NOTE, ui.available_width());
             ui.add_space(((BUTTON_HEIGHT - height) / 2.0).max(0.0));
         }
         ui.add(egui::Label::new(rich(ui, card.note.as_str(), Type::NOTE, Ink::Muted)).halign(Align::Max).wrap());
         if let Some(command) = &card.command {
-            reveal_command(ui, command);
+            command_line(ui, card, command);
         }
     });
+}
+
+/// Names the card whose command line is open.
+fn command_open_id() -> egui::Id {
+    egui::Id::NULL.with("tray_command_open")
+}
+
+/// The line stays open only while its card stays on top: `show` closes it when the top card changes.
+fn command_line(ui: &mut Ui, card: &Card, command: &str) {
+    let id = command_open_id();
+    let mut open = ui.data(|data| data.get_temp::<String>(id)).is_some_and(|key| key == card.key);
+    reveal_command(ui, command, &mut open);
+    ui.data_mut(|data| {
+        if open {
+            data.insert_temp(id, card.key.clone());
+        } else {
+            data.remove::<String>(id);
+        }
+    });
+}
+
+/// Another card on top, or an empty tray, closes the line, so a card back after Later starts closed.
+fn close_command_off_top(ui: &Ui, top: Option<&Card>) {
+    let id = command_open_id();
+    let shown = ui.data(|data| data.get_temp::<String>(id));
+    if shown.is_some_and(|key| top.is_none_or(|card| card.key != key)) {
+        ui.data_mut(|data| data.remove::<String>(id));
+    }
 }
 
 fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {

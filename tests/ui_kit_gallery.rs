@@ -481,7 +481,7 @@ fn postmark(ui: &mut Ui) {
         tally(ui, 3, 8, Ink::Stamp);
     });
     lead_line(ui, "Good fit, 78 of 100.", "Five checks pass. The day rate is not in the ad, so check it before you apply.");
-    reveal_command(ui, "/apply https://meridian.example/jobs/42");
+    reveal_command(ui, "/apply https://meridian.example/jobs/42", &mut false);
     ui.add_space(10.0);
     prompt_box_tone(ui, Tone::Closed, |ui| {
         ui.label(rich(ui, "Your applications could not be read.", Type::STRONG, Tone::Closed));

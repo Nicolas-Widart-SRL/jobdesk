@@ -204,15 +204,15 @@ pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
 
 /// "Show the command" under an action, which opens the command line it stands for in a code box.
 /// The line shows as plain wrapped text, never as Markdown or a link, and clicking starts nothing.
-pub fn reveal_command(ui: &mut Ui, line: &str) -> Response {
-    let id = egui::Id::NULL.with(("reveal_command", line));
-    let open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-    let text = if open { "Hide the command" } else { "Show the command" };
+/// The caller holds `open`, so it can close the line when what it belongs to goes away.
+pub fn reveal_command(ui: &mut Ui, line: &str, open: &mut bool) -> Response {
+    let text = if *open { "Hide the command" } else { "Show the command" };
     let link = rich(ui, text, Type::NOTE, Tone::Active);
     let response = ui.add(egui::Link::new(link));
-    let open = open != response.clicked();
-    ui.data_mut(|data| data.insert_temp(id, open));
-    if open {
+    if response.clicked() {
+        *open = !*open;
+    }
+    if *open {
         code_box(ui, |ui| {
             // A command reads from its start, wherever the link sits.
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -451,8 +451,9 @@ mod tests {
             crate::ui_kit::install_fonts(ctx);
             crate::ui_kit::install_theme(ctx);
         };
-        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(|ui| {
-            reveal_command(ui, LINE);
+        let mut open = false;
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
+            reveal_command(ui, LINE, &mut open);
         });
         harness.run();
         assert!(harness.query_by_label(LINE).is_none());

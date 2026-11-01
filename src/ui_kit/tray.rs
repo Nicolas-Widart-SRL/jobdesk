@@ -1,6 +1,6 @@
 //! The in-tray's parts: one decision at a time, on top of a visible stack of what is left.
 
-use egui::{CentralPanel, Color32, CornerRadius, Frame, Label, Margin, Panel, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Frame, Label, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
@@ -176,27 +176,40 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
         None => frame,
     };
     let (x, y) = DEAL_PADDING;
+    // The stroke sits inside the allocated height, on both edges.
+    let content = (height - 2.0 * HAIRLINE).max(0.0);
     let shown = ui.allocate_ui(vec2(ui.available_width(), height), |ui| {
         frame.show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_height(ui.available_height());
-            Panel::bottom("deal_footer").show_separator_line(false).frame(Frame::new()).show(ui, |ui| deal_footer(ui, footer));
-            CentralPanel::default()
-                .frame(Frame::new())
-                .show(ui, |ui| {
-                    ScrollArea::vertical().id_salt(("deal_body", look.key)).auto_shrink([false, false]).show(ui, |ui| {
-                        Frame::new()
-                            .inner_margin(Margin::symmetric(x, y))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.spacing_mut().item_spacing.y = DEAL_GAP;
-                                body(ui)
-                            })
-                            .inner
+            let inner = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), content));
+            ui.advance_cursor_after_rect(inner);
+            // The footer goes in first, at the foot of the card, so the body takes what it leaves.
+            // Its height is known only once laid out: when it differs from the height kept for this card,
+            // the pass is discarded and laid out again before anything shows.
+            let kept = ui.scope_id().with(("deal_footer", look.key));
+            let foot_height = ui.data(|data| data.get_temp::<f32>(kept)).unwrap_or(0.0).min(content);
+            let foot_rect = Rect::from_min_max(pos2(inner.left(), inner.bottom() - foot_height), pos2(inner.right(), inner.bottom() + content));
+            let mut foot = ui.new_child(UiBuilder::new().id_salt("deal_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
+            foot.shrink_clip_rect(inner);
+            deal_footer(&mut foot, footer);
+            let laid = foot.min_rect().height().min(content);
+            if (laid - foot_height).abs() > 0.5 {
+                ui.data_mut(|data| data.insert_temp(kept, laid));
+                ui.ctx().request_discard("a card's footer changed height");
+            }
+            let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
+            let mut body_ui = ui.new_child(UiBuilder::new().id_salt("deal_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+            body_ui.shrink_clip_rect(body_rect);
+            ScrollArea::vertical().id_salt(("deal_body", look.key)).auto_shrink([false, false]).show(&mut body_ui, |ui| {
+                Frame::new()
+                    .inner_margin(Margin::symmetric(x, y))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = DEAL_GAP;
+                        body(ui)
                     })
                     .inner
-                })
-                .inner
+            })
+            .inner
         })
     });
     // The tab's foot and the card's top edge give way to the tab's fill, so the two read as one sheet.

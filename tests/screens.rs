@@ -1143,24 +1143,51 @@ fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
     assert!(started.lock().unwrap().is_none(), "the chip starts no run");
 }
 
-/// The top of the dealt card's tab, which moves only when the tray scrolls.
+/// The top of the dealt card's tab. Only the card's body scrolls, so a decision never moves it.
 fn tab_top(harness: &Harness) -> f32 {
     let kinds = ["Claude asks", "Your turn", "Ready to send", "New match", "Interview prep", "Offer", "Check this ad", "Follow up", "Close it?"];
     kinds.iter().find_map(|kind| harness.query_by_label(kind)).expect("a dealt card").rect().top()
 }
 
-#[test]
-fn later_and_keep_leave_the_scroll_alone() {
-    let mut harness = tray_harness(shell(Screen::InTray, "tray_no_scroll"));
-    let top = tab_top(&harness);
-    for _ in 0..4 {
+/// The top of a company's name on the dealt card, near the top of its body.
+fn name_top(harness: &Harness, company: &str) -> f32 {
+    harness.get_by_label(company).rect().top()
+}
+
+/// Ardent Software's offer comes after Meridian. Its body's top, dealt without scrolling anything first.
+fn ardent_resting() -> f32 {
+    let mut harness = smallest_tray("tray_body_resting", ScriptedGateway(SharedSink::default()));
+    for _ in 0..3 {
         press(&mut harness, Key::L);
-        assert_eq!(tab_top(&harness), top);
     }
-    harness.get_by_label("Harmless, keep posting").click();
+    name_top(&harness, "Ardent Software")
+}
+
+/// Scrolling one card's body leaves the next card's body at its top, and the card itself in place.
+#[test]
+fn the_next_card_opens_its_body_at_the_top() {
+    let mut harness = smallest_tray("tray_body_scroll", ScriptedGateway(SharedSink::default()));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    let (tab, resting) = (tab_top(&harness), name_top(&harness, "Meridian Rail Systems"));
+
+    harness.hover_at(harness.get_by_label("Meridian Rail Systems").rect().center());
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.event(wheel);
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
-    assert_eq!(tab_top(&harness), top);
+    assert!(name_top(&harness, "Meridian Rail Systems") < resting, "the body scrolls");
+    assert_eq!(tab_top(&harness), tab, "the card stays put");
+
+    press(&mut harness, Key::L);
+    assert_eq!(name_top(&harness, "Ardent Software"), ardent_resting(), "the next card starts at its top");
+    assert_eq!(tab_top(&harness), tab);
 }
 
 fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {
@@ -1201,6 +1228,12 @@ fn show_the_command_reveals_the_line_and_starts_nothing() {
     assert!(is_shown(&harness, MERIDIAN), "the card stays dealt");
     assert!(!is_shown(&harness, "All commands"), "no launcher opens");
     assert!(started.lock().unwrap().is_none(), "no run starts");
+
+    press(&mut harness, Key::L);
+    assert!(!is_shown(&harness, line), "the line leaves with its card");
+    press(&mut harness, Key::U);
+    assert!(is_shown(&harness, MERIDIAN));
+    assert!(!is_shown(&harness, line), "a card back on top starts with its line closed");
 }
 
 /// The rail sits outside the card's scroll, so the row and its reasons show without scrolling.

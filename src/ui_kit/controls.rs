@@ -9,7 +9,7 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
 use crate::ui_kit::text::{add_text, line, paint_centred, paint_text, rich};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
 };
 
@@ -118,6 +118,29 @@ fn look_colors(p: &Palette, look: Look, hovered: bool, pressed: bool, desk: bool
     }
 }
 
+/// `color` at the disabled opacity.
+fn dimmed(color: Color32) -> Color32 {
+    color.gamma_multiply(DISABLED_OPACITY)
+}
+
+/// A disabled plain or danger button keeps its opaque rest fill and shows its border at half.
+/// A filled one paints its fill at half over the surface, with no border and its ink kept, so the label still reads on the paler fill.
+fn disabled_colors(p: &Palette, look: Look, desk: bool) -> (Color32, Color32) {
+    let rest = if desk { p.card } else { Color32::TRANSPARENT };
+    match look {
+        Look::Primary => (dimmed(p.primary), Color32::TRANSPARENT),
+        Look::On => (dimmed(p.text), Color32::TRANSPARENT),
+        Look::Plain => (rest, dimmed(p.line)),
+        Look::Danger => (rest, dimmed(p.closed)),
+    }
+}
+
+/// Runs `add` enabled or disabled, and says `why` when the pointer rests on it while it is disabled.
+/// `add` must be a kit widget, which paints its own disabled look: egui's own widgets no longer fade.
+pub fn enabled_when(ui: &mut Ui, enabled: bool, why: &str, add: impl FnOnce(&mut Ui) -> Response) -> Response {
+    ui.add_enabled_ui(enabled, add).inner.on_disabled_hover_text(why)
+}
+
 fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Response {
     press_as(ui, text, look, fit, key, None)
 }
@@ -131,12 +154,15 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
         Look::Danger => p.closed,
         Look::On => p.sheet,
     };
+    let enabled = ui.is_enabled();
+    // A filled button keeps its ink: its fill is what goes pale.
+    let ink = if enabled || matches!(look, Look::Primary | Look::On) { ink } else { dimmed(ink) };
     let keys = key.map_or(0.0, |_| KEY_SIZE + BUTTON_GAP);
     let room = ui.available_width() - fit.padding * 2.0 - keys;
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = look_colors(&p, look, pointer_over(&response), pressed(&response), on_desk(ui));
+    let (fill, border) = if enabled { look_colors(&p, look, pointer_over(&response), pressed(&response), on_desk(ui)) } else { disabled_colors(&p, look, on_desk(ui)) };
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(fit.padding, (fit.height - galley.size().y) / 2.0), galley.size());
     if matches!(look, Look::Primary) && pointer_over(&response) && !pressed(&response) {
@@ -202,16 +228,17 @@ pub fn primary_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
 /// A plain button in the menu that names its keyboard shortcut. The keys are plain glyphs, with no box.
 pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let p = Palette::of(ui);
-    let ink = p.text;
+    let enabled = ui.is_enabled();
+    let (ink, key_ink, border) = if enabled { (p.text, p.muted, p.line) } else { (dimmed(p.text), dimmed(p.muted), dimmed(p.line)) };
     let label = line(ui, text, NORMAL.font, ink, f32::INFINITY);
-    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, p.muted, f32::INFINITY)).collect();
+    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, key_ink, f32::INFINITY)).collect();
     let glyphs_width = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
     // The keys sit 2px further out than a button's own gap.
     let lead = if glyphs.is_empty() { 0.0 } else { BUTTON_GAP + 2.0 };
     let size = vec2(NORMAL.padding * 2.0 + label.size().x + lead + glyphs_width, NORMAL.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if pressed(&response) { p.line } else { p.card };
-    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
+    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(NORMAL.padding, (NORMAL.height - label.size().y) / 2.0), label.size());
     if pointer_over(&response) && !pressed(&response) {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
@@ -221,10 +248,10 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     for glyph in glyphs {
         let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
         x += glyph.size().x + KEYS_GAP;
-        paint_text(ui, at, glyph, p.muted, fill);
+        paint_text(ui, at, glyph, key_ink, fill);
     }
     interactive(ui, &response, RADIUS_BUTTON);
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, text));
     response
 }
 
@@ -332,13 +359,13 @@ fn tab_swipe(ui: &Ui, response: &Response, on: bool) -> Option<(Color32, Option<
     }
 }
 
-fn tab_info(label: &str, mark: TabMark, on: bool) -> WidgetInfo {
+fn tab_info(label: &str, mark: TabMark, on: bool, enabled: bool) -> WidgetInfo {
     let title = match mark {
         TabMark::Count(n) if n > 0 => format!("{label}, {n} need you"),
         TabMark::Failed => format!("{label}, could not be read"),
         _ => label.to_owned(),
     };
-    WidgetInfo::selected(Role::Tab, true, on, title)
+    WidgetInfo::selected(Role::Tab, enabled, on, title)
 }
 
 /// A tab in the menu, on the desk. The open tab's label is highlighted: a pale swipe over a stamp-ink rule.
@@ -346,7 +373,9 @@ fn tab_info(label: &str, mark: TabMark, on: bool) -> WidgetInfo {
 pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response {
     let p = Palette::of(ui);
     let font = if on { Type::TAB_ON } else { Type::TAB };
+    let enabled = ui.is_enabled();
     let ink = if on { p.text } else { p.muted };
+    let ink = if enabled { ink } else { dimmed(ink) };
     let text = line(ui, label, font, ink, f32::INFINITY);
     let width = text.size().x;
     let chip = match mark {
@@ -385,7 +414,7 @@ pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response
         ui.painter().rect_filled(square, 0.0, p.closed);
     }
     interactive(ui, &response, RADIUS_BUTTON);
-    response.widget_info(|| tab_info(label, mark, on));
+    response.widget_info(|| tab_info(label, mark, on, enabled));
     response
 }
 
@@ -410,13 +439,16 @@ struct SegmentInks {
 /// A segment is as wide as its label in the heavier face, on or off, so picking one never moves the others.
 fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentInks) -> Response {
     let font = if on { look.font_on } else { look.font };
-    let ink = if on { inks.on.1 } else { inks.off };
+    let enabled = ui.is_enabled();
+    // The picked segment keeps its ink, as a filled button does: its fill is what goes pale.
+    let ink = if on { inks.on.1 } else if enabled { inks.off } else { dimmed(inks.off) };
     let room = ui.available_width() - look.padding * 2.0;
     let galley = line(ui, label, font, ink, room);
     let widest = if on { galley.size().x } else { line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x) };
     let size = vec2(widest + look.padding * 2.0, look.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = match (on, pointer_over(&response), pressed(&response)) {
+        (true, _, _) if !enabled => dimmed(inks.on.0),
         (true, _, _) => inks.on.0,
         (false, _, true) => inks.pressed,
         (false, true, false) => inks.hover,
@@ -425,7 +457,7 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
     ui.painter().rect_filled(rect, look.radius, fill);
     paint_centred(ui, rect, galley, ink, fill);
     interactive(ui, &response, look.radius);
-    response.widget_info(|| WidgetInfo::selected(Role::Tab, true, on, label));
+    response.widget_info(|| WidgetInfo::selected(Role::Tab, enabled, on, label));
     response
 }
 

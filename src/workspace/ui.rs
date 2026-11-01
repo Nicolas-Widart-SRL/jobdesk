@@ -3,7 +3,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
+    CellRule, Ink, Subtitle, Title, Tone, Type, button, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
     rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
@@ -250,7 +250,8 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
         });
         panel_body(ui, |ui| {
             ui.horizontal(|ui| {
-                recheck = ui.add_enabled_ui(!running, |ui| small_button(ui, "Check again")).inner.clicked();
+                // A running check is its own reason: the label says so, and no hover is needed.
+                recheck = enabled_when(ui, !running, "Checking the tools now.", |ui| small_button(ui, if running { "Checking…" } else { "Check again" })).clicked();
             });
         });
     });

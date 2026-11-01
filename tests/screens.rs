@@ -474,6 +474,81 @@ fn a_quick_reply_waits_while_a_reply_is_drafted() {
     assert!(calls.lock().unwrap().sent.is_empty(), "nothing was sent");
 }
 
+/// A disabled control keeps the arrow, so the way to learn why it waits is to rest the pointer on it.
+#[test]
+fn a_disabled_send_says_why() {
+    let mut shell = shell(Screen::Runs, "disabled_send");
+    *shell.desk_slot() = Some(stop_after_evaluate(SharedCalls::default()));
+    let mut harness = tray_harness(shell);
+    let send = harness.get_by_label("Send");
+    assert!(send.accesskit_node().is_disabled(), "nothing is typed yet");
+    assert!(!is_shown(&harness, "Type a reply first."));
+    send.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Type a reply first."), "the pointer on a disabled Send says why");
+}
+
+/// A question's Send answer waits for a pick in every question.
+#[test]
+fn a_disabled_send_answer_says_why() {
+    let mut shell = shell(Screen::Runs, "disabled_send_answer");
+    *shell.desk_slot() = Some(apply_run(question_prompt()));
+    let mut harness = tray_harness(shell);
+    let send = harness.get_by_label("Send answer");
+    assert!(send.accesskit_node().is_disabled(), "no answer is picked yet");
+    send.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Pick an answer for each question."));
+}
+
+/// Until a folder is open, the tabs and New task wait and say what for.
+#[test]
+fn the_tabs_say_what_they_wait_for_before_a_folder_is_open() {
+    let mut harness = tray_harness(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()));
+    let new_task = harness.get_by_label("New task");
+    assert!(new_task.accesskit_node().is_disabled());
+    new_task.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Choose your job search folder first."));
+}
+
+/// Answers a probe once `release` is set, so a check stays running as long as a test wants.
+struct GatedTools(Arc<std::sync::atomic::AtomicBool>);
+
+impl ToolProber for GatedTools {
+    fn probe(&self, _: &ToolSpec) -> Option<String> {
+        while !self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Some("1.0".to_owned())
+    }
+}
+
+#[test]
+fn check_again_says_checking_while_it_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let release = Arc::new(AtomicBool::new(false));
+    let mut shell = shell(Screen::Workspace, "check_again_running");
+    let mut checks = EnvironmentChecks::new(Arc::new(GatedTools(Arc::clone(&release))), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Checking…"), "the button names what runs");
+    assert!(!is_shown(&harness, "Check again"));
+    assert!(harness.get_by_label("Checking…").accesskit_node().is_disabled());
+
+    release.store(true, Ordering::SeqCst);
+    for _ in 0..40 {
+        harness.run_steps(1);
+        if is_shown(&harness, "Check again") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(is_shown(&harness, "Check again"), "the label comes back with the results");
+    assert!(!harness.get_by_label("Check again").accesskit_node().is_disabled());
+}
+
 /// After Stop here and Claude's plain goodbye, the run is done for now: a reply is welcome, not awaited.
 #[test]
 fn stop_here_ends_your_turn() {

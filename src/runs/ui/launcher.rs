@@ -4,7 +4,7 @@ use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -133,11 +133,20 @@ impl Launcher {
             if desk.is_busy() {
                 strong(ui, "Another run is active. One run at a time keeps your files safe.");
             }
-            ui.add_enabled_ui(ready, |ui| {
-                if primary_button(ui, "Run").clicked() {
+            let why = if budget.is_none() {
+                "Enter a budget above zero."
+            } else if desk.is_busy() {
+                "Another run is active. One run at a time keeps your files safe."
+            } else {
+                "Tick \"I understand\" first."
+            };
+            enabled_when(ui, ready, why, |ui| {
+                let run = primary_button(ui, "Run");
+                if run.clicked() {
                     let options = StartOptions { model: MODELS[self.model].1.map(str::to_owned), budget_usd: budget.unwrap_or_default() };
                     started = desk.start(&line, &options, chrono::Local::now().naive_local()).ok();
                 }
+                run
             });
         });
         started

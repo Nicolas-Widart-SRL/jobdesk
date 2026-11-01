@@ -207,6 +207,8 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.selection.bg_fill = p.raised;
     visuals.selection.stroke = Stroke::new(HAIRLINE, p.text);
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
+    // egui fades a disabled ui to see-through, and the desk's grid shows through. The kit's controls paint their own disabled look.
+    visuals.disabled_alpha = 1.0;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
     // egui's own controls rest clear. None stands on the desk: the kit's buttons take the desk fill themselves,

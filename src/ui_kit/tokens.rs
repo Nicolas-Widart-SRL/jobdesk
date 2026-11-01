@@ -93,6 +93,8 @@ pub const WAITS_EDGE: f32 = 3.0;
 pub const PICK_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
+/// How much of its ink and border a disabled control keeps. egui's own fade is off, so the kit paints this.
+pub const DISABLED_OPACITY: f32 = 0.5;
 /// The room between a step's knot and its words.
 pub const KNOT_GAP: f32 = 20.0;
 pub const WELCOME_WIDTH: f32 = 620.0;

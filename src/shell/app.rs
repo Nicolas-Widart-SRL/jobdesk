@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -34,7 +34,9 @@ use crate::workspace::ui::WorkspaceAction;
 const WORKSPACE_KEY: &str = "workspace";
 
 /// The bundled fonts have no command key glyph, so macOS spells it out.
-const ASK_KEYS: [&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "K"] } else { ["Ctrl", "K"] };
+/// What the tabs and New task say while they wait for a folder.
+const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
+const ASK_KEYS:[&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "K"] } else { ["Ctrl", "K"] };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -341,12 +343,12 @@ impl Shell {
                     Screen::Runs => TabMark::Count(waiting),
                     _ => TabMark::None,
                 };
-                if ui.add_enabled_ui(open || screen == lit, |ui| folder_tab(ui, screen.title(), mark, screen == lit)).inner.clicked() {
+                if enabled_when(ui, open || screen == lit, CHOOSE_FOLDER, |ui| folder_tab(ui, screen.title(), mark, screen == lit)).clicked() {
                     picked = Some(screen);
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled_ui(open, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).inner.clicked() {
+                if enabled_when(ui, open, CHOOSE_FOLDER, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).clicked() {
                     self.screen = Screen::Launcher;
                 }
             });

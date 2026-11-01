@@ -120,9 +120,18 @@ fn buttons(ui: &mut Ui) {
         key_button(ui, "Later", "L");
         primary_key_button(ui, "Send", "Y");
         command_button(ui, "/rank");
+    });
+    // Disabled keeps the opaque rest fill, with ink and border at half. A primary's fill is at half over the paper.
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        muted(ui, "Disabled");
         ui.add_enabled_ui(false, |ui| {
-            button(ui, "Off");
-            primary_button(ui, "Off");
+            button(ui, "Plain");
+            primary_button(ui, "Primary");
+            danger_button(ui, "Deny");
+            small_button(ui, "Small");
+            key_button(ui, "Later", "L");
+            primary_key_button(ui, "Send", "Y");
         });
     });
 }

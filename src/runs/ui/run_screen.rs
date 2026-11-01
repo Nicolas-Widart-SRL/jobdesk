@@ -15,7 +15,7 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, empty_state, hand, markdown, muted, page_body, page_head, panel,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel,
     panel_body, panel_header, path_label, pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
@@ -682,7 +682,7 @@ impl RunScreen {
             for reply in replies {
                 // The words it sends show on hover, enabled or blocked. Why a run blocks it is the muted line's to say.
                 let why = if drafted { DRAFTED } else { reply.text };
-                let response = ui.add_enabled_ui(!blocked && !drafted, |ui| button(ui, reply.button)).inner.on_hover_text(reply.text).on_disabled_hover_text(why);
+                let response = enabled_when(ui, !blocked && !drafted, why, |ui| button(ui, reply.button)).on_hover_text(reply.text);
                 if response.clicked() {
                     *sent = Some(reply.text.to_owned());
                 }
@@ -708,7 +708,9 @@ impl RunScreen {
                 self.focused_for = Some(turn);
             }
             let typed = !self.reply.trim().is_empty();
-            let send = ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add_enabled_ui(typed && !blocked, |ui| primary_button(ui, "Send")).inner.clicked()).inner;
+            // While another run works, the muted line above says why, and the pointer says so again here.
+            let why = if blocked { BLOCKED } else { "Type a reply first." };
+            let send = ui.with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, typed && !blocked, why, |ui| primary_button(ui, "Send")).clicked()).inner;
             let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if (send || entered) && typed && !blocked {
                 sent = Some(self.reply.trim().to_owned());
@@ -786,7 +788,7 @@ impl RunScreen {
             .collect();
         let complete = answers.len() == questions.len();
         ui.horizontal(|ui| {
-            if ui.add_enabled_ui(complete, |ui| primary_button(ui, "Send answer")).inner.clicked() {
+            if enabled_when(ui, complete, "Pick an answer for each question.", |ui| primary_button(ui, "Send answer")).clicked() {
                 desk.decide(&run.id, &prompt.request_id, Decision::Answer(answers.clone()));
                 self.picks.clear();
             }

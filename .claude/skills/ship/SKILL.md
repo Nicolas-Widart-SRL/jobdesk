@@ -22,7 +22,8 @@ Name it and write its first line as `lead.md` says: the branch with each `/` tur
 It holds the plan, the waves, the user's decisions, each step's branch, worktree, head SHA and status,
 the review findings, and the CodeRabbit ids already handled.
 Update the file after each step merges and after each review. A new session reads it and goes on from there.
-When the pull request is open, tell the user to run `/clear` or start a new session before the next change.
+The session stays open after the pull request opens, to watch it.
+Tell the user to start the next change in a new session.
 
 Keep command output out of your context. Run checks only through `scripts/check.sh` and `scripts/merge-step.sh`,
 which print one line per check. Read a subagent's report once, then keep only its SHAs and findings in the plan file.
@@ -66,9 +67,25 @@ which print one line per check. Read a subagent's report once, then keep only it
    Nothing goes into a pull request without this pass.
 7. **Open the pull request.** Push the change's branch and open a pull request against `main`.
    Link it to the thread when the tool exists.
-   Tell the user that CodeRabbit reviews it, and to say when it has.
+   Then run the `squash-msg` skill with the pull request's number.
+   In one message, give the user the pull request's URL, the squash message's code block,
+   and one line saying you watch the pull request.
+   Then call `watch_pull_request` on it and end your turn.
+   Without that tool, say instead that CodeRabbit reviews it,
+   and ask the user to say when it has, and when the pull request merged.
    Never merge into `main`. The user merges the pull request.
-8. **Answer CodeRabbit** when the user asks, as the Answer CodeRabbit section says.
+8. **Watch the pull request.** On each wake, and when the user asks, run `gh pr view <pr> --json state -q .state`:
+   - `MERGED`: call `unwatch_pull_request`, run the `cleanup` skill, then report in one line.
+   - `CLOSED`: call `unwatch_pull_request` and tell the user.
+   - `OPEN` with new comments or reviews: answer them as the Answer CodeRabbit section says, with no prompt from the user.
+     After you push fixes, run `squash-msg` again. Give the message again only when it changed.
+   - A failed check or a conflict: tell the user in one line. Fix nothing unless the user asks.
+   - Nothing new: end your turn with one line at most.
+
+   The watch stays on after each wake, so never call `watch_pull_request` again on a wake.
+   A wake is not a merge decision, and a merge may not wake you at all.
+   So Session start in `lead.md` and the user's word still run the clean up.
+   Never wait for a pull request with sleep, a loop, `gh --watch`, Monitor or ScheduleWakeup.
 
 A change with one step skips the step review: the change review is its only review.
 A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
@@ -176,6 +193,7 @@ It never reruns the builder for a finding that has a fixed SHA.
 ## Clean up
 
 The lead runs `scripts/cleanup.sh` at session start, as `lead.md` says.
+It follows Session start again when a watch wake shows the pull request merged (see step 8), or when the user says it merged.
 Run `scripts/cleanup.sh <change-branch>` after each step merges.
 
 ## Other agents on call

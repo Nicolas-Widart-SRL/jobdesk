@@ -251,7 +251,7 @@ pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usiz
 
 /// A small square of the stamp ink beside something that waits on the user.
 pub fn stamp_square(ui: &mut Ui, spoken: &str) -> Response {
-    let color = Palette::of(ui).stamp;
+    let color = Palette::of(ui).turn;
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, color);
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, spoken));
@@ -355,7 +355,7 @@ impl CountChip {
     /// `on_chrome` takes the lighter stamp that reads on the navy frame.
     pub(in crate::ui_kit) fn layout(ui: &Ui, n: usize, on_chrome: bool) -> Self {
         let p = Palette::of(ui);
-        let (fill, ink) = if on_chrome { (p.stamp_on_chrome, p.on_stamp_chrome) } else { (p.stamp, p.on_stamp) };
+        let (fill, ink) = if on_chrome { (p.turn_on_chrome, p.on_turn_chrome) } else { (p.turn, p.on_turn) };
         Self { galley: line(ui, &n.to_string(), Type::TAG, ink, f32::INFINITY), fill, ink }
     }
 

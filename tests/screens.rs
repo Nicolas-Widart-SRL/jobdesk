@@ -491,7 +491,7 @@ fn stop_here_ends_your_turn() {
     assert!(harness.query_all_by_label("Your turn").count() == 0, "no run is tagged Your turn");
     assert!(harness.query_all_by_label("Ready for reply").count() > 0, "the tag reads Ready for reply");
     assert!(is_shown(&harness, "Claude is done for now"));
-    assert!(harness.query_by_label_contains("need you").is_none(), "the Tasks tab has no mark");
+    assert!(harness.query_by_label_contains("Tasks, ").is_none(), "the Tasks tab has no mark");
     assert!(harness.query_by_label_contains("needs you").is_none());
     assert!(is_shown(&harness, "Send"), "the reply field stays under the story");
     assert!(!is_shown(&harness, "Go ahead with the draft"));
@@ -663,7 +663,8 @@ fn the_turn_bar_fits_the_smallest_window() {
     assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
 }
 
-const STATUS_LINE: &str = "Slash commands stay the only writers of your files.";
+/// The theme switch, which sits in the status line.
+const STATUS_LINE: &str = "System";
 
 /// A reply takes a stop's story back to following the run: its newest row comes into view.
 #[test]
@@ -1145,7 +1146,7 @@ fn a_waiting_run_deals_a_your_turn_card() {
     press(&mut harness, Key::N);
     assert!(is_shown(&harness, "/apply: proceed with drafting?"));
 
-    harness.get_by_label("Open run").click();
+    harness.get_by_label("Open task").click();
     harness.run_steps(3);
     harness.get_by_label("Recent runs");
 }

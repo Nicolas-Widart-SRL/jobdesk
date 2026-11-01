@@ -13,13 +13,6 @@ use crate::ui_kit::tokens::{
     ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
-/// What fills a card's tab: the card itself with the kind in a status tone, or the stamp for what Claude asks of the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TabInk {
-    Tone(Tone),
-    Stamp,
-}
-
 /// Where a card's tab sits and what fills it, so the card under it can open its top edge there.
 #[derive(Debug, Clone, Copy)]
 #[must_use]
@@ -29,11 +22,12 @@ pub struct CardTab {
 }
 
 /// The folder tab on top of the dealt card. Hand it to `deal`, which joins the two.
-pub fn card_tab(ui: &mut Ui, title: &str, ink: TabInk, when: &str) -> CardTab {
+/// The card fills it, with the kind in its status tone. `Turn`, for what Claude asks of the user, fills it with the stamp.
+pub fn card_tab(ui: &mut Ui, title: &str, tone: Tone, when: &str) -> CardTab {
     let p = Palette::of(ui);
-    let (fill, title_ink, when_ink) = match ink {
-        TabInk::Tone(tone) => (p.card, tone.color(&p), p.muted),
-        TabInk::Stamp => (p.stamp, p.on_stamp, p.on_stamp),
+    let (fill, title_ink, when_ink) = match tone {
+        Tone::Turn => (p.turn, p.on_turn, p.on_turn),
+        tone => (p.card, tone.color(&p), p.muted),
     };
     let (x, y) = CARD_TAB_PADDING;
     let shown = Frame::new().fill(fill).corner_radius(TAB_TOP).inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
@@ -45,7 +39,7 @@ pub fn card_tab(ui: &mut Ui, title: &str, ink: TabInk, when: &str) -> CardTab {
         });
     });
     let rect = shown.response.rect;
-    if let TabInk::Tone(_) = ink {
+    if tone != Tone::Turn {
         ui.painter().rect_stroke(rect, TAB_TOP, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
     }
     CardTab { rect, fill }

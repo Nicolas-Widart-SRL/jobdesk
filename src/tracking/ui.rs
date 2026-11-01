@@ -179,7 +179,7 @@ impl TrackerScreen {
                         ui.label(rich(ui, format!("fit {fit}"), Type::SMALL, Ink::Muted));
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        let (style, ink) = if waits { (Type::TAG, Ink::Stamp) } else { (Type::SMALL, Ink::Faint) };
+                        let (style, ink) = if waits { (Type::TAG, Ink::Status(Tone::Turn)) } else { (Type::SMALL, Ink::Faint) };
                         ui.add(egui::Label::new(rich(ui, meta, style, ink)).wrap());
                     });
                 });

@@ -6,7 +6,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabInk, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
     check_tag, chrome_status, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
@@ -64,10 +64,8 @@ fn swatches(ui: &mut Ui) {
         ("chrome_muted", p.chrome_muted),
         ("chrome_line", p.chrome_line),
         ("chrome_alert", p.chrome_alert),
-        ("stamp", p.stamp),
-        ("on_stamp", p.on_stamp),
-        ("stamp_on_chrome", p.stamp_on_chrome),
-        ("on_stamp_chrome", p.on_stamp_chrome),
+        ("turn_on_chrome", p.turn_on_chrome),
+        ("on_turn_chrome", p.on_turn_chrome),
         ("card", p.card),
     ];
     for row in colors.chunks(SWATCHES_PER_ROW) {
@@ -280,7 +278,7 @@ fn board(ui: &mut Ui) {
             });
             index_card(ui, CardLook { waits: true, ..CardLook::default() }, "Waiting card", |ui| {
                 strong(ui, "Waiting card");
-                ui.label(rich(ui, "No reply in 15 days", Type::TAG, Ink::Stamp));
+                ui.label(rich(ui, "No reply in 15 days", Type::TAG, Tone::Turn));
             });
             index_card(ui, CardLook { faded: true, ..CardLook::default() }, "Faded card", |ui| {
                 strong(ui, "Faded card");
@@ -300,7 +298,7 @@ fn board(ui: &mut Ui) {
 
 fn tray(ui: &mut Ui) {
     dealt(ui, "send", |ui| {
-        let tab = card_tab(ui, "Ready to send", TabInk::Tone(Tone::Drafted), "Due today");
+        let tab = card_tab(ui, "Ready to send", Tone::Drafted, "Due today");
         deal(ui, tab, DealLook { key: "send", frame: None, behind: 3 }, |ui| {
             ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
         }, |ui| {
@@ -310,7 +308,7 @@ fn tray(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     dealt(ui, "asks", |ui| {
-        let tab = card_tab(ui, "Claude asks", TabInk::Stamp, "Paused task");
+        let tab = card_tab(ui, "Claude asks", Tone::Turn, "Paused task");
         deal(ui, tab, DealLook { key: "asks", frame: Some(Tone::Interview), behind: 9 }, |ui| {
             ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
         }, |ui| {
@@ -319,7 +317,7 @@ fn tray(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     dealt(ui, "turn", |ui| {
-        let tab = card_tab(ui, "Your turn", TabInk::Stamp, "Task waits");
+        let tab = card_tab(ui, "Your turn", Tone::Turn, "Task waits");
         deal(ui, tab, DealLook { key: "turn", frame: Some(Tone::Turn), behind: 1 }, |ui| {
             ui.label(rich(ui, "A card for a task that waits", Type::DEAL, Ink::Text));
         }, |ui| {
@@ -454,7 +452,7 @@ fn postmark(ui: &mut Ui) {
         check_tag(ui, CheckMark::Ok);
         check_tag(ui, CheckMark::Unclear);
         check_tag(ui, CheckMark::Fails);
-        tally(ui, 3, 8, Ink::Stamp);
+        tally(ui, 3, 8, Tone::Turn);
     });
     lead_line(ui, "Good fit, 78 of 100.", "Five checks pass. The day rate is not in the ad, so check it before you apply.");
     reveal_command(ui, "/apply https://meridian.example/jobs/42", &mut false);
@@ -536,9 +534,10 @@ fn gallery(ui: &mut Ui) {
 }
 
 fn render(theme: Theme, name: &str) {
+    // One point per pixel: at more, the sheet is taller than the 8192px a texture holds.
     let mut harness = Harness::builder()
-        .with_size([1000.0, 6900.0])
-        .with_pixels_per_point(1.25)
+        .with_size([1000.0, 7450.0])
+        .with_pixels_per_point(1.0)
         .with_theme(theme)
         .with_context_setup(install_look)
         .wgpu()

@@ -37,11 +37,9 @@ pub struct Palette {
     pub chrome_line: Color32,
     /// The failed-source square on a chrome tab.
     pub chrome_alert: Color32,
-    /// The one ink for what waits on the user.
-    pub stamp: Color32,
-    pub on_stamp: Color32,
-    pub stamp_on_chrome: Color32,
-    pub on_stamp_chrome: Color32,
+    /// `turn`, the stamp ink, where it sits on the navy frame.
+    pub turn_on_chrome: Color32,
+    pub on_turn_chrome: Color32,
     /// The fill of deal, job slip and application cards.
     pub card: Color32,
 }
@@ -80,10 +78,8 @@ const DARK: Palette = Palette {
     chrome_muted: hex(0xb3c4d6),
     chrome_line: hex(0x33506f),
     chrome_alert: hex(0xf7a697),
-    stamp: hex(0xf48cc0),
-    on_stamp: hex(0x0d1a2b),
-    stamp_on_chrome: hex(0xf48cc0),
-    on_stamp_chrome: hex(0x0d1a2b),
+    turn_on_chrome: hex(0xf48cc0),
+    on_turn_chrome: hex(0x0d1a2b),
     card: hex(0x1a2f49),
 };
 
@@ -117,10 +113,8 @@ const LIGHT: Palette = Palette {
     chrome_muted: hex(0xb3c4d6),
     chrome_line: hex(0x33506f),
     chrome_alert: hex(0xf7a697),
-    stamp: hex(0xb0246a),
-    on_stamp: hex(0xffffff),
-    stamp_on_chrome: hex(0xf48cc0),
-    on_stamp_chrome: hex(0x0d1a2b),
+    turn_on_chrome: hex(0xf48cc0),
+    on_turn_chrome: hex(0x0d1a2b),
     card: hex(0xffffff),
 };
 
@@ -165,14 +159,13 @@ impl Tone {
     }
 }
 
-/// How strongly text or a mark reads: a neutral step, a job status, or the stamp.
+/// How strongly text or a mark reads: a neutral step, or a job status. `Status(Tone::Turn)` is the stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ink {
     Text,
     Muted,
     Faint,
     Status(Tone),
-    Stamp,
 }
 
 impl From<Tone> for Ink {
@@ -188,7 +181,6 @@ impl Ink {
             Self::Muted => p.muted,
             Self::Faint => p.faint,
             Self::Status(tone) => tone.color(p),
-            Self::Stamp => p.stamp,
         }
     }
 }
@@ -275,8 +267,8 @@ mod tests {
         for theme in [Theme::Dark, Theme::Light] {
             let p = Palette::for_theme(theme);
             for (name, ink, fill) in [
-                ("on_stamp on stamp", p.on_stamp, p.stamp),
-                ("on_stamp_chrome on stamp_on_chrome", p.on_stamp_chrome, p.stamp_on_chrome),
+                ("on_turn on turn", p.on_turn, p.turn),
+                ("on_turn_chrome on turn_on_chrome", p.on_turn_chrome, p.turn_on_chrome),
                 ("chrome_ink on chrome", p.chrome_ink, p.chrome),
                 ("chrome_muted on chrome", p.chrome_muted, p.chrome),
                 ("chrome_ink on chrome_tab", p.chrome_ink, p.chrome_tab),

@@ -502,7 +502,7 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
                 let rect = frame.response.rect;
                 let edge = Rect::from_min_max(rect.min, pos2(rect.left() + WAITS_EDGE, rect.bottom()));
                 let corners = CornerRadius { nw: RADIUS_CARD, sw: RADIUS_CARD, ne: 0, se: 0 };
-                ui.painter().rect_filled(edge, corners, p.stamp);
+                ui.painter().rect_filled(edge, corners, p.turn);
             }
         })
         .response;

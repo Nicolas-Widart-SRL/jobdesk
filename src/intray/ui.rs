@@ -3,7 +3,7 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer, horizon_words};
 use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
+    AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
     deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
@@ -32,20 +32,19 @@ enum Pressed {
     BringAll,
 }
 
-/// A kind's name and its tab's ink.
-/// Only what Claude asks of the user takes the stamp: those cards hold a paused run.
-fn kind_look(kind: CardKind) -> (&'static str, TabInk) {
-    let toned = |name, tone| (name, TabInk::Tone(tone));
+/// A kind's name and its tab's tone.
+/// Only what Claude asks of the user takes the stamp, `Turn`: those cards hold a paused or waiting run.
+fn kind_look(kind: CardKind) -> (&'static str, Tone) {
     match kind {
-        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp),
-        CardKind::Turn => ("Your turn", TabInk::Stamp),
-        CardKind::Send => toned("Ready to send", Tone::Drafted),
-        CardKind::Triage => toned("New match", Tone::Active),
-        CardKind::Prep => toned("Interview prep", Tone::Interview),
-        CardKind::Offer => toned("Offer", Tone::Offer),
-        CardKind::GuardFlag => toned("Check this ad", Tone::Interview),
-        CardKind::FollowUp => toned("Follow up", Tone::Active),
-        CardKind::Close => toned("Close it?", Tone::Plain),
+        CardKind::Permission | CardKind::Question => ("Claude asks", Tone::Turn),
+        CardKind::Turn => ("Your turn", Tone::Turn),
+        CardKind::Send => ("Ready to send", Tone::Drafted),
+        CardKind::Triage => ("New match", Tone::Active),
+        CardKind::Prep => ("Interview prep", Tone::Interview),
+        CardKind::Offer => ("Offer", Tone::Offer),
+        CardKind::GuardFlag => ("Check this ad", Tone::Interview),
+        CardKind::FollowUp => ("Follow up", Tone::Active),
+        CardKind::Close => ("Close it?", Tone::Plain),
     }
 }
 

@@ -34,10 +34,13 @@ Design: $ARGUMENTS
 The canvases and their handoff files in `mockups/handoff/` (or the `handoff/` folder of the brief's folder) are the handoff:
 the brief, the states, the rules, the new widgets and the doc changes.
 Spawn one last fresh `designer` whose brief says the user approved and names the chosen options.
-It only finalizes the round's handoff files: it removes the options not chosen and the Open section.
+Give it the folder, the paths of the handoff files and the canvases of each option.
+It only finalizes the round: it removes the options not chosen and the Open section from the handoff files,
+deletes the canvases and PNGs of the options not chosen, and drops them from the index line.
 Commit the files only when the user asks.
-The design session ends there. Tell the user to run `/clear` or start a new session,
-then run `ship` with the canvas paths and every changed handoff file there.
+The design session ends there. Tell the user to commit the canvases and handoff files and merge them to `origin/main`,
+because `ship` builds from it. Then tell them to run `/clear` or start a new session
+and run `ship` with the canvas paths and every changed handoff file there.
 The planner reads those files and puts their doc changes in a docs step, which also deletes the Doc changes section from each file.
 
 ## Claude Design

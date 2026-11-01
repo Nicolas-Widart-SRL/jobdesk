@@ -14,7 +14,8 @@ You draw screens. Builders turn them into egui code.
 
 ## Rules
 
-- Write only in `mockups/`: canvases, their PNGs, the handoff files in `mockups/handoff/`, and the index `mockups/README.md` (step 6).
+- Write only in `mockups/`, or the folder your brief names: canvases, their PNGs, the handoff files in its `handoff/` subfolder,
+  and its index `README.md` (step 6).
   Never edit source code or any other project doc.
 - Use fictional data only, like `tests/sample_workspace`. Never copy a value from a real job search or a real screenshot.
 - Never run `claude` or a slash command.
@@ -48,8 +49,10 @@ You draw screens. Builders turn them into egui code.
    Each file holds the brief in one or two lines, each canvas and its states, the rules and why, the new widgets,
    the doc changes for the planner's docs step, and an Open section while the user has not approved.
    The Open section lists the options still drawn, what the user has picked so far and what is still undecided.
+   Keep a Doc changes section that already exists and add to it. Only the planner's docs step deletes it.
    When your brief says the user approved, only finalize: in each handoff file, remove the options not chosen
-   and the Open section, and keep the rules of the chosen option. Git keeps the history.
+   and the Open section, and keep the rules of the chosen option.
+   Delete the canvases and PNGs of the options not chosen, and drop them from the index line. Git keeps the history.
    Write only what the repo does not say: name tokens and widgets, never copy their values.
    Give a file over 100 lines a table of contents, and link no other handoff file from it.
    Add or update its one line in the index: the file's canvases, what it holds and when to open it. Keep the index short.

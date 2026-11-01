@@ -13,7 +13,7 @@ pub enum Outcome {
 impl Outcome {
     pub fn verb(self) -> &'static str {
         match self {
-            Self::Followed => "Command opened",
+            Self::Followed => "Task opened",
             Self::Later => "Set aside",
             Self::Skipped => "Skipped",
             Self::Kept => "Kept",
@@ -74,8 +74,8 @@ impl Decision {
     }
 
     pub fn label(&self) -> String {
-        if self.outcome == Outcome::Followed {
-            return self.action.as_ref().map_or_else(|| "Task opened".to_owned(), |action| format!("{action} opened"));
+        if let (Outcome::Followed, Some(action)) = (self.outcome, &self.action) {
+            return format!("Opened \"{}\"", action.trim_end_matches('\u{2026}'));
         }
         let verb = self.outcome.verb();
         self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb}, {}", reason.label().to_lowercase()))
@@ -126,7 +126,9 @@ mod tests {
     #[test]
     fn a_followed_decision_names_the_task_it_opened() {
         let followed = Decision { action: Some("Draft application".into()), ..decided(Outcome::Followed) };
-        assert_eq!(followed.label(), "Draft application opened");
+        assert_eq!(followed.label(), "Opened \"Draft application\"");
+        let ellipsis = Decision { action: Some("Draft application\u{2026}".into()), ..followed };
+        assert_eq!(ellipsis.label(), "Opened \"Draft application\"");
         assert_eq!(decided(Outcome::Followed).label(), "Task opened");
     }
 }

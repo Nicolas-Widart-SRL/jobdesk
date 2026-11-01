@@ -467,8 +467,7 @@ impl InTray {
             _ if asks_reason && last.reason.is_none() => "Skipped. Why? Optional.".to_owned(),
             _ => last.label(),
         };
-        let said = if last.outcome == Outcome::Followed { last.label() } else { last.outcome.verb().to_owned() };
-        let spoken = format!("Last decision: {said}, {}. Press U to undo.", last.name);
+        let spoken = format!("Last decision: {}, {}. Press U to undo.", last.label(), last.name);
         Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
@@ -639,8 +638,8 @@ mod tests {
         assert_eq!(request, Some(Request::Command("/apply".into())));
         assert!(dealt(&tray, &jobs).is_empty());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Draft application opened"));
-        assert_eq!(offer.spoken, "Last decision: Draft application opened, Acme. Press U to undo.");
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Opened \"Draft application\""));
+        assert_eq!(offer.spoken, "Last decision: Opened \"Draft application\", Acme. Press U to undo.");
         tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
     }
@@ -920,7 +919,7 @@ mod tests {
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!(offer.note, "Skipped, scope");
         assert_eq!(offer.reason, Some(SkipReason::Scope));
-        assert_eq!(offer.spoken, "Last decision: Skipped, Acme. Press U to undo.");
+        assert_eq!(offer.spoken, "Last decision: Skipped, scope, Acme. Press U to undo.");
     }
 
     #[test]

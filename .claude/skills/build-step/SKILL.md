@@ -15,7 +15,8 @@ You build one step in your own git worktree. Other builders work beside you in t
 - Test data is fictional. Add it to `tests/sample_workspace` or write it inline in the test.
 - Build only the step in your brief. When the step needs more, stop and say what.
 - Never push, merge or open a pull request. The lead merges steps into the change's branch and opens the pull request.
-- Never rebase, reset or push the change's branch. The lead does that.
+- Never move the change's branch itself: never rebase, reset or push it. The lead does that.
+  Step 1 resets only your own worktree branch to the change's branch.
 - Never open the app on the user's desktop. The snapshot tests show the screens.
 - Leave your worktree in place, because the lead runs the checks in it.
   The lead removes it, and its large `target/`, after the step merges.

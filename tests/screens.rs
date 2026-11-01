@@ -925,8 +925,11 @@ fn esc_in_the_quit_dialog_keeps_working() {
     assert!(harness.query_all_by_label("Your turn").count() > 0, "the session is still open");
 }
 
+/// The command key as the platform sends it: Cmd on macOS and Ctrl elsewhere, each with `command` set.
+const COMMAND: egui::Modifiers = egui::Modifiers { alt: false, ctrl: !cfg!(target_os = "macos"), shift: false, mac_cmd: cfg!(target_os = "macos"), command: true };
+
 fn cmd_enter(harness: &mut Harness) {
-    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::Enter);
+    harness.key_press_modifiers(COMMAND, Key::Enter);
     harness.run_steps(3);
 }
 
@@ -955,7 +958,7 @@ fn cmd_enter_runs_only_when_run_is_enabled() {
     // An empty budget leaves Run disabled.
     budget(&harness).focus();
     harness.run_steps(2);
-    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::A);
+    harness.key_press_modifiers(COMMAND, Key::A);
     press(&mut harness, Key::Backspace);
     posting(&harness).focus();
     posting(&harness).type_text("Kestrel Payments");
@@ -1005,7 +1008,7 @@ fn cmd_enter_starts_nothing_outside_the_launcher() {
 #[test]
 fn esc_leaves_the_launcher_for_where_it_came_from() {
     let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_esc", &SharedCalls::default()));
-    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
+    harness.key_press_modifiers(COMMAND, Key::K);
     harness.run_steps(3);
     harness.get_by_label(LAUNCHER);
 
@@ -1015,6 +1018,28 @@ fn esc_leaves_the_launcher_for_where_it_came_from() {
     press(&mut harness, Key::Escape);
     assert!(!is_shown(&harness, "Haiku"), "Esc closed the list");
     assert!(is_shown(&harness, LAUNCHER), "and left the launcher open");
+
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, LAUNCHER));
+    harness.get_by_label("Tune scoring");
+}
+
+/// In a text field Esc only leaves the field, and keeps what was typed. A second Esc leaves the launcher.
+#[test]
+fn esc_in_a_field_leaves_the_field_first() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_esc_field", &SharedCalls::default()));
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label_contains("/apply").click();
+    harness.run_steps(3);
+    posting(&harness).focus();
+    posting(&harness).type_text("Kestrel Payments");
+    harness.run_steps(2);
+
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher stays");
+    assert!(!posting(&harness).is_focused(), "the field let go");
+    assert_eq!(posting(&harness).value().as_deref(), Some("Kestrel Payments"));
 
     press(&mut harness, Key::Escape);
     assert!(!is_shown(&harness, LAUNCHER));

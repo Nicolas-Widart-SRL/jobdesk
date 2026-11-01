@@ -24,7 +24,8 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_text_focus, page_body, paper,
+    primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -217,6 +218,8 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
+                // The launcher no longer leads back into the last folder's screens.
+                self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
@@ -272,6 +275,7 @@ impl Shell {
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
         }
+        note_text_focus(ui.ctx());
     }
 
     /// Runs change between snapshots, so the queue is dealt again each frame.
@@ -309,14 +313,20 @@ impl Shell {
         self.screen = Screen::Launcher;
     }
 
+    /// Where Esc leaves the launcher for. A dossier that has gone falls back to its tab.
+    fn launcher_return(&self) -> Screen {
+        let shown = |folder: &str| self.snapshot.pipeline.card_in_folder(folder).is_some();
+        match self.launcher_from {
+            Screen::Dossier if !self.open_dossier.as_ref().is_some_and(|open| shown(&open.folder)) => Screen::Dossier.tab(),
+            screen => screen,
+        }
+    }
+
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
         // While the quit dialog asks, Esc means Keep working, and the launcher's Cmd Enter starts nothing.
         if self.confirm_quit {
-            let keep = ctx.input_mut(|input| {
-                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter);
-                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-            });
-            if keep {
+            ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+            if back_pressed(ctx) {
                 self.confirm_quit = false;
             }
         }
@@ -573,10 +583,8 @@ impl Shell {
                 }
             }
             Screen::Launcher => {
-                // An open list, such as the model's, takes Esc first and closes. The popups are still open from the frame before.
-                let back = !egui::Popup::is_any_open(ui.ctx()) && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-                if back {
-                    self.screen = self.launcher_from;
+                if back_pressed(ui.ctx()) {
+                    self.screen = self.launcher_return();
                     ui.ctx().request_repaint();
                 } else if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
                     self.run_screen.select(id);

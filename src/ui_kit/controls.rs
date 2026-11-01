@@ -166,15 +166,14 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
     let enabled = ui.is_enabled();
     // A filled button keeps its ink: its fill is what goes pale.
     let ink = if enabled || matches!(look, Look::Primary | Look::On) { ink } else { dimmed(ink) };
-    let glyphs: Vec<_> = match hint {
-        Hint::Keys(keys) => keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect(),
-        _ => Vec::new(),
-    };
-    // A chord sits 2px further out than a button's own gap, as on `shortcut_button`.
-    let keys = match hint {
-        Hint::None => 0.0,
-        Hint::Key(_) => KEY_SIZE + BUTTON_GAP,
-        Hint::Keys(_) => BUTTON_GAP + 2.0 + glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32,
+    let (chord, keys) = match hint {
+        Hint::None => (None, 0.0),
+        Hint::Key(_) => (None, KEY_SIZE + BUTTON_GAP),
+        Hint::Keys(keys) => {
+            let chord = Chord::new(ui, keys, ink);
+            let width = chord.width;
+            (Some(chord), width)
+        }
     };
     let room = ui.available_width() - fit.padding * 2.0 - keys;
     let galley = line(ui, text, fit.font, ink, room);
@@ -191,11 +190,8 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
         let hint = Rect::from_center_size(egui::pos2(text_rect.right() + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
         paint_key(ui, hint, key, ink, fill);
     }
-    let mut x = text_rect.right() + BUTTON_GAP + 2.0;
-    for glyph in glyphs {
-        let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
-        x += glyph.size().x + KEYS_GAP;
-        paint_text(ui, at, glyph, ink, fill);
+    if let Some(chord) = chord {
+        chord.paint(ui, text_rect.right(), rect.center().y, ink, fill);
     }
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
@@ -260,11 +256,8 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let enabled = ui.is_enabled();
     let (ink, key_ink, border) = if enabled { (p.text, p.muted, p.line) } else { (dimmed(p.text), dimmed(p.muted), dimmed(p.line)) };
     let label = line(ui, text, NORMAL.font, ink, f32::INFINITY);
-    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, key_ink, f32::INFINITY)).collect();
-    let glyphs_width = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
-    // The keys sit 2px further out than a button's own gap.
-    let lead = if glyphs.is_empty() { 0.0 } else { BUTTON_GAP + 2.0 };
-    let size = vec2(NORMAL.padding * 2.0 + label.size().x + lead + glyphs_width, NORMAL.height);
+    let chord = Chord::new(ui, keys, key_ink);
+    let size = vec2(NORMAL.padding * 2.0 + label.size().x + chord.width, NORMAL.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if pressed(&response) { p.line } else { p.card };
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
@@ -272,16 +265,62 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     if pointer_over(&response) && !pressed(&response) {
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
-    let mut x = text_rect.right() + lead;
+    let text_right = text_rect.right();
     paint_text(ui, text_rect.min, label, ink, fill);
-    for glyph in glyphs {
-        let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
-        x += glyph.size().x + KEYS_GAP;
-        paint_text(ui, at, glyph, key_ink, fill);
-    }
+    chord.paint(ui, text_right, rect.center().y, key_ink, fill);
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, text));
     response
+}
+
+/// A chord such as Cmd K, spelled out in plain glyphs after a button's text.
+struct Chord {
+    glyphs: Vec<Arc<Galley>>,
+    /// The room it takes after the text, with its lead. No keys take none.
+    width: f32,
+}
+
+impl Chord {
+    /// The keys sit 2px further out than a button's own gap.
+    const LEAD: f32 = BUTTON_GAP + 2.0;
+
+    fn new(ui: &Ui, keys: &[&str], ink: Color32) -> Self {
+        let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect();
+        let width = if glyphs.is_empty() {
+            0.0
+        } else {
+            Self::LEAD + glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * (glyphs.len() - 1) as f32
+        };
+        Self { glyphs, width }
+    }
+
+    /// Paints the keys after the text that ends at `text_right`, centred on `centre_y`.
+    fn paint(self, ui: &Ui, text_right: f32, centre_y: f32, ink: Color32, under: Color32) {
+        let mut x = text_right + Self::LEAD;
+        for glyph in self.glyphs {
+            let at = egui::pos2(x, centre_y - glyph.size().y / 2.0);
+            x += glyph.size().x + KEYS_GAP;
+            paint_text(ui, at, glyph, ink, under);
+        }
+    }
+}
+
+fn text_focus_id() -> egui::Id {
+    egui::Id::NULL.with("text_field_had_focus")
+}
+
+/// Notes, at the end of each frame, whether a text field has the focus. egui drops the focus on Esc before the next
+/// frame's widgets run, so `back_pressed` reads this note to tell leaving a field from going back.
+pub fn note_text_focus(ctx: &egui::Context) {
+    let typing = ctx.memory(|memory| memory.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+    ctx.data_mut(|data| data.insert_temp(text_focus_id(), typing));
+}
+
+/// Esc as back, for every dismisser. An open popup takes Esc first and closes, and in a text field Esc only leaves
+/// the field: a second Esc goes back. The key is taken only when it goes back.
+pub fn back_pressed(ctx: &egui::Context) -> bool {
+    let typing = ctx.data(|data| data.get_temp(text_focus_id())).unwrap_or(false);
+    !typing && !egui::Popup::is_any_open(ctx) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
 fn command_request_id() -> egui::Id {

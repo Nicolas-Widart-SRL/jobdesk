@@ -5,8 +5,8 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, blank_card, card_skeleton, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link,
-    page_body, page_head, panel_body, paper_with_footer, primary_button, primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
+    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, back_pressed, blank_card, card_skeleton, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note,
+    open_link, page_body, page_head, panel_body, paper_with_footer, primary_button, primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
@@ -141,10 +141,12 @@ impl TrackerScreen {
             return None;
         }
         action_bar(ui, pipeline);
-        if self.selected.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        let mut selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
+        // A card gone from the tracker closes without taking Esc, which stays free for whatever else listens.
+        if selected.is_none() || back_pressed(ui.ctx()) {
+            selected = None;
             self.selected = None;
         }
-        let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
         if let Some(card) = selected {
             side_column("application_details", 320.0).show(ui, |ui| {
                 paper_with_footer(ui, |ui| open = details(ui, card), |ui| actions(ui, card));

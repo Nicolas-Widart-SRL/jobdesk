@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::shared_kernel::WebUrl;
+use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::tokens::Type;
@@ -96,11 +96,6 @@ fn keep_web_links(commands: &mut Vec<OutputCommand>, from: usize) {
     });
 }
 
-/// Same extensions as the viewer, so both read the same images.
-fn markdown_options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES | Options::ENABLE_DEFINITION_LIST
-}
-
 /// Every ASCII punctuation mark escaped, so the text cannot form Markdown again.
 fn escaped(text: &str) -> String {
     text.chars().fold(String::new(), |mut out, c| {
@@ -116,7 +111,7 @@ fn escaped(text: &str) -> String {
 fn replace_images(text: &str) -> Option<String> {
     let mut out = String::new();
     let (mut copied, mut depth, mut alt, mut found) = (0, 0, String::new(), false);
-    for (event, range) in Parser::new_ext(text, markdown_options()).into_offset_iter() {
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Image { .. }) => {
                 if depth == 0 {

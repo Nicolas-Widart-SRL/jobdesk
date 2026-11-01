@@ -1,8 +1,9 @@
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::runs::domain::{ActivityKind, Run, RunStatus, StopPoint, stop_points};
+use crate::runs::domain::{ActivityKind, Run, StopPoint, stop_points};
+use crate::shared_kernel::markdown;
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// The question Claude closed its turn with, cut from its last message.
@@ -16,40 +17,51 @@ pub struct ClosingQuestion {
     pub range: Range<usize>,
 }
 
-/// The stop point the run waits at, when its turn ended on the step that has one.
+/// Whether the turn ended and the user is the one to act, with no prompt open.
+fn waiting_for_reply(run: &Run) -> bool {
+    run.is_your_turn() && !run.needs_user()
+}
+
+/// The stop point the run waits at, when its turn ended on the step that has one
+/// and the user has not answered since the rail reached it.
 pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
-    if run.status != RunStatus::AwaitingReply || run.is_busy() || run.needs_user() {
+    if !waiting_for_reply(run) || run.rail_moved_in_turn() != run.turn_number() {
         return None;
     }
     let rail = run.steps.as_ref()?;
-    stop_points(&run.line).iter().find(|stop| stop.after_step == rail.current)
+    let step = rail.labels.get(rail.current)?;
+    stop_points(&run.line).iter().find(|stop| stop.after == *step)
 }
 
 /// The last paragraph of this turn's last top-level message, when it asks something.
 /// Claude's text is untrusted: hidden characters are dropped, and a statement is not passed off as a question.
 pub fn closing_question(run: &Run) -> Option<ClosingQuestion> {
-    let turn_start = run.activity.iter().rposition(|activity| matches!(activity.kind, ActivityKind::You(_))).map_or(0, |at| at + 1);
-    let (activity, text) = run.activity.iter().enumerate().skip(turn_start).rev().find_map(|(at, activity)| match &activity.kind {
+    if !waiting_for_reply(run) {
+        return None;
+    }
+    let turn = run.activity.iter().enumerate().skip(run.current_turn_start());
+    let (activity, message) = turn.rev().find_map(|(at, activity)| match &activity.kind {
         ActivityKind::Claude(text) if !activity.nested => Some((at, text)),
         _ => None,
     })?;
-    let (range, plain) = last_paragraph(text)?;
+    let (range, plain) = last_paragraph(message)?;
     let text = visible_chars(&plain).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
-    text.ends_with('?').then_some(ClosingQuestion { text, activity, range })
+    text.ends_with('?').then(|| ClosingQuestion { text, activity, range: trimmed(message, range) })
 }
 
-/// Same extensions as the viewer's `markdown_options` in `ui_kit::text`, so both read a message the same way.
-/// The layers keep this module from reaching it.
-fn markdown_options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES | Options::ENABLE_DEFINITION_LIST
+/// The range without the whitespace around the text it holds.
+fn trimmed(message: &str, range: Range<usize>) -> Range<usize> {
+    let text = &message[range.clone()];
+    let start = range.start + (text.len() - text.trim_start().len());
+    start..start + text.trim().len()
 }
 
 /// The last paragraph outside any list, quote, table or footnote, with its text read as one line.
-fn last_paragraph(markdown: &str) -> Option<(Range<usize>, String)> {
+fn last_paragraph(text: &str) -> Option<(Range<usize>, String)> {
     let mut depth = 0usize;
     let mut open: Option<(Range<usize>, String)> = None;
     let mut last = None;
-    for (event, range) in Parser::new_ext(markdown, markdown_options()).into_offset_iter() {
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Paragraph) if depth == 0 => open = Some((range, String::new())),
             Event::End(TagEnd::Paragraph) if depth == 0 => last = open.take().or(last),
@@ -148,13 +160,53 @@ mod tests {
 
     #[test]
     fn nested_text_is_not_the_question() {
+        let nested = AgentEvent::AssistantText { text: "Is this the one?".into(), nested: true };
+        let mut only_nested = run("/apply x");
+        only_nested.apply(nested.clone());
+        ends_turn(&mut only_nested);
+        assert_eq!(closing_question(&only_nested), None);
+
+        let mut after_question = run("/apply x");
+        says(&mut after_question, "Shall I draft it?");
+        after_question.apply(nested);
+        ends_turn(&mut after_question);
+        assert_eq!(closing_question(&after_question).unwrap().text, "Shall I draft it?");
+    }
+
+    #[test]
+    fn no_question_while_the_run_works_or_asks_through_a_prompt() {
         let mut run = run("/apply x");
-        run.apply(AgentEvent::AssistantText { text: "Is this the one?".into(), nested: true });
+        says(&mut run, "Shall I draft it?");
+        assert_eq!(closing_question(&run), None);
+        ends_turn(&mut run);
+        assert!(closing_question(&run).is_some());
+        run.apply(AgentEvent::PromptRaised(prompt()));
+        assert_eq!(closing_question(&run), None);
+    }
+
+    #[test]
+    fn a_turn_claude_starts_on_its_own_has_its_own_question() {
+        let mut run = run("/apply x");
+        says(&mut run, "Shall I draft?");
+        ends_turn(&mut run);
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        reads(&mut run, "notes.md");
         ends_turn(&mut run);
         assert_eq!(closing_question(&run), None);
-        says(&mut run, "Shall I draft it?");
-        run.apply(AgentEvent::AssistantText { text: "Is this the one?".into(), nested: true });
-        assert_eq!(closing_question(&run).unwrap().text, "Shall I draft it?");
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        says(&mut run, "The agent is done. Shall I go on?");
+        ends_turn(&mut run);
+        assert_eq!(closing_question(&run).unwrap().text, "The agent is done. Shall I go on?");
+    }
+
+    #[test]
+    fn the_range_holds_only_the_paragraph_text() {
+        let message = "Shall I?\n\n- a\n- b";
+        assert_eq!(&message[asked(message).unwrap().range], "Shall I?");
+        let message = "Intro.\n\n   Shall I\n   draft it?  \n\n";
+        let range = asked(message).unwrap().range;
+        assert_eq!(&message[range.clone()], "Shall I\n   draft it?");
+        assert!(message[..range.start].ends_with("\n   "));
     }
 
     #[test]
@@ -179,6 +231,17 @@ mod tests {
         reads(&mut rank, "posting-scorer");
         ends_turn(&mut rank);
         assert_eq!(stop_point(&rank), None);
+    }
+
+    #[test]
+    fn an_answered_stop_point_does_not_come_back() {
+        let mut run = run("/apply https://x.example");
+        reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
+        ends_turn(&mut run);
+        assert!(stop_point(&run).is_some());
+        run.note_reply("No, stop here. Do not draft.");
+        ends_turn(&mut run);
+        assert_eq!(stop_point(&run), None);
     }
 
     #[test]

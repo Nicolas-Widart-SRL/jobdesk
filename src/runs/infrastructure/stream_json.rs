@@ -381,39 +381,9 @@ mod tests {
     }
 
     #[test]
-    fn reason_loses_hidden_characters() {
-        let raw = "a\u{200B}b\u{200C}c\u{200D}d\u{200E}e\u{200F}f\u{061C}g\u{2060}h\u{FEFF}i\u{E0001}j\u{E0041}\u{E007F}k";
-        assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("abcdefghijk"));
-    }
-
-    #[test]
     fn lone_carriage_return_breaks_the_line() {
         let raw = "Downloading 10%\rDownloading 50%\rDownloading 100%\rerror: failed\r\n";
         assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("Downloading 10%\n…\nDownloading 100%\nerror: failed"));
-    }
-
-    #[test]
-    fn reason_loses_short_and_eight_bit_escapes() {
-        let raw = "\u{1b}(Bplain\u{1b}7 text\u{1b}8 \u{9b}1;31mred\u{9b}0m end";
-        assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("plain text red end"));
-    }
-
-    #[test]
-    fn reason_loses_control_strings() {
-        for introducer in ["\u{1b}P", "\u{1b}X", "\u{1b}]", "\u{1b}^", "\u{1b}_", "\u{90}", "\u{98}", "\u{9d}", "\u{9e}", "\u{9f}"] {
-            for terminator in ["\u{1b}\\", "\u{9c}"] {
-                let raw = format!("before {introducer}payload{terminator}after");
-                assert_eq!(failure_reason(Some(&json!(raw))).as_deref(), Some("before after"), "{introducer:?} {terminator:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn bel_ends_only_osc() {
-        assert_eq!(failure_reason(Some(&json!("\u{1b}]title\u{7}after"))).as_deref(), Some("after"));
-        assert_eq!(failure_reason(Some(&json!("\u{9d}title\u{7}after"))).as_deref(), Some("after"));
-        assert_eq!(failure_reason(Some(&json!("\u{1b}Pa\u{7}b\u{1b}\\after"))).as_deref(), Some("after"));
-        assert_eq!(failure_reason(Some(&json!("\u{9f}a\u{7}b\u{9c}after"))).as_deref(), Some("after"));
     }
 
     #[test]

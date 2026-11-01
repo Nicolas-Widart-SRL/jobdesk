@@ -83,16 +83,17 @@ pub struct QuickReply {
     pub text: &'static str,
 }
 
-/// A step after which a command ends its turn and waits for the user.
+/// A step of the command's rail at which it ends its turn and waits for the user.
 #[derive(Debug, PartialEq, Eq)]
 pub struct StopPoint {
-    pub after_step: usize,
+    /// The label of that step in `StepRail::labels`.
+    pub after: &'static str,
     pub label: &'static str,
     pub replies: &'static [QuickReply],
 }
 
 const APPLY_STOPS: &[StopPoint] = &[StopPoint {
-    after_step: 1,
+    after: "Evaluate",
     label: "proceed with drafting",
     replies: &[
         QuickReply { button: "Go ahead with the draft", text: "Yes, proceed with drafting." },
@@ -130,6 +131,7 @@ pub fn compose_line(spec: &CommandSpec, value_of: impl Fn(&FieldSpec) -> String)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::domain::StepRail;
 
     #[test]
     fn composes_flags_and_skips_empty_fields() {
@@ -147,9 +149,18 @@ mod tests {
     #[test]
     fn only_apply_stops_to_ask() {
         let stops = stop_points("/apply https://x.example");
-        assert_eq!((stops.len(), stops[0].after_step), (1, 1));
+        assert_eq!((stops.len(), stops[0].after), (1, "Evaluate"));
         assert_eq!(stops[0].replies[1].text, "No, stop here. Do not draft.");
         assert!(stop_points("/rank").is_empty() && stop_points("").is_empty());
+    }
+
+    #[test]
+    fn every_stop_names_a_step_of_its_rail() {
+        for line in ["/apply x", "/rank", "/scrape"] {
+            let labels = StepRail::for_line(line).map_or(&[][..], |rail| rail.labels);
+            assert!(stop_points(line).iter().all(|stop| labels.contains(&stop.after)), "{line}");
+        }
+        assert!(!stop_points("/apply x").is_empty());
     }
 
     #[test]

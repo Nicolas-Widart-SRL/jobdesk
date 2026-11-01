@@ -76,6 +76,10 @@ pub struct Run {
     pub usage: Usage,
     /// Subagents still working after the turn that started them ended.
     pub background_agents: usize,
+    /// `turn_number()` when the rail last moved.
+    rail_moved_in_turn: usize,
+    /// Index in `activity` of the first row of the current turn.
+    turn_started_at: usize,
 }
 
 impl Run {
@@ -101,6 +105,8 @@ impl Run {
             files_changed: Vec::new(),
             usage: Usage::default(),
             background_agents: 0,
+            rail_moved_in_turn: 1,
+            turn_started_at: 1,
         }
     }
 
@@ -133,12 +139,24 @@ impl Run {
         self.activity.iter().filter(|activity| matches!(activity.kind, ActivityKind::You(_))).count()
     }
 
+    /// The `turn_number()` in which the rail last moved.
+    pub fn rail_moved_in_turn(&self) -> usize {
+        self.rail_moved_in_turn
+    }
+
+    /// Index in `activity` of the current turn's first row: the one after the user's last message,
+    /// or after the rows of the turn before when Claude began a turn on its own.
+    pub fn current_turn_start(&self) -> usize {
+        self.turn_started_at
+    }
+
     pub fn current_prompt(&self) -> Option<&Prompt> {
         self.prompts.front()
     }
 
     pub fn note_reply(&mut self, text: &str) {
         self.activity.push(Activity { kind: ActivityKind::You(text.to_owned()), nested: false });
+        self.turn_started_at = self.activity.len();
         self.status = RunStatus::Working;
     }
 
@@ -197,6 +215,9 @@ impl Run {
                 self.api_key_source = Some(api_key_source);
                 // Each turn starts with this, including the one Claude takes on its own when a background agent reports.
                 if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply) {
+                    if self.status == RunStatus::AwaitingReply {
+                        self.turn_started_at = self.activity.len();
+                    }
                     self.status = RunStatus::Working;
                 }
             }
@@ -229,8 +250,13 @@ impl Run {
 
     fn tool_started(&mut self, id: String, name: String, summary: String, nested: bool) {
         self.streaming_text.clear();
+        let turn = self.turn_number();
         if let Some(steps) = &mut self.steps {
+            let before = steps.current;
             steps.observe(&name, &summary);
+            if steps.current != before {
+                self.rail_moved_in_turn = turn;
+            }
         }
         if matches!(name.as_str(), "Agent" | "Task") {
             self.agents.push(summary.clone());

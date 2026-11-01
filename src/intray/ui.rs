@@ -4,7 +4,7 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
-    deal, divider, fat_tally, desk_label, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    deal, divider, fat_tally, desk_label, key_button, lead_line, link, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
@@ -472,11 +472,11 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             });
             if !queue.set_aside.is_empty() {
                 let n = queue.set_aside.len();
-                let (cards, verb, link) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
+                let (cards, verb, back) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.label(rich(ui, format!("{n} {cards} set aside with Later {verb} back tomorrow. "), Type::NOTE, Ink::Muted));
-                    if ui.add(egui::Link::new(rich(ui, link, Type::NOTE, Ink::Text).underline())).clicked() {
+                    if link(ui, back).clicked() {
                         *pressed = Some(Pressed::BringAll);
                     }
                 });

@@ -1,15 +1,16 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use egui::{Color32, CornerRadius, CursorIcon, Galley, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, vec2};
 
 use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::{CountChip, paint_key};
-use crate::ui_kit::palette::{Ink, Tone};
+use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
-use crate::ui_kit::text::{add_text, line, paint_centred, paint_text, rich};
+use crate::ui_kit::text::{add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
 };
 
@@ -303,8 +304,7 @@ pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
 /// The caller holds `open`, so it can close the line when what it belongs to goes away.
 pub fn reveal_command(ui: &mut Ui, line: &str, open: &mut bool) -> Response {
     let text = if *open { "Hide the command" } else { "Show the command" };
-    let link = rich(ui, text, Type::NOTE, Tone::Active);
-    let response = ui.add(egui::Link::new(link));
+    let response = link(ui, text);
     if response.clicked() {
         *open = !*open;
     }
@@ -544,6 +544,58 @@ pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: boo
     response
 }
 
+/// A link in a sentence or under an action: `active` ink with a `HAIRLINE` underline at rest, a `MARK_RULE` underline
+/// under the pointer, and `text` ink while pressed. Its hit rect is at least `MIN_HIT` tall, so the line of text is not the whole target.
+pub fn link(ui: &mut Ui, text: &str) -> Response {
+    let p = Palette::of(ui);
+    // A wrapping row moves a link that does not fit to its next line, so the text may take the row's whole width.
+    let room = ui.max_rect().width();
+    let size = line(ui, text, Type::NOTE, p.active, room).size();
+    let (rect, response) = ui.allocate_exact_size(vec2(size.x, size.y.max(MIN_HIT)), Sense::click());
+    let (over, down) = (pointer_over(&response), pressed(&response));
+    let ink = if down { p.text } else { p.active };
+    let galley = line(ui, text, Type::NOTE, ink, room);
+    let text_rect = Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - size.y / 2.0), size);
+    let rule = if over && !down { MARK_RULE } else { HAIRLINE };
+    ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(rule, ink));
+    paint_text(ui, text_rect.min, galley, ink, Color32::TRANSPARENT);
+    interactive(ui, &response, RADIUS_BUTTON);
+    response.widget_info(|| WidgetInfo::labeled(Role::Link, ui.is_enabled(), text));
+    response
+}
+
+/// How long a Copy button reads Copied, in seconds.
+const COPIED_FOR: f64 = 2.0;
+
+/// A small button that copies `text` to the clipboard and reads Copied for two seconds, so the user sees it worked.
+/// It is as wide as the longer of the two words, so nothing beside it moves when the word changes.
+pub fn copy_button(ui: &mut Ui, text: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    let ink = if enabled { p.text } else { dimmed(p.text) };
+    let copy = line(ui, "Copy", SMALL.font, ink, f32::INFINITY);
+    let copied = line(ui, "Copied", SMALL.font, ink, f32::INFINITY);
+    let size = vec2(copy.size().x.max(copied.size().x) + SMALL.padding * 2.0, SMALL.height);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|input| input.time);
+    if response.clicked() {
+        ctx.copy_text(text.to_owned());
+        ctx.data_mut(|data| data.insert_temp(response.id, now));
+    }
+    let left = ctx.data(|data| data.get_temp::<f64>(response.id)).map_or(0.0, |at| COPIED_FOR - (now - at));
+    if left > 0.0 {
+        ctx.request_repaint_after(Duration::from_secs_f64(left));
+    }
+    let (label, galley) = if left > 0.0 { ("Copied", copied) } else { ("Copy", copy) };
+    let (fill, border) = if enabled { look_colors(&p, Look::Plain, pointer_over(&response), pressed(&response), on_desk(ui)) } else { disabled_colors(&p, Look::Plain, on_desk(ui)) };
+    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    paint_centred(ui, rect, galley, ink, fill);
+    interactive(ui, &response, RADIUS_BUTTON);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
@@ -593,6 +645,28 @@ mod tests {
         harness.get_by_label("Jobs");
         harness.get_by_label("Applications, could not be read");
         harness.get_by_label("Tasks, 1 need you");
+    }
+
+    #[test]
+    fn copy_reads_copied_then_copy() {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([300.0, 80.0]).with_context_setup(setup).build_ui(|ui| {
+            copy_button(ui, "a draft");
+        });
+        harness.run();
+        let width = harness.get_by_label("Copy").rect().width();
+        harness.get_by_label("Copy").click();
+        harness.run();
+        assert_eq!(harness.get_by_label("Copied").rect().width(), width, "the button moved when it changed its word");
+        assert!(harness.query_by_label("Copy").is_none());
+        let later = harness.ctx.input(|input| input.time) + 2.1;
+        harness.input_mut().time = Some(later);
+        harness.run();
+        harness.get_by_label("Copy");
+        assert!(harness.query_by_label("Copied").is_none());
     }
 
     #[test]

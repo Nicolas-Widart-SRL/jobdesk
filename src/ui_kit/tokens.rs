@@ -28,6 +28,8 @@ pub const SMALL_BUTTON_PADDING: f32 = 8.0;
 pub const TOGGLE_GAP: f32 = 4.0;
 pub const FOCUS_RING: f32 = 2.0;
 pub const FOCUS_OFFSET: f32 = 1.0;
+/// The least height of anything that takes a click, so a link's text is never the whole target.
+pub const MIN_HIT: f32 = 24.0;
 
 pub const TAG_HEIGHT: f32 = 22.0;
 pub const TAG_PADDING: f32 = 7.0;

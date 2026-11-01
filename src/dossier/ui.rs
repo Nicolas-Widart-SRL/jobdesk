@@ -10,8 +10,8 @@ use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, P
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, copyable, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
-    panel_header, rich, segmented, slip, small_button, split, table_cell, table_head, tag, wrapped_height,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, copy_button, copyable, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
+    panel_header, rich, segmented, slip, split, table_cell, table_head, tag, wrapped_height,
 };
 
 
@@ -542,9 +542,7 @@ fn follow_up_row(ui: &mut Ui, first: bool, follow_up: &NamedText) {
     list_row(ui, first, |ui| {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if small_button(ui, "Copy").clicked() {
-                    ui.ctx().copy_text(follow_up.text.clone());
-                }
+                copy_button(ui, &follow_up.text);
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(egui::Label::new(rich(ui, follow_up.name.as_str(), Type::MONO, Ink::Text)).truncate());
                 });

@@ -8,8 +8,8 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, button, card_tab,
-    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
+    check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, faint_mono, fat_tally, figure,
+    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
@@ -120,6 +120,8 @@ fn buttons(ui: &mut Ui) {
         key_button(ui, "Later", "L");
         primary_key_button(ui, "Send", "Y");
         command_button(ui, "/rank");
+        link(ui, "Show the command");
+        copy_button(ui, "A draft");
     });
     // Disabled keeps the opaque rest fill, with ink and border at half. A primary's fill is at half over the paper.
     ui.add_space(6.0);
@@ -578,7 +580,7 @@ fn every_clickable_widget_shows_the_hand() {
     });
     harness.run();
     let mut clickable = Vec::new();
-    for role in [Role::Button, Role::Tab, Role::RadioButton] {
+    for role in [Role::Button, Role::Tab, Role::RadioButton, Role::Link] {
         for node in harness.query_all_by_role(role) {
             if !node.accesskit_node().is_disabled() {
                 clickable.push(node.rect().center());

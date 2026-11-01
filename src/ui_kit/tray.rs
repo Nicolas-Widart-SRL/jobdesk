@@ -1,6 +1,6 @@
 //! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Align, Color32, CornerRadius, Frame, Label, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{Align, Area, Color32, CornerRadius, Frame, Label, Layout, Margin, Order, Rect, Response, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
@@ -10,7 +10,7 @@ use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_o
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
-    ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
+    ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
 /// What fills a card's tab: the card itself with the kind in a status tone, or the stamp for what Claude asks of the user.
@@ -129,6 +129,18 @@ pub fn deal<R>(ui: &mut Ui, tab: CardTab, look: DealLook, body: impl FnOnce(&mut
     }
     stack_edges(ui, look.behind);
     shown.inner.inner
+}
+
+/// A copy of a decided card over `room`, `part` of the way off: slid toward the rail and faded.
+/// It sits on a layer that takes no input, so only the card under it can be pressed.
+pub fn departing(ui: &Ui, room: Rect, part: f32, add: impl FnOnce(&mut Ui)) {
+    let area = Area::new(ui.scope_id().with("departing")).order(Order::Foreground).interactable(false).constrain(false);
+    area.fixed_pos(room.min + vec2(MOTION_SLIDE * part, 0.0)).show(ui.ctx(), |ui| {
+        ui.set_opacity(1.0 - part);
+        ui.set_min_size(room.size());
+        ui.set_max_size(room.size());
+        add(ui);
+    });
 }
 
 /// The row under a card's body that holds its actions, ruled off on top.

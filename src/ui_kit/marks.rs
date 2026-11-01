@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use egui::emath::TSTransform;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
 
@@ -7,9 +8,9 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP, KEY_PADDING,
-    KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT, TALLY_GAP_Y,
-    TALLY_THIN, TallySize, Type,
+    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
+    KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, MOTION_TIME, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
+    TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
@@ -203,6 +204,8 @@ fn lit_ticks(total: usize, done: usize, ticks: usize) -> usize {
 
 /// The day's postmark: two rings, one tick per decision filled as it is made, and the date inside.
 /// With nothing to decide, the ring shows `DAY_STAMP_EMPTY_TICKS` unlit ticks in quieter rings.
+/// A new tick fills over `MOTION_TIME`, and when the last one fills the stamp settles from `DAY_STAMP_SETTLE`, once.
+/// Each animation is keyed on the tick count, so a ring that first shows or changes size never moves.
 pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usize, done: usize, spoken: &str) -> Response {
     let p = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(DAY_STAMP_SIZE), Sense::hover());
@@ -210,22 +213,37 @@ pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usiz
     let empty = total == 0;
     let ticks = if empty { DAY_STAMP_EMPTY_TICKS } else { total.min(DAY_STAMP_MAX_TICKS) };
     let lit = if empty { 0 } else { lit_ticks(total, done, ticks) };
+    let filled = ui.ctx().animate_value_with_time(response.id.with(("lit", ticks)), lit as f32, MOTION_TIME);
+    let full = !empty && lit == ticks;
+    let settled = ui.ctx().animate_bool_with_time(response.id.with(("full", ticks)), full, MOTION_TIME);
+    let mut shapes = Vec::new();
     let (inner, outer, width) = DAY_STAMP_TICK;
     for index in 0..ticks {
         let angle = -std::f32::consts::FRAC_PI_2 + (index as f32 + 0.5) * std::f32::consts::TAU / ticks as f32;
         let along = Vec2::angled(angle);
-        let color = if index < lit { p.text } else { p.off };
-        ui.painter().line_segment([centre + along * inner, centre + along * outer], Stroke::new(width, color));
+        let color = match (filled - index as f32).clamp(0.0, 1.0) {
+            1.0 => p.text,
+            0.0 => p.off,
+            part => p.off.lerp_to_gamma(p.text, part),
+        };
+        shapes.push(Shape::line_segment([centre + along * inner, centre + along * outer], Stroke::new(width, color)));
     }
     let edge = if empty { p.line } else { p.text };
     for radius in [DAY_STAMP_RINGS.0, DAY_STAMP_RINGS.1] {
-        ui.painter().circle_stroke(centre, radius, Stroke::new(HAIRLINE, edge));
+        shapes.push(Shape::circle_stroke(centre, radius, Stroke::new(HAIRLINE, edge)));
     }
     let (top, middle, bottom) = DAY_STAMP_LINES;
     for (text, style, color, below) in [(weekday, Type::SMALL, p.muted, top), (day, Type::CLOCK, p.text, middle), (month, Type::SMALL, p.muted, bottom)] {
         let galley = line(ui, text, style, color, DAY_STAMP_RINGS.1 * 2.0);
         // Centred on the ink, as the stamp is: dates have few descenders.
-        ui.painter().galley(centre + vec2(0.0, below) - galley.mesh_bounds.center().to_vec2(), galley, color);
+        shapes.push(Shape::galley(centre + vec2(0.0, below) - galley.mesh_bounds.center().to_vec2(), galley, color));
+    }
+    let scale = if full && settled < 1.0 { DAY_STAMP_SETTLE + (1.0 - DAY_STAMP_SETTLE) * settled } else { 1.0 };
+    for mut shape in shapes {
+        if scale != 1.0 {
+            shape.transform(TSTransform::from_translation(centre.to_vec2()) * TSTransform::from_scaling(scale) * TSTransform::from_translation(-centre.to_vec2()));
+        }
+        ui.painter().add(shape);
     }
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, spoken));
     response

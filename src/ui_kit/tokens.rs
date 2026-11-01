@@ -73,6 +73,13 @@ pub const DAY_STAMP_RINGS: (f32, f32) = (40.4, 28.4);
 pub const DAY_STAMP_TICK: (f32, f32, f32) = (31.0, 37.8, 4.7);
 pub const DAY_STAMP_EMPTY_TICKS: usize = 12;
 pub const DAY_STAMP_MAX_TICKS: usize = 40;
+/// The day stamp's size the moment its last tick fills, before it settles to its own.
+pub const DAY_STAMP_SETTLE: f32 = 1.04;
+/// Motion is decoration only: off, every change shows at once.
+pub const MOTION: bool = true;
+/// How long a decision moves for, in seconds, and how far a decided card slides toward the rail.
+pub const MOTION_TIME: f32 = if MOTION { 0.15 } else { 0.0 };
+pub const MOTION_SLIDE: f32 = 12.0;
 pub const AGENDA_DAY_WIDTH: f32 = 50.0;
 pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 /// The stamp-ink edge on a card that waits on the user.

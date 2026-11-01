@@ -1070,6 +1070,31 @@ fn the_head_counts_what_needs_you() {
     assert!(is_shown(&harness, &format!("Saturday 31 October. 1 of {} decided today.", left - 1)));
 }
 
+/// The decided card slides off from a copy while the next one already takes keys, and nothing moves after 150 ms.
+#[test]
+fn a_decision_settles_within_the_animation_time() {
+    let mut shell = shell(Screen::InTray, "tray_motion");
+    let frame = 1.0 / 60.0;
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_step_dt(frame)
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+
+    harness.key_press(Key::L);
+    harness.run_steps(2);
+    assert!(is_shown(&harness, HARBOR), "the decided card's copy is still sliding off");
+    harness.key_press(Key::L);
+    harness.run_steps(1);
+    assert!(is_shown(&harness, &format!("1 of {}", TRAY_CARDS - 2)), "a key during the slide decides the new top card");
+
+    harness.run_steps((0.15_f32 / frame).ceil() as usize);
+    assert!(!is_shown(&harness, HARBOR));
+    assert!(is_shown(&harness, MERIDIAN));
+    harness.run();
+}
+
 #[test]
 fn skip_takes_a_reason_and_only_some_cards_allow_it() {
     let mut harness = tray_harness(shell(Screen::InTray, "tray_skip"));

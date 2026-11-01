@@ -1,13 +1,13 @@
 use chrono::NaiveDate;
-use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
+use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp,
+    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
     deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -71,6 +71,15 @@ fn check_mark(check: Check) -> CheckMark {
 pub struct TodayScreen {
     /// The card whose command line is open. It closes when another card comes on top.
     command_open: Option<String>,
+    /// A copy of the card just decided, while it slides off. The queue has already moved past it.
+    departing: Option<Departing>,
+}
+
+/// The decided card as it was dealt, with its place count and when it was decided.
+struct Departing {
+    card: Card,
+    pending: usize,
+    since: f64,
 }
 
 /// What Today takes from outside the tray.
@@ -113,21 +122,38 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
         screen.command_open = None;
     }
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
+    let now = ui.input(|input| input.time);
+    // Undo, or an action that leaves the card on top, drops the copy at once.
+    if screen.departing.as_ref().is_some_and(|gone| now - gone.since >= f64::from(MOTION_TIME) || top.is_some_and(|card| card.key == gone.card.key)) {
+        screen.departing = None;
+    }
 
     head(ui, queue, context.missing);
     page_body(ui, |ui| {
         (context.alerts)(ui);
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.missing_dates, &mut pressed));
-        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
-            Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
-            None => {
-                ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
+        egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
+            let room = ui.available_rect_before_wrap();
+            match top {
+                Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
+                None => {
+                    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
+                }
+            }
+            if let Some(gone) = &screen.departing {
+                departed(ui, gone, room, now);
             }
         });
     });
 
+    if screen.departing.is_some() {
+        ui.ctx().request_repaint();
+    }
     let pressed = pressed?;
     ui.ctx().request_repaint();
+    if let (true, Some(card), Pressed::Act(_) | Pressed::Later | Pressed::Skip) = (MOTION, top, &pressed) {
+        screen.departing = Some(Departing { card: card.clone(), pending: queue.cards.len(), since: now });
+    }
     apply(tray, pressed, top, queue)
 }
 
@@ -252,6 +278,12 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
         .inner;
     let look = DealLook { key: &card.key, frame: deal_frame(card.kind), behind: pending - 1 };
     deal(ui, tab, look, |ui| card_face(ui, card), |ui| actions(ui, card, command_open, pressed));
+}
+
+/// The decided card, drawn from its copy over the next one. Its actions go nowhere.
+fn departed(ui: &Ui, gone: &Departing, room: Rect, now: f64) {
+    let part = ((now - gone.since) as f32 / MOTION_TIME).clamp(0.0, 1.0);
+    departing(ui, room, part, |ui| stack(ui, &gone.card, gone.pending, &mut None, &mut None));
 }
 
 /// Any string here may come from a posting, a note or a report, so each shows as a plain label.

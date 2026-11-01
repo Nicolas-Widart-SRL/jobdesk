@@ -225,7 +225,9 @@ fn sections(ui: &mut Ui) {
         strong(ui, "A prompt that needs an answer");
     });
     ui.add_space(10.0);
-    step_rail(ui, &["Fetch", "Evaluate", "Draft", "Verify"], 2, true);
+    step_rail(ui, &["Fetch", "Evaluate", "Draft", "Verify"], 2, true, false);
+    ui.add_space(10.0);
+    step_rail(ui, &["Fetch", "Evaluate", "Draft", "Verify"], 3, false, true);
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         page_frame(ui, |ui| {

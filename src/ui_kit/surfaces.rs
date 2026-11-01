@@ -402,13 +402,14 @@ pub fn index_card(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response 
 }
 
 /// Where a run has got to. Steps before `current` are done; `live` lights the current one.
-pub fn step_rail(ui: &mut Ui, labels: &[&str], current: usize, live: bool) {
+/// When `complete`, every step is done and none is lit.
+pub fn step_rail(ui: &mut Ui, labels: &[&str], current: usize, live: bool, complete: bool) {
     let p = Palette::of(ui);
     ui.spacing_mut().item_spacing = vec2(STEP_GAP, STEP_GAP);
     ui.horizontal_wrapped(|ui| {
         for (index, label) in labels.iter().enumerate() {
-            let now = index == current && live;
-            let done = index < current;
+            let now = index == current && live && !complete;
+            let done = complete || index < current;
             let (style, ink) = if now {
                 (Type::STEP_NOW, p.on_primary)
             } else if done {

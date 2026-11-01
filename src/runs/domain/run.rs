@@ -225,7 +225,7 @@ impl Run {
         if matches!(name.as_str(), "Agent" | "Task") {
             self.agents.push(summary.clone());
         }
-        if matches!(name.as_str(), "Write" | "Edit") && !self.files_changed.contains(&summary) {
+        if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") &&!self.files_changed.contains(&summary) {
             self.files_changed.push(summary.clone());
         }
         self.activity.push(Activity { kind: ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested });
@@ -372,6 +372,13 @@ mod tests {
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
         assert_eq!(run.agents.len(), 1);
         assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed(None), .. }));
+    }
+
+    #[test]
+    fn multi_edit_counts_as_a_changed_file() {
+        let mut run = run("/apply x");
+        run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "MultiEdit".into(), summary: "job_search_tracker.csv".into(), nested: false });
+        assert_eq!(run.files_changed, ["job_search_tracker.csv"]);
     }
 
     #[test]

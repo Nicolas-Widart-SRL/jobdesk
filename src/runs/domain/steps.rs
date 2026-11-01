@@ -37,7 +37,10 @@ const WRAPPERS: &[&str] = &["do", "then", "else", "time", "env", "timeout", "xar
 impl Match {
     pub(crate) fn hits(&self, tool: &str, summary: &str) -> bool {
         match self {
-            Match::File { tools, any_of } => tools.contains(&tool) && any_of.iter().any(|needle| summary.contains(needle)),
+            Match::File { tools, any_of } => {
+                let path = summary.replace('\\', "/");
+                tools.contains(&tool) && any_of.iter().any(|needle| path.contains(needle))
+            }
             Match::Program { names, args } => tool == "Bash" && summary.split(['&', '|', ';', '\n']).any(|segment| runs_program(segment, names, args)),
             Match::Agent(needles) => {
                 let agent = summary.split_once(": ").map_or(summary, |(agent, _)| agent);
@@ -49,8 +52,9 @@ impl Match {
 
 /// Whether a command segment runs one of `names`, as its command word or behind a runner such as `uv run`
 /// or `python3`, and whether the first argument after the program is one of `args`.
+/// Known limit: a flag with a value between the program and its subcommand is read as the subcommand.
 fn runs_program(segment: &str, names: &[&str], args: &[&str]) -> bool {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let tokens: Vec<&str> = segment.split_whitespace().map(|token| token.trim_matches(['"', '\''])).collect();
     let mut at = 0;
     let mut wrapped = false;
     while let Some(&token) = tokens.get(at) {
@@ -71,9 +75,9 @@ fn runs_program(segment: &str, names: &[&str], args: &[&str]) -> bool {
     let program = if named(&word) {
         at
     } else if is_interpreter(word) {
-        match tokens[at + 1..].iter().position(named) {
-            Some(offset) => at + 1 + offset,
-            None => return false,
+        match script_after(&tokens, at + 1) {
+            Some(script) if named(&tokens[script]) => script,
+            _ => return false,
         }
     } else {
         return false;
@@ -81,20 +85,40 @@ fn runs_program(segment: &str, names: &[&str], args: &[&str]) -> bool {
     args.is_empty() || tokens[program + 1..].iter().find(|token| !token.starts_with('-') && **token != "\\").is_some_and(|token| args.contains(token))
 }
 
+/// The script a runner starts: the first token past its flags, `run` and a nested interpreter.
+/// `-c` and `-m` run no script file, so they give none.
+fn script_after(tokens: &[&str], from: usize) -> Option<usize> {
+    let mut at = from;
+    while let Some(&token) = tokens.get(at) {
+        match token {
+            "-c" | "-m" => return None,
+            "-W" | "-X" | "--with" | "--python" | "--from" => at += 1,
+            "run" => {}
+            _ if token.starts_with('-') || is_interpreter(token) => {}
+            _ => return Some(at),
+        }
+        at += 1;
+    }
+    None
+}
+
 fn is_assignment(token: &str) -> bool {
     token.split_once('=').is_some_and(|(name, _)| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
-/// The file name of a path in either style, without quotes or a Windows `.exe`.
+/// The file name of a path in either style, without a Windows `.exe`.
 fn basename(token: &str) -> &str {
-    let file = token.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or(token);
-    file.strip_suffix(".exe").unwrap_or(file)
+    let file = token.rsplit(['/', '\\']).next().unwrap_or(token);
+    match file.len().checked_sub(4).and_then(|cut| file.split_at_checked(cut)) {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case(".exe") => stem,
+        _ => file,
+    }
 }
 
 /// A runner starts a script rather than naming it.
 fn is_interpreter(token: &str) -> bool {
-    let file = basename(token);
-    matches!(file, "python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
+    let file = basename(token).to_ascii_lowercase();
+    matches!(file.as_str(),"python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
 }
 
 const APPLY_LABELS: &[&str] = &["Fetch", "Evaluate", "Draft", "Review", "Revise", "Compile", "Finish"];
@@ -124,6 +148,11 @@ impl StepRail {
             _ => return None,
         };
         Some(Self { labels, current: 0, rules })
+    }
+
+    /// Whether the run has reached the last step.
+    pub fn is_complete(&self) -> bool {
+        self.current + 1 == self.labels.len()
     }
 
     /// Every rule is judged against the step the call began at, so one call never chains rules.
@@ -209,6 +238,38 @@ mod tests {
         assert_eq!(at("for f in a.tex; do lualatex \"$f\"; done"), 5);
         assert_eq!(at("C:\\Python312\\python.exe tools\\verify_pdf.py cv\\x.pdf"), 5);
         assert_eq!(at("cat .claude/x/salary_lookup.py"), 0);
+    }
+
+    #[test]
+    fn complete_only_at_the_last_step() {
+        let mut rail = StepRail::for_line("/rank").unwrap();
+        assert!(!rail.is_complete());
+        rail.observe("Bash", "python3 rank_state.py apply");
+        assert!(rail.is_complete());
+    }
+
+    #[test]
+    fn windows_paths_match_file_needles() {
+        let mut rail = StepRail::for_line("/apply x").unwrap();
+        rail.observe("Write", "C:\\w\\cv\\main_acme.tex");
+        assert_eq!(rail.current, 2);
+        rail.observe("Agent", "application-reviewer: critique");
+        rail.observe("Edit", "C:\\w\\cv\\main_acme.tex");
+        assert_eq!(rail.current, 4);
+    }
+
+    #[test]
+    fn only_the_script_that_runs_is_tested() {
+        let at = |summary: &str| {
+            let mut rail = StepRail::for_line("/apply x").unwrap();
+            rail.observe("Bash", summary);
+            rail.current
+        };
+        assert_eq!(at("bash -c 'cat tools/salary_lookup.py'"), 0);
+        assert_eq!(at("python3 -m py_compile tools/verify_layout.py"), 0);
+        assert_eq!(at("python3 tools/posting_guard.py --in documents/verify_pdf_notes.txt"), 0);
+        assert_eq!(at("uv run --python 3.12 python tools/verify_layout.py cv/x.pdf"), 5);
+        assert_eq!(at("PYTHONUTF8=1 \"C:\\Python312\\PYTHON.EXE\" \"tools\\verify_pdf.py\""), 5);
     }
 
     #[test]

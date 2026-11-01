@@ -217,6 +217,12 @@ impl ScreenState<'_> {
     }
 }
 
+/// Why a part's figures are hidden, said in their place, so no zero reads as a real count.
+/// Left aligned even in a justified column, which would stretch the wrapped words apart.
+pub fn hidden_note(ui: &mut Ui, why: &str) -> Response {
+    ui.with_layout(Layout::top_down(Align::Min), |ui| add_text(ui, why, Type::BODY, Ink::Muted)).inner
+}
+
 /// The content of a screen, under its head.
 pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let (x, top, bottom) = SCREEN_PADDING;
@@ -868,8 +874,7 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                     ui.spacing_mut().item_spacing.y = NODE_GAP;
                     add_text(ui, node.label, Type::TAB, Ink::Muted);
                     if let Some(hidden) = node.hidden {
-                        // Left aligned: the column's justified layout would stretch the wrapped words apart.
-                        ui.with_layout(Layout::top_down(Align::Min), |ui| add_text(ui, hidden, Type::BODY, Ink::Muted));
+                        hidden_note(ui, hidden);
                         return;
                     }
                     add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);

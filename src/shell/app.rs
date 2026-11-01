@@ -446,8 +446,9 @@ impl Shell {
             }
         };
         let loaded = self.loaded;
+        let failed = |source: Source| failures.iter().any(|(failed, _)| *failed == source);
         let load = |source: Source| {
-            if failures.iter().any(|(failed, _)| *failed == source) {
+            if failed(source) {
                 Load::Failed
             } else if loaded {
                 Load::Ready
@@ -455,9 +456,15 @@ impl Shell {
                 Load::Reading
             }
         };
+        let whole = if loaded { Load::Ready } else { Load::Reading };
         let state = |load: Load| ScreenState { load, alerts: &alerts };
-        // These screens keep the alert over their head until they take a `ScreenState` too.
-        if !failures.is_empty() && matches!(self.screen, Screen::Runs | Screen::Launcher | Screen::Dossier) {
+        // Each screen says where its alert goes, so a new one must choose.
+        let alert_over_head = match self.screen {
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Workspace => false,
+            // These keep it over their head until they take a `ScreenState` too.
+            Screen::Runs | Screen::Launcher | Screen::Dossier => true,
+        };
+        if !failures.is_empty() && alert_over_head {
             page_body(ui, alerts);
         }
         let snapshot = &self.snapshot;
@@ -465,7 +472,6 @@ impl Shell {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
                 let keys = !self.confirm_quit;
-                let failed = |source| failures.iter().any(|(failed, _)| *failed == source);
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
                 // In the alert's order, so the subtitle names them as the alert does.
                 let missing: Vec<&str> =
@@ -492,10 +498,15 @@ impl Shell {
             }
             Screen::Dossier => {
                 let today = snapshot.today;
+                let tracker_failed = failed(Source::Applications);
                 let view = self.refreshed_dossier();
                 match (view, &mut self.pages) {
                     (Some(view), Some(pages)) => {
                         self.dossier_screen.show(ui, &view, pages, today);
+                    }
+                    // A failed tracker loads with no rows, so the application is only hidden, and comes back with the file.
+                    _ if tracker_failed => {
+                        page_body(ui, |ui| muted(ui, "Hidden while the tracker cannot be read."));
                     }
                     _ => {
                         page_body(ui, |ui| muted(ui, "This application is no longer in the tracker."));
@@ -504,8 +515,8 @@ impl Shell {
             }
             Screen::Insights => {
                 // Each failed source hides only the parts it feeds, so the screen as a whole never fails.
-                let sources = insights::ui::Sources { tracker: load(Source::Applications), jobs: load(Source::Jobs), skill_gaps: load(Source::SkillGaps) };
-                let whole = if loaded { Load::Ready } else { Load::Reading };
+                let sources =
+                    insights::ui::Sources { tracker_failed: failed(Source::Applications), jobs_failed: failed(Source::Jobs), skill_gaps_failed: failed(Source::SkillGaps) };
                 insights::ui::show(ui, &state(whole), &sources, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref());
             }
             Screen::Runs => {
@@ -517,10 +528,9 @@ impl Shell {
             }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
-                let whole = if loaded { Load::Ready } else { Load::Reading };
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
                 let action = match self.environment.as_mut() {
-                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
+                    Some(environment) => workspace::ui::show(ui, &state(whole), failed(Source::Jobs), &name, &snapshot.workspace, environment),
                     None => {
                         page_body(ui, alerts);
                         None

@@ -4,8 +4,8 @@ use egui_extras::{Column, TableBuilder};
 use crate::insights::application::{GapRow, SearchInsights, SkillGapView, WorkflowBand, gap_rows};
 use crate::ui_kit::tokens::{SCREEN_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FlowNode, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, list_row, muted, note, page_body, page_head, panel,
-    panel_body, panel_header, primary_command_action, rich, slip, small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
+    CellRule, FlowNode, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note, list_row, muted, note, page_body, page_head,
+    panel, panel_body, panel_header, primary_command_action, rich, slip, small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
@@ -14,16 +14,16 @@ const ORDER_NUMBER_WIDTH: f32 = 12.0;
 const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
 const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
 
-/// Where each source Insights reads stands. A failed one loads as nothing, so the parts it feeds say they are hidden instead of showing zeros.
+/// Which sources Insights reads could not be read. A failed one loads as nothing, so the parts it feeds say they are hidden instead of showing zeros.
 #[derive(Debug, Clone, Copy)]
 pub struct Sources {
-    pub tracker: Load,
-    pub jobs: Load,
-    pub skill_gaps: Load,
+    pub tracker_failed: bool,
+    pub jobs_failed: bool,
+    pub skill_gaps_failed: bool,
 }
 
 pub fn show(ui: &mut Ui, state: &ScreenState, sources: &Sources, report: &SearchInsights, band: &WorkflowBand, gaps: Option<&SkillGapView>) {
-    let tracker = (sources.tracker == Load::Failed).then_some(TRACKER_HIDDEN);
+    let tracker = sources.tracker_failed.then_some(TRACKER_HIDDEN);
     page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text("The whole workflow, search health and skill gaps, read live from your files")), |ui| {
         primary_command_action(ui, "Find skill gaps", "/upskill");
         command_action(ui, "Rebuild dashboard", "/html-report");
@@ -31,10 +31,10 @@ pub fn show(ui: &mut Ui, state: &ScreenState, sources: &Sources, report: &Search
     page_body(ui, |ui| {
         (state.alerts)(ui);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            workflow(ui, band, tracker, (sources.jobs == Load::Failed).then_some(JOBS_HIDDEN));
+            workflow(ui, band, tracker, sources.jobs_failed.then_some(JOBS_HIDDEN));
             ui.add_space(SCREEN_GAP);
-            // Calibration counts tracker outcomes, so it waits for the tracker too.
-            if tracker.is_none() && report.can_calibrate() {
+            // A failed tracker loads with no outcomes, so it never calibrates.
+            if report.can_calibrate() {
                 calibration(ui, report);
                 ui.add_space(SCREEN_GAP);
             }
@@ -48,7 +48,7 @@ pub fn show(ui: &mut Ui, state: &ScreenState, sources: &Sources, report: &Search
                 });
             });
             ui.add_space(SCREEN_GAP);
-            if sources.skill_gaps == Load::Failed {
+            if sources.skill_gaps_failed {
                 empty_note(ui, "Skill gap report", "Your skill gap reports are hidden, not gone. They come back by themselves once the report file is fixed.");
             } else {
                 skill_gaps(ui, gaps);
@@ -133,8 +133,7 @@ fn hidden_panel(ui: &mut Ui, title: &str, why: &str) {
         panel_header(ui, title, None);
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
-            // Left aligned: the column's justified layout would stretch the wrapped words apart.
-            ui.with_layout(Layout::top_down(Align::Min), |ui| muted(ui, why));
+            hidden_note(ui, why);
         });
     });
 }

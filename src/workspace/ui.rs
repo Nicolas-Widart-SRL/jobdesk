@@ -4,7 +4,7 @@ use egui_extras::{Column, TableBuilder};
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
     CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
-    rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+    hidden_note, rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
 
@@ -39,8 +39,9 @@ pub enum WorkspaceAction {
 }
 
 /// `name` is the checkout's folder name, never its full path.
-/// Setup reads no source that can fail, so it only draws the alert for the others.
-pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
+/// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
+/// so `jobs_failed` hides those counts.
+pub fn show(ui: &mut Ui, state: &ScreenState, jobs_failed: bool, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
     page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
@@ -59,7 +60,7 @@ pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, 
             });
             ui.add_space(SPLIT_GAP);
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
-                portals(main, view);
+                portals(main, view, jobs_failed);
                 templates(side, view);
                 side.add_space(12.0);
                 sync(side, view);
@@ -97,22 +98,27 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
     });
 }
 
-fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
+/// Without `counted`, the Jobs seen column is left out: its counts would read zero.
+fn portal_table(ui: &mut Ui, portals: &[PortalRow], counted: bool) {
     let total = ui.available_width();
     let last = portals.len().saturating_sub(1);
+    let titles: &[&str] = if counted { &["Portal", "Jobs seen", "State"] } else { &["Portal", "State"] };
     // Cells pad themselves, so the rules run unbroken.
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .id_salt("workspace_portals")
             .vscroll(false)
             .striped(false)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true))
-            .column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true))
+            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true));
+        if counted {
+            table = table.column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true));
+        }
+        table
             .column(Column::remainder().clip(true))
             .header(TABLE_HEAD_HEIGHT, |mut header| {
-                for title in ["Portal", "Jobs seen", "State"] {
+                for &title in titles {
                     header.col(|ui| {
                         table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
                     });
@@ -126,9 +132,11 @@ fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
                     line.col(|ui| {
                         table_cell(ui, rule, |ui| ui.monospace(portal.name.as_str()));
                     });
-                    line.col(|ui| {
-                        table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
-                    });
+                    if counted {
+                        line.col(|ui| {
+                            table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
+                        });
+                    }
                     line.col(|ui| {
                         table_cell(ui, rule, |ui| if portal.enabled { tag(ui, "Enabled", Tone::Hired) } else { tag(ui, "Disabled", Tone::Plain) });
                     });
@@ -137,7 +145,8 @@ fn portal_table(ui: &mut Ui, portals: &[PortalRow]) {
     });
 }
 
-fn portals(ui: &mut Ui, view: &WorkspaceView) {
+/// The jobs seen on each portal come from the saved jobs, so they hide while those cannot be read.
+fn portals(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
     panel(ui, |ui| {
         panel_header(ui, "Portals", Some(".agents/skills"));
         if view.portals.is_empty() {
@@ -146,7 +155,13 @@ fn portals(ui: &mut Ui, view: &WorkspaceView) {
                 muted(ui, "No portals installed.");
             });
         } else {
-            portal_table(ui, &view.portals);
+            portal_table(ui, &view.portals, !jobs_failed);
+            if jobs_failed {
+                panel_body(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    hidden_note(ui, "Jobs seen are hidden while your saved jobs cannot be read.");
+                });
+            }
         }
         Frame::new().inner_margin(Margin::symmetric(0, 12)).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {

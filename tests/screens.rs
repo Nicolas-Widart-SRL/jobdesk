@@ -1904,8 +1904,16 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Applications],
             subtitle: "ai-job-search",
             alert: "Your applications could not be read.",
-            shown: &[],
-            not_shown: &[],
+            shown: &["Jobs seen"],
+            not_shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Jobs],
+            subtitle: "ai-job-search",
+            alert: "Your saved jobs could not be read.",
+            shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
+            not_shown: &["Jobs seen"],
         },
     ];
     for (index, case) in cases.iter().enumerate() {
@@ -1924,6 +1932,17 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             assert!(!is_shown(&harness, text), "{:?} hides {text}", case.screen);
         }
     }
+}
+
+/// An open dossier whose tracker fails stays open and says its application is hidden, not that it left the tracker.
+#[test]
+fn a_dossier_whose_tracker_fails_is_hidden_not_gone() {
+    let mut shell = broken_shell(Screen::Tracker, "dossier_tracker_failed", &[Source::Applications]);
+    shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "Hidden while the tracker cannot be read."));
+    assert!(!is_shown(&harness, "This application is no longer in the tracker."));
 }
 
 /// Insights hides only what the failed sources feed: each panel and band cell they feed says so, and the rest still counts.

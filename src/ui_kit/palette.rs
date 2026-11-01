@@ -272,6 +272,7 @@ mod tests {
                 ("chrome_ink on chrome", p.chrome_ink, p.chrome),
                 ("chrome_muted on chrome", p.chrome_muted, p.chrome),
                 ("chrome_ink on chrome_tab", p.chrome_ink, p.chrome_tab),
+                ("chrome_muted on chrome_line", p.chrome_muted, p.chrome_line),
             ] {
                 let ratio = contrast(ink, fill);
                 assert!(ratio >= 4.5, "{name} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");

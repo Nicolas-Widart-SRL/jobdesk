@@ -121,7 +121,7 @@ impl DossierScreen {
                         compiled_pages(ui, textures, &documents);
                     });
                     divider(ui);
-                    panel_header(ui, "Keywords from the ad, found in your CV", None);
+                    panel_header(ui, "Keywords from the ad compared with your CV", None);
                     keywords(ui, &dossier.findings.keywords);
                 });
             },

@@ -65,11 +65,16 @@ fn card_meta(card: &ApplicationCard) -> String {
             (_, Some(deadline)) => format!("Send by {}", day(deadline)),
             _ => card.status_label.clone(),
         },
-        StatusBucket::Offer => card.deadline.map_or_else(|| card.status_label.clone(), |deadline| format!("Reply by {}", day(deadline))),
+        StatusBucket::Offer => match (card.deadline_state, card.deadline) {
+            (Some(DeadlineState::Passed), _) => "Reply date passed".into(),
+            (_, Some(deadline)) => format!("Reply by {}", day(deadline)),
+            _ => card.status_label.clone(),
+        },
         StatusBucket::Interview => match card.outcome.as_ref().and_then(|outcome| outcome.stages.iter().find(|stage| !stage.reached)) {
             Some(stage) => stage.date.map_or_else(|| stage.name.clone(), |date| format!("{} {}", stage.name, day(date))),
             None => card.status_label.clone(),
         },
+        StatusBucket::Closed => card.status_label.clone(),
         // Quiet days restart with each dated note, so only the applied date says when it was sent.
         // A recent follow-up is the newer news, so it reads in place of the sent date.
         _ => match (card.days_quiet, card.days_followed_up, card.days_sent) {
@@ -319,6 +324,21 @@ mod tests {
     fn a_recent_follow_up_shows_in_place_of_the_sent_date() {
         assert_eq!(card_meta(&applied(3, 30, 1)), "Followed up 3 days ago");
         assert_eq!(card_meta(&applied(0, 30, 2)), "Followed up today");
+    }
+
+    #[test]
+    fn an_offer_reads_its_reply_date_until_it_passes() {
+        let offer = ApplicationCard { status_label: "Offer".into(), bucket: StatusBucket::Offer, ..plain(2, 9, 0) };
+        let deadline = NaiveDate::from_ymd_opt(2026, 3, 20);
+        assert_eq!(card_meta(&ApplicationCard { deadline, deadline_state: Some(DeadlineState::Passed), ..offer.clone() }), "Reply date passed");
+        assert_eq!(card_meta(&ApplicationCard { deadline, deadline_state: None, ..offer.clone() }), "Reply by Fri 20 Mar");
+        assert_eq!(card_meta(&offer), "Offer", "no deadline");
+    }
+
+    #[test]
+    fn a_custom_closed_status_keeps_its_label() {
+        let on_hold = ApplicationCard { status_label: "On hold".into(), bucket: StatusBucket::Closed, ..plain(12, 30, 0) };
+        assert_eq!(card_meta(&on_hold), "On hold");
     }
 
     #[test]

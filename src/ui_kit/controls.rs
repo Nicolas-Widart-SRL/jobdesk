@@ -361,7 +361,7 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
 pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, String)]) -> Option<T> {
     let p = Palette::of(ui);
     let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::SMALL };
-    let inks = SegmentInks { on: (p.chrome_tab, p.chrome_ink), off: p.chrome_muted, hover: p.chrome_tab };
+    let inks = SegmentInks { on: (p.chrome_tab, p.chrome_ink), off: p.chrome_muted, hover: p.chrome_line };
     let mut picked = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;

@@ -83,6 +83,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    Record in the plan file that this session watches the pull request.
    Then run the `squash-msg` skill with the pull request's number, and record its message in the plan file.
    Then run step 8 once, because comments posted before the `watch_pull_request` call never wake you.
+   In this run, skip step 8's "Nothing new" line and go on to the message below.
    In one message, give the user the pull request's URL, the squash message's code block,
    and one line saying you watch the pull request. Then end your turn.
    Without `watch_pull_request`, skip the call and its record, and say instead that CodeRabbit reviews it,
@@ -176,7 +177,7 @@ A review id counts as handled only once every finding in its body has a verdict.
 A thread stays open after "Not changed", and CodeRabbit often answers in it, so a thread can bring new comments later.
 
 Each finding gets one of three verdicts: valid, invalid or no finding.
-Only the earlier unrecorded comments in a resolved thread get a fourth, "resolved by the user" (see step 3).
+Only unrecorded CodeRabbit comments in a resolved thread get a fourth, "resolved by the user" (see step 3).
 "No finding" fits a comment that holds no new finding, such as CodeRabbit acknowledging a fix or answering a "Not changed".
 CodeRabbit's walkthrough and summary comments in the conversation tab get it too, unless they hold findings.
 
@@ -203,13 +204,15 @@ It never reruns the builder for a finding that has a fixed SHA.
    In a review id that is not handled yet, judge only the findings with no `<review id>#<n>` verdict.
    Judge a thread again only when it has a comment id that is not handled yet.
    The script prints resolved threads too, marked `[resolved]`, and their handled comment ids stay skipped.
-   Treat a new comment from the user's account in the reply format as the lead's own reply, and do not judge it:
-   a thread comment that starts with "Fixed in" or "Not changed" after the comment it answers,
-   or a conversation comment in the line format of step 6.
+   Treat a new comment from the user's account as the lead's own reply only when it answers a finding
+   that has a valid or invalid verdict and no reply id, and do not judge it then:
+   a thread comment after that finding that starts with "Not changed", or with "Fixed in <sha>" where `<sha>` is its fixed SHA,
+   or a conversation comment that names that finding's title in the line format of step 6.
    Record its id as the lead's own reply, and each finding it answers at the stage replied.
-   In a resolved thread, judge only the comments after one the plan file records, such as the lead's own reply:
-   reply in that thread, and do not resolve it again.
-   Record each earlier comment id it does not record with the verdict "resolved by the user": handled, no reply, no round.
+   Judge every other comment from the user's account like any other.
+   In a resolved thread, judge an unrecorded comment only when it comes from the user's account: reply in that thread, and do not resolve it again.
+   Record each unrecorded CodeRabbit comment there with the verdict "resolved by the user": handled, no reply, no round.
+   Record every other author's comment there as reported, as above.
    Review bodies cannot be resolved, so every run prints them again.
    Never judge a handled finding again, never post a second comment for it, and never append its escapes again.
 4. Check each new finding against the code at the branch tip,
@@ -233,13 +236,15 @@ It never reruns the builder for a finding that has a fixed SHA.
    When it is `CLOSED`, tell the user the pull request closed without a merge, and that the fix SHA sits on the change's branch.
    Then follow step 8 for that state.
 6. Right before the replies, run `gh pr view <pr> --json state -q .state` again.
-   When it is `MERGED` with no fix SHA from step 5, post the "Not changed" replies below, then follow step 8 for `MERGED`.
-   When it is `MERGED` with a fix SHA, read the merged head with `gh pr view <pr> --json headRefOid -q .headRefOid`.
-   Run `git fetch --quiet origin <merged head>`, then `git merge-base --is-ancestor <fix sha> <merged head>`.
+   When it is `MERGED` and no finding at the stage fixed waits for a reply, skip the check below:
+   post the "Not changed" replies, then follow step 8 for `MERGED`.
+   When one waits, read the merged head with `gh pr view <pr> --json headRefOid -q .headRefOid`.
+   Run `git fetch --quiet origin <merged head>`, then `git merge-base --is-ancestor <fix sha> <merged head>` with its recorded fixed SHA.
    Exit 0 means the fix is in: post the replies below, then follow step 8 for `MERGED`.
    Exit 1 means it missed: post nothing, because "Fixed in <sha>" would point at a SHA that `main` lacks.
    Tell the user which fix SHA missed the merge, and that it sits on the change's branch. Then follow step 8 for `MERGED`.
-   Any other exit: post nothing, tell the user you could not check whether the fix is in, then follow step 8 for `MERGED`.
+   When the fetch fails, or `merge-base` exits with any other code, post nothing.
+   Tell the user you could not check whether the fix is in, then follow step 8 for `MERGED`.
    When it is `CLOSED`, post nothing. Tell the user the pull request closed without a merge,
    and that the fix SHA sits on the change's branch. Then follow step 8 for `CLOSED`.
    Reply on each thread you judged valid or invalid in step 4 that has no reply id yet.

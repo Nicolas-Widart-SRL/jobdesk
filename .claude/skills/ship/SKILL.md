@@ -234,7 +234,8 @@ It never reruns the builder for a finding that has a fixed SHA.
    and that the fix SHA sits on the change's branch. Then follow step 8 for `CLOSED`.
    Reply on each thread you judged valid or invalid in step 4 that has no reply id yet.
    First look in that thread in the script's output for a reply the lead already posted:
-   a comment by the account `gh api user -q .login` prints, whose body starts with "Fixed in" or "Not changed".
+   a comment by the account `gh api user -q .login` prints, whose id the plan file does not record yet,
+   whose body starts with "Fixed in" or "Not changed", and that comes after the comment you answer in that thread.
    If one is there, record its id at the stage replied, and do not post again.
    Otherwise reply with
    `gh api repos/{owner}/{repo}/pulls/<pr>/comments/<id>/replies -f body="Fixed in <sha>: …" -q .id`

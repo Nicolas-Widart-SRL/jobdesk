@@ -14,7 +14,7 @@ Design: $ARGUMENTS
 ## Steps
 
 1. **Brief.** Find the screen's feature in the Features table of `ARCHITECTURE.md`,
-   its section in `README.md`, and the nearest canvases in `mockups/`. Read only their names and titles.
+   its section in `docs/guide.md`, and the nearest canvases in `mockups/`. Read only their names and titles.
 2. **Draw.** Spawn `designer` with a brief that stands alone:
    - what to design, in the user's words;
    - the folder to write in, and the nearest canvases to start from;

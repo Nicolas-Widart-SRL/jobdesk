@@ -37,7 +37,8 @@ You build one step in your own git worktree. Other builders work beside you in t
 3. Write the test first when the step has a testable rule.
 4. Make the change. Match the surrounding code: its names, idioms, comment density and hand formatting.
    Never run `cargo fmt`.
-5. Update `README.md` when the user sees a change, and `ARCHITECTURE.md` when the features, layers, runtime or trust handling change.
+5. Update `docs/guide.md` when the user sees a change, and `README.md` too when its pitch ("What it does"), install steps or privacy and trust statement change.
+   Update `CONTRIBUTING.md` when the build, packaging, release or test commands change, and `ARCHITECTURE.md` when the features, layers, runtime or trust handling change.
 6. Run `scripts/check.sh`. It runs `cargo test` and prints one line. Fix every failure.
    When a snapshot differs, read `tests/snapshots/<name>.diff.png` and `<name>.new.png`.
    If the change is meant, run `UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery`.

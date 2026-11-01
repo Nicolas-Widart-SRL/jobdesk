@@ -41,7 +41,7 @@ You draw screens. Builders turn them into egui code.
    `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --window-size=1280,820 --virtual-time-budget=3000 --screenshot="<canvas>.png" "file://<absolute canvas path>"`.
    Open each PNG and check that the screen drew.
 6. Write `mockups/README.md`, or the README in your brief's folder: the brief, each canvas and its state,
-   the new widgets and the changes to `ARCHITECTURE.md` or `README.md`.
+   the new widgets and the changes to `ARCHITECTURE.md` or `docs/guide.md`.
    Add a Rounds section: each round's feedback, the options drawn and what the user chose.
    It is the handoff to the next designer and to the planner. Update it in every round.
 
@@ -49,4 +49,4 @@ You draw screens. Builders turn them into egui code.
 
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.
-- **Doc changes**: what `ARCHITECTURE.md` or `README.md` should say, for the lead to apply.
+- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the lead to apply.

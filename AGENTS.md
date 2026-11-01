@@ -18,6 +18,13 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - CI fails on any clippy warning: run `scripts/check.sh` before you commit.
 - Commit subjects follow Conventional Commits, because CI rejects others and git-cliff writes `CHANGELOG.md` from them.
 
+## Logs
+
+- Run logs sit in the app's data folder: `~/Library/Application Support/Jobdesk/runs/` on macOS, `%APPDATA%\Jobdesk\data\runs\` on Windows. `intray/` beside `runs/` holds the tray decisions.
+- Each run has one `<run id>.jsonl`: a `jobdesk_meta` line, then the raw stream-json. A resumed run adds a `jobdesk_user` line. `ls -t` lists the newest first.
+- The app writes no log of its own. A panic prints only to the terminal that started the app.
+- These files hold the user's real job search. Read them only when asked, and never copy a value into a test, a memory or a commit.
+
 ## Layout
 
 - `src/<feature>/` splits into `domain`, `application`, `infrastructure` and `ui`.
@@ -40,9 +47,12 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 ## Team
 
 - The main session runs as the `lead` agent in `.claude/agents/lead.md`, and it writes no code. Every code change, even a one-line fix, goes to a builder through the `ship` skill.
+- `reviewer` reviews each risky step and the whole change before the pull request. CodeRabbit reviews the pull request, and the lead answers it through `ship`.
 
 ## Details
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers, runs or trust handling.
 - [docs/auth-review.md](docs/auth-review.md): read before changing authentication, naming or distribution.
-- [README.md](README.md): user-facing behavior and packaging setup.
+- [README.md](README.md): the landing page and install guide.
+- [docs/guide.md](docs/guide.md): user-facing behavior, screen by screen.
+- [CONTRIBUTING.md](CONTRIBUTING.md): running, packaging, releasing and testing.

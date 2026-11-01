@@ -31,27 +31,33 @@ Never write a value from a real job search in it.
    `trail skeleton <file>` shows a file's API, and `trail callers <symbol> --depth all` shows what a change reaches.
    Read whole files only where a step needs them, several files in one turn.
 2. Split the work into steps. One step is one branch that merges as a unit.
+   Aim for 4 to 6 steps. Join two steps when they touch the same files, or when one is too small to review alone.
    Its first commit builds and passes tests on its own. Review fixes land as more commits on the same branch.
 3. Order the steps so each one depends only on the steps before it.
    `shared_kernel` or a feature's `domain` first, then its `application`, then `infrastructure`, then `ui` and `shell`.
    A new feature joins `FEATURES` in `tests/architecture.rs` in its first step.
+   Make steps independent where you can, so builders run them in parallel. Group them in waves: a wave holds steps that depend only on earlier waves and touch different files.
+   When the lead sends new work partway through a change, plan only the new steps, after the merged ones.
 4. Give each step a check: the test to write or the behavior to see, and the command that proves it.
    A visible change names the snapshot tests in `tests/screens.rs` or `tests/ui_kit_gallery.rs` that change.
 5. Mark each step **written down** when a builder needs no judgment to do it:
    the files, the types, the signatures and the test cases are all in the step.
    The lead sends written-down steps to `builder-sonnet` and the rest to `builder`.
+   A step that needs UI layout or visual judgment is never written down: it goes to `builder`.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.
    A change to `.claude/agents/*.md` or `.claude/skills/*.md` is always risky: those files steer the agents.
-   Only risky steps get a review before they merge. Any other docs-only step is never risky.
+   Only risky steps get a review by `reviewer` before they merge. Say in one line why a step is risky: the reviewer checks that first.
+   Any other docs-only step is never risky.
 
 ## Report
 
 - **Goal**: one sentence.
 - **Steps**: numbered. Each step has a title as a Conventional Commits subject, the files,
   what to change, the check, and the written-down and risky marks when they apply.
-- **Docs**: which of `README.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
+- **Waves**: which steps build in parallel, for example `Wave 1: 1, 2. Wave 2: 3.`
+- **Docs**: which of `README.md`, `docs/guide.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
 - **Risks**: open questions the lead must answer before a builder starts.
 
 Leave trail's "tokens saved" lines out of the report.

@@ -16,7 +16,11 @@ if [ "$change" = main ]; then
   exit 1
 fi
 git rev-parse -q --verify "refs/heads/$step" >/dev/null || { echo "merge-step: no branch $step" >&2; exit 1; }
-git rev-parse -q --verify "refs/heads/$change" >/dev/null || git branch "$change" main
+if ! git rev-parse -q --verify "refs/heads/$change" >/dev/null; then
+  # A new change starts from a fresh origin/main, never from the local main.
+  git fetch --quiet origin
+  git branch "$change" origin/main
+fi
 
 # The worktree that has a branch checked out, if any.
 worktree_of() {

@@ -76,14 +76,17 @@ pub struct Run {
     pub usage: Usage,
     /// Subagents still working after the turn that started them ended.
     pub background_agents: usize,
-    /// `turn_number()` when the rail last moved.
-    rail_moved_in_turn: usize,
+    /// Index in `activity` of the tool that last moved the rail. 0, the command line, while it has never moved.
+    rail_moved_at: usize,
     /// Index in `activity` of the first row of the current turn.
     turn_started_at: usize,
+    /// How many `You` rows `activity` holds.
+    turn_count: usize,
 }
 
 impl Run {
     pub fn new(request: &RunRequest) -> Self {
+        let activity = vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false }];
         Self {
             id: request.run_id.clone(),
             line: request.line.clone(),
@@ -94,7 +97,10 @@ impl Run {
             model: None,
             api_key_source: None,
             status: RunStatus::Starting,
-            activity: vec![Activity { kind: ActivityKind::You(request.line.clone()), nested: false }],
+            rail_moved_at: 0,
+            turn_started_at: activity.len(),
+            turn_count: 1,
+            activity,
             streaming_text: String::new(),
             prompts: VecDeque::new(),
             cost_usd: 0.0,
@@ -105,8 +111,6 @@ impl Run {
             files_changed: Vec::new(),
             usage: Usage::default(),
             background_agents: 0,
-            rail_moved_in_turn: 1,
-            turn_started_at: 1,
         }
     }
 
@@ -131,17 +135,22 @@ impl Run {
 
     /// Whether Claude waits on the user: a prompt is open, or its turn ended and nothing else still works.
     pub fn is_your_turn(&self) -> bool {
-        self.needs_user() || (self.status == RunStatus::AwaitingReply && !self.is_busy())
+        self.needs_user() || self.awaits_reply()
+    }
+
+    /// Whether Claude's turn ended, nothing else still works and no prompt is open, so only a reply moves the run on.
+    pub fn awaits_reply(&self) -> bool {
+        self.status == RunStatus::AwaitingReply && !self.is_busy() && !self.needs_user()
     }
 
     /// How many messages the user has sent, the command line included.
     pub fn turn_number(&self) -> usize {
-        self.activity.iter().filter(|activity| matches!(activity.kind, ActivityKind::You(_))).count()
+        self.turn_count
     }
 
-    /// The `turn_number()` in which the rail last moved.
-    pub fn rail_moved_in_turn(&self) -> usize {
-        self.rail_moved_in_turn
+    /// Index in `activity` of the tool that last moved the rail. 0, the command line, while it has never moved.
+    pub fn rail_moved_at(&self) -> usize {
+        self.rail_moved_at
     }
 
     /// Index in `activity` of the current turn's first row: the one after the user's last message,
@@ -157,6 +166,7 @@ impl Run {
     pub fn note_reply(&mut self, text: &str) {
         self.activity.push(Activity { kind: ActivityKind::You(text.to_owned()), nested: false });
         self.turn_started_at = self.activity.len();
+        self.turn_count += 1;
         self.status = RunStatus::Working;
     }
 
@@ -214,8 +224,9 @@ impl Run {
                 self.model = Some(model);
                 self.api_key_source = Some(api_key_source);
                 // Each turn starts with this, including the one Claude takes on its own when a background agent reports.
-                if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply) {
-                    if self.status == RunStatus::AwaitingReply {
+                if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply | RunStatus::Stopped | RunStatus::Failed(_)) {
+                    // The first turn begins with the command line. Any later one is Claude's own.
+                    if self.status != RunStatus::Starting {
                         self.turn_started_at = self.activity.len();
                     }
                     self.status = RunStatus::Working;
@@ -250,12 +261,12 @@ impl Run {
 
     fn tool_started(&mut self, id: String, name: String, summary: String, nested: bool) {
         self.streaming_text.clear();
-        let turn = self.turn_number();
         if let Some(steps) = &mut self.steps {
             let before = steps.current;
             steps.observe(&name, &summary);
             if steps.current != before {
-                self.rail_moved_in_turn = turn;
+                // The tool is pushed below, at the end of the activity.
+                self.rail_moved_at = self.activity.len();
             }
         }
         if matches!(name.as_str(), "Agent" | "Task") {

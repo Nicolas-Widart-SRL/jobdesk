@@ -17,26 +17,26 @@ pub struct ClosingQuestion {
     pub range: Range<usize>,
 }
 
-/// Whether the turn ended and the user is the one to act, with no prompt open.
-fn waiting_for_reply(run: &Run) -> bool {
-    run.is_your_turn() && !run.needs_user()
-}
-
-/// The stop point the run waits at, when its turn ended on the step that has one
-/// and the user has not answered since the rail reached it.
+/// The stop point the run waits at, when its turn ended on the step that has one.
+/// A quick reply sent since the rail reached that step answers it. Any other message, such as a side question, does not.
 pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
-    if !waiting_for_reply(run) || run.rail_moved_in_turn() != run.turn_number() {
+    if !run.awaits_reply() {
         return None;
     }
     let rail = run.steps.as_ref()?;
     let step = rail.labels.get(rail.current)?;
-    stop_points(&run.line).iter().find(|stop| stop.after == *step)
+    let stop = stop_points(&run.line).iter().find(|stop| stop.after == *step)?;
+    let answered = run.activity.iter().skip(run.rail_moved_at() + 1).any(|activity| match &activity.kind {
+        ActivityKind::You(text) => stop.replies.iter().any(|reply| reply.text == text),
+        _ => false,
+    });
+    (!answered).then_some(stop)
 }
 
 /// The last paragraph of this turn's last top-level message, when it asks something.
 /// Claude's text is untrusted: hidden characters are dropped, and a statement is not passed off as a question.
 pub fn closing_question(run: &Run) -> Option<ClosingQuestion> {
-    if !waiting_for_reply(run) {
+    if !run.awaits_reply() {
         return None;
     }
     let turn = run.activity.iter().enumerate().skip(run.current_turn_start());
@@ -92,7 +92,7 @@ fn ends_blocks(tag: &TagEnd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest};
+    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest, RunStatus};
 
     fn run(line: &str) -> Run {
         Run::new(&RunRequest { run_id: "1".into(), line: line.into(), model: None, budget_usd: 1.0, started_at: String::new(), resume_session: None })
@@ -242,6 +242,41 @@ mod tests {
         run.note_reply("No, stop here. Do not draft.");
         ends_turn(&mut run);
         assert_eq!(stop_point(&run), None);
+    }
+
+    #[test]
+    fn a_side_question_does_not_answer_the_stop() {
+        let mut run = run("/apply https://x.example");
+        reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
+        ends_turn(&mut run);
+        run.note_reply("Why only 72?");
+        says(&mut run, "Because of the stack gap. Shall I proceed with drafting?");
+        ends_turn(&mut run);
+        assert!(stop_point(&run).is_some());
+    }
+
+    #[test]
+    fn a_failed_turn_and_a_continue_leave_the_stop_open() {
+        let mut run = run("/apply https://x.example");
+        reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
+        run.apply(AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 });
+        assert_eq!(stop_point(&run), None);
+        run.note_reply("continue");
+        ends_turn(&mut run);
+        assert!(stop_point(&run).is_some());
+    }
+
+    #[test]
+    fn a_turn_started_on_its_own_after_a_stop_has_no_old_question() {
+        let mut run = run("/apply x");
+        says(&mut run, "Shall I draft?");
+        run.note_stop_requested();
+        ends_turn(&mut run);
+        assert_eq!(run.status, RunStatus::Stopped);
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        reads(&mut run, "notes.md");
+        ends_turn(&mut run);
+        assert_eq!(closing_question(&run), None);
     }
 
     #[test]

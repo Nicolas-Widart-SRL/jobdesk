@@ -156,9 +156,9 @@ mod tests {
 
     #[test]
     fn every_stop_names_a_step_of_its_rail() {
-        for line in ["/apply x", "/rank", "/scrape"] {
-            let labels = StepRail::for_line(line).map_or(&[][..], |rail| rail.labels);
-            assert!(stop_points(line).iter().all(|stop| labels.contains(&stop.after)), "{line}");
+        for spec in CATALOG {
+            let labels = StepRail::for_line(spec.name).map_or(&[][..], |rail| rail.labels);
+            assert!(stop_points(spec.name).iter().all(|stop| labels.contains(&stop.after)), "{}", spec.name);
         }
         assert!(!stop_points("/apply x").is_empty());
     }

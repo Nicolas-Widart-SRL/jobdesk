@@ -1,5 +1,5 @@
 /// The line without escape sequences, control characters other than tab, bidi marks, overrides and isolates,
-/// zero-width, invisible or filler characters, variation selectors or tag characters,
+/// zero-width, invisible, filler, line-separator or annotation characters or tag characters,
 /// so untrusted output cannot restyle, reorder or hide what the screen shows.
 pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     let mut chars = line.chars();
@@ -20,8 +20,8 @@ pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
 fn hidden(c: char) -> bool {
     matches!(
         c,
-        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}'
-            | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{FFA0}' | '\u{E0000}'..='\u{E007F}' | '\u{E0100}'..='\u{E01EF}'
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E007F}'
     )
 }
 
@@ -71,8 +71,19 @@ mod tests {
 
     #[test]
     fn invisible_fillers_and_selectors_are_dropped() {
-        let raw = "a\u{AD}b\u{34F}c\u{115F}d\u{1160}e\u{3164}f\u{FFA0}g\u{180E}h\u{2061}i\u{2062}j\u{2063}k\u{2064}l\u{FE00}m\u{FE0F}n\u{E0100}o\u{E01EF}p";
-        assert_eq!(clean(raw), "abcdefghijklmnop");
+        let raw = "a\u{AD}b\u{34F}c\u{115F}d\u{1160}e\u{3164}f\u{FFA0}g\u{180E}h\u{2061}i\u{2062}j\u{2063}k\u{2064}l";
+        assert_eq!(clean(raw), "abcdefghijkl");
+    }
+
+    #[test]
+    fn deprecated_annotation_and_separator_characters_are_dropped() {
+        let raw = "a\u{206A}b\u{206F}c\u{FFF9}d\u{FFFB}e\u{180B}f\u{180F}g\u{17B4}h\u{17B5}i\u{1D173}j\u{1D17A}k\u{2028}l\u{2029}m";
+        assert_eq!(clean(raw), "abcdefghijklm");
+    }
+
+    #[test]
+    fn variation_selectors_stay_for_emoji_and_cjk() {
+        assert_eq!(clean("\u{2764}\u{FE0F} \u{8FBB}\u{E0100}"), "\u{2764}\u{FE0F} \u{8FBB}\u{E0100}");
     }
 
     #[test]

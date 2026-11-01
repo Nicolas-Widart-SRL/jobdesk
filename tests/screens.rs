@@ -1020,6 +1020,70 @@ fn a_click_on_a_job_title_picks_the_job() {
     assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 1, "and no longer the first");
 }
 
+const MERIDIAN_ROW: &str = "Tech Lead Java, Real-Time Traffic, Meridian Rail Systems, 84";
+const KESTREL_ROW: &str = "Solution Architect, Event Sourcing, Kestrel Payments, 78";
+
+/// A job's row is one Tab stop, named for screen readers, and the table comes before the detail's actions.
+/// Every segment is its own stop, so Tab starts from the last one.
+#[test]
+fn tab_reaches_the_first_job_in_one_press() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_tab"));
+    harness.get_by_label_contains("Skipped").focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::Tab);
+    assert!(harness.get_by_label(MERIDIAN_ROW).is_focused(), "the first job takes the next stop");
+    press(&mut harness, Key::Tab);
+    assert!(harness.get_by_label(KESTREL_ROW).is_focused(), "the second job one stop further");
+    press(&mut harness, Key::Enter);
+    assert_eq!(harness.query_all_by_label("Solution Architect, Event Sourcing").count(), 2, "Enter picks the job");
+}
+
+/// Up and Down move the pick, and the focus goes with it.
+#[test]
+fn arrow_keys_move_the_pick() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_arrows"));
+    let second = "Solution Architect, Event Sourcing";
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the second job");
+    press(&mut harness, Key::ArrowUp);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "and the first again");
+
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert!(harness.get_by_label(KESTREL_ROW).is_focused(), "the focus follows the pick");
+    assert_eq!(harness.query_all_by_label(second).count(), 2);
+}
+
+/// The table cuts a long title, and the pointer on it shows the whole title. A row's text sits over the row's click,
+/// so it still takes the hover.
+#[test]
+fn a_cut_job_title_shows_in_full_on_hover() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_cut_title"));
+    let second = "Solution Architect, Event Sourcing";
+    assert_eq!(harness.query_all_by_label(second).count(), 1, "only the table lists it");
+    harness.get_by_label(second).hover();
+    harness.run_steps(4);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the tooltip shows the title");
+
+    harness.get_by_label("+1").hover();
+    harness.run_steps(4);
+    assert!(harness.query_by_label_contains("Also: ").is_some(), "+1 names the other signal");
+}
+
+/// The detail names the site, so a narrow window drops the column and keeps the rest in view.
+#[test]
+fn the_found_on_column_drops_below_1100() {
+    let mut narrow = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui({
+        let mut shell = shell(Screen::Jobs, "jobs_narrow");
+        move |ui| shell.show(ui)
+    });
+    narrow.run_steps(3);
+    assert!(!is_shown(&narrow, "Found on"));
+    let harness = tray_harness(shell(Screen::Jobs, "jobs_wide"));
+    assert!(is_shown(&harness, "Found on"));
+}
+
 /// The same holds for an application card: a click on its role opens the details.
 #[test]
 fn a_click_on_a_card_role_opens_its_details() {

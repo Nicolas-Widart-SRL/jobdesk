@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use egui::{Sense, Ui};
-use egui_extras::{Column, TableBuilder};
+use egui::Ui;
 
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
-use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
+use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP};
 use crate::ui_kit::{
-    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, hand, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, primary_command_action, rich,
-    score, segmented, side_column, stamp, stamp_square, strong, table_cell, table_head, tag, title_over,
+    CheckMark, ColumnWidth, Ink, PickTable, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel, panel_body,
+    paper_with_footer, pick_table, primary_command_action, rich, score, segmented, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
@@ -130,107 +129,118 @@ impl JobsScreen {
         }
         let selected = jobs.iter().find(|job| Some(&job.key) == self.selected.as_ref());
 
-        side_column("job_details", 340.0).show(ui, |ui| {
-            if let Some(job) = selected {
-                paper_with_footer(ui, |ui| details(ui, job, kept.contains(&job.key)), |ui| actions(ui, job));
-            }
-        });
-        egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
-            // The fixed columns overflow a narrow window, so the table scrolls sideways there.
-            panel(ui, |ui| {
-                egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs, waiting));
-            });
-            if jobs.iter().any(|job| waiting.contains(&job.key)) {
-                ui.add_space(ROW_GAP);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
-                    stamp_square(ui, WAITING);
-                    muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
+        with_side_column(
+            ui,
+            340.0,
+            |ui| {
+                // The fixed columns overflow a narrow window, so the table scrolls sideways there.
+                panel(ui, |ui| {
+                    egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs, waiting));
                 });
-            }
-        });
+                if jobs.iter().any(|job| waiting.contains(&job.key)) {
+                    ui.add_space(ROW_GAP);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                        stamp_square(ui, WAITING);
+                        muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
+                    });
+                }
+            },
+            |ui| {
+                if let Some(job) = selected {
+                    paper_with_footer(ui, |ui| details(ui, job, kept.contains(&job.key)), |ui| actions(ui, job));
+                }
+            },
+        );
     }
 
     fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &HashSet<String>) {
-        let selected = self.selected.clone();
-        let last = jobs.len().saturating_sub(1);
-        // Cells pad themselves, so rules and the selected row run unbroken.
-        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        TableBuilder::new(ui)
-            .striped(false)
-            .sense(Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(60.0))
-            .column(Column::remainder().at_least(160.0).clip(true))
-            .column(Column::exact(112.0).clip(true))
-            .column(Column::exact(80.0).clip(true))
-            .column(Column::exact(96.0))
-            .column(Column::exact(168.0).clip(true))
-            .column(Column::exact(84.0).clip(true))
-            .column(Column::exact(24.0))
-            .header(TABLE_HEAD_HEIGHT, |mut header| {
-                for title in ["Score", "Job", "Where", "Day rate", "Closes", "Worth knowing", "Found on", ""] {
-                    header.col(|ui| {
-                        table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
-                    });
+        // The detail names the site too, so a narrow window drops the column.
+        let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
+        let shown: Vec<_> = COLUMNS.iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect();
+        let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
+        let picked = jobs.iter().position(|job| Some(&job.key) == self.selected.as_ref());
+        let table = PickTable { id_salt: "jobs_table", columns: &heads, row_height: 58.0, rows: jobs.len(), picked };
+        if let Some(row) = pick_table(ui, &table, |row| spoken(&jobs[row]), |ui, row, column| job_cell(ui, &jobs[row], shown[column].0, waiting)) {
+            self.selected = Some(jobs[row].key.clone());
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JobColumn {
+    Score,
+    Job,
+    Where,
+    DayRate,
+    Closes,
+    WorthKnowing,
+    FoundOn,
+    Waiting,
+}
+
+const COLUMNS: [(JobColumn, TableColumn<'static>); 8] = [
+    (JobColumn::Score, TableColumn { head: "Score", width: ColumnWidth::Exact(60.0) }),
+    (JobColumn::Job, TableColumn { head: "Job", width: ColumnWidth::Rest { least: 160.0 } }),
+    (JobColumn::Where, TableColumn { head: "Where", width: ColumnWidth::Exact(112.0) }),
+    (JobColumn::DayRate, TableColumn { head: "Day rate", width: ColumnWidth::Exact(80.0) }),
+    (JobColumn::Closes, TableColumn { head: "Closes", width: ColumnWidth::Exact(96.0) }),
+    (JobColumn::WorthKnowing, TableColumn { head: "Worth knowing", width: ColumnWidth::Exact(168.0) }),
+    (JobColumn::FoundOn, TableColumn { head: "Found on", width: ColumnWidth::Exact(84.0) }),
+    (JobColumn::Waiting, TableColumn { head: "", width: ColumnWidth::Exact(24.0) }),
+];
+
+/// Below this window width the table drops its Found on column.
+const FOUND_ON_FROM_WIDTH: f32 = 1100.0;
+
+/// What a screen reader says for a job's row, such as "Tech Lead Java, Real-Time Traffic, Meridian Rail Systems, 84".
+fn spoken(job: &JobView) -> String {
+    let score = job.score.map_or_else(|| "not scored".to_owned(), |score| score.to_string());
+    format!("{}, {}, {score}", job.title, job.company)
+}
+
+fn job_cell(ui: &mut Ui, job: &JobView, column: JobColumn, waiting: &HashSet<String>) {
+    match column {
+        JobColumn::Score => {
+            score(ui, job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_words).to_owned(), |s| s.to_string()));
+        }
+        JobColumn::Job => {
+            title_over(ui, &job.title, &job.company);
+        }
+        JobColumn::Where => {
+            ui.add(egui::Label::new(rich(ui, job.location.as_deref().unwrap_or(NOT_STATED), Type::BODY, Ink::Muted)).wrap());
+        }
+        JobColumn::DayRate => {
+            let rate = day_rate(job);
+            let ink = if rate == NOT_STATED { Ink::Faint } else { Ink::Text };
+            ui.add(egui::Label::new(rich(ui, rate, Type::BODY, ink)).wrap());
+        }
+        JobColumn::Closes => {
+            match job.deadline {
+                Some(deadline) => ui.label(deadline.format("%a %-d %b").to_string()),
+                None => ui.label(rich(ui, "None", Type::BODY, Ink::Faint)),
+            };
+        }
+        JobColumn::WorthKnowing => {
+            if let Some((first, rest)) = job.signals.split_first() {
+                let (text, tone) = signal_tag(first);
+                tag(ui, text, tone);
+                if !rest.is_empty() {
+                    let also: Vec<_> = rest.iter().map(|signal| signal_tag(signal).0).collect();
+                    muted(ui, format!("+{}", rest.len())).on_hover_text(format!("Also: {}", also.join(", ")));
                 }
-            })
-            .body(|body| {
-                body.rows(58.0, jobs.len(), |mut row| {
-                    let index = row.index();
-                    let job = &jobs[index];
-                    let rule = if index == last { CellRule::Last } else { CellRule::Row };
-                    row.set_selected(selected.as_ref() == Some(&job.key));
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| score(ui, job.score.map_or_else(|| job.scraper_fit.map_or("-", fit_words).to_owned(), |s| s.to_string())));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| title_over(ui, &job.title, &job.company));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, job.location.as_deref().unwrap_or(NOT_STATED), Type::BODY, Ink::Muted)).wrap()));
-                    });
-                    row.col(|ui| {
-                        let rate = day_rate(job);
-                        let ink = if rate == NOT_STATED { Ink::Faint } else { Ink::Text };
-                        table_cell(ui, rule, |ui| ui.add(egui::Label::new(rich(ui, rate, Type::BODY, ink)).wrap()));
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| match job.deadline {
-                            Some(deadline) => ui.label(deadline.format("%a %-d %b").to_string()),
-                            None => ui.label(rich(ui, "None", Type::BODY, Ink::Faint)),
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if let Some(signal) = job.signals.first() {
-                                let (text, tone) = signal_tag(signal);
-                                tag(ui, text, tone);
-                                if job.signals.len() > 1 {
-                                    muted(ui, format!("+{}", job.signals.len() - 1));
-                                }
-                            }
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if let Some(site) = &job.found_on {
-                                ui.add(egui::Label::new(site.as_str()).truncate());
-                            }
-                        });
-                    });
-                    row.col(|ui| {
-                        table_cell(ui, rule, |ui| {
-                            if waiting.contains(&job.key) {
-                                stamp_square(ui, WAITING);
-                            }
-                        });
-                    });
-                    if hand(row.response()).clicked() {
-                        self.selected = Some(job.key.clone());
-                    }
-                });
-            });
+            }
+        }
+        JobColumn::FoundOn => {
+            if let Some(site) = &job.found_on {
+                ui.add(egui::Label::new(site.as_str()).truncate());
+            }
+        }
+        JobColumn::Waiting => {
+            if waiting.contains(&job.key) {
+                stamp_square(ui, WAITING);
+            }
+        }
     }
 }
 

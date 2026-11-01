@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, WidgetText, pos2,
-    vec2,
+    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2,
+    WidgetInfo, WidgetText, pos2, vec2,
 };
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text, table_head};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -210,6 +210,22 @@ pub fn side_column(id: &'static str, width: f32) -> Panel {
     Panel::right(id).exact_size(width).resizable(false).show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: GUTTER, ..Default::default() }))
 }
 
+/// A screen's content with a fixed column `width` wide at its right, laid out as `side_column` lays one out beside a
+/// central panel. The content is built first, so Tab reaches it before the side column, where a panel would come first.
+pub fn with_side_column(ui: &mut Ui, width: f32, main: impl FnOnce(&mut Ui), side: impl FnOnce(&mut Ui)) {
+    let area = ui.available_rect_before_wrap();
+    let side_rect = Rect::from_min_max(pos2(area.right() - width.min(area.width()), area.top()), area.max);
+    let main_rect = Rect::from_min_max(area.min, pos2(side_rect.left(), area.bottom()));
+    let column = |rect: Rect, salt: &str| UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::top_down(Align::Min));
+    let mut main_ui = ui.new_child(column(main_rect, "with_side_main"));
+    main_ui.shrink_clip_rect(main_rect);
+    main(&mut main_ui);
+    let mut side_ui = ui.new_child(column(Rect::from_min_max(pos2(side_rect.left() + f32::from(GUTTER), side_rect.top()), side_rect.max), "with_side_side"));
+    side_ui.shrink_clip_rect(side_rect);
+    side(&mut side_ui);
+    ui.advance_cursor_after_rect(area);
+}
+
 /// A main column and a side column of slips, `SPLIT_GAP` apart, both starting at the top.
 /// The side column is `side_width` wide, but never wider than the main one.
 /// Each column gets the height left in `ui`: a column that should scroll on its own puts a scroll area in it.
@@ -383,6 +399,139 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
         .response;
     interactive_row(ui, &response, RADIUS_PANEL);
     response
+}
+
+/// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColumnWidth {
+    Exact(f32),
+    Rest { least: f32 },
+}
+
+/// A column of a `pick_table`: its head and its width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableColumn<'a> {
+    pub head: &'a str,
+    pub width: ColumnWidth,
+}
+
+/// What a `pick_table` lays out: its columns, the height of a row, how many rows and which one is picked.
+pub struct PickTable<'a> {
+    pub id_salt: &'a str,
+    pub columns: &'a [TableColumn<'a>],
+    pub row_height: f32,
+    pub rows: usize,
+    pub picked: Option<usize>,
+}
+
+/// A table whose every row picks something, such as a job. A row is one target under its cells: one Tab stop, named
+/// `spoken(row)` for screen readers, lit as every pickable thing is and ringed inside when it has focus. Its text takes
+/// no click, so a click on it picks the row, and a cut title or a mark beneath the pointer still shows its tooltip.
+/// Up and Down move the pick while no text field has focus. `cell(ui, row, column)` fills one cell.
+/// The head stays put while the rows scroll. Returns the row picked this frame.
+pub fn pick_table(ui: &mut Ui, table: &PickTable, spoken: impl Fn(usize) -> String, mut cell: impl FnMut(&mut Ui, usize, usize)) -> Option<usize> {
+    let p = Palette::of(ui);
+    let id = ui.make_persistent_id(table.id_salt);
+    let row_id = |row: usize| id.with(("pick_table_row", row));
+    let widths = column_widths(table.columns, ui.available_width());
+    let width: f32 = widths.iter().sum();
+    let moved = arrow_pick(ui, table);
+    if let Some(row) = moved {
+        let focused = ui.memory(|mem| mem.focused());
+        if focused.is_some_and(|focused| (0..table.rows).any(|row| row_id(row) == focused)) {
+            ui.memory_mut(|mem| mem.request_focus(row_id(row)));
+        }
+    }
+    let shown = moved.or(table.picked);
+    let mut clicked = None;
+    // Cells pad themselves, so rules and the picked row run unbroken.
+    ui.spacing_mut().item_spacing = Vec2::ZERO;
+    let head = Rect::from_min_size(ui.cursor().min, vec2(width, TABLE_HEAD_HEIGHT));
+    for (column, rect) in column_rects(head, &widths).enumerate() {
+        table_cell_in(ui, rect, CellRule::Head, |ui| {
+            table_head(ui, table.columns[column].head);
+        });
+    }
+    ui.advance_cursor_after_rect(head);
+    egui::ScrollArea::vertical().id_salt(id.with("rows")).auto_shrink([false, true]).show_rows(ui, table.row_height, table.rows, |ui, range| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        let top = ui.max_rect().top() - range.start as f32 * table.row_height;
+        if let Some(row) = moved {
+            ui.scroll_to_rect(Rect::from_min_size(pos2(ui.max_rect().left(), top + row as f32 * table.row_height), vec2(width, table.row_height)), None);
+        }
+        for row in range {
+            let rect = Rect::from_min_size(ui.cursor().min, vec2(width, table.row_height));
+            let rule = if row + 1 == table.rows { CellRule::Last } else { CellRule::Row };
+            let response = ui
+                .scope_builder(clickable().scope_id(row_id(row)).max_rect(rect), |ui| {
+                    let hit = ui.response();
+                    let look = pick_look(&p, shown == Some(row), pointer_over(&hit), pressed(&hit));
+                    ui.painter().rect_filled(rect, 0.0, look.fill);
+                    for (column, cell_rect) in column_rects(rect, &widths).enumerate() {
+                        table_cell_in(ui, cell_rect, rule, |ui| cell(ui, row, column));
+                    }
+                    if let Some(edge) = look.edge {
+                        paint_pick_edge(ui, rect, 0, edge);
+                    }
+                    ui.expand_to_include_rect(rect);
+                })
+                .response;
+            interactive_row(ui, &response, 0);
+            if response.has_focus() {
+                // Up and Down move the pick, and the focus with it, so egui must not move the focus on its own.
+                ui.memory_mut(|mem| mem.set_focus_lock_filter(response.id, EventFilter { vertical_arrows: true, ..EventFilter::default() }));
+            }
+            response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), shown == Some(row), spoken(row)));
+            if response.clicked() {
+                clicked = Some(row);
+            }
+        }
+    });
+    clicked.or(moved)
+}
+
+/// The row Up or Down picks this frame, if either was pressed and the pick moves. Typing in a field keeps its arrows.
+fn arrow_pick(ui: &mut Ui, table: &PickTable) -> Option<usize> {
+    if table.rows == 0 || ui.ctx().text_edit_focused() {
+        return None;
+    }
+    let (up, down) = ui.input_mut(|input| (input.consume_key(Modifiers::NONE, Key::ArrowUp), input.consume_key(Modifiers::NONE, Key::ArrowDown)));
+    let row = match (table.picked, up, down) {
+        (Some(row), true, false) => row.saturating_sub(1),
+        (Some(row), false, true) => (row + 1).min(table.rows - 1),
+        (None, true, _) | (None, _, true) => 0,
+        _ => return None,
+    };
+    (Some(row) != table.picked).then_some(row)
+}
+
+/// Each column's width: fixed ones as given, and the others sharing what is left of `room`.
+fn column_widths(columns: &[TableColumn], room: f32) -> Vec<f32> {
+    let fixed: f32 = columns.iter().filter_map(|column| if let ColumnWidth::Exact(width) = column.width { Some(width) } else { None }).sum();
+    let rest = columns.iter().filter(|column| matches!(column.width, ColumnWidth::Rest { .. })).count().max(1);
+    let share = (room - fixed) / rest as f32;
+    columns
+        .iter()
+        .map(|column| match column.width {
+            ColumnWidth::Exact(width) => width,
+            ColumnWidth::Rest { least } => share.max(least),
+        })
+        .collect()
+}
+
+fn column_rects(row: Rect, widths: &[f32]) -> impl Iterator<Item = Rect> + '_ {
+    widths.iter().scan(row.left(), move |left, width| {
+        let rect = Rect::from_min_size(pos2(*left, row.top()), vec2(*width, row.height()));
+        *left += width;
+        Some(rect)
+    })
+}
+
+/// A `table_cell` at `rect`, clipped to it, so a long value never runs into the next column.
+fn table_cell_in(ui: &mut Ui, rect: Rect, rule: CellRule, add: impl FnOnce(&mut Ui)) {
+    let mut cell = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+    cell.shrink_clip_rect(rect);
+    table_cell(&mut cell, rule, add);
 }
 
 /// A filled line across a screen, for a short message and its actions.

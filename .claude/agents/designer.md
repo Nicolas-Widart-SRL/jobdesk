@@ -30,7 +30,8 @@ You draw screens. Builders turn them into egui code.
 
 ## Steps
 
-1. Read the brief, the index, and the shared base: `app.css`, `support.js` and `Grid.html`, which sit in the index's folder.
+1. Read the brief, the index, and the shared base in `mockups/`, whatever folder your brief names:
+   `mockups/app.css`, `mockups/support.js` and `mockups/Grid.html`.
    Of the rest, read only the handoff files and canvases for the screens you touch.
    The index is `mockups/README.md`. When your brief names another folder, it is that folder's own `README.md`,
    and the handoff files sit in that folder's `handoff/` subfolder in place of `mockups/handoff/`.

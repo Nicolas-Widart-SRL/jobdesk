@@ -9,6 +9,7 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - **Untrusted text**: posting, note, report and tool text shown without stripping control, escape, bidi and zero-width characters, or split on fewer line breaks than it holds.
 - **Copy claims more than the data**: a label or sentence that says more than the data behind it, in the empty, one or many case.
 - **Hover/focus/keyboard**: hover, focus and selected states that look the same, or a control or tooltip that the keyboard cannot reach.
+- **Contradiction between steps**: two steps or rules in one instruction file that cannot both be followed, such as a read limit against a step that needs the file.
 
 ## Escapes
 

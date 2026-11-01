@@ -14,19 +14,19 @@ pub struct NoticeText {
 
 /// The first line of untrusted text, trimmed, without the characters that could hide or reorder what it says.
 pub fn first_line(text: &str) -> String {
-    visible(text.lines().next().unwrap_or_default())
+    visible(lines(text).next().unwrap_or_default())
 }
 
 /// The first line of untrusted text that holds something, cleaned as `first_line` cleans one.
 /// A turn's result text opens with what went wrong.
 pub fn first_filled_line(text: &str) -> String {
-    text.lines().map(visible).find(|line| !line.is_empty()).unwrap_or_default()
+    lines(text).map(visible).find(|line| !line.is_empty()).unwrap_or_default()
 }
 
 /// The last line of untrusted text that holds something, cleaned as `first_line` cleans one.
 /// A failure reason ends on its error, so this is the line that says what went wrong.
 pub fn last_line(text: &str) -> String {
-    text.lines().rev().map(visible).find(|line| !line.is_empty()).unwrap_or_default()
+    lines(text).rev().map(visible).find(|line| !line.is_empty()).unwrap_or_default()
 }
 
 /// The command word of a command line, such as `/apply`, cleaned as `first_line` cleans a line.
@@ -36,9 +36,14 @@ pub fn command_word(line: &str) -> String {
 
 /// Every line of a notice that holds something, each cleaned, with the last `NOTICE_LINES` of them shown.
 pub fn notice_text(text: &str) -> NoticeText {
-    let lines: Vec<String> = text.lines().map(visible).filter(|line| !line.is_empty()).collect();
+    let lines: Vec<String> = lines(text).map(visible).filter(|line| !line.is_empty()).collect();
     let shown = lines[lines.len().saturating_sub(NOTICE_LINES)..].to_vec();
     NoticeText { shown, full: lines.join("\n") }
+}
+
+/// The lines of untrusted text. A lone carriage return ends a line too, so a progress bar cannot run into the error after it.
+fn lines(text: &str) -> impl DoubleEndedIterator<Item = &str> {
+    text.split(['\r', '\n'])
 }
 
 fn visible(line: &str) -> String {
@@ -78,6 +83,15 @@ mod tests {
     fn the_first_filled_line_skips_blank_ones() {
         assert_eq!(first_filled_line("\n  \nAPI Error: 401 invalid x-api-key\n\nPlease run /login"), "API Error: 401 invalid x-api-key");
         assert_eq!(first_filled_line(" \u{200b}\n"), "");
+    }
+
+    #[test]
+    fn a_carriage_return_ends_a_line() {
+        let text = "Downloading 10%\rDownloading 55%\rerror: auth expired\r\n";
+        assert_eq!(notice_text(text).shown, ["Downloading 10%", "Downloading 55%", "error: auth expired"]);
+        assert_eq!(last_line(text), "error: auth expired");
+        assert_eq!(first_filled_line("\r\rAPI Error: 401\rmore"), "API Error: 401");
+        assert_eq!(first_line("/apply x\rignore"), "/apply x");
     }
 
     #[test]

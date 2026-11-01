@@ -1,5 +1,5 @@
 use crate::runs::application::{closing_question, command_word, first_filled_line, first_line, last_line, stop_point, wants_reply};
-use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Run, RunStatus, ToolState, phrases_for};
+use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Run, RunStatus, ToolState, phrases_for, stop_points};
 use crate::shared_kernel::visible_text::visible_chars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,11 +55,13 @@ pub fn step_states(run: &Run) -> Option<Vec<StepState>> {
     let rail = run.steps.as_ref()?;
     let (current, next) = match &run.status {
         RunStatus::Failed(_) | RunStatus::Stopped => (StepState::Failed, StepState::Next),
-        RunStatus::Closed => (StepState::Done, StepState::Next),
+        RunStatus::Closed if current_step_finished(run) => (StepState::Done, StepState::Next),
+        // The session closed part-way through the step, so the step is not lit, and not done either.
+        RunStatus::Closed => (StepState::Next, StepState::Next),
         _ if run.needs_user() => (StepState::Waiting, StepState::Next),
         // Claude is done for now and asks nothing, so no step waits. A step it left part-way is not lit, and not done either.
         RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
-            if rail.is_complete() { (StepState::Done, StepState::Next) } else { (StepState::Next, StepState::Next) }
+            if current_step_finished(run) { (StepState::Done, StepState::Next) } else { (StepState::Next, StepState::Next) }
         }
         RunStatus::AwaitingReply if !run.is_busy() => {
             if stop_point(run).is_some() { (StepState::Done, StepState::Waiting) } else { (StepState::Waiting, StepState::Next) }
@@ -73,6 +75,12 @@ pub fn step_states(run: &Run) -> Option<Vec<StepState>> {
         _ => StepState::Next,
     });
     Some(states.collect())
+}
+
+/// Whether the current step is over: the rail is complete, or the step ends on one of the command's stop points.
+fn current_step_finished(run: &Run) -> bool {
+    let Some(rail) = run.steps.as_ref() else { return false };
+    rail.is_complete() || rail.labels.get(rail.current).is_some_and(|label| stop_points(&run.line).iter().any(|stop| stop.after == *label))
 }
 
 /// One line per step that holds rows, in order.
@@ -200,7 +208,10 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
                 };
                 (say(&format!("All {} steps", rail.labels.len()), "", Plain), nobody("The session is closed"), next)
             }
-            Some(_) => (say(&where_value(run, ""), "", Plain), nobody("The session is closed"), say("Reply to resume", "", Plain)),
+            Some(_) => {
+                let place = if current_step_finished(run) { where_value(run, ", done") } else { where_value(run, "") };
+                (say(&place, "", Plain), nobody("The session is closed"), say("Reply to resume", "", Plain))
+            }
             None => (say(&where_value(run, ""), "", Plain), nobody("The session is closed"), say("Nothing for now", "Reply to resume this session.", Plain)),
         },
         _ if run.needs_user() => {
@@ -211,6 +222,7 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
         RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
             let place = match rail {
                 Some(rail) if rail.is_complete() => format!("All {} steps", rail.labels.len()),
+                _ if current_step_finished(run) => where_value(run, ", done"),
                 _ => where_value(run, ", paused"),
             };
             (say(&place, "", Plain), nobody("Claude is done for now"), say("Reply to continue", "Or end the session.", Plain))
@@ -409,11 +421,11 @@ mod tests {
         says(&mut run, "Understood, stopping.");
         ends_turn(&mut run);
         let band = band(&run);
-        assert_eq!(band.place, cell("1 Evaluate, paused", "", BandTone::Plain));
+        assert_eq!(band.place, cell("1 Evaluate, done", "", BandTone::Plain));
         assert_eq!(band.who, cell("Nobody", "Claude is done for now", BandTone::Plain));
         assert_eq!(band.next, cell("Reply to continue", "Or end the session.", BandTone::Plain));
-        assert_eq!(band.tally, "1 of 7 steps done");
-        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Next, StepState::Next]);
+        assert_eq!(band.tally, "2 of 7 steps done");
+        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Done, StepState::Next]);
         assert!(!band.marks.contains(&StepState::Waiting));
     }
 
@@ -521,7 +533,28 @@ mod tests {
         assert_eq!(band.place.value, "2 Draft");
         assert_eq!(band.who, cell("Nobody", "The session is closed", BandTone::Plain));
         assert_eq!(band.next.value, "Reply to resume");
-        assert_eq!(step_states(&run).unwrap()[..4], [StepState::Done, StepState::Done, StepState::Done, StepState::Next]);
+        assert_eq!(step_states(&run).unwrap()[..4], [StepState::Done, StepState::Done, StepState::Next, StepState::Next]);
+        assert_eq!(band.tally, "2 of 7 steps done", "the step left part-way is not counted");
+    }
+
+    #[test]
+    fn closing_at_the_stop_keeps_its_step_done() {
+        let mut run = at_the_stop();
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        let band = band(&run);
+        assert_eq!(band.place, cell("1 Evaluate, done", "", BandTone::Plain));
+        assert_eq!(band.tally, "2 of 7 steps done");
+        assert_eq!(step_states(&run).unwrap()[..3], [StepState::Done, StepState::Done, StepState::Next]);
+    }
+
+    #[test]
+    fn closing_part_way_through_fetch_is_not_done() {
+        let mut run = started("/apply x");
+        says(&mut run, "The posting URL returned 404, so I could not fetch it.");
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        let band = band(&run);
+        assert_eq!(band.place.value, "0 Fetch");
+        assert_eq!(band.tally, "0 of 7 steps done");
     }
 
     #[test]

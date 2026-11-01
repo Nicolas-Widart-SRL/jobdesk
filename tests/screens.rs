@@ -204,7 +204,7 @@ fn stop_point() -> AgentEvent {
 /// The launcher's subtitle, which only the launcher shows. Its title, "New task", is also the menu button's label.
 const LAUNCHER: &str = "Pick a command. Nothing runs until you press Run.";
 const APPLY_LINE: &str = "/apply https://kestrel.example/jobs/2";
-const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestrel Payments\n\nVerdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week in Leuven | Pass |\n| Language | English, Dutch is a plus | Pass |\n| Salary | Not stated | Check |\n\nShall I go ahead and draft the CV and cover letter?";
+const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestrel Payments\n\nVerdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.\n\n| Gate | In the posting | Result | Notes |\n|---|---|---|---|\n| Contract | Permanent, full time | Pass | Matches the permanent role you asked for in the profile. |\n| Work mode | Hybrid, 2 days a week in Leuven | Pass | Leuven is inside the commute you set, and two office days are fine. |\n| Language | English, Dutch is a plus | Pass | Your Dutch is conversational, which covers the plus. |\n| Salary | Not stated | Check | Ask for the range on the first call with the hiring manager. |\n\nShall I go ahead and draft the CV and cover letter?";
 
 /// /apply stopped after Evaluate, with Claude's question closing its evaluation.
 fn apply_stop_after_evaluate() -> RunDesk {

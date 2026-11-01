@@ -204,12 +204,11 @@ It never reruns the builder for a finding that has a fixed SHA.
    In a review id that is not handled yet, judge only the findings with no `<review id>#<n>` verdict.
    Judge a thread again only when it has a comment id that is not handled yet.
    The script prints resolved threads too, marked `[resolved]`, and their handled comment ids stay skipped.
-   Treat a new comment from the user's account as the lead's own reply only when it answers a finding
-   at the stage replying, and do not judge it then:
-   a thread comment after that finding that starts with "Not changed", or with "Fixed in <sha>" where `<sha>` is its fixed SHA,
-   or a conversation comment that names that finding's title in the line format of step 6.
-   Record its id as the lead's own reply, and each finding it answers at the stage replied.
-   A finding at the stage judged or fixed never matches, so a user comment there is judged like any other.
+   Treat a new comment from the user's account as the lead's own reply only when its body equals
+   the body recorded for a finding at the stage replying, ignoring trailing whitespace, and do not judge it then.
+   A thread comment must sit in that finding's thread. A conversation comment matches each finding that recorded its body.
+   Record its id as the lead's own reply, and each finding it matches at the stage replied.
+   A finding at the stage judged or fixed has no recorded body, so a user comment there is judged like any other.
    Judge every other comment from the user's account like any other.
    In a resolved thread, judge an unrecorded comment only when it comes from the user's account: reply in that thread, and do not resolve it again.
    Record each unrecorded CodeRabbit comment there with the verdict "resolved by the user": handled, no reply, no round.
@@ -250,22 +249,25 @@ It never reruns the builder for a finding that has a fixed SHA.
    and that the fix SHA sits on the change's branch. Then follow step 8 for `CLOSED`.
    Reply on each thread you judged valid or invalid in step 4 that has no reply id yet.
    Step 3 records a reply the lead already posted at the stage replied, so never post one again.
-   A finding at the stage replying whose reply step 3 did not recover gets its reply posted again.
-   Right before each reply, record the finding it answers in the plan file at the stage replying.
+   A finding at the stage replying whose reply step 3 did not recover gets its recorded body posted again.
+   Right before each reply, record the finding it answers in the plan file at the stage replying,
+   with the exact body you are about to post.
    Reply with
    `gh api repos/{owner}/{repo}/pulls/<pr>/comments/<id>/replies -f body="Fixed in <sha>: …" -q .id`
    or with `-f body="Not changed: <why>"` in place of that body.
    The `<id>` is the first comment's id on the script's `thread` line, and `<sha>` is the fixed SHA from step 5.
    The command prints the new reply's id. Record it in the plan file at the stage replied, as the lead's own reply.
    The lead posts as the user's `gh` account, so the author alone does not tell its replies apart:
-   the recorded id does, or the author with that opening on a finding at the stage replying.
+   the recorded id does, or a body equal to the one recorded for a finding at the stage replying.
    Resolve each fixed thread not marked `[resolved]` with its node id:
    `gh api graphql -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' -f id=<node id>`.
    Leave skipped threads open, so the user judges them.
    Answer the new valid or invalid findings in review bodies and in conversation comments in one `gh pr comment <pr>`.
    Give one line each: the finding's title, then "Fixed in <sha>: …" or "Not changed: <why>".
    Leave out the findings step 3 already recorded at the stage replied.
-   Right before the post, record each finding it answers at the stage replying.
+   Include the findings at the stage replying that step 3 did not recover, each with its line from its recorded body.
+   Right before the post, record each finding it answers at the stage replying,
+   with the exact body of the whole comment you are about to post.
    Post it, and record the URL it prints at the stage replied, for each of those findings.
    That reply comes back as a conversation comment on the next run.
    So record the id at the end of the URL (`#issuecomment-<id>`) as the lead's own reply, and it is never judged.

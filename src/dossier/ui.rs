@@ -10,7 +10,7 @@ use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, P
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, copyable, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
     panel_header, rich, segmented, slip, small_button, split, table_cell, table_head, tag, wrapped_height,
 };
 
@@ -391,7 +391,7 @@ fn sources(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
                     if note.is_stale {
                         tag(ui, "Older than 30 days", Tone::Interview);
                     }
-                    ui.add(egui::Label::new(rich(ui, &note.text, Type::MONO, Ink::Text)).wrap());
+                    copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, &note.text, Type::MONO, Ink::Text)).wrap()));
                 }
                 None => {
                     muted(ui, "No cached research for this company.");
@@ -410,7 +410,7 @@ fn posting(ui: &mut Ui, dossier: &Dossier) {
                 ui.set_width(ui.available_width());
                 match &dossier.contents.posting {
                     Some(posting) => {
-                        ui.add(egui::Label::new(posting.text.as_str()).wrap());
+                        copyable(ui, |ui| ui.add(egui::Label::new(posting.text.as_str()).wrap()));
                     }
                     None => {
                         muted(ui, "No archived posting. /apply saves it when it records the application.");
@@ -550,7 +550,7 @@ fn follow_up_row(ui: &mut Ui, first: bool, follow_up: &NamedText) {
                 });
             });
         });
-        ui.add(egui::Label::new(follow_up.text.as_str()).wrap());
+        copyable(ui, |ui| ui.add(egui::Label::new(follow_up.text.as_str()).wrap()));
     });
 }
 

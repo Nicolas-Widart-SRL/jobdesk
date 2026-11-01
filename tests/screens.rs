@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime};
-use egui::{Key, Theme};
+use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
@@ -981,6 +981,33 @@ fn applications_mark_what_waits_in_today() {
     assert!(is_shown(&harness, "Mosaic Data, Architect, You withdrew"));
     assert!(harness.query_by_label_contains("of them wait for you in Today.").is_some());
     assert!(is_shown(&harness, "A pink edge means the application waits for you in Today."));
+}
+
+/// Text in a row takes no click of its own, so a click on a job's title picks the job, and the pointer shows the hand.
+#[test]
+fn a_click_on_a_job_title_picks_the_job() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "job_title_click"));
+    let second = "Solution Architect, Event Sourcing";
+    assert_eq!(harness.query_all_by_label(second).count(), 1, "the table lists it, the detail shows another job");
+    harness.get_by_label(second).hover();
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand);
+
+    harness.get_by_label(second).click();
+    harness.run_steps(3);
+
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the job now");
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 1, "and no longer the first");
+}
+
+/// The same holds for an application card: a click on its role opens the details.
+#[test]
+fn a_click_on_a_card_role_opens_its_details() {
+    let mut harness = tray_harness(shell(Screen::Tracker, "card_role_click"));
+    assert_eq!(harness.query_all_by_label("Granite Cloud").count(), 1, "only the card names the company");
+    harness.get_by_label("Platform Lead").click();
+    harness.run_steps(3);
+    assert_eq!(harness.query_all_by_label("Granite Cloud").count(), 2, "the detail slip names it too");
 }
 
 const TRAY_CARDS: usize = 10;

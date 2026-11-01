@@ -1,7 +1,8 @@
 //! One sheet showing every Ledger component, in both themes.
 
-use egui::{Grid, ScrollArea, Theme, Ui};
+use egui::{CursorIcon, Grid, Role, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
@@ -541,4 +542,35 @@ fn ui_kit_gallery_dark() {
 #[test]
 fn ui_kit_gallery_light() {
     render(Theme::Light, "ui_kit_gallery_light");
+}
+
+/// Every clickable kit widget in the gallery shows the pointing hand under the pointer, and a disabled one keeps the arrow.
+#[test]
+fn every_clickable_widget_shows_the_hand() {
+    let mut harness = Harness::builder().with_size([1000.0, 7450.0]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(|ui| {
+        jobdesk::ui_kit::desk(ui, |ui| {
+            jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
+                ui.add_enabled_ui(false, |ui| button(ui, "Switched off"));
+                gallery(ui);
+            });
+        });
+    });
+    harness.run();
+    let mut clickable = Vec::new();
+    for role in [Role::Button, Role::Tab, Role::RadioButton] {
+        for node in harness.query_all_by_role(role) {
+            if !node.accesskit_node().is_disabled() {
+                clickable.push(node.rect().center());
+            }
+        }
+    }
+    assert!(clickable.len() > 20, "the gallery shows {} clickable widgets", clickable.len());
+    for at in clickable {
+        harness.hover_at(at);
+        harness.step();
+        assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
+    }
+    harness.get_by_label("Switched off").hover();
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default);
 }

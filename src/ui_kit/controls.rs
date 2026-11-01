@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, Galley, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, vec2};
+use egui::{Color32, CornerRadius, CursorIcon, Galley, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, vec2};
 
 use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
@@ -32,11 +32,21 @@ const NORMAL: Fit = Fit { height: BUTTON_HEIGHT, padding: BUTTON_PADDING, font: 
 const SMALL: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::SMALL_BUTTON };
 const COMMAND: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::MONO };
 
-pub(in crate::ui_kit) fn focus_ring(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
+/// What every clickable kit widget calls last: the pointing hand while the pointer is over it, then the focus ring.
+/// A disabled widget never reports hover, so it keeps the arrow.
+pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
     if response.has_focus() {
         let color = Palette::of(ui).active;
         ui.painter().rect_stroke(response.rect.expand(FOCUS_OFFSET), radius, Stroke::new(FOCUS_RING, color), StrokeKind::Outside);
     }
+}
+
+/// The pointing hand on a control egui paints, such as a checkbox or a combo box. The kit's own widgets set it themselves.
+pub fn hand(response: Response) -> Response {
+    response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 /// A plain button at rest is clear on a surface, and fills with paper on the desk, so the grid never runs behind its label.
@@ -81,7 +91,7 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
         let hint = Rect::from_center_size(egui::pos2(text_rect.right() + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
         paint_key(ui, hint, key, ink, fill);
     }
-    focus_ring(ui, &response, RADIUS_BUTTON);
+    interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
         Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, text),
         None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), text),
@@ -156,7 +166,7 @@ pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
         x += glyph.size().x + KEYS_GAP;
         paint_text(ui, at, glyph, p.muted, p.card);
     }
-    focus_ring(ui, &response, RADIUS_BUTTON);
+    interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), text));
     response
 }
@@ -315,7 +325,7 @@ pub fn folder_tab(ui: &mut Ui, label: &str, mark: TabMark, on: bool) -> Response
         let square = Rect::from_min_size(egui::pos2(mark_left, rect.center().y - STATUS_DOT / 2.0), vec2(STATUS_DOT, STATUS_DOT));
         ui.painter().rect_filled(square, 0.0, p.closed);
     }
-    focus_ring(ui, &response, RADIUS_BUTTON);
+    interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| tab_info(label, mark, on));
     response
 }
@@ -353,7 +363,7 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
     };
     ui.painter().rect_filled(rect, look.radius, fill);
     paint_centred(ui, rect, galley, ink, fill);
-    focus_ring(ui, &response, look.radius);
+    interactive(ui, &response, look.radius);
     response.widget_info(|| WidgetInfo::selected(Role::Tab, true, on, label));
     response
 }
@@ -404,7 +414,7 @@ pub fn select_row(ui: &mut Ui, text: &str, style: Type, on: bool) -> Response {
     let galley = line(ui, text, style, ink, rect.width() - crate::ui_kit::tokens::INSET as f32 * 2.0);
     let at = egui::pos2(rect.left() + crate::ui_kit::tokens::INSET as f32, rect.center().y - galley.size().y / 2.0);
     paint_text(ui, at, galley, ink, fill);
-    focus_ring(ui, &response, 0);
+    interactive(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, text));
     response
 }
@@ -428,7 +438,7 @@ pub fn command_row(ui: &mut Ui, name: &str, summary: &str, writes: &str, on: boo
     paint_text(ui, named_at, named, p.text, fill);
     paint_text(ui, summed_at, summed, p.text, fill);
     paint_text(ui, written_at, written, p.faint, fill);
-    focus_ring(ui, &response, 0);
+    interactive(ui, &response, 0);
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, on, format!("{name} {summary}")));
     response
 }

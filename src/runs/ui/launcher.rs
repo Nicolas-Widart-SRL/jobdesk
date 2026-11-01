@@ -4,7 +4,7 @@ use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, group_title, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -105,7 +105,8 @@ impl Launcher {
                 labelled(model, "Model", |ui, label| {
                     ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
                     let width = ui.available_width();
-                    ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0).labelled_by(label);
+                    let combo = ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0);
+                    hand(combo).labelled_by(label);
                 });
                 labelled(budget, "Spend at most, USD", |ui, label| {
                     let edit = TextEdit::singleline(&mut self.budget).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
@@ -122,7 +123,7 @@ impl Launcher {
             if self.command.destructive {
                 ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");
-                ui.checkbox(&mut self.reset_confirmed, "I understand");
+                hand(ui.checkbox(&mut self.reset_confirmed, "I understand"));
             }
             let budget = self.budget.trim().parse::<f64>().ok().filter(|budget| *budget > 0.0);
             let ready = budget.is_some() && (!self.command.destructive || self.reset_confirmed) && !desk.is_busy();

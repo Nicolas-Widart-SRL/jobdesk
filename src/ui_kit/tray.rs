@@ -3,7 +3,7 @@
 use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
+use crate::ui_kit::controls::{interactive, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined, surface};
@@ -154,7 +154,7 @@ pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgendaEnd<'a> {
     Nothing,
-    /// The row is the card being read.
+    /// The row is the card being read: it cannot be clicked.
     Now,
     /// The row's card is decided: the row reads faint and cannot be clicked.
     Done,
@@ -174,9 +174,10 @@ pub struct AgendaPress {
 /// `text` may come from a posting, so it is painted as plain text, cut to the room left.
 pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> AgendaPress {
     let (pressed, response) = agenda_line(ui, day, text, end, first);
-    let role = if end == AgendaEnd::Done { Role::Label } else { Role::Button };
+    let role = if matches!(end, AgendaEnd::Done | AgendaEnd::Now) { Role::Label } else { Role::Button };
     let spoken = match end {
         AgendaEnd::Done => format!("{day}, {text}, done"),
+        AgendaEnd::Now => format!("{day}, {text}, now"),
         AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
         _ => format!("{day}, {text}"),
     };
@@ -208,9 +209,11 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
         divider(ui);
     }
     let done = end == AgendaEnd::Done;
-    let sense = if done { Sense::hover() } else { Sense::click() };
+    // A decided row and the card being read have nothing to open: they take no click, light no fill and keep the arrow.
+    let inert = done || end == AgendaEnd::Now;
+    let sense = if inert { Sense::hover() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
-    let fill = if !done && response.hovered() { p.raised } else { Color32::TRANSPARENT };
+    let fill = if !inert && response.hovered() { p.raised } else { Color32::TRANSPARENT };
     ui.painter().rect_filled(rect, 0.0, fill);
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;
@@ -240,8 +243,8 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let (dated_at, said_at) = (pos2(left, centred(dated.size().y)), pos2(text_left, centred(said.size().y)));
     paint_text(ui, dated_at, dated, day_ink, fill);
     paint_text(ui, said_at, said, ink, fill);
-    if !done {
-        focus_ring(ui, &response, 0);
+    if !inert {
+        interactive(ui, &response, 0);
     }
     pressed.row = response.clicked();
     (pressed, response)
@@ -378,11 +381,12 @@ mod tests {
         harness.get_by_label("Tue 3, Harbor Bank deadline, done").click();
         harness.run();
         assert_eq!(*presses.borrow(), Vec::new());
-        harness.get_by_label("Thu 5, Meridian Rail closes").click();
+        harness.get_by_label("Thu 5, Meridian Rail closes, now").click();
         harness.run();
+        assert_eq!(*presses.borrow(), Vec::new());
         harness.get_by_label("Bring back").click();
         harness.run();
-        assert_eq!(*presses.borrow(), vec![(2, AgendaPress { row: true, button: false }), (0, AgendaPress { row: false, button: true })]);
+        assert_eq!(*presses.borrow(), vec![(0, AgendaPress { row: false, button: true })]);
     }
 
     #[test]

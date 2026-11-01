@@ -15,7 +15,7 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, markdown, muted, page_body, page_head, panel,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, hand, markdown, muted, page_body, page_head, panel,
     panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
@@ -733,9 +733,9 @@ impl RunScreen {
                             ui.spacing_mut().item_spacing.y = DETAIL_GAP;
                             let mut on = picked.contains(&option.label);
                             let changed = if question.multi_select {
-                                ui.checkbox(&mut on, &option.label).changed()
+                                hand(ui.checkbox(&mut on, &option.label)).changed()
                             } else {
-                                let clicked = ui.radio(on, &option.label).clicked();
+                                let clicked = hand(ui.radio(on, &option.label)).clicked();
                                 on |= clicked;
                                 clicked
                             };
@@ -835,16 +835,15 @@ impl RunScreen {
     }
 
     /// One run in the recent list. The picked run reads in full ink, the others muted.
-    /// Its labels take no clicks, so a click anywhere on the row picks the run.
     fn recent_row(&self, ui: &mut Ui, run: &Run, on: bool) -> bool {
         let response = pick_row(ui, on, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)).selectable(false));
+                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)));
                     status_tag(ui, run);
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let ink = if on { Ink::Text } else { Ink::Muted };
-                        ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate().selectable(false));
+                        ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());
                     });
                 });
             });

@@ -6,9 +6,10 @@ use egui::{
 };
 
 use crate::ui_kit::Palette;
+use crate::ui_kit::controls::interactive;
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
@@ -27,6 +28,14 @@ const DESK: &str = "jobdesk_desk";
 pub fn desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     paint_grid(ui.painter(), ui.max_rect());
     ui.scope_builder(UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(DESK)), add).inner
+}
+
+/// Marks a `Ui` that takes a click as a whole, such as a row or a card. `copyable` text must never sit inside one.
+pub(in crate::ui_kit) const CLICKABLE: &str = "jobdesk_clickable";
+
+/// A child `Ui` that takes a click anywhere on it, tagged `CLICKABLE`.
+fn clickable() -> UiBuilder {
+    UiBuilder::new().sense(Sense::click()).ui_stack_info(UiStackInfo::default().with_tag(CLICKABLE))
 }
 
 /// Marks a `Ui` whose owner paints its own fill under it with the painter, not with a `Frame`, such as a row that lights up.
@@ -358,16 +367,19 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
 /// A whole row that picks something, such as a run in a list.
 pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
-    ui.scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
-        let lit = on || ui.response().hovered();
-        let frame = Frame::new().corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
-        let frame = if lit { frame.fill(p.panel) } else { frame };
-        frame.show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui);
-        });
-    })
-    .response
+    let response = ui
+        .scope_builder(clickable(), |ui| {
+            let lit = on || ui.response().hovered();
+            let frame = Frame::new().corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
+            let frame = if lit { frame.fill(p.panel) } else { frame };
+            frame.show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+        })
+        .response;
+    interactive(ui, &response, RADIUS_PANEL);
+    response
 }
 
 /// A filled line across a screen, for a short message and its actions.
@@ -418,7 +430,7 @@ pub fn code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner_margin(margin(CODE_PADDING))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            add(ui)
+            copyable(ui, add)
         })
         .inner
 }
@@ -542,7 +554,7 @@ pub struct CardLook {
 pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let response = ui
-        .scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
+        .scope_builder(clickable(), |ui| {
             if look.faded {
                 ui.multiply_opacity(FADED_OPACITY);
             }
@@ -560,6 +572,7 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             }
         })
         .response;
+    interactive(ui, &response, RADIUS_CARD);
     let spoken = if look.waits { format!("{spoken}, waits for you in Today") } else { spoken.to_owned() };
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &spoken));
     response

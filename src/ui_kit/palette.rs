@@ -176,6 +176,8 @@ pub fn install_theme(ctx: &Context) {
             style.spacing.button_padding = egui::vec2(BUTTON_PADDING, 5.0);
             style.spacing.interact_size.y = 26.0;
             style.spacing.scroll.fade.strength = 0.0;
+            // A label takes no click, so a click on a row's text picks the row. `copyable` turns selection back on.
+            style.interaction.selectable_labels = false;
         });
     }
 }

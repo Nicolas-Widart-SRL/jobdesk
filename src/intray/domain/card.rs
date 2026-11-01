@@ -96,7 +96,7 @@ pub struct Due {
     pub label: String,
 }
 
-/// One pending decision. `primary` is the Y key: permission, question and guard cards have none.
+/// One pending decision. `primary` is the Y key: permission, question, guard and Your turn cards have none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
     /// Stable across snapshots, and new when the underlying state moves on.

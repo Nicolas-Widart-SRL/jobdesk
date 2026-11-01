@@ -36,6 +36,14 @@ fn kind_tag(kind: CardKind) -> (&'static str, Tone) {
     }
 }
 
+/// What `n` cards of a kind are called in the day's count: the tag in lower case, except for turns, which are replies.
+fn count_noun(kind: CardKind, n: usize) -> String {
+    match kind {
+        CardKind::Turn => (if n == 1 { "reply" } else { "replies" }).to_owned(),
+        _ => kind_tag(kind).0.to_lowercase(),
+    }
+}
+
 /// The frame a card is dealt in: cards that wait on the user to read and decide get one.
 fn deal_frame(kind: CardKind) -> Option<Tone> {
     match kind {
@@ -128,7 +136,7 @@ fn horizon(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Presse
             horizon_mark(ui, mark, pressed);
         }
         if today {
-            let kinds: Vec<(usize, String)> = queue.by_kind().into_iter().map(|(n, kind)| (n, kind.map_or("other".to_owned(), |kind| kind_tag(kind).0.to_lowercase()))).collect();
+            let kinds: Vec<(usize, String)> = queue.by_kind().into_iter().map(|(n, kind)| (n, kind.map_or("other".to_owned(), |kind| count_noun(kind, n)))).collect();
             let kinds: Vec<(usize, &str)> = kinds.iter().map(|(n, kind)| (*n, kind.as_str())).collect();
             horizon_count(ui, queue.cards.len(), queue.overdue(), &kinds);
         } else if *day == tomorrow && !queue.set_aside.is_empty() {
@@ -360,5 +368,17 @@ fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed
         *pressed = Some(Pressed::Undo);
     } else if let Some(index) = press.toggle {
         *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turns_are_counted_as_replies() {
+        assert_eq!(count_noun(CardKind::Turn, 1), "reply");
+        assert_eq!(count_noun(CardKind::Turn, 2), "replies");
+        assert_eq!(count_noun(CardKind::GuardFlag, 2), "guard flag");
     }
 }

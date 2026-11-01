@@ -3,13 +3,13 @@
 use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, TRAY_RAIL};
+use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    FlowNode, Ink, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button, deal, desk_frame,
-    divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, lane,
-    lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone,
-    rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp, status_dot, status_segmented, step_rail, strong, table_head, tag, tally,
-    tally_strip, undo_row,
+    BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button,
+    deal, desk_frame, divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
+    knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button, primary_key_button,
+    prompt_box, prompt_box_tone, rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
+    status_dot, status_segmented, step_line, step_rail, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -333,12 +333,86 @@ fn tray(ui: &mut Ui) {
     });
 }
 
+fn runs(ui: &mut Ui) {
+    let at_stop = [(1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Turn))), (5, None)];
+    let working = [(2, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Active))), (4, None)];
+    let finished = [(7, Some(Ink::Text))];
+    turn_band(
+        ui,
+        &[
+            BandCell { label: "Where", value: "1 Evaluate, done", note: "Draft waits for your go", look: CellLook::Plain, marks: &at_stop },
+            BandCell { label: "Whose turn", value: "Yours", note: "Claude stopped 2 min ago", look: CellLook::Yours, marks: &[] },
+            BandCell { label: "What next", value: "Answer Claude", note: "Its question is right below.", look: CellLook::Plain, marks: &[] },
+        ],
+        false,
+        "Where the run is",
+        "1 of 7 steps done",
+    );
+    ui.add_space(10.0);
+    turn_band(
+        ui,
+        &[
+            BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
+            BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
+            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Runs tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
+        ],
+        false,
+        "Where the run is",
+        "2 of 7 steps done",
+    );
+    ui.add_space(10.0);
+    turn_band(
+        ui,
+        &[
+            BandCell { label: "Where", value: "All 7 steps", note: "Finished in 14m 20s", look: CellLook::Plain, marks: &finished },
+            BandCell { label: "Whose turn", value: "Nobody", note: "The session is closed", look: CellLook::Plain, marks: &[] },
+            BandCell { label: "What next", value: "Read the documents", note: "Open the dossier, then send it yourself.", look: CellLook::Plain, marks: &[] },
+        ],
+        false,
+        "Where the run is",
+        "7 of 7 steps done",
+    );
+    ui.add_space(10.0);
+    turn_band(
+        ui,
+        &[
+            BandCell { label: "Where", value: "1 Evaluate, done", note: "Draft waits for your go", look: CellLook::Plain, marks: &at_stop },
+            BandCell { label: "Whose turn", value: "Yours", note: "Claude stopped 2 min ago", look: CellLook::Yours, marks: &[] },
+            BandCell { label: "What next", value: "Answer Claude", note: "Its question is right below.", look: CellLook::Plain, marks: &[] },
+        ],
+        true,
+        "Where the run is",
+        "1 of 7 steps done",
+    );
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        for size in [KNOT_SIZE, KNOT_SIZE_SMALL] {
+            knot(ui, "1", KnotState::Done, size);
+            knot(ui, "2", KnotState::Working, size);
+            knot(ui, "3", KnotState::Waiting, size);
+            knot(ui, "5", KnotState::Failed, size);
+        }
+    });
+    ui.add_space(10.0);
+    step_line(ui, Some(("1", KnotState::Done)), "Evaluate", "Read your profile and scored the posting.", Some(("Show 3 actions", false)));
+    divider(ui);
+    step_line(ui, None, "You", "\u{201c}Yes, proceed with drafting.\u{201d}", None);
+    divider(ui);
+    step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV. Writing the cover letter now.", Some(("Hide actions", true)));
+    path_label(ui, ".claude/skills/job-application-assistant/", "05-cv-tailoring.md");
+    path_label(ui, "cv/", "main_harbor_tech_lead.tex");
+    divider(ui);
+    step_line(ui, Some(("3", KnotState::Waiting)), "Verify", "Waits for your answer on the CV template.", Some(("Show 4 actions so far", false)));
+    divider(ui);
+    step_line(ui, Some(("5", KnotState::Failed)), "Compile", "The cover letter did not build.", Some(("Show 2 actions", false)));
+}
+
 type Section = (&'static str, fn(&mut Ui));
 
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [Section; 10] = [
+        let sections_of_gallery: [Section; 11] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -349,6 +423,7 @@ fn gallery(ui: &mut Ui) {
             ("Sections and rows", sections),
             ("Board", board),
             ("In-tray", tray),
+            ("Runs", runs),
         ];
         for (title, section) in sections_of_gallery {
             ui.heading(title);
@@ -361,7 +436,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 4500.0])
+        .with_size([1000.0, 5250.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
         .with_context_setup(install_look)

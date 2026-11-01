@@ -1,12 +1,18 @@
-use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, Panel, Rect, Response, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{
+    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2,
+    vec2,
+};
 
 use crate::ui_kit::Palette;
+use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
-    BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, INSET, ITEM_GAP, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
-    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP,
-    STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_PADDING, TABLE_CELL_PADDING, Type,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
+    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, STEP_PADDING, TABLE_CELL_PADDING, TALLY_BAND, Type,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -52,7 +58,7 @@ pub enum Subtitle<'a> {
 }
 
 /// A screen's head: title and subtitle on the left, `actions` on the right, their bottom edges level, as `align-items: flex-end` sets them.
-/// Actions are added right to left. Title and subtitle are cut to the width the actions leave, with the full text on hover.
+/// With no subtitle, the actions sit on the title's centre line instead. Actions are added right to left. Title and subtitle are cut to the width the actions leave, with the full text on hover.
 /// When the actions leave less than `HEAD_TITLE_MIN`, they move to a row of their own under the title.
 ///
 /// `actions` runs twice a frame: first in an unseen, disabled sizing pass to measure it, then for real.
@@ -86,10 +92,12 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             line(ui, text, style, Palette::of(ui).muted, room)
         });
         let line_gap = ITEM_GAP - 2.0;
-        // A title block shorter than the actions drops, so both end on one line.
+        // A one-line head centres its actions on the title. A two-line one ends both on one line.
+        let centred = subtitle.is_none();
         let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |subtitle| line_gap + subtitle.size().y);
-        if inline && used.y > text_height {
-            ui.add_space(used.y - text_height);
+        let overhang = if inline { (used.y - text_height).max(0.0) } else { 0.0 };
+        if overhang > 0.0 {
+            ui.add_space(if centred { overhang / 2.0 } else { overhang });
         }
         let text = ui
             .vertical(|ui| {
@@ -101,7 +109,14 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             })
             .response
             .rect;
-        if inline {
+        if inline && centred {
+            let row = Rect::from_center_size(pos2((text.left() + right) / 2.0, text.center().y), vec2(right - text.left(), used.y.max(text.height())));
+            let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::Center)));
+            side.spacing_mut().item_spacing.x = HEAD_GAP.0;
+            actions(&mut side);
+            // Room for the half of the actions that hangs below the title.
+            ui.expand_to_include_rect(side.min_rect());
+        } else if inline {
             let row = Rect::from_min_max(pos2(text.left(), text.bottom() - used.y.max(text.height())), pos2(right, text.bottom()));
             let mut side = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::BOTTOM)));
             side.spacing_mut().item_spacing.x = HEAD_GAP.0;
@@ -494,6 +509,163 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
     }
 }
 
+/// How a band cell reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellLook {
+    Plain,
+    /// The value in a status colour, such as Claude's turn in `Active`.
+    Ink(Tone),
+    /// Filled in `turn`: the move is the user's.
+    Yours,
+}
+
+/// One cell of a turn band: a label, a value and a note. `marks` is a tally beside the label, in runs of `(count, ink)`.
+pub struct BandCell<'a> {
+    pub label: &'a str,
+    pub value: &'a str,
+    pub note: &'a str,
+    pub look: CellLook,
+    pub marks: &'a [(usize, Option<Ink>)],
+}
+
+/// Text wrapped to `width`, for widgets that paint their own.
+fn wrapped(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
+    WidgetText::from(RichText::new(text).font(style.font()).color(color)).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font())
+}
+
+/// How far the first line's baseline sits below the galley's top.
+fn baseline(galley: &Galley) -> f32 {
+    galley.rows.first().map_or(galley.size().y, |row| row.pos.y + row.glyphs.first().map_or(row.size.y, |glyph| glyph.pos.y))
+}
+
+/// Paints `galley` at `at` and names it for screen readers and tests.
+fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, color: Color32, text: &str) {
+    let rect = Rect::from_min_size(at, galley.size());
+    ui.painter().galley(at, galley, color);
+    ui.interact(rect, id, Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
+}
+
+/// Where a run is, whose turn it is and what comes next: three cells on the folder plane, with a hairline between them.
+/// Labels, values and notes line up across the cells. When `compact`, each cell is one line, label then value, with no note.
+/// `group_label` names the band and `tally_label` its tally for screen readers.
+pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label: &str, tally_label: &str) -> Response {
+    let p = Palette::of(ui);
+    let width = ui.available_width();
+    let parts: f32 = BAND_COLUMNS.iter().sum();
+    let (x, top, bottom) = if compact { BAND_COMPACT_PADDING } else { BAND_PADDING };
+    let value_style = if compact { Type::BAND_LINE } else { Type::SCORE };
+    struct Laid {
+        left: f32,
+        width: f32,
+        fill: Option<Color32>,
+        label: Arc<Galley>,
+        value: Arc<Galley>,
+        note: Option<Arc<Galley>>,
+        marks: Vec<Color32>,
+    }
+    let mut left = 0.0;
+    let laid: Vec<Laid> = cells
+        .iter()
+        .zip(BAND_COLUMNS)
+        .map(|(cell, part)| {
+            let cell_width = width * part / parts;
+            let room = (cell_width - x * 2.0).max(0.0);
+            let (ink, value_ink, fill) = match cell.look {
+                CellLook::Plain => (p.muted, p.text, None),
+                CellLook::Ink(tone) => (p.muted, tone.color(&p), None),
+                CellLook::Yours => (p.on_turn, p.on_turn, Some(p.turn)),
+            };
+            let marks = crate::ui_kit::marks::strip_colors(&p, cell.marks);
+            let label = line(ui, cell.label, Type::NOTE, ink, room);
+            let tally = if marks.is_empty() { 0.0 } else { marks.len() as f32 * (TALLY_BAND.width + TALLY_BAND.gap) - TALLY_BAND.gap + BAND_GAP };
+            let value_room = if compact { (room - label.size().x - BAND_GAP - tally).max(0.0) } else { room };
+            let value = line(ui, cell.value, value_style, value_ink, value_room);
+            let note = (!compact && !cell.note.is_empty()).then(|| wrapped(ui, cell.note, Type::BODY, ink, room));
+            let laid = Laid { left, width: cell_width, fill, label, value, note, marks };
+            left += cell_width;
+            laid
+        })
+        .collect();
+    let content = laid
+        .iter()
+        .map(|cell| {
+            if compact {
+                cell.value.size().y.max(cell.label.size().y)
+            } else {
+                BAND_LABEL_HEIGHT + BAND_ROW_GAP + cell.value.size().y + cell.note.as_ref().map_or(0.0, |note| BAND_ROW_GAP + note.size().y)
+            }
+        })
+        .fold(0.0, f32::max);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, top + content + bottom), Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::Group, true, group_label));
+    ui.painter().rect_filled(rect, RADIUS_PANEL, p.panel);
+    for (index, cell) in laid.into_iter().enumerate() {
+        let cell_rect = Rect::from_min_size(pos2(rect.left() + cell.left, rect.top()), vec2(cell.width, rect.height()));
+        if let Some(fill) = cell.fill {
+            let first = if index == 0 { RADIUS_PANEL } else { 0 };
+            let last = if index + 1 == cells.len() { RADIUS_PANEL } else { 0 };
+            ui.painter().rect_filled(cell_rect, CornerRadius { nw: first, sw: first, ne: last, se: last }, fill);
+        }
+        let id = response.id.with(index);
+        let cell_text = &cells[index];
+        let at = pos2(cell_rect.left() + x, rect.top() + top);
+        // The label's line: centred in its row, or on the value's baseline when compact.
+        let label_top = if compact { at.y + baseline(&cell.value) - baseline(&cell.label) } else { at.y + (BAND_LABEL_HEIGHT - cell.label.size().y) / 2.0 };
+        let label_width = cell.label.size().x;
+        let label_centre = label_top + cell.label.size().y / 2.0;
+        painted(ui, id.with("label"), pos2(at.x, label_top), cell.label, p.text, cell_text.label);
+        let mut after = at.x + label_width + BAND_GAP;
+        if !cell.marks.is_empty() {
+            let tally = crate::ui_kit::marks::paint_mark_row(ui, pos2(after, label_centre - TALLY_BAND.height / 2.0), &cell.marks, TALLY_BAND);
+            ui.interact(tally, id.with("tally"), Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::Label, true, tally_label));
+            after = tally.right() + BAND_GAP;
+        }
+        if compact {
+            painted(ui, id.with("value"), pos2(after, at.y), cell.value, p.text, cell_text.value);
+        } else {
+            let value_top = at.y + BAND_LABEL_HEIGHT + BAND_ROW_GAP;
+            let value_bottom = value_top + cell.value.size().y;
+            painted(ui, id.with("value"), pos2(at.x, value_top), cell.value, p.text, cell_text.value);
+            if let Some(note) = cell.note {
+                painted(ui, id.with("note"), pos2(at.x, value_bottom + BAND_ROW_GAP), note, p.text, cell_text.note);
+            }
+        }
+        if index > 0 {
+            ui.painter().rect_filled(Rect::from_min_size(cell_rect.left_top(), vec2(HAIRLINE, rect.height())), 0.0, p.line);
+        }
+    }
+    response
+}
+
+/// One plain line for a step: its knot, its name, one sentence and an optional toggle on the right, such as "Show 3 actions".
+/// With no knot, its place stays empty, so names line up. Returns the toggle's response.
+pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sentence: &str, toggle: Option<(&str, bool)>) -> Option<Response> {
+    let width = ui.available_width();
+    let name_ink = if knot.is_some_and(|(_, state)| state == KnotState::Waiting) { Ink::Status(Tone::Turn) } else { Ink::Text };
+    ui.allocate_ui_with_layout(vec2(width, STEP_LINE_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
+        ui.set_min_size(vec2(width, STEP_LINE_HEIGHT));
+        ui.spacing_mut().item_spacing.x = STEP_LINE_GAP;
+        let toggled = toggle.map(|(text, on)| crate::ui_kit::small_toggle(ui, text, on));
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            match knot {
+                Some((text, state)) => {
+                    crate::ui_kit::knot(ui, text, state, KNOT_SIZE_SMALL);
+                }
+                None => {
+                    ui.allocate_exact_size(Vec2::splat(KNOT_SIZE_SMALL), Sense::hover());
+                }
+            }
+            ui.allocate_ui_with_layout(vec2(STEP_NAME_WIDTH, KNOT_SIZE_SMALL), Layout::left_to_right(Align::Center), |ui| {
+                ui.set_min_width(STEP_NAME_WIDTH);
+                ui.add(egui::Label::new(rich(ui, name, Type::STRONG, name_ink)).truncate());
+            });
+            ui.add(egui::Label::new(rich(ui, sentence, Type::BODY, Ink::Text)).truncate());
+        });
+        toggled
+    })
+    .inner
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
@@ -503,12 +675,13 @@ mod tests {
 
     const LONG: &str = "Tessel Group Holdings International, Principal Solution Architect for Payments";
 
+    fn setup(ctx: &egui::Context) {
+        crate::ui_kit::install_fonts(ctx);
+        crate::ui_kit::install_theme(ctx);
+    }
+
     /// The title and the action on the very first frame, at `width`.
     fn first_frame(width: f32) -> (Rect, Rect) {
-        let setup = |ctx: &egui::Context| {
-            crate::ui_kit::install_fonts(ctx);
-            crate::ui_kit::install_theme(ctx);
-        };
         let mut harness = Harness::builder().with_size([width, 300.0]).with_context_setup(setup).build_ui(|ui| {
             page_head(ui, Title::Slab(LONG), Some(Subtitle::Typed("documents/applications/tessel/")), |ui| {
                 crate::ui_kit::button(ui, "Record a result");
@@ -523,6 +696,70 @@ mod tests {
         let (title, action) = first_frame(900.0);
         assert!(title.right() <= action.left(), "{title:?} runs under {action:?}");
         assert!(title.width() >= HEAD_TITLE_MIN);
+    }
+
+    #[test]
+    fn a_one_line_head_centres_its_actions() {
+        const LINE: &str = "/apply jobs.marlowe.example/postings/tech-lead-2291";
+        for (title, small) in [(Title::Typed(LINE), true), (Title::Typed(LINE), false), (Title::Slab(LINE), true)] {
+            let mut harness = Harness::builder().with_size([1000.0, 300.0]).with_context_setup(setup).build_ui(move |ui| {
+                page_head(ui, title, None, |ui| {
+                    if small {
+                        crate::ui_kit::small_button(ui, "End session");
+                    } else {
+                        crate::ui_kit::button(ui, "End session");
+                    }
+                });
+            });
+            harness.step();
+            let (title, action) = (harness.get_by_label(LINE).rect(), harness.get_by_label("End session").rect());
+            assert!((title.center().y - action.center().y).abs() <= 1.0, "{title:?} and {action:?} are off centre");
+        }
+    }
+
+    #[test]
+    fn the_band_names_its_text_and_tally() {
+        let mut harness = Harness::builder().with_size([900.0, 200.0]).with_context_setup(setup).build_ui(|ui| {
+            let marks = [(1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Turn))), (5, None)];
+            let cells = [
+                BandCell { label: "Where", value: "1 Evaluate, done", note: "Draft waits for your go", look: CellLook::Plain, marks: &marks },
+                BandCell { label: "Whose turn", value: "Yours", note: "Claude stopped 2 min ago", look: CellLook::Yours, marks: &[] },
+                BandCell { label: "What next", value: "Answer Claude", note: "Its question is right below.", look: CellLook::Plain, marks: &[] },
+            ];
+            turn_band(ui, &cells, false, "Where the run is", "1 of 7 steps done");
+        });
+        harness.step();
+        for label in ["Where the run is", "1 of 7 steps done", "Yours", "Answer Claude", "Its question is right below."] {
+            harness.get_by_label(label);
+        }
+    }
+
+    #[test]
+    fn a_compact_band_drops_its_notes() {
+        let mut harness = Harness::builder().with_size([900.0, 200.0]).with_context_setup(setup).build_ui(|ui| {
+            let cell = |label, value| BandCell { label, value, note: "A note", look: CellLook::Plain, marks: &[] };
+            turn_band(ui, &[cell("Where", "2 Draft"), cell("Whose turn", "Claude's"), cell("What next", "Nothing for now")], true, "Where the run is", "");
+        });
+        harness.step();
+        harness.get_by_label("Claude's");
+        assert!(harness.query_by_label("A note").is_none());
+    }
+
+    #[test]
+    fn a_step_line_reports_its_toggle() {
+        let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&clicked);
+        let mut harness = Harness::builder().with_size([700.0, 100.0]).with_context_setup(setup).build_ui(move |ui| {
+            if step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV.", Some(("Show 3 actions", false))).is_some_and(|toggle| toggle.clicked()) {
+                seen.set(true);
+            }
+        });
+        harness.step();
+        harness.get_by_label("2, working");
+        harness.get_by_label("Draft");
+        harness.get_by_label("Show 3 actions").click();
+        harness.run();
+        assert!(clicked.get());
     }
 
     #[test]

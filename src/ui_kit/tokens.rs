@@ -79,6 +79,24 @@ pub const UNDO_ROW_PADDING: (i8, i8) = (10, 12);
 pub const STEP_HEIGHT: f32 = 34.0;
 pub const STEP_PADDING: f32 = 14.0;
 pub const STEP_GAP: f32 = 3.0;
+/// The run screen's side column.
+pub const RUN_SIDE: f32 = 280.0;
+pub const STEP_LINE_HEIGHT: f32 = 48.0;
+pub const STEP_LINE_GAP: f32 = 12.0;
+pub const STEP_NAME_WIDTH: f32 = 74.0;
+pub const KNOT_SIZE: f32 = 22.0;
+pub const KNOT_SIZE_SMALL: f32 = 18.0;
+pub const KNOT_PADDING: f32 = 4.0;
+/// Below this window height, each band cell keeps to one line.
+pub const BAND_COMPACT_HEIGHT: f32 = 700.0;
+/// The band's three cells share its width in these parts.
+pub const BAND_COLUMNS: [f32; 3] = [1.0, 1.0, 1.4];
+pub const BAND_PADDING: (f32, f32, f32) = (16.0, 10.0, 12.0);
+pub const BAND_COMPACT_PADDING: (f32, f32, f32) = (16.0, 9.0, 10.0);
+pub const BAND_LABEL_HEIGHT: f32 = 20.0;
+pub const BAND_ROW_GAP: f32 = 2.0;
+pub const BAND_GAP: f32 = 10.0;
+pub const TALLY_BAND: TallySize = TallySize { width: 5.0, height: 12.0, gap: 2.0 };
 
 pub const SHELL_PADDING: (f32, f32, f32) = (28.0, 12.0, 0.0);
 pub const SHELL_GAP: (f32, f32) = (20.0, 8.0);
@@ -209,6 +227,8 @@ impl Type {
     pub const SECTION: Self = Self { face: Face::Slab, size: 17.0 };
     pub const SLIP_TITLE: Self = Self { face: Face::Slab, size: 19.0 };
     pub const SCORE: Self = Self { face: Face::Slab, size: 21.0 };
+    /// A band value on its one line, in a short window.
+    pub const BAND_LINE: Self = Self { face: Face::Slab, size: 19.0 };
     pub const FIT: Self = Self { face: Face::Slab, size: 16.0 };
     pub const STAMP: Self = Self { face: Face::Slab, size: 32.0 };
     pub const FIGURE: Self = Self { face: Face::Slab, size: 34.0 };

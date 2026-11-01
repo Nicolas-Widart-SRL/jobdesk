@@ -1,10 +1,11 @@
+use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BAR_HEIGHT, BRAND_MARK_WIDTH, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, RADIUS_CARD, RADIUS_STAMP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
+    BAR_HEIGHT, BRAND_MARK_WIDTH, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
     TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
@@ -107,11 +108,72 @@ pub fn fat_tally(ui: &mut Ui, marked: usize, total: usize, tone: Tone) -> Respon
     tally_marks(ui, &colors, TALLY_FAT)
 }
 
+/// One colour per mark, from runs of `(count, ink)`. `None` is an unlit run.
+pub(in crate::ui_kit) fn strip_colors(p: &Palette, segments: &[(usize, Option<Ink>)]) -> Vec<Color32> {
+    segments.iter().flat_map(|(count, ink)| std::iter::repeat_n(ink.map_or(p.off, |ink| ink.color(p)), *count)).collect()
+}
+
+/// Marks on one line from `at`, for a widget that paints its own tally. Returns where they went.
+pub(in crate::ui_kit) fn paint_mark_row(ui: &Ui, at: Pos2, colors: &[Color32], mark: TallySize) -> Rect {
+    let pitch = mark.width + mark.gap;
+    for (index, color) in colors.iter().enumerate() {
+        ui.painter().rect_filled(Rect::from_min_size(at + vec2(index as f32 * pitch, 0.0), vec2(mark.width, mark.height)), 0.0, *color);
+    }
+    Rect::from_min_size(at, vec2((colors.len() as f32 * pitch - mark.gap).max(0.0), mark.height))
+}
+
 /// One wrapping tally in runs of marks: `(count, ink)`. `None` is an unlit run.
 pub fn tally_strip(ui: &mut Ui, segments: &[(usize, Option<Ink>)], fat: bool) -> Response {
-    let p = Palette::of(ui);
-    let colors: Vec<Color32> = segments.iter().flat_map(|(count, ink)| std::iter::repeat_n(ink.map_or(p.off, |ink| ink.color(&p)), *count)).collect();
+    let colors = strip_colors(&Palette::of(ui), segments);
     tally_marks(ui, &colors, if fat { TALLY_FAT } else { TALLY_THIN })
+}
+
+/// Where a step stands, as its knot shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnotState {
+    Done,
+    Working,
+    Waiting,
+    Failed,
+}
+
+/// A step's numbered square, `size` tall: `KNOT_SIZE`, or `KNOT_SIZE_SMALL` in a line of text.
+/// Done and failed are drawn in a hairline, working and waiting are filled.
+pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
+    let p = Palette::of(ui);
+    let (fill, ink, edge) = match state {
+        KnotState::Done => (p.sheet, p.text, Some(p.text)),
+        KnotState::Working => (p.primary, p.on_primary, None),
+        KnotState::Waiting => (p.turn, p.on_turn, None),
+        KnotState::Failed => (p.sheet, p.closed, Some(p.closed)),
+    };
+    let style = if size < KNOT_SIZE { Type::KEY } else { Type::TAG };
+    let galley = line(ui, text, style, ink, f32::INFINITY);
+    let (rect, response) = ui.allocate_exact_size(vec2((galley.size().x + KNOT_PADDING * 2.0).max(size), size), Sense::hover());
+    ui.painter().rect_filled(rect, RADIUS_CARD, fill);
+    if let Some(edge) = edge {
+        ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
+    }
+    // Centred on the ink, as a stamp is: digits have no descenders to balance the line box.
+    ui.painter().galley(rect.center() - galley.mesh_bounds.center().to_vec2(), galley, ink);
+    let said = match state {
+        KnotState::Done => "done",
+        KnotState::Working => "working",
+        KnotState::Waiting => "waiting for you",
+        KnotState::Failed => "failed",
+    };
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{text}, {said}")));
+    response
+}
+
+/// A path on one line: the folder in Faint, the file in Text, cut at the right with the whole path on hover.
+/// `dir` keeps its trailing separator.
+pub fn path_label(ui: &mut Ui, dir: &str, file: &str) -> Response {
+    let p = Palette::of(ui);
+    let mut job = LayoutJob::default();
+    job.append(dir, 0.0, TextFormat::simple(Type::MONO.font(), p.faint));
+    job.append(file, 0.0, TextFormat::simple(Type::MONO.font(), p.text));
+    ui.add(egui::Label::new(job).truncate())
 }
 
 /// The Jobdesk mark: a folder with a J hooked into it, drawn from the logo's 652 by 600 view box.

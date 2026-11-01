@@ -49,8 +49,8 @@ pub struct Decision {
     pub name: String,
     pub outcome: Outcome,
     pub reason: Option<SkipReason>,
-    /// The label of the action a followed card opened, so the log can name the task.
-    pub action: Option<String>,
+    /// The key of the task a followed card opened. See `task_name`.
+    pub task: Option<String>,
     pub on: NaiveDate,
 }
 
@@ -74,11 +74,31 @@ impl Decision {
     }
 
     pub fn label(&self) -> String {
-        if let (Outcome::Followed, Some(action)) = (self.outcome, &self.action) {
-            return format!("Opened \"{}\"", action.trim_end_matches('\u{2026}'));
-        }
         let verb = self.outcome.verb();
-        self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb}, {}", reason.label().to_lowercase()))
+        if self.outcome == Outcome::Followed {
+            return self.task.as_deref().and_then(task_name).map_or_else(|| verb.to_owned(), |name| format!("{verb}: {name}"));
+        }
+        self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb} for {}", reason.label().to_lowercase()))
+    }
+
+    /// What the undo row shows, and what a screen reader hears of it.
+    pub fn note(&self) -> String {
+        match (self.outcome, self.reason) {
+            (Outcome::Later, _) => "Set aside until tomorrow".to_owned(),
+            (Outcome::Skipped, None) => "Skipped. Why? Optional.".to_owned(),
+            _ => self.label(),
+        }
+    }
+}
+
+/// The plain name of a task a card can open, by the key its action carries. An unknown key has none.
+pub fn task_name(key: &str) -> Option<&'static str> {
+    match key {
+        "draft" => Some("draft application"),
+        "sent" => Some("record as sent"),
+        "follow_up" => Some("follow-up"),
+        "close" => Some("close as no response"),
+        _ => None,
     }
 }
 
@@ -92,7 +112,7 @@ mod tests {
     use super::*;
 
     fn decided(outcome: Outcome) -> Decision {
-        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, action: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
+        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, task: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
     }
 
     #[test]
@@ -120,15 +140,25 @@ mod tests {
     #[test]
     fn label_names_the_reason() {
         let skipped = Decision { reason: Some(SkipReason::Rate), ..decided(Outcome::Skipped) };
-        assert_eq!(skipped.label(), "Skipped, rate");
+        assert_eq!(skipped.label(), "Skipped for rate");
+    }
+
+    #[test]
+    fn the_note_tells_what_is_still_open_to_the_user() {
+        assert_eq!(decided(Outcome::Later).note(), "Set aside until tomorrow");
+        assert_eq!(decided(Outcome::Skipped).note(), "Skipped. Why? Optional.");
+        assert_eq!(Decision { reason: Some(SkipReason::Scope), ..decided(Outcome::Skipped) }.note(), "Skipped for scope");
+        assert_eq!(decided(Outcome::Kept).note(), "Kept");
     }
 
     #[test]
     fn a_followed_decision_names_the_task_it_opened() {
-        let followed = Decision { action: Some("Draft application".into()), ..decided(Outcome::Followed) };
-        assert_eq!(followed.label(), "Opened \"Draft application\"");
-        let ellipsis = Decision { action: Some("Draft application\u{2026}".into()), ..followed };
-        assert_eq!(ellipsis.label(), "Opened \"Draft application\"");
+        let opened = |task: &str| Decision { task: Some(task.into()), ..decided(Outcome::Followed) }.label();
+        assert_eq!(opened("draft"), "Task opened: draft application");
+        assert_eq!(opened("sent"), "Task opened: record as sent");
+        assert_eq!(opened("follow_up"), "Task opened: follow-up");
+        assert_eq!(opened("close"), "Task opened: close as no response");
+        assert_eq!(opened("renamed_later"), "Task opened");
         assert_eq!(decided(Outcome::Followed).label(), "Task opened");
     }
 }

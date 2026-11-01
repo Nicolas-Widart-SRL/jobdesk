@@ -378,8 +378,8 @@ impl InTray {
         self.reading = None;
     }
 
-    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, action: Option<String>, today: NaiveDate) {
-        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, action, on: today });
+    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, task: Option<String>, today: NaiveDate) {
+        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, task, on: today });
         self.can_undo = true;
         self.reading = None;
         self.forget_returns_before(today);
@@ -436,7 +436,7 @@ impl InTray {
     pub fn follow(&mut self, card: &Card, action: &Action, today: NaiveDate) -> Option<Request> {
         match &action.effect {
             Effect::Command(line) => {
-                self.record(card, Outcome::Followed, None, Some(action.label.clone()), today);
+                self.record(card, Outcome::Followed, None, action.task.map(str::to_owned), today);
                 Some(Request::Command(line.clone()))
             }
             Effect::Skip(reason) => {
@@ -462,12 +462,8 @@ impl InTray {
     fn undo_offer(&self, today: NaiveDate) -> Option<UndoOffer> {
         let last = self.undoable(today)?;
         let asks_reason = last.outcome == Outcome::Skipped;
-        let note = match last.outcome {
-            Outcome::Later => "Set aside until tomorrow".to_owned(),
-            _ if asks_reason && last.reason.is_none() => "Skipped. Why? Optional.".to_owned(),
-            _ => last.label(),
-        };
-        let spoken = format!("Last decision: {}, {}. Press U to undo.", last.label(), last.name);
+        let note = last.note();
+        let spoken = format!("Last decision on {}: {}. Press U to undo.", last.name, note.trim_end_matches('.'));
         Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
     }
 
@@ -638,8 +634,8 @@ mod tests {
         assert_eq!(request, Some(Request::Command("/apply".into())));
         assert!(dealt(&tray, &jobs).is_empty());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Opened \"Draft application\""));
-        assert_eq!(offer.spoken, "Last decision: Opened \"Draft application\", Acme. Press U to undo.");
+        assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Task opened: draft application"));
+        assert_eq!(offer.spoken, "Last decision on Acme: Task opened: draft application. Press U to undo.");
         tray.undo(today());
         assert_eq!(dealt(&tray, &jobs), ["Acme"]);
     }
@@ -667,7 +663,7 @@ mod tests {
         let reopened = InTray::new(Box::new(memory.clone()));
         assert!(dealt(&reopened, &jobs).is_empty());
         assert_eq!(memory.0.borrow()[0].reason, Some(SkipReason::Domain));
-        assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped, domain");
+        assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped for domain");
     }
 
     #[test]
@@ -917,9 +913,9 @@ mod tests {
 
         tray.give_reason(SkipReason::Scope, today());
         let offer = tray.undo_offer(today()).unwrap();
-        assert_eq!(offer.note, "Skipped, scope");
+        assert_eq!(offer.note, "Skipped for scope");
         assert_eq!(offer.reason, Some(SkipReason::Scope));
-        assert_eq!(offer.spoken, "Last decision: Skipped, scope, Acme. Press U to undo.");
+        assert_eq!(offer.spoken, "Last decision on Acme: Skipped for scope. Press U to undo.");
     }
 
     #[test]
@@ -930,7 +926,23 @@ mod tests {
         let offer = tray.undo_offer(today()).unwrap();
         assert!(!offer.logged);
         assert!(offer.note.contains("until tomorrow"), "{}", offer.note);
-        assert_eq!(offer.spoken, "Last decision: Set aside, Acme. Press U to undo.");
+        assert_eq!(offer.spoken, "Last decision on Acme: Set aside until tomorrow. Press U to undo.");
+    }
+
+    #[test]
+    fn the_spoken_offer_says_what_the_note_shows() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let hears = |note: &str| format!("Last decision on Acme: {note}. Press U to undo.");
+
+        let mut tray = InTray::unsaved();
+        tray.later(&top(&tray, &jobs), today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.note.as_str(), offer.spoken.as_str()), ("Set aside until tomorrow", hears("Set aside until tomorrow").as_str()));
+
+        let mut tray = InTray::unsaved();
+        tray.skip(&top(&tray, &jobs), today());
+        let offer = tray.undo_offer(today()).unwrap();
+        assert_eq!((offer.note.as_str(), offer.spoken.as_str()), ("Skipped. Why? Optional.", hears("Skipped. Why? Optional").as_str()));
     }
 
     #[test]

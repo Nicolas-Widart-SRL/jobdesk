@@ -984,7 +984,7 @@ fn later_deals_the_next_card_and_undo_brings_it_back() {
 
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
-    let row = "Last decision: Set aside, Harbor Bank. Press U to undo.";
+    let row = "Last decision on Harbor Bank: Set aside until tomorrow. Press U to undo.";
     assert!(is_shown(&harness, row));
     assert!(is_shown(&harness, "Set aside until tomorrow"));
     assert!(!is_shown(&harness, "Nothing yet."), "the undo row heads the rail");
@@ -1061,8 +1061,8 @@ fn skip_takes_a_reason_and_only_some_cards_allow_it() {
 
     harness.get_by_label("Domain").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Skipped, domain"));
-    assert!(is_shown(&harness, "Last decision: Skipped, domain, Meridian Rail Systems. Press U to undo."));
+    assert!(is_shown(&harness, "Skipped for domain"));
+    assert!(is_shown(&harness, "Last decision on Meridian Rail Systems: Skipped for domain. Press U to undo."));
     assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the logged skip is not drawn twice");
     assert_eq!(harness.get_by_label("Domain").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
 }
@@ -1113,7 +1113,7 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
 
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
 }
 
 #[test]
@@ -1159,7 +1159,7 @@ fn later_and_keep_leave_the_scroll_alone() {
     }
     harness.get_by_label("Harmless, keep posting").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Last decision: Kept, Halden Logistics. Press U to undo."));
+    assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
     assert_eq!(tab_top(&harness), top);
 }
 
@@ -1191,8 +1191,8 @@ fn a_suggested_skip_comes_with_its_reason_and_leaves_the_scroll_alone() {
     }
     let resting = tab_top(&harness);
     press(&mut harness, Key::Y);
-    assert!(is_shown(&harness, "Last decision: Skipped, rate, Federal Data Agency. Press U to undo."));
-    assert!(is_shown(&harness, "Skipped, rate"), "Y skips with the suggested reason");
+    assert!(is_shown(&harness, "Last decision on Federal Data Agency: Skipped for rate. Press U to undo."));
+    assert!(is_shown(&harness, "Skipped for rate"), "Y skips with the suggested reason");
     assert_eq!(tab_top(&harness), resting);
 }
 
@@ -1205,7 +1205,7 @@ fn a_logged_offer_shows_once_above_the_log() {
     for key in SKIP_OVER_LOG {
         press(&mut harness, key);
     }
-    let row = harness.get_by_label("Last decision: Skipped, rate, Federal Data Agency. Press U to undo.").rect();
+    let row = harness.get_by_label("Last decision on Federal Data Agency: Skipped for rate. Press U to undo.").rect();
     assert_eq!(harness.query_all_by_label("Federal Data Agency").count(), 1, "the offer is not drawn again in the log");
     assert_eq!(harness.query_all_by_label("Meridian Rail Systems").count(), 1, "the older skip stays in the log");
     let logged = harness.get_by_label("Meridian Rail Systems").rect();

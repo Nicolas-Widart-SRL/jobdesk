@@ -265,8 +265,8 @@ fn posting_action(job: &JobView) -> Option<Action> {
 fn triage_card(job: &JobView) -> Card {
     let line = apply_line(job);
     let (primary, mut others, command, note) = match skip_suggestion(&job.freelance) {
-        Some((reason, label, _)) => (Action::new(label, Effect::Skip(reason)), vec![Action::new("Draft anyway…", Effect::Command(line))], None, "Skips stay in the app. Nothing runs."),
-        None => (Action::new("Draft application…", Effect::Command(line.clone())), vec![], Some(line), "Opens the drafting task. Nothing starts until you press Start."),
+        Some((reason, label, _)) => (Action::new(label, Effect::Skip(reason)), vec![Action::new("Draft anyway…", Effect::Command(line)).opening("draft")], None, "Skips stay in the app. Nothing runs."),
+        None => (Action::new("Draft application…", Effect::Command(line.clone())).opening("draft"), vec![], Some(line), "Opens the drafting task. Nothing starts until you press Start."),
     };
     others.extend(posting_action(job));
     let score = job.score.unwrap_or_default();
@@ -376,7 +376,7 @@ fn send_card(card: &ApplicationCard, archive: &ArchiveContents, today: NaiveDate
         take: "Send it from your own mail or the portal, then mark it sent.".into(),
         when: days.map_or_else(|| "No deadline".to_owned(), |days| days_text("Deadline", days)),
         due: card.deadline.map(|on| Due { on, label: format!("{} deadline", card.company) }),
-        primary: Some(Action::new("Mark as sent…", Effect::Command(line.clone()))),
+        primary: Some(Action::new("Mark as sent…", Effect::Command(line.clone())).opening("sent")),
         note: "Opens the task that records it as sent. The app never sends for you.".into(),
         command: Some(line),
         ..base_card(card, application_key("send", card), CardKind::Send)
@@ -450,7 +450,7 @@ fn follow_up_card(card: &ApplicationCard, archive: Option<&ArchiveContents>) -> 
         when: format!("Quiet {quiet} days"),
         weight: -quiet,
         body,
-        primary: Some(Action::new(primary, Effect::Command(line.clone()))),
+        primary: Some(Action::new(primary, Effect::Command(line.clone())).opening("follow_up")),
         others: draft.map(|draft| Action::new("Copy draft", Effect::Copy(draft.text.clone()))).into_iter().collect(),
         can_skip: true,
         note: "The app never sends for you.".into(),
@@ -466,7 +466,7 @@ fn close_card(card: &ApplicationCard) -> Card {
         take: "No reply for a long time. Close it as no response.".into(),
         when: format!("Quiet {quiet} days"),
         weight: -quiet,
-        primary: Some(Action::new("Close as no response…", Effect::Command("/outcome stale".into()))),
+        primary: Some(Action::new("Close as no response…", Effect::Command("/outcome stale".into())).opening("close")),
         note: format!("Opens the task that closes it. Confirm {} only.", card.company),
         command: Some("/outcome stale".into()),
         ..base_card(card, application_key("close", card), CardKind::Close)
@@ -876,6 +876,24 @@ mod tests {
         let card = &one_app(stale, ArchiveContents::default())[0];
         assert_eq!(card.kind, CardKind::Close);
         assert_eq!(card.primary.as_ref().unwrap().effect, Effect::Command("/outcome stale".into()));
+    }
+
+    #[test]
+    fn every_command_action_has_a_task_key() {
+        let skippable = JobView { freelance: gates(Gate::Fail, Gate::Pass, Gate::Pass), ..job("Skip") };
+        let mut all = cards(&shortlist(vec![job("Acme"), skippable]), vec![], ArchiveContents::default(), &[]);
+        let due = ApplicationCard { follow_up_due: true, ..application(StatusBucket::Active) };
+        let draft = NamedText { name: "followup_2026-10-31.md".into(), text: "x".into() };
+        all.extend(one_app(due.clone(), ArchiveContents::default()));
+        all.extend(one_app(due, ArchiveContents { follow_ups: vec![draft], ..Default::default() }));
+        all.extend(one_app(application(StatusBucket::Drafted), compiled()));
+        all.extend(one_app(ApplicationCard { stale: true, follow_up_due: true, ..application(StatusBucket::Active) }, ArchiveContents::default()));
+
+        let commands: Vec<&Action> = all.iter().flat_map(|card| card.primary.iter().chain(&card.others)).filter(|action| matches!(action.effect, Effect::Command(_))).collect();
+        assert!(commands.len() >= 6, "{} command actions found", commands.len());
+        for action in commands {
+            assert!(action.task.is_some(), "{} has no task key", action.label);
+        }
     }
 
     #[test]

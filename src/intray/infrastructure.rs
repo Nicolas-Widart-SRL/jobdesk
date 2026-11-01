@@ -19,7 +19,7 @@ struct Record {
     reason: Option<String>,
     /// Absent in files from before a followed decision named its task, and left out when empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    action: Option<String>,
+    task: Option<String>,
     on: String,
 }
 
@@ -83,7 +83,7 @@ fn record_from(decision: &Decision) -> Record {
         name: decision.name.clone(),
         outcome: outcome.to_owned(),
         reason: decision.reason.map(|reason| reason.label().to_lowercase()),
-        action: decision.action.clone(),
+        task: decision.task.clone(),
         on: decision.on.to_string(),
     }
 }
@@ -98,7 +98,7 @@ fn decision_from(record: Record) -> Option<Decision> {
         _ => return None,
     };
     let reason = record.reason.and_then(|raw| SkipReason::ALL.into_iter().find(|reason| reason.label().eq_ignore_ascii_case(&raw)));
-    Some(Decision { key: record.key, name: record.name, outcome, reason, action: record.action, on: parse_iso_date(&record.on)? })
+    Some(Decision { key: record.key, name: record.name, outcome, reason, task: record.task, on: parse_iso_date(&record.on)? })
 }
 
 #[cfg(test)]
@@ -108,7 +108,7 @@ mod tests {
     use super::*;
 
     fn decision(key: &str, outcome: Outcome, reason: Option<SkipReason>) -> Decision {
-        Decision { key: key.into(), name: "Acme".into(), outcome, reason, action: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
+        Decision { key: key.into(), name: "Acme".into(), outcome, reason, task: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
     }
 
     #[test]
@@ -143,12 +143,12 @@ mod tests {
 
     #[test]
     fn an_unknown_outcome_is_dropped() {
-        let record = Record { key: "k".into(), name: "n".into(), outcome: "maybe".into(), reason: None, action: None, on: "2026-10-31".into() };
+        let record = Record { key: "k".into(), name: "n".into(), outcome: "maybe".into(), reason: None, task: None, on: "2026-10-31".into() };
         assert_eq!(decision_from(record), None);
     }
 
     #[test]
-    fn a_file_from_before_the_action_field_still_loads() {
+    fn a_file_from_before_the_task_field_still_loads() {
         let dir = tempfile::tempdir().unwrap();
         let old = r#"{"/w": [{"key": "send:a", "name": "Acme", "outcome": "followed", "reason": null, "on": "2026-10-31"}]}"#;
         fs::write(dir.path().join(FILE), old).unwrap();
@@ -157,16 +157,16 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_decision_round_trips_its_action() {
+    fn a_followed_decision_round_trips_its_task() {
         let dir = tempfile::tempdir().unwrap();
         let file = DecisionFile::new(dir.path().to_owned(), Path::new("/w"));
-        let saved = [Decision { action: Some("Draft application".into()), ..decision("send:a", Outcome::Followed, None) }];
+        let saved = [Decision { task: Some("draft".into()), ..decision("send:a", Outcome::Followed, None) }];
         file.save(&saved).unwrap();
         assert_eq!(file.load().unwrap(), saved);
     }
 
     #[test]
-    fn a_record_without_action_writes_no_field() {
+    fn a_record_without_a_task_writes_no_field() {
         let text = serde_json::to_string(&record_from(&decision("k", Outcome::Skipped, None))).unwrap();
         assert_eq!(text, r#"{"key":"k","name":"Acme","outcome":"skipped","reason":null,"on":"2026-10-31"}"#);
     }

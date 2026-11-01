@@ -82,11 +82,18 @@ pub enum Effect {
 pub struct Action {
     pub label: String,
     pub effect: Effect,
+    /// For a command: the stable key of the task it opens, which a decision stores in place of the label.
+    pub task: Option<&'static str>,
 }
 
 impl Action {
     pub fn new(label: impl Into<String>, effect: Effect) -> Self {
-        Self { label: label.into(), effect }
+        Self { label: label.into(), effect, task: None }
+    }
+
+    pub fn opening(self, task: &'static str) -> Self {
+        debug_assert!(crate::intray::domain::task_name(task).is_some(), "{task} is not a task a decision can name");
+        Self { task: Some(task), ..self }
     }
 }
 

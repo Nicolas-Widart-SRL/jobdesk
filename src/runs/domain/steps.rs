@@ -24,15 +24,15 @@ const fn rule(step: usize, on: Match) -> Rule {
 pub(crate) enum Match {
     /// tool is one of `tools`, and the summary (a file path) contains a needle
     File { tools: &'static [&'static str], any_of: &'static [&'static str] },
-    /// tool is "Bash", and some command segment runs a program whose token contains a name.
-    /// `args` empty means any; otherwise the token right after the program must be one of them.
+    /// tool is "Bash", and some command segment runs a program whose file name contains a name, directly or behind a runner.
+    /// `args` empty means any; otherwise the first non-flag token after the program must be one of them.
     Program { names: &'static [&'static str], args: &'static [&'static str] },
     /// tool is "Agent" or "Task", and the part before ": " contains a needle
     Agent(&'static [&'static str]),
 }
 
-/// Words that start a script rather than name it.
-const INTERPRETERS: &[&str] = &["python", "python3", "uv", "bun", "node", "bash", "sh", "npx", "deno"];
+/// Shell keywords and wrappers that come before the command word.
+const WRAPPERS: &[&str] = &["do", "then", "else", "time", "env", "timeout", "xargs", "exec"];
 
 impl Match {
     pub(crate) fn hits(&self, tool: &str, summary: &str) -> bool {
@@ -40,26 +40,61 @@ impl Match {
             Match::File { tools, any_of } => tools.contains(&tool) && any_of.iter().any(|needle| summary.contains(needle)),
             Match::Program { names, args } => tool == "Bash" && summary.split(['&', '|', ';', '\n']).any(|segment| runs_program(segment, names, args)),
             Match::Agent(needles) => {
-                let agent = summary.split(": ").next().unwrap_or(summary);
+                let agent = summary.split_once(": ").map_or(summary, |(agent, _)| agent);
                 matches!(tool, "Agent" | "Task") && needles.iter().any(|needle| agent.contains(needle))
             }
         }
     }
 }
 
-/// The program a command segment runs, past assignments, interpreters, `run` and flags, and the token after it.
+/// Whether a command segment runs one of `names`, as its command word or behind a runner such as `uv run`
+/// or `python3`, and whether the first argument after the program is one of `args`.
 fn runs_program(segment: &str, names: &[&str], args: &[&str]) -> bool {
-    let mut tokens = segment.split_whitespace().skip_while(|token| is_assignment(token) || is_interpreter(token) || *token == "run" || token.starts_with('-'));
-    let Some(program) = tokens.next() else { return false };
-    names.iter().any(|name| program.contains(name)) && (args.is_empty() || tokens.next().is_some_and(|arg| args.contains(&arg)))
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    let mut at = 0;
+    let mut wrapped = false;
+    while let Some(&token) = tokens.get(at) {
+        let wrapper = WRAPPERS.contains(&token);
+        // After a wrapper come its own flags and a duration, as in `timeout 300 lualatex`.
+        let wrapper_arg = wrapped && (token.starts_with('-') || token.starts_with(|c: char| c.is_ascii_digit()));
+        if !(is_assignment(token) || wrapper || wrapper_arg) {
+            break;
+        }
+        wrapped |= wrapper;
+        at += 1;
+    }
+    let Some(&word) = tokens.get(at) else { return false };
+    let named = |token: &&str| {
+        let file = basename(token);
+        names.iter().any(|name| file.contains(name))
+    };
+    let program = if named(&word) {
+        at
+    } else if is_interpreter(word) {
+        match tokens[at + 1..].iter().position(named) {
+            Some(offset) => at + 1 + offset,
+            None => return false,
+        }
+    } else {
+        return false;
+    };
+    args.is_empty() || tokens[program + 1..].iter().find(|token| !token.starts_with('-') && **token != "\\").is_some_and(|token| args.contains(token))
 }
 
 fn is_assignment(token: &str) -> bool {
     token.split_once('=').is_some_and(|(name, _)| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
+/// The file name of a path in either style, without quotes or a Windows `.exe`.
+fn basename(token: &str) -> &str {
+    let file = token.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or(token);
+    file.strip_suffix(".exe").unwrap_or(file)
+}
+
+/// A runner starts a script rather than naming it.
 fn is_interpreter(token: &str) -> bool {
-    INTERPRETERS.contains(&token.rsplit('/').next().unwrap_or(token))
+    let file = basename(token);
+    matches!(file, "python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
 }
 
 const APPLY_LABELS: &[&str] = &["Fetch", "Evaluate", "Draft", "Review", "Revise", "Compile", "Finish"];
@@ -69,9 +104,9 @@ const APPLY_RULES: &[Rule] = &[
     rule(1, Match::Program { names: &["salary_lookup"], args: &[] }),
     rule(2, Match::File { tools: &["Write"], any_of: APPLY_DOCUMENTS }),
     rule(3, Match::Agent(&["application-reviewer"])),
-    Rule { step: 4, on: Match::File { tools: &["Edit"], any_of: APPLY_DOCUMENTS }, after: 3 },
+    Rule { step: 4, on: Match::File { tools: &["Edit", "MultiEdit"], any_of: APPLY_DOCUMENTS }, after: 3 },
     rule(5, Match::Program { names: &["lualatex", "xelatex", "verify_pdf", "verify_layout"], args: &[] }),
-    rule(6, Match::File { tools: &["Write", "Edit"], any_of: &["job_search_tracker.csv", "job_posting.md"] }),
+    rule(6, Match::File { tools: &["Write", "Edit", "MultiEdit"], any_of: &["job_search_tracker.csv", "job_posting.md"] }),
 ];
 
 const RANK_LABELS: &[&str] = &["Load", "Score", "Store"];
@@ -162,11 +197,37 @@ mod tests {
     }
 
     #[test]
+    fn scripts_hide_behind_flags_and_wrappers() {
+        let at = |summary: &str| {
+            let mut rail = StepRail::for_line("/apply x").unwrap();
+            rail.observe("Bash", summary);
+            rail.current
+        };
+        assert_eq!(at("uv run --with pypdf python tools/verify_pdf.py x.pdf"), 5);
+        assert_eq!(at("python3 -X utf8 tools/verify_layout.py"), 5);
+        assert_eq!(at("timeout 300 lualatex main.tex"), 5);
+        assert_eq!(at("for f in a.tex; do lualatex \"$f\"; done"), 5);
+        assert_eq!(at("C:\\Python312\\python.exe tools\\verify_pdf.py cv\\x.pdf"), 5);
+        assert_eq!(at("cat .claude/x/salary_lookup.py"), 0);
+    }
+
+    #[test]
+    fn multi_edit_finishes_like_edit() {
+        let mut rail = StepRail::for_line("/apply x").unwrap();
+        rail.current = 5;
+        rail.observe("MultiEdit", "/w/job_search_tracker.csv");
+        assert_eq!(rail.current, 6);
+    }
+
+    #[test]
     fn rank_store_needs_its_subcommand() {
         let mut rail = StepRail::for_line("/rank").unwrap();
         rail.observe("Bash", "python3 rank_state.py show");
         assert_eq!(rail.current, 0);
         rail.observe("Bash", "python3 rank_state.py apply --x");
+        assert_eq!(rail.current, 2);
+        let mut rail = StepRail::for_line("/rank").unwrap();
+        rail.observe("Bash", "python3 tools/rank_state.py --x apply");
         assert_eq!(rail.current, 2);
     }
 

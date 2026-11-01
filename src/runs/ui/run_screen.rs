@@ -100,7 +100,7 @@ impl RunScreen {
 
     fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
         if let Some(steps) = &run.steps {
-            step_rail(ui, steps.labels, steps.current, run.is_busy() || run.needs_user() || run.status == RunStatus::AwaitingReply);
+            step_rail(ui, steps.labels, steps.current, run.is_busy() || run.needs_user() || (run.status == RunStatus::AwaitingReply && steps.current + 1 < steps.labels.len()));
             ui.add_space(SCREEN_GAP);
         }
         split(ui, SPLIT_SIDE_BASIS, |main, side| {

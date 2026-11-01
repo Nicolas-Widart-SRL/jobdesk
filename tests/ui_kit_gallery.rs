@@ -362,7 +362,7 @@ fn runs(ui: &mut Ui) {
         &[
             BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
             BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
-            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Runs tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
+            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Tasks tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
         ],
         false,
         "Where the run is",

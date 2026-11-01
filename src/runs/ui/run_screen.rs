@@ -268,13 +268,13 @@ impl RunScreen {
             }
         }
         let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
-            page_head(ui, Title::Slab("Runs"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+            page_head(ui, Title::Slab("Tasks"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
             page_body(ui, |ui| {
                 panel(ui, |ui| {
                     panel_body(ui, |ui| {
                         ui.set_width(ui.available_width());
                         strong(ui, "No runs yet");
-                        muted(ui, "Press Ask or run to start one.");
+                        muted(ui, "Press New task to start one.");
                     });
                 });
             });

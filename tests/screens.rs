@@ -491,7 +491,7 @@ fn stop_here_ends_your_turn() {
     assert!(harness.query_all_by_label("Your turn").count() == 0, "no run is tagged Your turn");
     assert!(harness.query_all_by_label("Ready for reply").count() > 0, "the tag reads Ready for reply");
     assert!(is_shown(&harness, "Claude is done for now"));
-    assert!(harness.query_by_label_contains("waits for you").is_none(), "the Runs tab has no mark");
+    assert!(harness.query_by_label_contains("waits for you").is_none(), "the Tasks tab has no mark");
     assert!(harness.query_by_label_contains("needs you").is_none());
     assert!(is_shown(&harness, "Send"), "the reply field stays under the story");
     assert!(!is_shown(&harness, "Go ahead with the draft"));
@@ -853,9 +853,18 @@ fn the_launcher_shortcut_works_while_typing() {
     harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
     harness.run_steps(3);
     harness.get_by_label("All commands");
-    harness.get_by_label("Runs, 1 run waits for you").click();
+    harness.get_by_label("Tasks, 1 task waits for you").click();
     harness.run_steps(3);
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
+}
+
+#[test]
+fn the_tabs_use_plain_names() {
+    let harness = tray_harness(shell(Screen::InTray, "plain_tabs"));
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Setup"] {
+        harness.get_by_label_contains(name);
+    }
+    assert!(harness.query_by_label_contains("In-tray").is_none());
 }
 
 /// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.

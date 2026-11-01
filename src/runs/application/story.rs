@@ -247,8 +247,8 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
                 (true, _, _) => ("Starting the CLI".to_owned(), "", ""),
                 (_, true, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Stopping", ""),
                 (_, true, None) => (String::new(), "Stopping", ""),
-                (_, _, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Claude is working", "You can leave. The Runs tab marks it when it needs you."),
-                (_, _, None) => (String::new(), "Claude is working", "You can leave. The Runs tab marks it when it needs you."),
+                (_, _, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Claude is working", "You can leave. The Tasks tab marks it when it needs you."),
+                (_, _, None) => (String::new(), "Claude is working", "You can leave. The Tasks tab marks it when it needs you."),
             };
             (say(&where_value(run, ""), &place_note, Plain), say("Claude's", who_note, Claude), say("Nothing for now", next_note, Plain))
         }
@@ -352,7 +352,7 @@ mod tests {
         let band = band(&at_draft_working());
         assert_eq!(band.place, cell("2 Draft", "2 of 7 steps done", BandTone::Plain));
         assert_eq!(band.who, cell("Claude's", "Claude is working", BandTone::Claude));
-        assert_eq!(band.next, cell("Nothing for now", "You can leave. The Runs tab marks it when it needs you.", BandTone::Plain));
+        assert_eq!(band.next, cell("Nothing for now", "You can leave. The Tasks tab marks it when it needs you.", BandTone::Plain));
         assert_eq!(band.tally, "2 of 7 steps done");
         assert_eq!(band.marks[..4], [StepState::Done, StepState::Done, StepState::Working, StepState::Next]);
     }

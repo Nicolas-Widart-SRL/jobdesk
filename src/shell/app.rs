@@ -5,7 +5,6 @@ use std::sync::mpsc::Receiver;
 use chrono::Local;
 use egui::{Align, Layout, Panel, ThemePreference, Ui, vec2};
 
-use crate::discovery::application::Lane;
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
@@ -49,13 +48,13 @@ impl Screen {
 
     fn title(self) -> &'static str {
         match self {
-            Self::InTray => "In-tray",
+            Self::InTray => "Today",
             Self::Jobs => "Jobs",
-            Self::Tracker => "Tracker",
+            Self::Tracker => "Applications",
             Self::Insights => "Insights",
-            Self::Runs => "Runs",
-            Self::Workspace => "Workspace",
-            Self::Launcher => "Run a command",
+            Self::Runs => "Tasks",
+            Self::Workspace => "Setup",
+            Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
         }
     }
@@ -279,7 +278,7 @@ impl Shell {
 
     fn quit_dialog(&mut self, ctx: &egui::Context) {
         egui::Window::new("Quit Jobdesk?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label("A Claude session is still open. Quitting ends it. You can resume it later from Runs.");
+            ui.label("A Claude session is still open. Quitting ends it. You can resume it later from Tasks.");
             ui.horizontal(|ui| {
                 if primary_button(ui, "Keep working").clicked() {
                     self.confirm_quit = false;
@@ -292,7 +291,7 @@ impl Shell {
         });
     }
 
-    /// The desk strip: brand and Ask or run, then the folder tabs. The active tab stands on the sheet.
+    /// The desk strip: brand and New task, then the folder tabs. The active tab stands on the sheet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
         let open = self.workspace.is_some();
@@ -302,7 +301,7 @@ impl Shell {
             ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
             if open {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if shortcut_button(ui, "Ask or run", &ASK_KEYS).clicked() {
+                    if shortcut_button(ui, "New task", &ASK_KEYS).clicked() {
                         self.screen = Screen::Launcher;
                     }
                 });
@@ -313,7 +312,6 @@ impl Shell {
             return;
         }
         ui.add_space(SHELL_GAP.1 + NAV_TOP);
-        let snapshot = &self.snapshot;
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         let lit = self.screen.tab();
         let mut picked = None;
@@ -322,16 +320,14 @@ impl Shell {
             for screen in Screen::NAV {
                 let count = match screen {
                     Screen::InTray => pending,
-                    Screen::Jobs => snapshot.board.count(Lane::New),
-                    Screen::Tracker => snapshot.pipeline.open_count(),
                     Screen::Runs => waiting,
                     _ => 0,
                 };
                 let count = (count > 0).then(|| count.to_string());
-                // The Runs count is runs waiting for you, so it carries the turn mark.
+                // The Tasks count is tasks waiting for you, so it carries the turn mark.
                 let mark = (screen == Screen::Runs && waiting > 0).then(|| match waiting {
-                    1 => "Runs, 1 run waits for you".to_owned(),
-                    _ => format!("Runs, {waiting} runs wait for you"),
+                    1 => "Tasks, 1 task waits for you".to_owned(),
+                    _ => format!("Tasks, {waiting} tasks wait for you"),
                 });
                 if folder_tab(ui, screen.title(), count.as_deref(), screen == lit, mark.as_deref()).clicked() {
                     picked = Some(screen);
@@ -344,22 +340,21 @@ impl Shell {
     }
 
     /// What the status bar says about the screen on show.
-    fn screen_note(&self) -> String {
+    fn screen_note(&self) -> Option<String> {
         let pipeline = &self.snapshot.pipeline;
         match self.screen {
-            Screen::Jobs => "Source: job_scraper/seen_jobs.json".to_owned(),
             Screen::Tracker => {
                 let open = pipeline.open_count();
-                format!("{open} open, {} closed", pipeline.cards().count() - open)
+                Some(format!("{open} open, {} closed", pipeline.cards().count() - open))
             }
-            Screen::Insights => "Drafted rows stay out of every statistic".to_owned(),
-            Screen::Dossier => "Source: tracker row and application archive".to_owned(),
-            Screen::Workspace => match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
-                AuthMode::ClaudeLogin => "Runs use your Claude CLI login. Jobdesk stores no credentials.".to_owned(),
-                AuthMode::ApiKey => "Runs use an API key or provider. Jobdesk stores no credentials.".to_owned(),
-                AuthMode::NoRunYet => "Sign-in is known after the first run. Jobdesk stores no credentials.".to_owned(),
-            },
-            _ => "Slash commands stay the only writers of your files.".to_owned(),
+            Screen::Insights => Some("Drafted rows stay out of every statistic".to_owned()),
+            Screen::Dossier => Some("Source: tracker row and application archive".to_owned()),
+            Screen::Workspace => Some(match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
+                AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),
+                AuthMode::ApiKey => "Tasks use an API key or provider. Jobdesk stores no credentials.".to_owned(),
+                AuthMode::NoRunYet => "You will see which account Claude uses after the first task. Jobdesk stores no credentials.".to_owned(),
+            }),
+            _ => None,
         }
     }
 
@@ -369,8 +364,8 @@ impl Shell {
             // Nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
             if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let (tone, text) = match environment.version_of("claude") {
-                    Some(version) => (Tone::Hired, format!("Claude CLI {version}")),
-                    None => (Tone::Closed, "Claude CLI not found".to_owned()),
+                    Some(_) => (Tone::Hired, "Claude is ready"),
+                    None => (Tone::Closed, "Claude Code is not installed"),
                 };
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = ROW_GAP;
@@ -380,17 +375,17 @@ impl Shell {
             }
             let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
             if waiting > 0 {
-                let text = if waiting == 1 { "1 run needs you".to_owned() } else { format!("{waiting} runs need you") };
+                let text = if waiting == 1 { "1 task needs you".to_owned() } else { format!("{waiting} tasks need you") };
                 tag(ui, text, Tone::Turn);
             }
             let issues = self.snapshot.issues.len();
             if issues > 0 {
                 alert(ui, format!("{issues} source could not be read"));
             }
-            // Workspace always says how runs sign in, as docs/auth-review.md promises.
-            if issues == 0 || self.screen == Screen::Workspace {
-                let line = rich(ui, self.screen_note(), Type::NOTE, Ink::Muted);
-                ui.label(line);
+            // Setup always says how tasks sign in, as docs/auth-review.md promises.
+            let note = self.screen_note().filter(|_| issues == 0 || self.screen == Screen::Workspace);
+            if let Some(note) = note {
+                ui.label(rich(ui, note, Type::NOTE, Ink::Muted));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let current = ui.ctx().options(|options| options.theme_preference);

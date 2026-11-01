@@ -36,7 +36,7 @@ impl TrackerScreen {
     /// Returns the archive folder of a dossier the user asked to open.
     pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
         let subtitle = Subtitle::Text("Read from job_search_tracker.csv. Status changes go through /outcome.");
-        page_head(ui, Title::Slab("Tracker"), Some(subtitle), |ui| {
+        page_head(ui, Title::Slab("Applications"), Some(subtitle), |ui| {
             primary_command_action(ui, "Record a result", "/outcome");
             command_action(ui, "Check mail", "/gmail-sync");
         });

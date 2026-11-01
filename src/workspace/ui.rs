@@ -39,12 +39,14 @@ pub enum WorkspaceAction {
 pub fn show(ui: &mut Ui, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
-    page_head(ui, Title::Slab("Workspace"), Some(Subtitle::Typed(name)), |ui| {
+    page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
         if button(ui, "Change folder").clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
         }
     });
     page_body(ui, |ui| {
+        muted(ui, "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.");
+        ui.add_space(SPLIT_GAP);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
                 profile(main, view);

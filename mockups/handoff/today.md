@@ -15,7 +15,7 @@ Canvases, in `mockups/`: [Grid-today.png](../Grid-today.png), [Grid-today-dark.p
 
 The card is paper (`deal`), with the stack's edges under it.
 
-- **The tab** names the kind in its tone, and the date in `muted`. A Your turn card's tab and frame take turn ink. Claude asks and Check this ad cards take the warning frame.
+- **The tab** names the kind in its tone, and the date in `muted`. A Your turn card's tab and frame take stamp ink. Claude asks and Check this ad cards take the warning frame.
 - **The face**: the company above the role, the role in `Type::DEAL`, then "{location}. Found on {site}."
 - **The verdict** names the weakest check in words, never a count of passes.
 - **The checks** are a grid of label, value and an OK, Unclear or Fails tag.
@@ -40,7 +40,7 @@ It is not beside the card tab, because there it would have to leave the scroll a
 
 - First, when cards are set aside: "{n} comes back" with a Bring back button. Its tooltip names the cards. It only reorders the queue and never starts a run.
 - Then overdue cards, each with "{n} days late" in the warning tone.
-- Then the dated cards of the next two weeks, day by day. The card being read takes a solid Now tag in turn ink and takes no click. A decided row reads in faint ink and ends in Done. Any other row pulls its card back on top.
+- Then the dated cards of the next two weeks, day by day. The card being read takes a solid Now tag in stamp ink and takes no click. A decided row reads in faint ink and ends in Done. Any other row pulls its card back on top.
 - At most 6 rows, then "{n} more before {day}" or "Nothing else dated before {day}."
 - With no dated card, one line: "No deadlines in the next two weeks."
 
@@ -53,7 +53,7 @@ It is not beside the card tab, because there it would have to leave the scroll a
 
 ## Motion
 
-Only two things move. A decision slides the card 12px toward the rail and fades it over 150 ms while the next card is in place and its tick fills. When the last tick fills, the stamp settles once from 104% to its size. `MOTION` in `tokens.rs` turns both off.
+Only two things move. A decision slides the card `MOTION_SLIDE` toward the rail and fades it over `MOTION_TIME` while the next card is in place and its tick fills. When the last tick fills, the stamp settles once from `DAY_STAMP_SETTLE` to its size. `MOTION` in `tokens.rs` turns both off.
 
 ## Accessibility
 

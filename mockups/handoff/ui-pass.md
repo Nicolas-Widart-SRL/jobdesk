@@ -1,6 +1,6 @@
 # UI pass: how clickable things behave
 
-The user asked for a pass over the whole app: "links and clickable items dont show a hand icon. job list: job title and sub title show a cursor, line not clickable there." The fixes are built, so this file keeps the rules that guide new widgets and states. The widgets and measures named here live in `src/ui_kit/`.
+These rules say how anything clickable shows that it is, and how a screen shows loading, failed and empty. Follow them for every new widget and state. The widgets and measures named here live in `src/ui_kit/`.
 
 ## Rules
 

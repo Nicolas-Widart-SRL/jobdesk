@@ -1459,6 +1459,40 @@ fn intray_clear_dark() {
     tray_after(wgpu_tray(empty_shell("intray_clear_dark"), Theme::Dark), &[], "intray_clear_dark");
 }
 
+/// The sample workspace with a tracker saved in Latin-1, as a spreadsheet's plain CSV export does.
+fn failed_tracker_shell(name: &str) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap();
+    let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    assert_eq!(snapshot.issues.len(), 1, "{:?}", snapshot.issues);
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+#[test]
+fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
+    let mut harness = tray_harness(failed_tracker_shell("failed_tracker"));
+    assert!(is_shown(&harness, "Applications, could not be read"));
+    assert!(is_shown(&harness, "Your applications could not be read."));
+    assert!(is_shown(&harness, "job_search_tracker.csv: not UTF-8 text, re-save it as CSV UTF-8"));
+    assert!(is_shown(&harness, "Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work."));
+    assert!(harness.query_by_label_contains("Applications are missing from this list.").is_some());
+    assert!(is_shown(&harness, "Application dates are missing until the file is fixed."));
+    assert!(is_shown(&harness, MERIDIAN), "the job cards still deal");
+    assert!(harness.query_by_label_contains("source could not be read").is_none(), "the count left the status bar");
+
+    harness.get_by_label("Open Setup").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
+    assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
+}
+
+#[test]
+fn intray_failed_light() {
+    tray_after(wgpu_tray(failed_tracker_shell("intray_failed_light"), Theme::Light), &[], "intray_failed_light");
+}
+
 /// Every sample deadline, Nov 3 to 6, has passed by then.
 fn overdue_day() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()

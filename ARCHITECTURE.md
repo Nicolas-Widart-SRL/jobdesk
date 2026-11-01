@@ -50,7 +50,7 @@ PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no P
 
 A worker thread rebuilds an immutable `Snapshot` when watched files change, every hour and at
 local midnight, and sends it to the UI thread. So the app's today changes at midnight, not up to an hour later. The UI never reads from disk. A feature that fails to load reports an issue and the
-others keep working.
+others keep working. Its tab carries a mark, and an alert names what failed and what still works.
 
 Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout. A supervisor thread owns the child and a reader thread turns stdout lines into domain events. The UI thread applies them once per frame through `RunDesk::poll`. Dropping a session ends its process.
 
@@ -69,7 +69,7 @@ No card action runs anything by itself: Y opens the launcher on the slash comman
 Posting text, notes and reports are third-party or generated data. Screens render them as
 plain text, and a link opens only on click and only for `http` or `https`. Claude's replies and prep packs
 render as Markdown with no image loading. On the Runs screen they read as documents, with headings capped at the section size. Claude's closing question, pinned above the reply box and shown on the In tray card, renders as plain text with Markdown markup and hidden characters removed. Archived postings always render as plain text. Paths read
-from the tracker must stay inside the workspace. The reason for a failed tool renders as plain text, with control, escape, bidi and zero-width characters removed.
+from the tracker must stay inside the workspace. The reason for a failed tool renders as plain text, with control, escape, bidi and zero-width characters removed. A load error's reason renders as plain text, with control, escape, bidi and zero-width characters removed.
 
 By default `RunDesk` allows every tool permission itself and records each one as an allowance row in the activity, so a run never stalls on a prompt nobody sees. Each step folds its allowances behind its toggle. Other notices, such as why a run failed or stopped or which action was denied, show inline in the story as plain text with hidden characters removed, one row per non-blank line. The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover. This trades away the prompt as a check against injected posting text. Postings rely on `posting_guard` in the workspace instead. Questions from `AskUserQuestion` always reach the user. With `ask_permission` on, which a setting will expose later, every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB. The CLI suggests saving allow rules to project settings, so `stream_json` rewrites every remembered rule to session scope to keep the checkout unchanged.
 

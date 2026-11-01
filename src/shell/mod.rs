@@ -5,4 +5,4 @@ mod live_snapshot;
 mod snapshot;
 
 pub use app::{Screen, Shell, install_look, run};
-pub use snapshot::Snapshot;
+pub use snapshot::{Issue, Snapshot};

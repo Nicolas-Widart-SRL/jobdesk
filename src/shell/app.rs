@@ -1,9 +1,10 @@
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use chrono::{Local, NaiveDate};
-use egui::{Align, Frame, Layout, Margin, Panel, Rect, ThemePreference, Ui, UiBuilder, pos2, vec2};
+use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
@@ -12,17 +13,17 @@ use crate::dossier::ui::DossierScreen;
 use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
-use crate::intray::ui::TodayScreen;
+use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen};
-use crate::shell::{Snapshot, live_snapshot};
+use crate::shell::{Issue, Snapshot, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     BUTTON_HEIGHT, HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TOP, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Type, alert, brand, button, chrome_note, chrome_status, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, rich, sheet_frame,
+    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, chrome_note, chrome_status, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich, sheet_frame,
     shell_top_frame, shortcut_button, status_frame, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -59,6 +60,21 @@ impl Screen {
             Self::Workspace => "Setup",
             Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
+        }
+    }
+
+    /// What an alert says when this screen's source could not be read: what failed, then what still works.
+    fn failed_words(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Tracker => (
+                "Your applications could not be read.",
+                "Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work.",
+            ),
+            Self::Jobs => (
+                "Your saved jobs could not be read.",
+                "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.",
+            ),
+            _ => ("Your skill gap reports could not be read.", "Everything else still works."),
         }
     }
 
@@ -335,7 +351,9 @@ impl Shell {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
             for screen in Screen::NAV {
+                let failed = self.snapshot.issues.iter().any(|issue| issue.screen == screen);
                 let mark = match screen {
+                    _ if failed => TabMark::Failed,
                     Screen::InTray => TabMark::Count(pending),
                     Screen::Runs => TabMark::Count(waiting),
                     _ => TabMark::None,
@@ -378,13 +396,8 @@ impl Shell {
                 };
                 chrome_status(ui, ready, text);
             }
-            let issues = self.snapshot.issues.len();
-            if issues > 0 {
-                chrome_note(ui, &format!("{issues} source could not be read"), true);
-            }
             // Setup always says how tasks sign in, as docs/auth-review.md promises.
-            let note = self.screen_note().filter(|_| issues == 0 || self.screen == Screen::Workspace);
-            if let Some(note) = note {
+            if let Some(note) = self.screen_note() {
                 chrome_note(ui, &note, false);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -422,20 +435,29 @@ impl Shell {
         }
     }
 
+    /// A source that could not be read frames an alert over every screen. Today draws it under its head.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
-        if !self.snapshot.issues.is_empty() {
-            page_body(ui, |ui| {
-                for issue in &self.snapshot.issues {
-                    alert(ui, issue.to_string());
+        let issues = self.snapshot.issues.clone();
+        let open_setup = Cell::new(false);
+        let alerts = |ui: &mut Ui| {
+            for issue in &issues {
+                if source_alert(ui, issue) {
+                    open_setup.set(true);
                 }
-            });
+            }
+        };
+        if !issues.is_empty() && self.screen != Screen::InTray {
+            page_body(ui, alerts);
         }
         let snapshot = &self.snapshot;
         match self.screen {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
                 let keys = !self.confirm_quit;
-                if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, keys)) {
+                let missing: Vec<&str> = issues.iter().filter(|issue| matches!(issue.screen, Screen::Jobs | Screen::Tracker)).map(|issue| issue.screen.title()).collect();
+                let dates_missing = issues.iter().any(|issue| issue.screen == Screen::Tracker);
+                let context = TodayContext { missing: &missing, dates_missing, alerts: &alerts };
+                if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, &context, keys)) {
                     self.follow(ui.ctx(), request);
                 }
             }
@@ -479,6 +501,9 @@ impl Shell {
                     self.screen = Screen::Runs;
                 }
             }
+        }
+        if open_setup.get() {
+            self.screen = Screen::Workspace;
         }
     }
 }
@@ -529,6 +554,30 @@ fn welcome_step(ui: &mut Ui, number: usize, title: &str, detail: &str, next: boo
         .inner;
     ui.add_space(WELCOME_STEP_PADDING);
     pressed
+}
+
+/// What could not be read, why, and what still works. The reason quotes a file, so it shows as plain text only.
+/// Returns whether Open Setup was pressed.
+fn source_alert(ui: &mut Ui, issue: &Issue) -> bool {
+    let (title, still) = issue.screen.failed_words();
+    prompt_box_tone(ui, Tone::Closed, |ui| {
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                let open = button(ui, "Open Setup").clicked();
+                ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(rich(ui, title, Type::STRONG, Tone::Closed));
+                        ui.add(Label::new(issue.error.to_string()).wrap());
+                        ui.add(Label::new(still).wrap());
+                    });
+                });
+                open
+            })
+            .inner
+        })
+        .inner
+    })
 }
 
 impl eframe::App for Shell {

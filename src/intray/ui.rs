@@ -3,8 +3,8 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp,
-    deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp,
+    deal, divider, fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, prompt_box_tone, reveal_command, rich, side_column, skeleton,
     slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
@@ -73,6 +73,16 @@ pub struct TodayScreen {
     command_open: Option<String>,
 }
 
+/// What Today takes from outside the tray.
+pub struct TodayContext<'a> {
+    /// The screens whose source could not be read, so their cards are missing from this list.
+    pub missing: &'a [&'a str],
+    /// The tracker could not be read, so Coming up has no application dates.
+    pub dates_missing: bool,
+    /// Draws the alerts for sources that could not be read, under the head.
+    pub alerts: &'a dyn Fn(&mut Ui),
+}
+
 /// Keys never fire while a text field has focus. Y does nothing on a card with no default.
 fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
     if ui.ctx().egui_wants_keyboard_input() {
@@ -93,7 +103,7 @@ fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
 }
 
 /// Draws the tray and applies what the user did. `keys` is off while a dialog covers the window.
-pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Queue, keys: bool) -> Option<Request> {
+pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Queue, context: &TodayContext, keys: bool) -> Option<Request> {
     let top = queue.cards.first();
     if let Some(top) = top {
         tray.read(&top.key);
@@ -104,12 +114,14 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     }
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
 
-    head(ui, queue);
+    head(ui, queue, context.missing);
     page_body(ui, |ui| {
+        (context.alerts)(ui);
         if let Some(issue) = tray.issue() {
-            alert(ui, issue);
+            // The message quotes a file, so it shows as plain text.
+            prompt_box_tone(ui, Tone::Closed, |ui| ui.add(egui::Label::new(issue).wrap()));
         }
-        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, &mut pressed));
+        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.dates_missing, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
             Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
             None => {
@@ -124,10 +136,10 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 }
 
 /// The day stamp ticks off today's decisions. Cards set aside with Later count on neither side.
-fn head(ui: &mut Ui, queue: &Queue) {
+fn head(ui: &mut Ui, queue: &Queue, missing: &[&str]) {
     let tally = queue.tally();
     let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
-    stamped_head(ui, stamp, &queue.today_headline(), &queue.today_subtitle(&[]));
+    stamped_head(ui, stamp, &queue.today_headline(), &queue.today_subtitle(missing));
 }
 
 /// With nothing dealt, the stamp's ring is empty and it reads as the date alone.
@@ -453,11 +465,11 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 
 /// Done today over Coming up. The rail sits outside the card's scroll, so the undo row at its top stays in view.
 /// It scrolls on its own when a long log pushes Coming up past the window. `active` is off while a dialog covers the tray.
-fn rail(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+fn rail(ui: &mut Ui, queue: &Queue, active: bool, dates_missing: bool, pressed: &mut Option<Pressed>) {
     ScrollArea::vertical().id_salt("tray_rail").auto_shrink([false, false]).show(ui, |ui| {
         done_today(ui, queue, pressed);
         ui.add_space(RAIL_GAP);
-        coming_up(ui, queue, active, pressed);
+        coming_up(ui, queue, active, dates_missing, pressed);
     });
 }
 
@@ -501,7 +513,8 @@ fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 }
 
 /// Rows and the return row only reorder the queue: none opens the launcher or starts a run.
-fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+/// Without the tracker the closing line would claim nothing else is dated, so it says the dates are missing.
+fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, dates_missing: bool, pressed: &mut Option<Pressed>) {
     let agenda = queue.agenda();
     slip(ui, |ui| {
         panel_header(ui, "Coming up", Some("2 weeks"));
@@ -518,10 +531,11 @@ fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pres
                 divider(ui);
                 ui.add_space(CLOSING_GAP);
             }
+            let closing = if dates_missing { "Application dates are missing until the file is fixed." } else { agenda.closing.as_str() };
             // The line starts under the rows' day column.
             ui.horizontal(|ui| {
                 ui.add_space(PICK_ROW_INLINE);
-                ui.add(egui::Label::new(rich(ui, agenda.closing.as_str(), Type::NOTE, Ink::Muted)).wrap());
+                ui.add(egui::Label::new(rich(ui, closing, Type::NOTE, Ink::Muted)).wrap());
             });
         });
     });

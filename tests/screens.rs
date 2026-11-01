@@ -594,6 +594,34 @@ fn a_failure_reason_shows_without_opening_the_step() {
     assert!(harness.get_by_label(COMPILE_FAILED).rect().bottom() <= harness.get_by_label(STATUS_LINE).rect().top());
 }
 
+/// A failure reason is untrusted: the story draws it without its hidden characters.
+#[test]
+fn a_failure_reason_shows_without_hidden_characters() {
+    let failed = AgentEvent::TurnEnded { failed: true, message: Some("Compile\u{202e} broke\u{200b} on page 2.".into()), cost_usd: 1.4, duration_ms: 90_000 };
+    let harness = smallest_window(apply_run_ending([failed]), "failure_reason_visible");
+    assert!(is_shown(&harness, "Compile broke on page 2."));
+    for hidden in ["\u{202e}", "\u{200b}"] {
+        assert!(harness.query_by_label_contains(hidden).is_none(), "{hidden:?} reaches the screen");
+    }
+}
+
+/// A turn Claude begins on its own leaves the reader where they were.
+#[test]
+fn a_turn_claude_begins_alone_does_not_move_the_story() {
+    let (desk, sink) = stop_with(SharedCalls::default(), STOP_EVALUATION);
+    let mut harness = smallest_window(desk, "self_started_turn");
+    let offset = |harness: &Harness| harness.get_by_label_contains("Job fit evaluation").rect().top() - harness.get_by_label("The run so far").rect().bottom();
+    let before = offset(&harness);
+    emit_all(&sink, [
+        AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+        tool("6", "Read", "notes/kestrel.md", false),
+        done("6"),
+        tool("7", "Bash", "ls cv", false),
+    ]);
+    harness.run_steps(3);
+    assert!((offset(&harness) - before).abs() <= 1.0, "the story moved from {before} to {}", offset(&harness));
+}
+
 /// A run that failed with its process still up can end its session, through the same popover.
 #[test]
 fn an_idle_failed_session_can_be_ended() {

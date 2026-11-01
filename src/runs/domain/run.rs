@@ -75,7 +75,6 @@ pub struct Run {
     cost_of_ended_processes: f64,
     pub duration_ms: u64,
     pub steps: Option<StepRail>,
-    pub agents: Vec<String>,
     pub files_changed: Vec<String>,
     pub usage: Usage,
     /// Subagents still working after the turn that started them ended.
@@ -112,7 +111,6 @@ impl Run {
             cost_of_ended_processes: 0.0,
             duration_ms: 0,
             steps,
-            agents: Vec::new(),
             files_changed: Vec::new(),
             usage: Usage::default(),
             background_agents: 0,
@@ -275,9 +273,6 @@ impl Run {
                 self.rail_moved_at = self.activity.len();
             }
         }
-        if matches!(name.as_str(), "Agent" | "Task") {
-            self.agents.push(summary.clone());
-        }
         if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") &&!self.files_changed.contains(&summary) {
             self.files_changed.push(summary.clone());
         }
@@ -307,8 +302,9 @@ impl Run {
         self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
+        // A run that already failed keeps its first reason, said once.
         match failure {
-            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped) => {
+            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped | RunStatus::Failed(_)) => {
                 self.notice(&reason);
                 self.status = RunStatus::Failed(reason);
             }
@@ -425,15 +421,25 @@ mod tests {
     }
 
     #[test]
-    fn tools_feed_steps_agents_and_files() {
+    fn tools_feed_steps_and_files() {
         let mut run = run("/apply x");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Write".into(), summary: "cv/main_a.tex".into(), nested: false });
         run.apply(AgentEvent::ToolStarted { id: "2".into(), name: "Agent".into(), summary: "application-reviewer: critique".into(), nested: false });
         run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Err(None) });
         assert_eq!(run.steps.as_ref().unwrap().current, 3);
         assert_eq!(run.files_changed, ["cv/main_a.tex"]);
-        assert_eq!(run.agents.len(), 1);
         assert!(matches!(run.activity[1].kind, ActivityKind::Tool { state: ToolState::Failed(None), .. }));
+    }
+
+    #[test]
+    fn a_failed_run_keeps_its_first_reason() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 });
+        run.apply(AgentEvent::ProcessExited { failure: Some("exit code 1".into()) });
+        assert_eq!(run.status, RunStatus::Failed("Budget cap reached.".into()));
+        let notices: Vec<_> = run.activity.iter().filter(|activity| matches!(activity.kind, ActivityKind::Notice(_))).collect();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, ActivityKind::Notice("Budget cap reached.".into()));
     }
 
     #[test]

@@ -20,8 +20,6 @@ pub struct StepLine {
     pub state: StepState,
     /// Built from the command's fixed phrases and counts only, never from text in the run.
     pub sentence: String,
-    /// How many tool rows the step holds, nested ones included.
-    pub actions: usize,
     /// Whether the step may still gain actions, so its toggle reads "so far".
     pub live: bool,
 }
@@ -83,7 +81,6 @@ pub fn step_lines(run: &Run) -> Vec<StepLine> {
             name: rail.labels[step],
             state: states[step],
             sentence: sentence(run, step),
-            actions: tools_of(run, step).count(),
             live: step == rail.current && matches!(states[step], StepState::Working | StepState::Waiting),
         })
         .collect()
@@ -588,9 +585,9 @@ mod tests {
         let lines = step_lines(&run);
         assert_eq!(lines.iter().map(|line| (line.step, line.name)).collect::<Vec<_>>(), [(0, "Fetch"), (1, "Evaluate"), (2, "Draft")]);
         assert_eq!(lines[1].sentence, "Read the evaluation guide.");
-        assert_eq!((lines[1].state, lines[1].actions, lines[1].live), (StepState::Done, 1, false));
+        assert_eq!((lines[1].state, lines[1].live), (StepState::Done, false));
         assert_eq!(lines[2].sentence, "Wrote the CV.");
-        assert_eq!((lines[2].state, lines[2].actions, lines[2].live), (StepState::Working, 2, true));
+        assert_eq!((lines[2].state, lines[2].live), (StepState::Working, true));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::runs::application::{
     Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine, StepState, ToolState,
     action_noun, band, closing_question, elapsed_text, short_path, step_lines, stop_point, wants_reply,
 };
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
     BAND_COMPACT_HEIGHT, BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, KNOT_SIZE_SMALL, OFFSET_SHADOW, PROMPT_PADDING, ROW_GAP, RUN_SIDE,
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
@@ -59,8 +60,8 @@ pub struct RunScreen {
     opened: HashSet<(String, Option<usize>)>,
     /// The run and message the story last opened on, so the user's own scrolling wins after it.
     opened_at: Option<(String, usize)>,
-    /// The run shown last frame, and whether its story was settled, so a resumed run is followed again.
-    settled_seen: Option<(String, bool)>,
+    /// Each run's turn start and reply count when its story was last drawn, so a turn the user's reply began is followed from its end.
+    followed: HashMap<String, (usize, usize)>,
     markdown: CommonMarkCache,
 }
 
@@ -222,23 +223,19 @@ impl View {
         let from = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
         let lines = step_lines(run);
         let steps: Vec<(Option<usize>, Option<StepLine>)> = if lines.is_empty() { vec![(None, None)] } else { lines.into_iter().map(|line| (Some(line.step), Some(line))).collect() };
-        let parts = steps
-            .into_iter()
-            .map(|(step, line)| {
-                let mut part = Part { step, line, folded: Vec::new(), shown: Vec::new(), actions: 0, cut: 0 };
-                // The command line, row 0, is the head's title.
-                for (index, item) in run.activity.iter().enumerate().skip(1).filter(|(_, item)| item.step == step) {
-                    let tool = usize::from(matches!(item.kind, ActivityKind::Tool { .. }));
-                    if index < from {
-                        part.cut += tool;
-                    } else {
-                        part.actions += tool;
-                        if in_story(item) { part.shown.push(index) } else { part.folded.push(index) }
-                    }
-                }
-                part
-            })
-            .collect();
+        let mut parts: Vec<Part> = steps.into_iter().map(|(step, line)| Part { step, line, folded: Vec::new(), shown: Vec::new(), actions: 0, cut: 0 }).collect();
+        let slot: HashMap<Option<usize>, usize> = parts.iter().enumerate().map(|(at, part)| (part.step, at)).collect();
+        // One pass over the rows, each into its step's part. The command line, row 0, is the head's title.
+        for (index, item) in run.activity.iter().enumerate().skip(1) {
+            let Some(part) = slot.get(&item.step).map(|at| &mut parts[*at]) else { continue };
+            let tool = usize::from(matches!(item.kind, ActivityKind::Tool { .. }));
+            if index < from {
+                part.cut += tool;
+            } else {
+                part.actions += tool;
+                if in_story(item) { part.shown.push(index) } else { part.folded.push(index) }
+            }
+        }
         let newest = run.activity.iter().rposition(|item| !item.nested && matches!(item.kind, ActivityKind::Claude(_)));
         Self { band: band(run), parts, from, newest }
     }
@@ -279,7 +276,8 @@ impl RunScreen {
         let idle = matches!(run.status, RunStatus::Stopped | RunStatus::Failed(_)) && !run.is_busy() && desk.has_session(&run.id);
         let endable = run.awaits_reply() || idle;
         let mut head = Head::default();
-        page_head(ui, Title::Typed(first_line(&run.line)), None, |ui| {
+        let title = first_line(&run.line);
+        page_head(ui, Title::Typed(&title), None, |ui| {
             let pass = head_actions(ui, &run, endable, narrow);
             // The real pass comes last, so its buttons are the ones kept.
             head = Head { action: pass.action.or(head.action), ..pass };
@@ -394,8 +392,10 @@ impl RunScreen {
         let input = has_footer(run);
         let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
         let settled = settled(run);
-        // A reply takes a settled story back to working: it follows the run again, from its end.
-        let resumed = !settled && self.settled_seen.as_ref().is_some_and(|(id, was)| *id == run.id && *was);
+        // A turn the user's reply began is followed from its end, once, even when the reply was sent before switching away.
+        // A turn Claude began on its own moves nothing: the story follows it only when the view was already at the end.
+        let turn = (run.current_turn_start(), run.turn_number());
+        let resumed = self.followed.get(&run.id).is_some_and(|seen| seen.0 != turn.0 && seen.1 != turn.1);
         let title = if run.status == RunStatus::Closed { "The run" } else { "The run so far" };
         panel(ui, |ui| {
             panel_header(ui, title, None);
@@ -424,7 +424,7 @@ impl RunScreen {
             self.measured_footer(ui, desk, run, reserved);
         }
         if !ui.ctx().will_discard() {
-            self.settled_seen = Some((run.id.clone(), settled));
+            self.followed.insert(run.id.clone(), turn);
         }
     }
 
@@ -462,7 +462,7 @@ impl RunScreen {
             separate(ui, &mut first);
             // Plain while it streams: the finished message renders as a document.
             Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| {
-                ui.add(egui::Label::new(rich(ui, run.streaming_text.as_str(), Type::TAKE, Ink::Text)).wrap());
+                ui.add(egui::Label::new(rich(ui, plain(&run.streaming_text), Type::TAKE, Ink::Text)).wrap());
             });
         }
         anchor
@@ -495,16 +495,18 @@ impl RunScreen {
             }
         }
         // With no action to count, there is no toggle, so the step's other rows show as they are.
-        if (open || part.actions == 0) && (part.cut > 0 || !part.folded.is_empty()) {
+        // Only an open toggle says how many of its actions were cut: a step cut whole is covered by the story's own note.
+        let cut = if open { part.cut } else { 0 };
+        if (open || part.actions == 0) && (cut > 0 || !part.folded.is_empty()) {
             let indent = KNOT_SIZE_SMALL + STEP_NAME_WIDTH + STEP_LINE_GAP * 2.0;
             Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
-                if part.cut > 0 {
+                if cut > 0 {
                     Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| {
-                        muted(ui, format!("{} earlier {} in the run log.", part.cut, if part.cut == 1 { "action is" } else { "actions are" }));
+                        muted(ui, format!("{cut} earlier {} {} in the run log.", action_noun(cut), if cut == 1 { "is" } else { "are" }));
                     });
                 }
                 for (at, index) in part.folded.iter().enumerate() {
-                    if at > 0 || part.cut > 0 {
+                    if at > 0 || cut > 0 {
                         divider(ui);
                     }
                     self.action_row(ui, &run.activity[*index], root);
@@ -542,19 +544,19 @@ impl RunScreen {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = EVENT_GAP;
                     who(ui, "You");
-                    ui.add(egui::Label::new(rich(ui, text, Type::MONO, Ink::Text)).wrap());
+                    ui.add(egui::Label::new(rich(ui, plain(text), Type::MONO, Ink::Text)).wrap());
                 });
             }
             ActivityKind::Claude(text) => {
                 markdown(ui, &mut self.markdown, text);
             }
             ActivityKind::Notice(text) | ActivityKind::Allowed(text) => {
-                muted(ui, text);
+                muted(ui, first_line(text));
             }
             ActivityKind::Tool { name, summary, state, .. } => {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = EVENT_GAP;
-                    who(ui, name);
+                    who(ui, &first_line(name));
                     let (text, tone) = match state {
                         ToolState::Running => ("Running", Tone::Active),
                         ToolState::Done => ("Done", Tone::Hired),
@@ -565,10 +567,10 @@ impl RunScreen {
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             let summary = first_line(summary);
                             if matches!(name.as_str(), "Read" | "Write" | "Edit" | "MultiEdit") {
-                                let (dir, file) = short_path(root, summary);
-                                path_label(ui, &dir, &file).on_hover_text(summary);
+                                let (dir, file) = short_path(root, &summary);
+                                path_label(ui, &dir, &file).on_hover_text(&summary);
                             } else {
-                                ui.add(egui::Label::new(rich(ui, summary, Type::MONO, Ink::Text)).truncate()).on_hover_text(summary);
+                                ui.add(egui::Label::new(rich(ui, &summary, Type::MONO, Ink::Text)).truncate()).on_hover_text(&summary);
                             }
                         });
                     });
@@ -791,10 +793,10 @@ impl RunScreen {
                     slip_bar(ui, (run.cost_usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
                     fact(ui, "Elapsed", &elapsed_text(run.duration_ms));
                     if let Some(model) = &run.model {
-                        fact(ui, "Model", model);
+                        fact(ui, "Model", &first_line(model));
                     }
                     if let Some(session) = &run.session_id {
-                        fact(ui, "Session", &session.chars().take(8).collect::<String>());
+                        fact(ui, "Session", &first_line(session).chars().take(8).collect::<String>());
                     }
                     if let Some(usage) = run.usage.five_hour {
                         fact(ui, "5-hour usage", &format!("{:.0}%", usage * 100.0));
@@ -862,12 +864,13 @@ fn you_line(ui: &mut Ui, text: &str) {
             ui.set_min_width(STEP_NAME_WIDTH);
             ui.label(rich(ui, "You", Type::STRONG, Ink::Text));
         });
-        ui.add(egui::Label::new(rich(ui, format!("\u{201c}{text}\u{201d}"), Type::BODY, Ink::Text)).wrap());
+        ui.add(egui::Label::new(rich(ui, format!("\u{201c}{}\u{201d}", plain(text)), Type::BODY, Ink::Text)).wrap());
     });
 }
 
-/// A notice in the story, such as why the run failed: muted, under the step names' column, wrapped.
+/// A notice in the story, such as why the run failed: its first line, muted, under the step names' column, wrapped.
 fn notice_line(ui: &mut Ui, text: &str) {
+    let text = first_line(text);
     let indent = KNOT_SIZE_SMALL + STEP_LINE_GAP;
     Frame::new().inner_margin(Margin { left: indent as i8, right: 0, top: EVENT_PADDING as i8, bottom: EVENT_PADDING as i8 }).show(ui, |ui| {
         ui.add(egui::Label::new(rich(ui, text, Type::BODY, Ink::Muted)).wrap());
@@ -977,8 +980,9 @@ fn background_note(count: usize) -> String {
 fn failure_reason(ui: &mut Ui, reason: &str) {
     let indent = EVENT_WHO_WIDTH + EVENT_GAP;
     Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
+        let reason = plain(reason);
         for line in reason.lines() {
-            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).truncate()).on_hover_text(reason);
+            ui.add(egui::Label::new(rich(ui, line, Type::BODY, Ink::Muted)).truncate()).on_hover_text(&reason);
         }
     });
 }
@@ -1001,6 +1005,12 @@ fn fact(ui: &mut Ui, label: &str, value: &str) {
     });
 }
 
-fn first_line(text: &str) -> &str {
-    text.lines().next().unwrap_or_default()
+/// The first line of untrusted text, without the characters that could hide or reorder what it says.
+fn first_line(text: &str) -> String {
+    visible_chars(text.lines().next().unwrap_or_default()).collect()
+}
+
+/// Untrusted text drawn as it is, not as Markdown: each line without hidden or control characters.
+fn plain(text: &str) -> String {
+    text.lines().map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n")
 }

@@ -1,6 +1,6 @@
-//! The in-tray's parts: one decision at a time, on top of a visible stack of what is left.
+//! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Align, Color32, CornerRadius, Frame, Label, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Frame, Label, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
@@ -9,110 +9,9 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{KeptHeight, divider, inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    AGENDA_DAY_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
-    HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
-    STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
+    AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
+    ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
-
-/// A strip of day cells, one column each. The first cell is today. `note` reads across the third to the last day.
-pub fn horizon<T>(ui: &mut Ui, days: &[T], note: Option<&str>, mut cell: impl FnMut(&mut Ui, &T, bool)) {
-    let p = Palette::of(ui);
-    let (x, top, bottom) = HORIZON_PADDING;
-    Frame::new().fill(p.panel).corner_radius(RADIUS_PANEL).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let fill = ui.painter().add(Shape::Noop);
-        let mut rects = Vec::with_capacity(days.len());
-        ui.columns(days.len(), |columns| {
-            for (index, (ui, day)) in columns.iter_mut().zip(days).enumerate() {
-                let today = index == 0;
-                let shown = Frame::new().inner_margin(Margin { left: x, right: x, top, bottom }).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.set_min_height(HORIZON_CELL_HEIGHT - (top + bottom) as f32);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.spacing_mut().item_spacing.y = 3.0;
-                        cell(ui, day, today);
-                    });
-                });
-                rects.push(shown.response.rect);
-            }
-        });
-        let Some(first) = rects.first() else { return };
-        let strip = rects.iter().fold(*first, |strip, rect| strip.union(*rect));
-        let corners = CornerRadius { nw: RADIUS_PANEL, sw: RADIUS_PANEL, ne: 0, se: 0 };
-        ui.painter().set(fill, Shape::rect_filled(Rect::from_x_y_ranges(first.x_range(), strip.y_range()), corners, p.raised));
-        for rect in &rects[1..] {
-            ui.painter().vline(rect.left(), strip.y_range(), Stroke::new(HAIRLINE, p.line));
-        }
-        if let (Some(note), true) = (note, rects.len() > 2) {
-            let galley = line(ui, note, Type::SMALL, p.muted, f32::INFINITY);
-            let across = rects[2].left()..=rects[rects.len() - 1].right();
-            let centre = pos2((across.start() + across.end()) / 2.0, strip.center().y);
-            let text_rect = Rect::from_center_size(centre, galley.size());
-            let (pad_x, pad_y) = HORIZON_NOTE_PADDING;
-            ui.painter().rect_filled(text_rect.expand2(vec2(pad_x, pad_y)), 0.0, p.panel);
-            ui.painter().galley(text_rect.min, galley, p.muted);
-            let response = ui.interact(text_rect, ui.scope_id().with("horizon_note"), Sense::hover());
-            response.widget_info(|| WidgetInfo::labeled(Role::Label, true, note));
-        }
-    });
-}
-
-/// Today's pending count, the overdue line and one line per kind, in the cell's own gap.
-pub fn horizon_count(ui: &mut Ui, count: usize, overdue: usize, kinds: &[(usize, &str)]) {
-    let ink = if count == 0 { Ink::Muted } else { Ink::Text };
-    ui.add(Label::new(rich(ui, format!("{count} to decide"), Type::TAG, ink)).truncate());
-    if overdue > 0 {
-        ui.add(Label::new(rich(ui, format!("{overdue} overdue"), Type::TAG, Tone::Interview)).truncate());
-    }
-    for (n, kind) in kinds {
-        ui.add(Label::new(rich(ui, format!("{n} {kind}"), Type::SMALL, Ink::Muted)).truncate());
-    }
-}
-
-/// The chip that brings back the cards set aside. `label` is what a screen reader hears, `tip` shows on hover,
-/// and on keyboard focus while `active`.
-/// In a narrow column the chip keeps to the column and its text elides.
-pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, active: bool, tip: impl FnOnce(&mut Ui)) -> Response {
-    let p = Palette::of(ui);
-    let room = ui.available_width();
-    let galley = line(ui, text, Type::TAG, p.text, (room - CHIP_PADDING * 2.0).max(0.0));
-    let size = vec2((galley.size().x + CHIP_PADDING * 2.0).min(room), CHIP_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let edge = if response.hovered() { p.text } else { p.line };
-    ui.painter().rect_filled(rect, RADIUS_CARD, p.sheet);
-    ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
-    let at = pos2(rect.left() + CHIP_PADDING, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(at, galley, p.text);
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
-    let tip = |ui: &mut Ui| {
-        ui.set_max_width(HORIZON_TIP_WIDTH);
-        tip(ui)
-    };
-    if active && response.has_focus() {
-        response.show_tooltip_ui(tip);
-        return response;
-    }
-    response.on_hover_ui(tip)
-}
-
-pub fn horizon_day(ui: &mut Ui, text: &str, today: bool) -> Response {
-    let text = if today { rich(ui, text, Type::TAG, Ink::Text) } else { rich(ui, text, Type::SMALL, Ink::Muted) };
-    ui.label(text)
-}
-
-/// An event on the strip. `tone` is `None` once the card behind it has left the tray.
-pub fn horizon_mark(ui: &mut Ui, text: &str, tone: Option<Tone>) -> Response {
-    let label = match tone {
-        Some(tone) => egui::Label::new(rich(ui, text, Type::TAG, tone)).sense(Sense::click()),
-        None => egui::Label::new(rich(ui, text, Type::TAG, Ink::Faint).strikethrough()).sense(Sense::hover()),
-    };
-    let response = ui.add(label.wrap());
-    if let (Some(tone), true) = (tone, response.hovered()) {
-        let color = tone.color(&Palette::of(ui));
-        ui.painter().hline(response.rect.x_range(), response.rect.bottom(), Stroke::new(HAIRLINE, color));
-    }
-    response
-}
 
 /// What fills a card's tab: the card itself with the kind in a status tone, or the stamp for what Claude asks of the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,6 +158,36 @@ pub struct AgendaPress {
 /// One dated line in a list of what is coming: the day, what happens, and how it ends. Ruled off from the row above unless `first`.
 /// `text` may come from a posting, so it is painted as plain text, cut to the room left.
 pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> AgendaPress {
+    let (pressed, response) = agenda_line(ui, day, text, end, first);
+    let role = if end == AgendaEnd::Done { Role::Label } else { Role::Button };
+    let spoken = match end {
+        AgendaEnd::Done => format!("{day}, {text}, done"),
+        AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
+        _ => format!("{day}, {text}"),
+    };
+    response.widget_info(|| WidgetInfo::labeled(role, true, &spoken));
+    pressed
+}
+
+/// The first line of a list of what is coming: what comes back on `day`, with `button` to bring it back now.
+/// `label` is what a screen reader hears for the row. `tip` shows on hover, and on keyboard focus while `active`.
+pub fn agenda_return(ui: &mut Ui, day: &str, text: &str, button: &str, label: &str, active: bool, tip: impl FnOnce(&mut Ui)) -> AgendaPress {
+    let (pressed, response) = agenda_line(ui, day, text, AgendaEnd::Button(button), true);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    let tip = |ui: &mut Ui| {
+        ui.set_max_width(AGENDA_TIP_WIDTH);
+        tip(ui)
+    };
+    if active && response.has_focus() {
+        response.show_tooltip_ui(tip);
+    } else {
+        response.on_hover_ui(tip);
+    }
+    pressed
+}
+
+/// Paints an agenda row and hands back its response, for the caller to name.
+fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> (AgendaPress, Response) {
     let p = Palette::of(ui);
     if !first {
         divider(ui);
@@ -299,15 +228,8 @@ pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: boo
     if !done {
         focus_ring(ui, &response, 0);
     }
-    let role = if done { Role::Label } else { Role::Button };
-    let spoken = match end {
-        AgendaEnd::Done => format!("{day}, {text}, done"),
-        AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
-        _ => format!("{day}, {text}"),
-    };
-    response.widget_info(|| WidgetInfo::labeled(role, true, &spoken));
     pressed.row = response.clicked();
-    pressed
+    (pressed, response)
 }
 
 /// The edges of the cards behind the dealt one. The count caps; the words say how many.

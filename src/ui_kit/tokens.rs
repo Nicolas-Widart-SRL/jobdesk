@@ -57,12 +57,8 @@ pub const CARD_PADDING: (i8, i8) = (11, 9);
 pub const LANE_PADDING: (i8, i8, i8) = (8, 10, 12);
 pub const LANE_GAP: f32 = 6.0;
 
-pub const HORIZON_CELL_HEIGHT: f32 = 72.0;
-pub const HORIZON_PADDING: (i8, i8, i8) = (7, 7, 9);
 pub const CHIP_HEIGHT: f32 = 20.0;
 pub const CHIP_PADDING: f32 = 6.0;
-pub const HORIZON_NOTE_PADDING: (f32, f32) = (14.0, 7.0);
-pub const HORIZON_TIP_WIDTH: f32 = 250.0;
 pub const CARD_TAB_HEIGHT: f32 = 30.0;
 pub const CARD_TAB_PADDING: (i8, i8) = (14, 6);
 pub const CARD_TAB_GAP: f32 = 10.0;
@@ -78,6 +74,7 @@ pub const DAY_STAMP_TICK: (f32, f32, f32) = (31.0, 37.8, 4.7);
 pub const DAY_STAMP_EMPTY_TICKS: usize = 12;
 pub const DAY_STAMP_MAX_TICKS: usize = 40;
 pub const AGENDA_DAY_WIDTH: f32 = 50.0;
+pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 /// The stamp-ink edge on a card that waits on the user.
 pub const WAITS_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
@@ -138,6 +135,8 @@ pub const SPLIT_MAIN_BASIS: f32 = 520.0;
 pub const SPLIT_SIDE_BASIS: f32 = 340.0;
 /// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
 pub const TRAY_RAIL: f32 = 292.0;
+/// The room between the slips in the rail.
+pub const RAIL_GAP: f32 = 14.0;
 pub const CARD_GRID_MIN: f32 = 150.0;
 pub const FLOW_MIN: f32 = 170.0;
 pub const NODE_PADDING: (f32, f32, f32) = (16.0, 12.0, 14.0);
@@ -158,7 +157,6 @@ pub const PAGE_LINE_HEIGHTS: (f32, f32) = (3.0, 6.0);
 pub const PAGE_GAP: f32 = 12.0;
 pub const MINI_PAGE_SIZE: (f32, f32) = (92.0, 130.0);
 pub const MINI_PAGE_PADDING: (f32, f32) = (7.0, 8.0);
-pub const HORIZON_CELL_MIN: f32 = 68.0;
 pub const GATE_PADDING: f32 = 7.0;
 pub const GATE_COLUMN_GAP: f32 = 20.0;
 pub const GATE_MIN: f32 = 210.0;

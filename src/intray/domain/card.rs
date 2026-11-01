@@ -4,7 +4,7 @@ use crate::intray::domain::SkipReason;
 use crate::shared_kernel::WebUrl;
 use crate::shared_kernel::dates::days_from;
 
-/// How far ahead a date counts as a deadline, the width of the horizon strip.
+/// How far ahead a date counts as a deadline, the span of Coming up.
 pub const HORIZON_DAYS: i64 = 14;
 
 /// Declared in the order cards of one tier and date are dealt.

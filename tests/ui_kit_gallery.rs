@@ -6,9 +6,9 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabInk, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabInk, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
     check_tag, chrome_status, clear_panel, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
+    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
@@ -304,28 +304,6 @@ fn board(ui: &mut Ui) {
 }
 
 fn tray(ui: &mut Ui) {
-    let days = ["Sat 31", "Sun 1", "Mon 2", "Tue 3", "Wed 4", "Thu 5", "Fri 6"];
-    horizon(ui, &days, None, |ui, day, today| {
-        horizon_day(ui, day, today);
-        if today {
-            horizon_mark(ui, "Harbor deadline", Some(Tone::Drafted));
-            horizon_count(ui, 0, 0, &[]);
-        } else if *day == "Mon 2" {
-            horizon_mark(ui, "Set aside", None);
-        }
-    });
-    ui.add_space(10.0);
-    horizon(ui, &days, Some("No other deadlines in the next 14 days"), |ui, day, today| {
-        horizon_day(ui, day, today);
-        if today {
-            horizon_count(ui, 7, 1, &[(5, "triage"), (2, "send")]);
-        } else if *day == "Sun 1" {
-            horizon_return(ui, "1 back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
-                ui.label("Juniper Retail");
-            });
-        }
-    });
-    ui.add_space(10.0);
     dealt(ui, "send", |ui| {
         let tab = card_tab(ui, "Ready to send", TabInk::Tone(Tone::Drafted), "Due today");
         deal(ui, tab, DealLook { key: "send", frame: None, behind: 3 }, |ui| {
@@ -357,7 +335,10 @@ fn tray(ui: &mut Ui) {
     ui.scope(|ui| {
         ui.set_max_width(SLIP);
         slip(ui, |ui| {
-            panel_header(ui, "Cleared today", Some("2"));
+            panel_header(ui, "Done today", Some("2 of 5"));
+            panel_body(ui, |ui| {
+                fat_tally(ui, 2, 5, Ink::Text);
+            });
             let toggles = [("Rate", false), ("Scope", true), ("Domain", false), ("Location", false)];
             undo_row(ui, "Quarry Labs", "Skipped. Why? Optional.", "Last decision: Skipped, Quarry Labs. Press U to undo.", &toggles, false);
             panel_body(ui, |ui| {
@@ -502,7 +483,9 @@ fn postmark(ui: &mut Ui) {
             panel_header(ui, "Coming up", Some("2 weeks"));
             panel_body(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                agenda_row(ui, "Sun 1", "1 comes back", AgendaEnd::Button("Bring back"), true);
+                agenda_return(ui, "Sun 1", "1 comes back", "Bring back", "1 set aside, back tomorrow: Juniper Retail. Bring it back now.", true, |ui| {
+                    ui.label("Juniper Retail");
+                });
                 agenda_row(ui, "Tue 3", "Harbor Bank deadline", AgendaEnd::Done, false);
                 agenda_row(ui, "Wed 4", "Quarry Labs reply", AgendaEnd::Late("2 days late"), false);
                 agenda_row(ui, "Thu 5", "Meridian Rail closes", AgendaEnd::Now, false);
@@ -543,8 +526,8 @@ fn gallery(ui: &mut Ui) {
             ("Tabs", tabs),
             ("Sections and rows", sections),
             ("Board", board),
-            ("In-tray", tray),
-            ("Runs", runs),
+            ("Today", tray),
+            ("Tasks", runs),
             ("Document", document_sample),
             ("Postmark", postmark),
         ];

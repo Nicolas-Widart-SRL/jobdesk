@@ -21,7 +21,7 @@ pub struct Cleared {
     pub label: String,
 }
 
-/// A dated card on the horizon strip.
+/// A dated card in Coming up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mark {
     pub on: NaiveDate,
@@ -114,35 +114,6 @@ impl Queue {
     /// Pending cards whose date has passed. A card due today is not overdue.
     pub fn overdue(&self) -> usize {
         self.cards.iter().filter(|card| card.due.as_ref().is_some_and(|due| due.on < self.today)).count()
-    }
-
-    /// The two biggest kinds, most first. With more than two kinds the second line folds the rest into `None`, meaning other.
-    pub fn by_kind(&self) -> Vec<(usize, Option<CardKind>)> {
-        let mut counts: Vec<(usize, CardKind)> = Vec::new();
-        for card in &self.cards {
-            match counts.iter_mut().find(|(_, kind)| *kind == card.kind) {
-                Some((count, _)) => *count += 1,
-                None => counts.push((1, card.kind)),
-            }
-        }
-        counts.sort_by_key(|&(count, kind)| (std::cmp::Reverse(count), kind));
-        if counts.len() > 2 {
-            let rest = counts[1..].iter().map(|(count, _)| count).sum();
-            counts.truncate(1);
-            let mut lines: Vec<(usize, Option<CardKind>)> = counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect();
-            lines.push((rest, None));
-            return lines;
-        }
-        counts.into_iter().map(|(count, kind)| (count, Some(kind))).collect()
-    }
-
-    /// Says so when nothing, set aside or not, is dated inside the horizon.
-    pub fn horizon_note(&self) -> Option<String> {
-        if !self.marks.is_empty() {
-            return None;
-        }
-        let other = if self.overdue() > 0 { "other " } else { "" };
-        Some(format!("No {other}deadlines in the next {HORIZON_DAYS} days"))
     }
 
     /// Today's log under the undo offer. A logged offer already stands for the newest entry, so that entry is left out.
@@ -1058,11 +1029,6 @@ mod tests {
         }
     }
 
-    fn of_kinds(kinds: &[(usize, CardKind)]) -> Queue {
-        let cards = kinds.iter().flat_map(|&(count, kind)| (0..count).map(move |_| pending(kind, None))).collect();
-        Queue { cards, ..Default::default() }
-    }
-
     #[test]
     fn overdue_counts_pending_cards_past_their_date() {
         let day = |offset: i64| Some(today() + chrono::Duration::days(offset));
@@ -1074,35 +1040,9 @@ mod tests {
     }
 
     #[test]
-    fn kinds_sort_by_count_then_kind_order() {
-        assert_eq!(of_kinds(&[(5, CardKind::Triage), (2, CardKind::Send)]).by_kind(), [(5, Some(CardKind::Triage)), (2, Some(CardKind::Send))]);
-        assert_eq!(of_kinds(&[(1, CardKind::Triage), (1, CardKind::Send)]).by_kind(), [(1, Some(CardKind::Send)), (1, Some(CardKind::Triage))]);
-        assert_eq!(of_kinds(&[(3, CardKind::Close)]).by_kind(), [(3, Some(CardKind::Close))]);
-        assert_eq!(of_kinds(&[]).by_kind(), []);
-    }
-
-    #[test]
-    fn more_than_two_kinds_fold_into_other() {
-        let queue = of_kinds(&[(4, CardKind::Triage), (2, CardKind::Send), (1, CardKind::FollowUp), (1, CardKind::Close)]);
-        assert_eq!(queue.by_kind(), [(4, Some(CardKind::Triage)), (4, None)]);
-    }
-
-    #[test]
     fn set_aside_names_are_listed_once() {
         let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
         assert_eq!(aside.set_aside_distinct(), ["A", "B"]);
-    }
-
-    #[test]
-    fn the_note_shows_only_when_no_mark_is_in_the_window() {
-        let empty = Queue { today: today(), ..Default::default() };
-        assert_eq!(empty.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
-
-        let late = Queue { cards: vec![pending(CardKind::Triage, Some(today() - chrono::Duration::days(1)))], today: today(), ..Default::default() };
-        assert_eq!(late.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
-
-        let mark = Mark { on: today(), label: "Acme closes".into(), name: "Acme".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
-        assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
     }
 
     fn closing_in(company: &str, score: u8, days: i64) -> JobView {
@@ -1116,13 +1056,13 @@ mod tests {
         let dealt_far = queue(&tray, &far, today());
         assert_eq!(dealt(&tray, &far), ["Plain", "Fourteen"]);
         assert!(dealt_far.marks.is_empty());
-        assert_eq!(dealt_far.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+        assert_eq!(dealt_far.agenda().closing, "No deadlines in the next two weeks.");
 
         let near = board(vec![job("Plain", 90), closing_in("Thirteen", 70, HORIZON_DAYS - 1)]);
         let dealt_near = queue(&tray, &near, today());
         assert_eq!(dealt(&tray, &near), ["Thirteen", "Plain"]);
         assert_eq!(dealt_near.marks.iter().map(|mark| mark.key.as_str()).collect::<Vec<_>>(), ["triage:thirteen"]);
-        assert_eq!(dealt_near.horizon_note(), None);
+        assert_eq!(dealt_near.agenda().rows.len(), 1);
     }
 
     #[test]
@@ -1143,14 +1083,14 @@ mod tests {
         let before = dealt(&tray);
         assert_eq!(before.overdue(), 1);
         assert!(before.marks.is_empty());
-        assert_eq!(before.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
+        assert_eq!(before.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::Late(2)]);
 
         tray.later(&before.cards[0], today());
 
         let after = dealt(&tray);
         assert_eq!(after.overdue(), 0);
         assert_eq!(after.set_aside, ["Juniper"]);
-        assert_eq!(after.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+        assert_eq!(after.agenda().closing, "No deadlines in the next two weeks.");
     }
 
     fn day(offset: i64) -> NaiveDate {

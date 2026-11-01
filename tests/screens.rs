@@ -987,12 +987,12 @@ fn later_deals_the_next_card_and_undo_brings_it_back() {
     let row = "Last decision on Harbor Bank: Set aside until tomorrow. Press U to undo.";
     assert!(is_shown(&harness, row));
     assert!(is_shown(&harness, "Set aside until tomorrow"));
-    assert!(!is_shown(&harness, "Nothing yet."), "the undo row heads the rail");
+    assert!(!is_shown(&harness, "Each decision lands here. U undoes the last one."), "the undo row heads the rail");
 
     press(&mut harness, Key::U);
     assert!(is_shown(&harness, HARBOR));
     assert!(!is_shown(&harness, row));
-    assert!(is_shown(&harness, "Nothing yet."), "setting aside clears nothing");
+    assert!(is_shown(&harness, "Each decision lands here. U undoes the last one."), "setting aside clears nothing");
 }
 
 #[test]
@@ -1001,7 +1001,7 @@ fn a_timeline_mark_pulls_a_set_aside_card_back() {
     press(&mut harness, Key::L);
     assert!(!is_shown(&harness, HARBOR));
 
-    harness.get_by_label("Harbor Bank deadline").click();
+    harness.get_by_label("Tue 3, Harbor Bank deadline").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR));
@@ -1116,31 +1116,53 @@ fn a_guard_card_has_no_default_and_a_kept_posting_reaches_triage() {
     assert!(is_shown(&harness, "Last decision on Halden Logistics: Kept. Press U to undo."));
 }
 
+/// The slip's note and its tally both read the count.
+fn tallied(harness: &Harness, done: usize, total: usize) -> bool {
+    harness.query_all_by_label(&format!("{done} of {total}")).count() == 2
+}
+
+/// Later leaves a card out of the total, a skip ticks one off.
 #[test]
-fn the_horizon_counts_what_is_left_today() {
+fn the_tally_counts_what_is_done() {
     let mut harness = tray_harness(shell(Screen::InTray, "tray_count"));
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+    assert!(tallied(&harness, 0, TRAY_CARDS));
 
     press(&mut harness, Key::L);
-    assert!(is_shown(&harness, &format!("{} to decide", TRAY_CARDS - 1)));
+    assert!(tallied(&harness, 0, TRAY_CARDS - 1));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::N);
+    assert!(tallied(&harness, 1, TRAY_CARDS - 2));
 }
 
 #[test]
-fn the_return_chip_brings_set_aside_cards_back_without_a_run() {
-    let mut shell = shell(Screen::InTray, "tray_return_chip");
+fn bring_back_returns_set_aside_cards_without_a_run() {
+    let mut shell = shell(Screen::InTray, "tray_bring_back_row");
     let started = SharedSink::default();
     *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
     let mut harness = tray_harness(shell);
     press(&mut harness, Key::L);
+    assert!(is_shown(&harness, "1 set aside, back tomorrow: Harbor Bank. Bring it back now."));
 
-    harness.get_by_label_contains("1 set aside, back tomorrow: Harbor Bank").click();
+    harness.get_by_label("Bring back").click();
     harness.run_steps(3);
 
     assert!(is_shown(&harness, HARBOR), "the card brought back is on top again");
-    assert!(is_shown(&harness, &format!("{TRAY_CARDS} to decide")));
+    assert!(tallied(&harness, 0, TRAY_CARDS));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
-    assert!(!is_shown(&harness, "All commands"), "the chip opens no launcher");
-    assert!(started.lock().unwrap().is_none(), "the chip starts no run");
+    assert!(!is_shown(&harness, "All commands"), "the row opens no launcher");
+    assert!(started.lock().unwrap().is_none(), "the row starts no run");
+}
+
+/// With the rail beside the card and nothing above it, a new match reads down to why it fits before any scroll.
+#[test]
+fn a_triage_card_shows_why_it_fits_without_scrolling() {
+    let mut harness = tray_harness(shell(Screen::InTray, "tray_why_it_fits"));
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    let why = harness.get_by_label("Why it fits").rect();
+    let footer = harness.get_by_label("Draft application…").rect();
+    assert!(why.bottom() < footer.top(), "Why it fits at {why:?} sits above the footer at {footer:?}");
 }
 
 /// The top of the dealt card's tab. Only the card's body scrolls, so a decision never moves it.
@@ -1308,22 +1330,20 @@ fn a_logged_offer_shows_once_above_the_log() {
     let logged = harness.get_by_label("Meridian Rail Systems").rect();
     assert!(row.bottom() <= logged.top(), "the undo row at {row:?} heads the log row at {logged:?}");
     assert!(is_shown(&harness, "Skipped"));
-    assert!(!is_shown(&harness, "Nothing yet."));
+    assert!(!is_shown(&harness, "Each decision lands here. U undoes the last one."));
 }
 
 #[test]
-fn overdue_cards_show_in_todays_cell() {
+fn overdue_cards_lead_coming_up() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
-    assert!(harness.query_by_label_contains(" overdue").is_some());
-    assert!(is_shown(&harness, "No other deadlines in the next 14 days"));
-    assert!(!is_shown(&harness, "Harbor Bank deadline"));
+    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late"));
+    assert!(is_shown(&harness, "Nothing else dated before Fri 20 Nov."), "late rows leave the next two weeks empty");
 }
 
 #[test]
 fn an_empty_tray_says_nothing_is_due() {
     let harness = tray_harness(empty_shell("tray_empty"));
-    assert!(is_shown(&harness, "0 to decide"));
-    assert!(is_shown(&harness, "No deadlines in the next 14 days"));
+    assert!(is_shown(&harness, "No deadlines in the next two weeks."));
 }
 
 fn tray_after(mut harness: Harness, keys: &[Key], name: &str) {

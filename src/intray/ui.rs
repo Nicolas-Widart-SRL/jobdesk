@@ -1,12 +1,12 @@
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, ScrollArea, Ui};
 
-use crate::intray::application::{Action, Body, Card, CardKind, Check, GateRow, HORIZON_DAYS, InTray, Mark, Queue, Request, SkipReason, UndoOffer};
+use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, Check, GateRow, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
-    CheckMark, DealLook, Ink, TabInk, Tone, Type, alert, button, card_tab, check_tag, clear_panel, code_box, command_button, day_stamp, deal, divider, horizon as horizon_strip, horizon_count,
-    horizon_day, horizon_mark as strip_mark, horizon_return, key_button, lead_line, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, reveal_command, rich,
-    side_column, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
+    AgendaEnd, CheckMark, DealLook, Ink, TabInk, Tone, Type, agenda_return, agenda_row, alert, button, card_tab, check_tag, clear_panel, code_box, command_button, day_stamp, deal, divider,
+    fat_tally, key_button, lead_line, muted, page_body, panel_body, panel_header, primary_button, primary_key_button, reveal_command, rich, side_column, slip, stamp, stamped_head, strong,
+    undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, PICK_ROW_INLINE, RAIL_GAP, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -14,6 +14,8 @@ const STAMP_GAP: f32 = 14.0;
 /// Under every score, whatever the take says: the score rests on the job ad and nothing else.
 const SCORE_SOURCE: &str = "Job ad only";
 const CODE_HEIGHT: f32 = 150.0;
+/// The room above the line that closes Coming up.
+const CLOSING_GAP: f32 = 6.0;
 
 enum Pressed {
     Act(Action),
@@ -25,13 +27,13 @@ enum Pressed {
     BringAll,
 }
 
-/// A kind's name, its tab's ink and its colour on the strip.
-/// Only what Claude asks of the user takes the stamp, on the tab: those cards hold a paused run. The strip keeps status tones.
-fn kind_look(kind: CardKind) -> (&'static str, TabInk, Tone) {
-    let toned = |name, tone| (name, TabInk::Tone(tone), tone);
+/// A kind's name and its tab's ink.
+/// Only what Claude asks of the user takes the stamp: those cards hold a paused run.
+fn kind_look(kind: CardKind) -> (&'static str, TabInk) {
+    let toned = |name, tone| (name, TabInk::Tone(tone));
     match kind {
-        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp, Tone::Interview),
-        CardKind::Turn => ("Your turn", TabInk::Stamp, Tone::Turn),
+        CardKind::Permission | CardKind::Question => ("Claude asks", TabInk::Stamp),
+        CardKind::Turn => ("Your turn", TabInk::Stamp),
         CardKind::Send => toned("Ready to send", Tone::Drafted),
         CardKind::Triage => toned("New match", Tone::Active),
         CardKind::Prep => toned("Interview prep", Tone::Interview),
@@ -39,14 +41,6 @@ fn kind_look(kind: CardKind) -> (&'static str, TabInk, Tone) {
         CardKind::GuardFlag => toned("Check this ad", Tone::Interview),
         CardKind::FollowUp => toned("Follow up", Tone::Active),
         CardKind::Close => toned("Close it?", Tone::Plain),
-    }
-}
-
-/// What `n` cards of a kind are called in the day's count: the tag in lower case, except for turns, which are replies.
-fn count_noun(kind: CardKind, n: usize) -> String {
-    match kind {
-        CardKind::Turn => (if n == 1 { "reply" } else { "replies" }).to_owned(),
-        _ => kind_look(kind).0.to_lowercase(),
     }
 }
 
@@ -110,10 +104,7 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
         if let Some(issue) = tray.issue() {
             alert(ui, issue);
         }
-        horizon(ui, queue, keys, &mut pressed);
-        ui.add_space(12.0);
-
-        side_column("tray_side", TRAY_RAIL).show(ui, |ui| cleared(ui, queue, &mut pressed));
+        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| match top {
             Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
             None => {
@@ -153,56 +144,10 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
     None
 }
 
-/// `active` is off while a dialog covers the tray, so a focused chip keeps its tip to itself.
-fn horizon(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
-    let days: Vec<_> = (0..HORIZON_DAYS as u64).map(|offset| queue.today + chrono::Days::new(offset)).collect();
-    let note = queue.horizon_note();
-    let tomorrow = queue.today + chrono::Days::new(1);
-    horizon_strip(ui, &days, note.as_deref(), |ui, day, today| {
-        horizon_day(ui, &day.format("%a %-d").to_string(), today);
-        for mark in queue.marks.iter().filter(|mark| mark.on == *day) {
-            horizon_mark(ui, mark, pressed);
-        }
-        if today {
-            let kinds: Vec<(usize, String)> = queue.by_kind().into_iter().map(|(n, kind)| (n, kind.map_or("other".to_owned(), |kind| count_noun(kind, n)))).collect();
-            let kinds: Vec<(usize, &str)> = kinds.iter().map(|(n, kind)| (*n, kind.as_str())).collect();
-            horizon_count(ui, queue.cards.len(), queue.overdue(), &kinds);
-        } else if *day == tomorrow && !queue.set_aside.is_empty() {
-            return_chip(ui, queue, active, pressed);
-        }
-    });
-}
-
-/// Names come from postings, so they show as plain labels only.
-fn return_chip(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
-    let n = queue.set_aside.len();
-    let names = queue.set_aside_distinct();
-    let pronoun = if n == 1 { "it" } else { "them" };
-    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", names.join(", "));
-    let chip = horizon_return(ui, &format!("{n} back"), &label, active, |ui| {
-        strong(ui, "Set aside with Later");
-        for name in &names {
-            ui.label(*name);
-        }
-        ui.add_space(4.0);
-        ui.label(rich(ui, format!("Back in the tray tomorrow. Click to bring {pronoun} back now."), Type::NOTE, Ink::Muted));
-    });
-    if chip.clicked() {
-        *pressed = Some(Pressed::BringAll);
-    }
-}
-
-fn horizon_mark(ui: &mut Ui, mark: &Mark, pressed: &mut Option<Pressed>) {
-    let tone = mark.active.then(|| kind_look(mark.kind).2);
-    if strip_mark(ui, mark.label.as_str(), tone).clicked() {
-        *pressed = Some(Pressed::Bring(mark.key.clone()));
-    }
-}
-
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
 /// The card takes the height left, so its actions stay in view however long its body is.
 fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<String>, pressed: &mut Option<Pressed>) {
-    let (kind, ink, _) = kind_look(card.kind);
+    let (kind, ink) = kind_look(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     let tab = ui
         .horizontal(|ui| {
@@ -409,21 +354,39 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
+/// Done today over Coming up. The rail sits outside the card's scroll, so the undo row at its top stays in view.
+/// It scrolls on its own when a long log pushes Coming up past the window. `active` is off while a dialog covers the tray.
+fn rail(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+    ScrollArea::vertical().id_salt("tray_rail").auto_shrink([false, false]).show(ui, |ui| {
+        done_today(ui, queue, pressed);
+        ui.add_space(RAIL_GAP);
+        coming_up(ui, queue, active, pressed);
+    });
+}
+
 /// The last decision heads the log while it can be undone, so its row is not drawn twice.
-/// Later is never logged: its row heads the rail without counting. The rail sits outside the card's scroll, so the row stays in view.
-fn cleared(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
+/// Later is never logged: its row heads the log without counting, and the tally leaves the card out.
+fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     slip(ui, |ui| {
-        let count = (!queue.cleared.is_empty()).then(|| queue.cleared.len().to_string());
-        panel_header(ui, "Cleared today", count.as_deref());
+        let tally = queue.tally();
+        let count = (tally.total > 0).then(|| format!("{} of {}", tally.done, tally.total));
+        panel_header(ui, "Done today", count.as_deref());
         let rows = queue.log_under();
         let last = rows.is_empty();
-        match &queue.undo {
-            Some(offer) => undo(ui, offer, last, pressed),
-            None if last => panel_body(ui, |ui| {
+        let empty = queue.undo.is_none() && last;
+        if tally.total > 0 || empty {
+            panel_body(ui, |ui| {
                 ui.set_width(ui.available_width());
-                muted(ui, "Nothing yet.");
-            }),
-            None => {}
+                if tally.total > 0 {
+                    fat_tally(ui, tally.done, tally.total, Ink::Text);
+                }
+                if empty {
+                    ui.add(egui::Label::new(rich(ui, "Each decision lands here. U undoes the last one.", Type::NOTE, Ink::Muted)).wrap());
+                }
+            });
+        }
+        if let Some(offer) = &queue.undo {
+            undo(ui, offer, last, pressed);
         }
         if last {
             return;
@@ -440,6 +403,71 @@ fn cleared(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     });
 }
 
+/// Rows and the return row only reorder the queue: none opens the launcher or starts a run.
+fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, pressed: &mut Option<Pressed>) {
+    let agenda = queue.agenda();
+    slip(ui, |ui| {
+        panel_header(ui, "Coming up", Some("2 weeks"));
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if let Some(returning) = &agenda.returning {
+                return_row(ui, returning, active, pressed);
+            }
+            for (index, row) in agenda.rows.iter().enumerate() {
+                agenda_line(ui, row, index == 0 && agenda.returning.is_none(), pressed);
+            }
+            if agenda.returning.is_some() || !agenda.rows.is_empty() {
+                divider(ui);
+                ui.add_space(CLOSING_GAP);
+            }
+            // The line starts under the rows' day column.
+            ui.horizontal(|ui| {
+                ui.add_space(PICK_ROW_INLINE);
+                ui.add(egui::Label::new(rich(ui, agenda.closing.as_str(), Type::NOTE, Ink::Muted)).wrap());
+            });
+        });
+    });
+}
+
+/// Names come from postings, so they show as plain labels only.
+fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Option<Pressed>) {
+    let n = returning.count;
+    let (verb, pronoun) = if n == 1 { ("comes", "it") } else { ("come", "them") };
+    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", returning.names.join(", "));
+    let day = returning.on.format("%a %-d").to_string();
+    let press = agenda_return(ui, &day, &format!("{n} {verb} back"), "Bring back", &label, active, |ui| {
+        strong(ui, "Set aside with Later");
+        for name in &returning.names {
+            ui.label(name.as_str());
+        }
+        ui.add_space(4.0);
+        ui.label(rich(ui, format!("Back in the tray tomorrow. Bring {pronoun} back to decide today."), Type::NOTE, Ink::Muted));
+    });
+    if press.row || press.button {
+        *pressed = Some(Pressed::BringAll);
+    }
+}
+
+/// A row pulls its card back on top, unless the card is decided. The text names a company, so it shows as plain text.
+fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<Pressed>) {
+    let late = match row.state {
+        RowState::Late(1) => "1 day late".to_owned(),
+        RowState::Late(days) => format!("{days} days late"),
+        _ => String::new(),
+    };
+    let end = match row.state {
+        RowState::Late(_) => AgendaEnd::Late(&late),
+        RowState::Now => AgendaEnd::Now,
+        RowState::Done => AgendaEnd::Done,
+        RowState::Waiting => AgendaEnd::Nothing,
+    };
+    let press = agenda_row(ui, &row.on.format("%a %-d").to_string(), &row.text, end, first);
+    if press.row && row.state != RowState::Done {
+        *pressed = Some(Pressed::Bring(row.key.clone()));
+    }
+}
+
 /// The reasons show only on a skip. `last` rounds the row's foot when no log row follows it.
 fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed>) {
     let reasons = SkipReason::ALL.map(|reason| (reason.label(), offer.reason == Some(reason)));
@@ -449,17 +477,5 @@ fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed
         *pressed = Some(Pressed::Undo);
     } else if let Some(index) = press.toggle {
         *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn turns_are_counted_as_replies() {
-        assert_eq!(count_noun(CardKind::Turn, 1), "reply");
-        assert_eq!(count_noun(CardKind::Turn, 2), "replies");
-        assert_eq!(count_noun(CardKind::GuardFlag, 2), "guard flag");
     }
 }

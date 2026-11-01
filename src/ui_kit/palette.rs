@@ -175,6 +175,8 @@ pub fn install_theme(ctx: &Context) {
             style.spacing.item_spacing = egui::vec2(ROW_GAP, ITEM_GAP);
             style.spacing.button_padding = egui::vec2(BUTTON_PADDING, 5.0);
             style.spacing.interact_size.y = 26.0;
+            // The bar floats and takes no room, but it stays drawn at rest, so a column that scrolls shows it before any hover.
+            style.spacing.scroll.dormant_handle_opacity = 0.6;
             style.spacing.scroll.fade.strength = 0.0;
             // A label takes no click, so a click on a row's text picks the row. `copyable` turns selection back on.
             style.interaction.selectable_labels = false;

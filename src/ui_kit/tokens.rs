@@ -89,6 +89,8 @@ pub const AGENDA_DAY_WIDTH: f32 = 50.0;
 pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 /// The stamp-ink edge on a card that waits on the user.
 pub const WAITS_EDGE: f32 = 3.0;
+/// The ink edge at the leading side of a picked row.
+pub const PICK_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
 /// The room between a step's knot and its words.

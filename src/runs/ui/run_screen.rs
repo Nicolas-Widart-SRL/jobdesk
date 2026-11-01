@@ -495,7 +495,8 @@ impl RunScreen {
                 step_line(ui, None, if part.actions == 0 { "Details" } else { "Actions" }, "", Some((text, open)))
             }),
         };
-        if clicked.is_some_and(|toggle| toggle.clicked()) {
+        // A click anywhere on the step's line toggles it, as a click on its toggle does.
+        if clicked.is_some_and(|line| line.clicked()) {
             if open {
                 self.opened.remove(&key);
             } else {

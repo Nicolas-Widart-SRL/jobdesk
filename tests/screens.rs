@@ -609,6 +609,26 @@ fn actions_open_only_when_asked() {
     assert_eq!(named(&harness), 0);
 }
 
+/// A step's whole line is its toggle's hit area: a click on its name opens its actions, and a second one closes them.
+#[test]
+fn a_click_on_a_step_name_opens_its_actions() {
+    let mut shell = shell(Screen::Runs, "step_name_click");
+    *shell.desk_slot() = Some(apply_run(stop_point()));
+    let mut harness = tray_harness(shell);
+    let file = "main_kestrel_solution_architect.tex";
+    let named = |harness: &Harness| harness.query_all_by_label_contains(file).count();
+    assert_eq!(named(&harness), 0, "nowhere while every toggle is closed");
+
+    harness.get_by_label("Draft").click();
+    harness.run_steps(3);
+    assert_eq!(named(&harness), 1, "Draft's Write row");
+    assert!(is_shown(&harness, "Hide actions"));
+
+    harness.get_by_label("Draft").click();
+    harness.run_steps(3);
+    assert_eq!(named(&harness), 0);
+}
+
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
 /// Both stories are taller than their room, so they have to scroll: the stop in the smallest window, and a long stop in the default one.
 #[test]

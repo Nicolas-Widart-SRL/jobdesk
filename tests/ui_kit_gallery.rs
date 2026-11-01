@@ -33,6 +33,9 @@ const TONES: [(&str, Tone); 8] = [
 
 const SWATCHES_PER_ROW: usize = 7;
 
+/// The row the pointer rests on in the snapshots.
+const HOVERED_ROW: &str = "/match    Pick row, hovered";
+
 fn swatches(ui: &mut Ui) {
     let p = Palette::of(ui);
     let colors = [
@@ -207,6 +210,7 @@ fn sections(ui: &mut Ui) {
             divider(ui);
             select_row(ui, "/rank     Pick row, on", Type::MONO, true);
             select_row(ui, "/scrape   Pick row, off", Type::MONO, false);
+            select_row(ui, HOVERED_ROW, Type::MONO, false);
             command_row(ui, "/rank", "Score new postings", "seen_jobs.json", true);
             command_row(ui, "/apply", "Evaluate and draft", "cv, cover_letters, tracker", false);
             panel_body(ui, |ui| {
@@ -531,6 +535,9 @@ fn render(theme: Theme, name: &str) {
             jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
         });
     harness.run_steps(3);
+    // The pointer rests on one row, so the sheet shows hover beside picked.
+    harness.get_by_label(HOVERED_ROW).hover();
+    harness.run_steps(2);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 

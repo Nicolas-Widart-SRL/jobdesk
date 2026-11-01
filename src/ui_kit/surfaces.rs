@@ -6,7 +6,7 @@ use egui::{
 };
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{interactive, pointer_over};
+use crate::ui_kit::controls::{interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
@@ -364,21 +364,24 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
     .inner
 }
 
-/// A whole row that picks something, such as a run in a list.
+/// A whole row that picks something, such as a run in a list. Picked, it takes an ink edge at its leading side.
 pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let response = ui
         .scope_builder(clickable(), |ui| {
-            let lit = on || pointer_over(&ui.response());
-            let frame = Frame::new().corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
-            let frame = if lit { frame.fill(p.panel) } else { frame };
-            frame.show(ui, |ui| {
+            let row = ui.response();
+            let look = pick_look(&p, on, pointer_over(&row), pressed(&row));
+            let frame = Frame::new().fill(look.fill).corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
+            let shown = frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 add(ui);
             });
+            if let Some(edge) = look.edge {
+                paint_pick_edge(ui, shown.response.rect, RADIUS_PANEL, edge);
+            }
         })
         .response;
-    interactive(ui, &response, RADIUS_PANEL);
+    interactive_row(ui, &response, RADIUS_PANEL);
     response
 }
 
@@ -551,6 +554,7 @@ pub struct CardLook {
 }
 
 /// One application on a board. Clicking anywhere on it counts. `spoken` names the card for screen readers.
+/// Picked, its border takes ink, so its left edge stays free for the `turn` mark.
 pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let response = ui
@@ -558,8 +562,10 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             if look.faded {
                 ui.multiply_opacity(FADED_OPACITY);
             }
-            let fill = if look.on || pointer_over(&ui.response()) { p.raised } else { p.card };
-            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
+            let card = ui.response();
+            let pick = pick_look(&p, look.on, pointer_over(&card), pressed(&card));
+            let fill = if pick.fill == Color32::TRANSPARENT { p.card } else { pick.fill };
+            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, pick.edge.unwrap_or(p.line))).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 2.0;
                 add(ui);
@@ -572,7 +578,7 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             }
         })
         .response;
-    interactive(ui, &response, RADIUS_CARD);
+    interactive_row(ui, &response, RADIUS_CARD);
     let spoken = if look.waits { format!("{spoken}, waits for you in Today") } else { spoken.to_owned() };
     response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &spoken));
     response
@@ -763,11 +769,19 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
 }
 
 /// One plain line for a step: its knot, its name, one sentence and an optional toggle on the right, such as "Show 3 actions".
-/// With no knot, its place stays empty, so names line up. Returns the toggle's response.
+/// With no knot, its place stays empty, so names line up.
+/// With a toggle, the whole line is its hit area: a click anywhere on it counts, and the line lights up under the pointer.
+/// The toggle stays the line's one keyboard stop and shows its state. Returns a response that reports a click on either.
 pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sentence: &str, toggle: Option<(&str, bool)>) -> Option<Response> {
     let width = ui.available_width();
     let name_ink = if knot.is_some_and(|(_, state)| state == KnotState::Waiting) { Ink::Status(Tone::Turn) } else { Ink::Text };
-    ui.allocate_ui_with_layout(vec2(width, STEP_LINE_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(width, STEP_LINE_HEIGHT));
+    // Sensed before the toggle is added, so the toggle sits on top and takes its own clicks.
+    // It takes no focus, because the toggle already gives the line its keyboard stop.
+    let line = toggle.map(|_| ui.interact(rect, ui.next_auto_id().with("step_line"), Sense::CLICK));
+    let fill = ui.painter().add(egui::Shape::Noop);
+    // The line paints its own fill under what it holds, so its toggle and text stand on a surface.
+    let shown = ui.scope_builder(surface().max_rect(rect).layout(Layout::right_to_left(Align::Center)), |ui| {
         ui.set_min_size(vec2(width, STEP_LINE_HEIGHT));
         ui.spacing_mut().item_spacing.x = STEP_LINE_GAP;
         let toggled = toggle.map(|(text, on)| crate::ui_kit::small_toggle(ui, text, on));
@@ -787,8 +801,14 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
             add_cut_text(ui, sentence, Type::BODY, Ink::Text);
         });
         toggled
-    })
-    .inner
+    });
+    let (line, toggled) = (line?, shown.inner?);
+    let p = Palette::of(ui);
+    // Over the toggle, the line stays lit: the toggle is part of it.
+    let look = pick_look(&p, false, pointer_over(&line) || pointer_over(&toggled), pressed(&line));
+    ui.painter().set(fill, egui::epaint::RectShape::filled(rect, RADIUS_CARD, look.fill));
+    interactive(ui, &line, RADIUS_CARD);
+    Some(line.union(toggled))
 }
 
 #[cfg(test)]
@@ -872,19 +892,34 @@ mod tests {
 
     #[test]
     fn a_step_line_reports_its_toggle() {
-        let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+        let clicked = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = std::rc::Rc::clone(&clicked);
         let mut harness = Harness::builder().with_size([700.0, 100.0]).with_context_setup(setup).build_ui(move |ui| {
-            if step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV.", Some(("Show 3 actions", false))).is_some_and(|toggle| toggle.clicked()) {
-                seen.set(true);
+            if step_line(ui, Some(("2", KnotState::Working)), "Draft", "Wrote the CV.", Some(("Show 3 actions", false))).is_some_and(|line| line.clicked()) {
+                seen.set(seen.get() + 1);
             }
         });
         harness.step();
         harness.get_by_label("2, working");
-        harness.get_by_label("Draft");
         harness.get_by_label("Show 3 actions").click();
         harness.run();
-        assert!(clicked.get());
+        assert_eq!(clicked.get(), 1, "a click on the toggle");
+        harness.get_by_label("Draft").click();
+        harness.run();
+        assert_eq!(clicked.get(), 2, "a click on the step's name");
+        harness.get_by_label("Wrote the CV.").click();
+        harness.run();
+        assert_eq!(clicked.get(), 3, "a click on its sentence");
+    }
+
+    #[test]
+    fn a_step_line_without_a_toggle_takes_no_click() {
+        let mut harness = Harness::builder().with_size([700.0, 100.0]).with_context_setup(setup).build_ui(|ui| {
+            assert!(step_line(ui, None, "You", "Yes, go ahead.", None).is_none());
+        });
+        harness.step();
+        harness.get_by_label("You").click();
+        harness.run();
     }
 
     #[test]

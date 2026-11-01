@@ -854,13 +854,13 @@ impl RunScreen {
         });
     }
 
-    /// One run in the recent list. The picked run reads in full ink, the others muted.
+    /// One run in the recent list. The picked run reads in full ink, the others muted. The status badge sits at the right edge so the badges' right edges line up, with the cost left of it.
     fn recent_row(&self, ui: &mut Ui, run: &Run, on: bool) -> bool {
         let response = pick_row(ui, on, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)));
                     status_tag(ui, run);
+                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)));
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let ink = if on { Ink::Text } else { Ink::Muted };
                         ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());

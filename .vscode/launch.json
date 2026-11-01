@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug jobdesk",
+            "cargo": {
+                "args": ["build", "--bin=jobdesk", "--package=jobdesk"],
+                "filter": { "name": "jobdesk", "kind": "bin" }
+            },
+            "args": ["--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug jobdesk (release)",
+            "cargo": {
+                "args": ["build", "--release", "--bin=jobdesk", "--package=jobdesk"],
+                "filter": { "name": "jobdesk", "kind": "bin" }
+            },
+            "args": ["--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

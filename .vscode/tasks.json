@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "jobdesk: watch",
+            "detail": "Rebuild and restart the app when src, assets or Cargo files change. Needs watchexec (brew install watchexec).",
+            "type": "shell",
+            "command": "watchexec",
+            "args": [
+                "--restart",
+                "--watch", "src",
+                "--watch", "assets",
+                "--watch", "Cargo.toml",
+                "--watch", "Cargo.lock",
+                "--",
+                "cargo", "run", "--", "--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"
+            ],
+            "isBackground": true,
+            "problemMatcher": ["$rustc-watch"],
+            "presentation": { "panel": "dedicated", "clear": true }
+        },
+        {
+            "label": "jobdesk: run",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["run", "--", "--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "problemMatcher": ["$rustc"],
+            "presentation": { "panel": "dedicated" }
+        }
+    ]
+}

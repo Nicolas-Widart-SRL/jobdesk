@@ -18,6 +18,7 @@ Write the message the user pastes in GitHub's squash merge box:
 
 - **Subject**: one Conventional Commits subject, at most 72 characters, ending in ` (#<number>)`.
   Take the type that sets the version: `feat` when any commit is a `feat`, else `fix`, else the most common type.
+  Leave out commits that fix review findings when you pick the type.
 - **Body**: a short paragraph on what the change does for the user, then one bullet per change
   a reader of the changelog cares about, in plain words. Wrap lines at 72 characters.
   Merge commits that touch the same thing. Drop review fixes, formatting and snapshot updates.
@@ -25,3 +26,4 @@ Write the message the user pastes in GitHub's squash merge box:
 
 Print the subject and the body in one code block, and nothing else.
 When the lead runs this skill in step 7 or 8 of `ship`, it adds its own lines around the block, as that step says.
+In step 8, the lead holds the block back when the message did not change, as that step says.

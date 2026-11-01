@@ -33,6 +33,20 @@ pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
     (!answered).then_some(stop)
 }
 
+/// Claude ended its turn and wants something from the user: a known stop, a closing question,
+/// or a stop part-way through the command's steps. An open prompt always does.
+/// A run that ended its last step, or has no steps, without asking anything is done, not waiting.
+pub fn wants_reply(run: &Run) -> bool {
+    if run.needs_user() {
+        return true;
+    }
+    if !run.awaits_reply() {
+        return false;
+    }
+    let unfinished = run.steps.as_ref().is_some_and(|rail| !rail.is_complete());
+    unfinished || stop_point(run).is_some() || closing_question(run).is_some()
+}
+
 /// The last paragraph of this turn's last top-level message, when it asks something.
 /// Claude's text is untrusted: hidden characters are dropped, and a statement is not passed off as a question.
 pub fn closing_question(run: &Run) -> Option<ClosingQuestion> {
@@ -277,6 +291,44 @@ mod tests {
         reads(&mut run, "notes.md");
         ends_turn(&mut run);
         assert_eq!(closing_question(&run), None);
+    }
+
+    #[test]
+    fn a_finished_run_that_asks_nothing_does_not_want_a_reply() {
+        let mut rank = run("/rank");
+        rank.apply(AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "python3 rank_state.py apply".into(), nested: false });
+        says(&mut rank, "Ranked 12 postings.");
+        ends_turn(&mut rank);
+        assert!(rank.steps.as_ref().unwrap().is_complete());
+        assert!(!wants_reply(&rank));
+
+        let mut unlisted = run("/outcome tessel");
+        says(&mut unlisted, "Logged the interview outcome.");
+        ends_turn(&mut unlisted);
+        assert!(!wants_reply(&unlisted), "no rail and no question");
+    }
+
+    #[test]
+    fn a_question_at_the_last_step_wants_a_reply() {
+        let mut run = run("/apply x");
+        run.apply(AgentEvent::ToolStarted { id: "t".into(), name: "Edit".into(), summary: "job_search_tracker.csv".into(), nested: false });
+        says(&mut run, "The tracker is updated. Shall I open the dossier?");
+        ends_turn(&mut run);
+        assert!(run.steps.as_ref().unwrap().is_complete());
+        assert!(wants_reply(&run));
+    }
+
+    #[test]
+    fn the_stop_and_a_prompt_want_a_reply() {
+        let mut stop = run("/apply x");
+        reads(&mut stop, ".claude/skills/a/04-job-evaluation.md");
+        ends_turn(&mut stop);
+        assert!(stop_point(&stop).is_some());
+        assert!(wants_reply(&stop));
+
+        let mut asking = run("/rank");
+        asking.apply(AgentEvent::PromptRaised(prompt()));
+        assert!(wants_reply(&asking));
     }
 
     #[test]

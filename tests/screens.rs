@@ -66,6 +66,35 @@ impl AgentSession for ScriptedSession {
     fn interrupt(&mut self) {}
 }
 
+/// What a recording gateway saw: each process it started, and each message sent to a live one.
+#[derive(Default)]
+struct Calls {
+    starts: usize,
+    sent: Vec<String>,
+}
+
+type SharedCalls = Arc<Mutex<Calls>>;
+
+/// A scripted gateway that also records its calls.
+struct RecordingGateway(SharedSink, SharedCalls);
+struct RecordingSession(SharedCalls);
+
+impl AgentGateway for RecordingGateway {
+    fn start(&self, _: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
+        self.1.lock().unwrap().starts += 1;
+        *self.0.lock().unwrap() = Some(sink);
+        Box::new(RecordingSession(Arc::clone(&self.1)))
+    }
+}
+
+impl AgentSession for RecordingSession {
+    fn send_message(&mut self, text: &str) {
+        self.0.lock().unwrap().sent.push(text.to_owned());
+    }
+    fn respond(&mut self, _: &Prompt, _: &Decision) {}
+    fn interrupt(&mut self) {}
+}
+
 fn tool(id: &str, name: &str, summary: &str, nested: bool) -> AgentEvent {
     AgentEvent::ToolStarted { id: id.into(), name: name.into(), summary: summary.into(), nested }
 }
@@ -173,8 +202,13 @@ const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestr
 
 /// /apply stopped after Evaluate, with Claude's question closing its evaluation.
 fn apply_stop_after_evaluate() -> RunDesk {
+    stop_after_evaluate(SharedCalls::default())
+}
+
+/// The same stop, on a gateway that records into `calls`.
+fn stop_after_evaluate(calls: SharedCalls) -> RunDesk {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), calls)), Arc::new(|| {}));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
@@ -328,9 +362,12 @@ fn a_stop_point_fits_the_smallest_window() {
 #[test]
 fn a_quick_reply_is_sent_as_a_reply() {
     let mut shell = shell(Screen::Runs, "quick_reply");
-    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let calls = SharedCalls::default();
+    *shell.desk_slot() = Some(stop_after_evaluate(Arc::clone(&calls)));
     let mut harness = tray_harness(shell);
     let lines = harness.query_all_by_label(APPLY_LINE).count();
+    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("half typed");
+    harness.run_steps(2);
 
     harness.get_by_label("Go ahead with the draft").click();
     harness.run_steps(3);
@@ -339,6 +376,46 @@ fn a_quick_reply_is_sent_as_a_reply() {
     assert!(!is_shown(&harness, "Go ahead with the draft"));
     assert!(!is_shown(&harness, "Stop here"));
     assert_eq!(harness.query_all_by_label(APPLY_LINE).count(), lines, "Recent runs still lists one /apply run");
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.starts, 1, "no other process started");
+    assert_eq!(calls.sent, ["Yes, proceed with drafting."], "the reply reached the live session");
+    drop(calls);
+    assert!(harness.query_by_role(egui::accesskit::Role::TextInput).is_none_or(|field| field.value().as_deref().unwrap_or_default().is_empty()), "the field is cleared");
+}
+
+/// While another run works, the stop's replies wait, and the bar says why.
+#[test]
+fn replies_wait_while_another_run_works() {
+    let mut shell = shell(Screen::Runs, "replies_blocked");
+    let mut desk = apply_stop_after_evaluate();
+    desk.poll();
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    let mut harness = tray_harness(shell);
+    // The stopped run is the one row tagged Your turn: the newest run, shown first, is starting.
+    harness.get_by_label("Your turn").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, "Another run is working. You can reply when it finishes."));
+    for label in ["Go ahead with the draft", "Stop here", "Send"] {
+        assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label} is disabled");
+    }
+}
+
+#[test]
+fn esc_keeps_the_session_open() {
+    let mut shell = shell(Screen::Runs, "end_session_esc");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("End session…").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Keep it open"));
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep it open"));
+    assert!(harness.query_all_by_label("Your turn").count() > 0);
+    assert!(is_shown(&harness, "End session…"));
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use chrono::NaiveDateTime;
 
+use crate::runs::application::turn::wants_reply;
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, PromptKind, Run, RunHistory, RunRequest};
 
 const HISTORY_LIMIT: usize = 50;
@@ -73,9 +74,9 @@ impl RunDesk {
         !self.sessions.is_empty()
     }
 
-    /// Runs where it is the user's turn: a prompt is open, or Claude waits for a reply.
+    /// Runs where Claude waits on the user, as `wants_reply` says.
     pub fn waiting_count(&self) -> usize {
-        self.runs.iter().filter(|run| run.is_your_turn()).count()
+        self.runs.iter().filter(|run| wants_reply(run)).count()
     }
 
     /// Applies what arrived from the agent processes. Call once per frame.

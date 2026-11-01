@@ -51,7 +51,7 @@ Never write a value from a real job search in it.
 - **Goal**: one sentence.
 - **Steps**: numbered. Each step has a title as a Conventional Commits subject, the files,
   what to change, the check, and the written-down and risky marks when they apply.
-- **Docs**: which of `README.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
+- **Docs**: which of `README.md`, `docs/guide.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
 - **Risks**: open questions the lead must answer before a builder starts.
 
 Leave trail's "tokens saved" lines out of the report.

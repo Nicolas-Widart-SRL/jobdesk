@@ -26,10 +26,58 @@ pub struct Cleared {
 pub struct Mark {
     pub on: NaiveDate,
     pub label: String,
+    /// The card's own name, for a sentence that names the company.
+    pub name: String,
     pub key: String,
     pub kind: CardKind,
     /// False once decided. A card set aside still counts, so its date stays in view.
     pub active: bool,
+}
+
+/// How many Coming up rows show before the rest are counted.
+pub const AGENDA_ROWS: usize = 6;
+
+/// Today's decisions against the cards dealt today. Cards set aside are in neither number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayTally {
+    pub done: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowState {
+    /// A pending card whose date passed this many days ago.
+    Late(i64),
+    /// The card being read.
+    Now,
+    Done,
+    Waiting,
+}
+
+/// One dated line of Coming up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgendaRow {
+    pub on: NaiveDate,
+    pub text: String,
+    pub key: String,
+    pub state: RowState,
+}
+
+/// The cards set aside, which come back on the next day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Returning {
+    pub on: NaiveDate,
+    pub count: usize,
+    /// Each company once, in the order they first appear.
+    pub names: Vec<String>,
+}
+
+/// What Coming up shows: the return row, the dated rows, and the line that closes the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agenda {
+    pub returning: Option<Returning>,
+    pub rows: Vec<AgendaRow>,
+    pub closing: String,
 }
 
 /// The tray as dealt from one snapshot, top card first.
@@ -114,6 +162,108 @@ impl Queue {
     }
 }
 
+impl Queue {
+    pub fn tally(&self) -> DayTally {
+        let done = self.cleared.len();
+        DayTally { done, total: done + self.cards.len() }
+    }
+
+    pub fn today_headline(&self) -> String {
+        let count = self.cards.len();
+        if count == 0 {
+            "All done for today".to_owned()
+        } else if self.cards.iter().all(|card| card.kind == CardKind::Triage) {
+            if count == 1 { "1 new match to look at".to_owned() } else { format!("{count} new matches to look at") }
+        } else if count == 1 {
+            "1 thing needs you".to_owned()
+        } else {
+            format!("{count} things need you")
+        }
+    }
+
+    /// `missing` names the sources that could not be read, as they should read at the start of a sentence.
+    pub fn today_subtitle(&self, missing: &[&str]) -> String {
+        let done = self.cleared.len();
+        let mut parts: Vec<String> = Vec::new();
+        if self.cards.is_empty() {
+            match done {
+                0 => {}
+                1 => parts.push("1 decision.".to_owned()),
+                _ => parts.push(format!("{done} decisions.")),
+            }
+            let next = self.marks.iter().filter(|mark| mark.active && mark.on >= self.today).min_by_key(|mark| mark.on);
+            match next {
+                Some(mark) => parts.push(format!("Your next deadline is {}, {}.", mark.on.format("%a %-d %b"), mark.name)),
+                None if done == 0 => parts.push("Nothing waits on you.".to_owned()),
+                None => {}
+            }
+            return parts.join(" ");
+        }
+        let minutes: usize = self.cards.iter().map(|card| card.kind.minutes()).sum();
+        parts.push(format!("About {minutes} {}.", if minutes == 1 { "minute" } else { "minutes" }));
+        if done > 0 {
+            parts.push(format!("{done} done so far today."));
+        }
+        match self.overdue() {
+            0 => {}
+            1 => parts.push("1 is past its deadline.".to_owned()),
+            late => parts.push(format!("{late} are past their deadline.")),
+        }
+        if done == 0 && self.cards.iter().all(|card| card.due.is_none()) {
+            parts.push("Nothing has a deadline yet.".to_owned());
+        }
+        if let Some((last, rest)) = missing.split_last() {
+            let names = if rest.is_empty() { (*last).to_owned() } else { format!("{} and {last}", rest.join(", ")) };
+            parts.push(format!("{names} are missing from this list."));
+        }
+        parts.join(" ")
+    }
+
+    /// Late cards first, then the dated marks day by day. Rows show up to `AGENDA_ROWS`, and the rest are counted.
+    pub fn agenda(&self) -> Agenda {
+        let mut late: Vec<AgendaRow> = self
+            .cards
+            .iter()
+            .filter_map(|card| {
+                let due = card.due.as_ref().filter(|due| due.on < self.today)?;
+                Some(AgendaRow { on: due.on, text: due.label.clone(), key: card.key.clone(), state: RowState::Late((self.today - due.on).num_days()) })
+            })
+            .collect();
+        late.sort_by_key(|row| row.on);
+        let position = |key: &str| self.cards.iter().position(|card| card.key == key).unwrap_or(usize::MAX);
+        let mut marks: Vec<&Mark> = self.marks.iter().collect();
+        marks.sort_by_key(|mark| (mark.on, position(&mark.key)));
+        let top = self.cards.first().map(|card| card.key.as_str());
+        let dated = marks.into_iter().map(|mark| {
+            let state = if !mark.active {
+                RowState::Done
+            } else if top == Some(mark.key.as_str()) {
+                RowState::Now
+            } else {
+                RowState::Waiting
+            };
+            AgendaRow { on: mark.on, text: mark.label.clone(), key: mark.key.clone(), state }
+        });
+        let mut rows: Vec<AgendaRow> = late.into_iter().chain(dated).collect();
+        let cut = rows.len().saturating_sub(AGENDA_ROWS);
+        rows.truncate(AGENDA_ROWS);
+        let until = (self.today + chrono::Duration::days(HORIZON_DAYS - 1)).format("%a %-d %b");
+        let closing = if rows.is_empty() {
+            "No deadlines in the next two weeks.".to_owned()
+        } else if cut > 0 {
+            format!("{cut} more before {until}.")
+        } else {
+            format!("Nothing else dated before {until}.")
+        };
+        let returning = (!self.set_aside.is_empty()).then(|| Returning {
+            on: self.today + chrono::Duration::days(1),
+            count: self.set_aside.len(),
+            names: self.set_aside_distinct().into_iter().map(str::to_owned).collect(),
+        });
+        Agenda { returning, rows, closing }
+    }
+}
+
 /// The last decision, for as long as it can be taken back: until the next one, and only on the day it was made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoOffer {
@@ -193,7 +343,7 @@ impl InTray {
             .filter(|card| card.is_on_horizon(today))
             .filter_map(|card| {
                 let due = card.due.as_ref()?;
-                Some(Mark { on: due.on, label: due.label.clone(), key: card.key.clone(), kind: card.kind, active: !self.is_cleared(&card.key, today) })
+                Some(Mark { on: due.on, label: due.label.clone(), name: card.name.clone(), key: card.key.clone(), kind: card.kind, active: !self.is_cleared(&card.key, today) })
             })
             .collect();
         let (aside, mut cards): (Vec<Card>, Vec<Card>) = derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
@@ -927,7 +1077,7 @@ mod tests {
         let late = Queue { cards: vec![pending(CardKind::Triage, Some(today() - chrono::Duration::days(1)))], today: today(), ..Default::default() };
         assert_eq!(late.horizon_note().as_deref(), Some("No other deadlines in the next 14 days"));
 
-        let mark = Mark { on: today(), label: "Acme closes".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
+        let mark = Mark { on: today(), label: "Acme closes".into(), name: "Acme".into(), key: "triage:acme".into(), kind: CardKind::Triage, active: false };
         assert_eq!(Queue { marks: vec![mark], today: today(), ..Default::default() }.horizon_note(), None);
     }
 
@@ -977,5 +1127,137 @@ mod tests {
         assert_eq!(after.overdue(), 0);
         assert_eq!(after.set_aside, ["Juniper"]);
         assert_eq!(after.horizon_note().as_deref(), Some("No deadlines in the next 14 days"));
+    }
+
+    fn day(offset: i64) -> NaiveDate {
+        today() + chrono::Duration::days(offset)
+    }
+
+    fn named(key: &str, name: &str, kind: CardKind, due: Option<(i64, &str)>) -> Card {
+        let card = pending(kind, due.map(|(offset, _)| day(offset)));
+        Card { key: key.into(), name: name.into(), due: due.map(|(offset, label)| Due { on: day(offset), label: label.into() }), ..card }
+    }
+
+    fn marked(key: &str, name: &str, offset: i64, active: bool) -> Mark {
+        Mark { on: day(offset), label: format!("{name} closes"), name: name.into(), key: key.into(), kind: CardKind::Triage, active }
+    }
+
+    fn logged(count: usize) -> Vec<Cleared> {
+        (0..count).map(|at| Cleared { name: format!("Done {at}"), label: "Skipped".into() }).collect()
+    }
+
+    fn today_queue(cards: Vec<Card>) -> Queue {
+        Queue { cards, today: today(), ..Default::default() }
+    }
+
+    #[test]
+    fn today_headline_names_new_matches_when_every_card_is_one() {
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None)]).today_headline(), "1 new match to look at");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Triage, None)]).today_headline(), "2 new matches to look at");
+    }
+
+    #[test]
+    fn today_headline_counts_things_otherwise() {
+        assert_eq!(today_queue(vec![pending(CardKind::Send, None)]).today_headline(), "1 thing needs you");
+        assert_eq!(today_queue(vec![pending(CardKind::Triage, None), pending(CardKind::Close, None)]).today_headline(), "2 things need you");
+    }
+
+    #[test]
+    fn today_headline_is_all_done_with_cards_set_aside() {
+        assert_eq!(today_queue(vec![]).today_headline(), "All done for today");
+        let aside = Queue { set_aside: vec!["Acme".into()], ..today_queue(vec![]) };
+        assert_eq!(aside.today_headline(), "All done for today");
+    }
+
+    #[test]
+    fn today_subtitle_counts_minutes_done_and_overdue() {
+        let due = |offset| Some((offset, "closes"));
+        let cards = vec![named("a", "A", CardKind::Send, due(-1)), named("b", "B", CardKind::Close, due(4))];
+        let one_late = Queue { cleared: logged(3), ..today_queue(cards) };
+        assert_eq!(one_late.today_subtitle(&[]), "About 4 minutes. 3 done so far today. 1 is past its deadline.");
+
+        let cards = vec![named("a", "A", CardKind::Close, due(-3)), named("b", "B", CardKind::Triage, due(-1))];
+        assert_eq!(today_queue(cards).today_subtitle(&[]), "About 2 minutes. 2 are past their deadline.");
+
+        let undated = today_queue(vec![pending(CardKind::Close, None)]);
+        assert_eq!(undated.today_subtitle(&[]), "About 1 minute. Nothing has a deadline yet.");
+
+        let undated_but_started = Queue { cleared: logged(1), ..undated };
+        assert_eq!(undated_but_started.today_subtitle(&[]), "About 1 minute. 1 done so far today.");
+    }
+
+    #[test]
+    fn today_subtitle_names_missing_sources() {
+        let queue = Queue { cleared: logged(1), ..today_queue(vec![pending(CardKind::Close, None)]) };
+        assert_eq!(queue.today_subtitle(&["Applications"]), "About 1 minute. 1 done so far today. Applications are missing from this list.");
+        assert_eq!(queue.today_subtitle(&["Applications", "Jobs"]), "About 1 minute. 1 done so far today. Applications and Jobs are missing from this list.");
+        assert_eq!(queue.today_subtitle(&["Applications", "Jobs", "Tasks"]), "About 1 minute. 1 done so far today. Applications, Jobs and Tasks are missing from this list.");
+    }
+
+    #[test]
+    fn clear_subtitle_names_the_next_deadline() {
+        let marks = vec![marked("late", "Harbor Bank", 1, false), marked("b", "Ardent Software", 6, true), marked("a", "Meridian Rail Systems", 5, true)];
+        let clear = Queue { cleared: logged(11), marks, ..today_queue(vec![]) };
+        assert_eq!(clear.today_subtitle(&[]), "11 decisions. Your next deadline is Thu 5 Nov, Meridian Rail Systems.");
+
+        let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
+        assert_eq!(one.today_subtitle(&[]), "1 decision.");
+
+        let only_deadline = Queue { marks: vec![marked("a", "Acme", 0, true)], ..today_queue(vec![]) };
+        assert_eq!(only_deadline.today_subtitle(&[]), "Your next deadline is Sat 31 Oct, Acme.");
+
+        assert_eq!(today_queue(vec![]).today_subtitle(&[]), "Nothing waits on you.");
+    }
+
+    #[test]
+    fn tally_leaves_out_cards_set_aside() {
+        let queue = Queue { cleared: logged(3), set_aside: vec!["Acme".into(), "Beta".into()], ..today_queue(vec![pending(CardKind::Close, None), pending(CardKind::Close, None)]) };
+        assert_eq!(queue.tally(), DayTally { done: 3, total: 5 });
+        assert_eq!(today_queue(vec![]).tally(), DayTally { done: 0, total: 0 });
+    }
+
+    #[test]
+    fn agenda_puts_late_cards_first_and_marks_now_and_done() {
+        let cards = vec![
+            named("now", "Meridian", CardKind::Send, Some((5, "Meridian closes"))),
+            named("old", "Older", CardKind::Close, Some((-5, "Older closed"))),
+            named("recent", "Recent", CardKind::Close, Some((-1, "Recent closed"))),
+            named("wait", "Waiting", CardKind::Triage, Some((5, "Waiting closes"))),
+        ];
+        let marks = vec![marked("wait", "Waiting", 5, true), marked("gone", "Gone", 2, false), marked("now", "Meridian", 5, true)];
+        let agenda = Queue { marks, ..today_queue(cards) }.agenda();
+
+        let rows: Vec<(&str, RowState)> = agenda.rows.iter().map(|row| (row.key.as_str(), row.state)).collect();
+        assert_eq!(rows, [("old", RowState::Late(5)), ("recent", RowState::Late(1)), ("gone", RowState::Done), ("now", RowState::Now), ("wait", RowState::Waiting)]);
+        assert_eq!(agenda.rows[0].text, "Older closed");
+        assert_eq!(agenda.rows[0].on, day(-5));
+        assert_eq!(agenda.rows[3].text, "Meridian closes");
+        assert_eq!(agenda.closing, "Nothing else dated before Fri 13 Nov.");
+        assert_eq!(agenda.returning, None);
+    }
+
+    #[test]
+    fn agenda_caps_rows_and_counts_the_rest() {
+        let marks = (0..AGENDA_ROWS as i64 + 2).map(|offset| marked(&format!("k{offset}"), "Acme", offset, true)).collect();
+        let agenda = Queue { marks, ..today_queue(vec![]) }.agenda();
+        assert_eq!(agenda.rows.len(), AGENDA_ROWS);
+        assert_eq!(agenda.closing, "2 more before Fri 13 Nov.");
+
+        let exact = (0..AGENDA_ROWS as i64).map(|offset| marked(&format!("k{offset}"), "Acme", offset, true)).collect();
+        assert_eq!(Queue { marks: exact, ..today_queue(vec![]) }.agenda().closing, "Nothing else dated before Fri 13 Nov.");
+    }
+
+    #[test]
+    fn agenda_says_no_deadlines_when_nothing_is_dated() {
+        let agenda = today_queue(vec![pending(CardKind::Triage, None)]).agenda();
+        assert!(agenda.rows.is_empty());
+        assert_eq!(agenda.closing, "No deadlines in the next two weeks.");
+    }
+
+    #[test]
+    fn agenda_offers_tomorrows_return_row() {
+        let queue = Queue { set_aside: vec!["Acme".into(), "Beta".into(), "Acme".into()], ..today_queue(vec![]) };
+        let returning = queue.agenda().returning.unwrap();
+        assert_eq!(returning, Returning { on: day(1), count: 3, names: vec!["Acme".into(), "Beta".into()] });
     }
 }

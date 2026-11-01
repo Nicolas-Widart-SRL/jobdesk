@@ -541,15 +541,15 @@ pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnO
 /// What a screen shows when it has nothing yet: a title, a sentence on what to do, then the actions, all on paper.
 /// The actions only open the launcher: the user starts the run there.
 pub fn empty_state(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui)) {
-    empty_sheet(ui, title, body, Some(Box::new(actions)));
+    empty_sheet(ui, title, body, Some(actions));
 }
 
 /// The same with no actions, such as a lane that is empty with nothing to offer. A blank `body` leaves the sentence out.
 pub fn empty_note(ui: &mut Ui, title: &str, body: &str) {
-    empty_sheet(ui, title, body, None);
+    empty_sheet(ui, title, body, None::<fn(&mut Ui)>);
 }
 
-fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<Box<dyn FnOnce(&mut Ui) + '_>>) {
+fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>) {
     paper(ui, false, |ui| {
         Frame::new().inner_margin(Margin::same(EMPTY_PADDING)).show(ui, |ui| {
             ui.set_max_width(EMPTY_WIDTH);

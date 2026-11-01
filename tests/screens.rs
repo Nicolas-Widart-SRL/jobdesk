@@ -947,6 +947,16 @@ fn is_shown(harness: &Harness, label: &str) -> bool {
     harness.query_by_label(label).is_some()
 }
 
+#[test]
+fn applications_mark_what_waits_in_today() {
+    let harness = tray_harness(shell(Screen::Tracker, "applications_waits"));
+    assert!(is_shown(&harness, "Granite Cloud, Platform Lead, No reply in 15 days, waits for you in Today"));
+    assert!(is_shown(&harness, "Sable Analytics, Tech Lead, Sent 3 days ago"), "a card with nothing in Today stays plain");
+    assert!(is_shown(&harness, "Mosaic Data, Architect, You withdrew"));
+    assert!(harness.query_by_label_contains("of them wait for you in Today.").is_some());
+    assert!(is_shown(&harness, "A pink edge means the application waits for you in Today."));
+}
+
 const TRAY_CARDS: usize = 10;
 const HARBOR: &str = "Lead Java Engineer";
 const MERIDIAN: &str = "Tech Lead Java, Real-Time Traffic";

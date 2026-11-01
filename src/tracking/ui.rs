@@ -1,9 +1,10 @@
+use chrono::NaiveDate;
 use egui::{Frame, ScrollArea, Ui};
 
-use crate::tracking::application::{ApplicationCard, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
+use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body, primary_button,
-    primary_command_action, rich, side_column, slip, small_command_action, strong, tag,
+    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
+    primary_button, primary_command_action, rich, side_column, slip, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
 
@@ -23,27 +24,76 @@ pub fn bucket_tone(bucket: StatusBucket) -> Tone {
     }
 }
 
-fn card_meta(card: &ApplicationCard) -> String {
-    match (card.deadline_state, card.days_quiet) {
-        (Some(DeadlineState::Passed), _) => "Deadline passed".into(),
-        (Some(DeadlineState::ClosingIn(days)), _) => format!("Deadline in {days}d"),
-        (_, Some(days)) if !card.is_final => format!("{days}d quiet, {} of {MAX_FOLLOW_UPS} follow-ups", card.follow_ups_sent),
-        _ => card.status_label.clone(),
+/// A lane's name in plain words.
+fn lane_name(bucket: StatusBucket) -> &'static str {
+    match bucket {
+        StatusBucket::Drafted => "Not sent yet",
+        bucket => bucket.label(),
     }
 }
 
+fn day(date: NaiveDate) -> String {
+    date.format("%a %-d %b").to_string()
+}
+
+fn times(count: usize) -> String {
+    match count {
+        1 => "once".into(),
+        2 => "twice".into(),
+        count => format!("{count} times"),
+    }
+}
+
+/// The line under a card's role: what comes next, or how it ended.
+fn card_meta(card: &ApplicationCard) -> String {
+    if card.is_final {
+        return if card.status_label == ApplicationStatus::Withdrawn.label() { "You withdrew".into() } else { card.status_label.clone() };
+    }
+    match card.bucket {
+        StatusBucket::Drafted => match (card.deadline_state, card.deadline) {
+            (Some(DeadlineState::Passed), _) => "Deadline passed".into(),
+            (_, Some(deadline)) => format!("Send by {}", day(deadline)),
+            _ => card.status_label.clone(),
+        },
+        StatusBucket::Offer => card.deadline.map_or_else(|| card.status_label.clone(), |deadline| format!("Reply by {}", day(deadline))),
+        StatusBucket::Interview => match card.outcome.as_ref().and_then(|outcome| outcome.stages.iter().find(|stage| !stage.reached)) {
+            Some(stage) => stage.date.map_or_else(|| stage.name.clone(), |date| format!("{} {}", stage.name, day(date))),
+            None => card.status_label.clone(),
+        },
+        _ => match card.days_quiet {
+            Some(0) => "Sent today".into(),
+            Some(1) => "Sent yesterday".into(),
+            Some(days) if days < FOLLOW_UP_DAYS => format!("Sent {days} days ago"),
+            Some(days) if card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
+            Some(days) => format!("No reply in {days} days"),
+            None => card.status_label.clone(),
+        },
+    }
+}
+
+fn card_waits(card: &ApplicationCard, waiting: &[(String, String)]) -> bool {
+    waiting.iter().any(|(company, role)| company == &card.company && role == &card.role)
+}
+
 impl TrackerScreen {
+    /// `waiting` holds the company and role of every application with a card in Today.
     /// Returns the archive folder of a dossier the user asked to open.
-    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
-        let subtitle = Subtitle::Text("Read from job_search_tracker.csv. Status changes go through /outcome.");
-        page_head(ui, Title::Slab("Applications"), Some(subtitle), |ui| {
-            primary_command_action(ui, "Record a result", "/outcome");
-            command_action(ui, "Check mail", "/gmail-sync");
+    pub fn show(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) -> Option<String> {
+        let open = pipeline.open_count();
+        let waits = pipeline.cards().filter(|card| card_waits(card, waiting)).count();
+        let mut subtitle = format!("{open} open, {} closed.", pipeline.cards().count() - open);
+        if waits > 0 {
+            subtitle.push_str(&format!(" {waits} of them wait for you in Today."));
+        }
+        let subtitle = (!pipeline.is_empty()).then_some(subtitle);
+        page_head(ui, Title::Slab("Applications"), subtitle.as_deref().map(Subtitle::Text), |ui| {
+            primary_command_action(ui, "Record a result…", "/outcome");
+            command_action(ui, "Check mail for replies…", "/gmail-sync");
         });
-        page_body(ui, |ui| self.body(ui, pipeline))
+        page_body(ui, |ui| self.body(ui, pipeline, waiting))
     }
 
-    fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline) -> Option<String> {
+    fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) -> Option<String> {
         let mut open = None;
         if pipeline.is_empty() {
             panel(ui, |ui| {
@@ -62,13 +112,22 @@ impl TrackerScreen {
                 slip(ui, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| open = details(ui, card)));
             });
         }
+        if pipeline.cards().any(|card| card_waits(card, waiting)) {
+            let frame = Frame::new().inner_margin(egui::Margin { top: NOTE_GAP.1 as i8, ..Default::default() });
+            egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    stamp_square(ui, "Pink edge");
+                    ui.label(rich(ui, "A pink edge means the application waits for you in Today.", Type::NOTE, Ink::Muted));
+                });
+            });
+        }
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.board(ui, pipeline));
+            ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.board(ui, pipeline, waiting));
         });
         open
     }
 
-    fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline) {
+    fn board(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &[(String, String)]) {
         let lanes: Vec<&PipelineLane> = pipeline.lanes.iter().filter(|lane| !lane.cards.is_empty() || lane.bucket != StatusBucket::Hired).collect();
         // Every lane takes the height of the tallest, measured on the frame before.
         let tallest_id = ui.scope_id().with("tallest_lane");
@@ -81,11 +140,11 @@ impl TrackerScreen {
                     ui.set_min_height(tallest);
                     let used = ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            lane_title(ui, lane.bucket.label(), bucket_tone(lane.bucket));
+                            lane_title(ui, lane_name(lane.bucket), bucket_tone(lane.bucket));
                             ui.label(rich(ui, lane.cards.len().to_string(), Type::BODY, Ink::Faint));
                         });
                         for card in &lane.cards {
-                            if self.card(ui, card) {
+                            if self.card(ui, card, card_waits(card, waiting)) {
                                 self.selected = Some((card.company.clone(), card.role.clone()));
                             }
                         }
@@ -100,19 +159,22 @@ impl TrackerScreen {
         }
     }
 
-    fn card(&self, ui: &mut Ui, card: &ApplicationCard) -> bool {
+    fn card(&self, ui: &mut Ui, card: &ApplicationCard, waits: bool) -> bool {
         let on = self.selected.as_ref().is_some_and(|(company, role)| company == &card.company && role == &card.role);
-        index_card(ui, on, |ui| {
+        let meta = card_meta(card);
+        let spoken = format!("{}, {}, {meta}", card.company, card.role);
+        index_card(ui, CardLook { on, waits, faded: card.is_final }, &spoken, |ui| {
             ui.add(egui::Label::new(rich(ui, card.company.as_str(), Type::STRONG, Ink::Text)).truncate());
             ui.add(egui::Label::new(rich(ui, card.role.as_str(), Type::BODY, Ink::Muted)).truncate());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     if let Some(fit) = card.fit_rating {
-                        ui.label(rich(ui, fit.to_string(), Type::FIT, Ink::Text));
+                        ui.label(rich(ui, format!("fit {fit}"), Type::SMALL, Ink::Muted));
                     }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(rich(ui, card_meta(card), Type::SMALL, Ink::Faint)).truncate());
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        let (style, ink) = if waits { (Type::TAG, Ink::Stamp) } else { (Type::SMALL, Ink::Faint) };
+                        ui.add(egui::Label::new(rich(ui, meta, style, ink)).wrap());
                     });
                 });
             });
@@ -121,18 +183,33 @@ impl TrackerScreen {
     }
 }
 
+fn applications(count: usize) -> String {
+    if count == 1 { "1 application has".into() } else { format!("{count} applications have") }
+}
+
 fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
     let (due, stale) = (pipeline.follow_ups_due(), pipeline.stale_count());
     if due == 0 && stale == 0 {
         return;
     }
+    let mut clauses = Vec::new();
+    if due > 0 {
+        clauses.push(format!("{} had no reply for {FOLLOW_UP_DAYS} days or more. A short follow-up often gets one.", applications(due)));
+    }
+    if stale > 0 {
+        clauses.push(format!("{} been quiet for {STALE_DAYS} days or more and can be closed.", applications(stale)));
+    }
     note(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = NOTE_GAP.0;
-            ui.label(format!("{due} applications quiet {FOLLOW_UP_DAYS}+ days can get a follow-up. {stale} quiet {STALE_DAYS}+ days ready to resolve."));
+            ui.label(clauses.join(" "));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                small_command_action(ui, "Review quiet applications", "/outcome stale");
-                small_command_action(ui, "Draft follow-ups", "/outcome followup");
+                if stale > 0 {
+                    small_command_action(ui, "Close quiet ones…", "/outcome stale");
+                }
+                if due > 0 {
+                    small_command_action(ui, "Draft follow-ups…", "/outcome followup");
+                }
             });
         });
     });
@@ -176,9 +253,9 @@ fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
     divider(ui);
     panel_body(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            command_button(ui, &format!("/outcome {}", card.company.to_lowercase()));
-            command_button(ui, &format!("/interview {}", card.company.to_lowercase()));
-            open_link(ui, "Open posting", card.source.as_ref());
+            small_command_action(ui, "Record a result…", &format!("/outcome {}", card.company.to_lowercase()));
+            small_command_action(ui, "Prepare for the interview…", &format!("/interview {}", card.company.to_lowercase()));
+            open_link(ui, "Open job ad", card.source.as_ref());
         });
     });
     open

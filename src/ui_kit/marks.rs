@@ -40,10 +40,15 @@ pub fn solid_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     response
 }
 
-/// A lane's heading: the tag's colour without its box.
+/// A lane's heading: a square in the tag's colour, then the name.
 pub fn lane_title(ui: &mut Ui, text: &str, tone: Tone) -> Response {
-    let text = crate::ui_kit::rich(ui, text, Type::SECTION, tone);
-    ui.label(text)
+    let color = tone.color(&Palette::of(ui));
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, color);
+        ui.label(crate::ui_kit::rich(ui, text, Type::SECTION, Ink::Text))
+    })
+    .inner
 }
 
 /// The double-ruled verdict on a posting.

@@ -333,12 +333,7 @@ impl Shell {
 
     /// What the status bar says about the screen on show.
     fn screen_note(&self) -> Option<String> {
-        let pipeline = &self.snapshot.pipeline;
         match self.screen {
-            Screen::Tracker => {
-                let open = pipeline.open_count();
-                Some(format!("{open} open, {} closed", pipeline.cards().count() - open))
-            }
             Screen::Dossier => Some("Source: tracker row and application archive".to_owned()),
             Screen::Workspace => Some(match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
                 AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),
@@ -419,7 +414,7 @@ impl Shell {
             }
             Screen::Jobs => self.jobs.show(ui, &snapshot.board, &queue.waiting_jobs()),
             Screen::Tracker => {
-                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline) {
+                if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline, &queue.waiting_applications()) {
                     self.show_dossier(folder);
                 }
             }

@@ -6,7 +6,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CellLook, CheckMark, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
     check_tag, chrome_status, clear_panel, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
@@ -277,13 +277,17 @@ fn board(ui: &mut Ui) {
     ui.columns_const(|[left, right]| {
         lane(left, |ui| {
             lane_title(ui, "Interview", Tone::Interview);
-            index_card(ui, true, |ui| {
+            index_card(ui, CardLook { on: true, ..CardLook::default() }, "Picked card", |ui| {
                 strong(ui, "Picked card");
                 muted(ui, "Lead Java Engineer");
             });
-            index_card(ui, false, |ui| {
-                strong(ui, "Index card");
-                ui.label(rich(ui, "78", Type::FIT, Ink::Text));
+            index_card(ui, CardLook { waits: true, ..CardLook::default() }, "Waiting card", |ui| {
+                strong(ui, "Waiting card");
+                ui.label(rich(ui, "No reply in 15 days", Type::TAG, Ink::Stamp));
+            });
+            index_card(ui, CardLook { faded: true, ..CardLook::default() }, "Faded card", |ui| {
+                strong(ui, "Faded card");
+                ui.label(rich(ui, "fit 68", Type::SMALL, Ink::Muted));
             });
         });
         Grid::new("table").spacing([24.0, 6.0]).show(right, |ui| {

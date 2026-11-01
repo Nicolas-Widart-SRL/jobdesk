@@ -88,7 +88,7 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
     // Permission prompts, as the coming setting will show them.
     desk.ask_permission();
-    desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
         AgentEvent::UsageChanged(Usage { five_hour: Some(0.08), seven_day: Some(0.25) }),
@@ -168,13 +168,48 @@ fn stop_point() -> AgentEvent {
     AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.94, duration_ms: 401_000 }
 }
 
+const APPLY_LINE: &str = "/apply https://kestrel.example/jobs/2";
+const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestrel Payments\n\nVerdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week in Leuven | Pass |\n| Language | English, Dutch is a plus | Pass |\n| Salary | Not stated | Check |\n\nShall I go ahead and draft the CV and cover letter?";
+
+/// /apply stopped after Evaluate, with Claude's question closing its evaluation.
+fn apply_stop_after_evaluate() -> RunDesk {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
+    let events = [
+        AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+        AgentEvent::UsageChanged(Usage { five_hour: Some(0.08), seven_day: Some(0.25) }),
+        tool("1", "Agent", "posting-fetcher: Fetch the posting", false),
+        tool("2", "Bash", "python3 tools/posting_guard.py --text --json", true),
+        done("2"),
+        done("1"),
+        tool("3", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
+        done("3"),
+        tool("4", "Bash", "ls salary_data.json salary_lookup.py job_search_tracker.csv", false),
+        done("4"),
+        tool("5", "Bash", "python3 salary_lookup.py \"Kestrel\" --json", false),
+        done("5"),
+        AgentEvent::AssistantText { text: STOP_EVALUATION.into(), nested: false },
+        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.12, duration_ms: 303_000 },
+    ];
+    let guard = sink.lock().unwrap();
+    let emit = guard.as_ref().unwrap();
+    events.into_iter().for_each(emit);
+    drop(guard);
+    desk
+}
+
 fn render(screen: Screen, theme: Theme, name: &str) {
     render_with(shell(screen, name), theme, name);
 }
 
 fn render_run(final_event: AgentEvent, theme: Theme, name: &str) {
+    render_desk(apply_run(final_event), theme, name);
+}
+
+fn render_desk(desk: RunDesk, theme: Theme, name: &str) {
     let mut shell = shell(Screen::Runs, name);
-    *shell.desk_slot() = Some(apply_run(final_event));
+    *shell.desk_slot() = Some(desk);
     render_with(shell, theme, name);
 }
 
@@ -260,9 +295,9 @@ fn assert_in_window(harness: &Harness, size: [f32; 2], labels: &[&str]) {
 }
 
 /// The smallest window the app allows, with a run's step rail above the prompt.
-fn smallest_window(final_event: AgentEvent, name: &str) -> Harness<'static> {
+fn smallest_window(desk: RunDesk, name: &str) -> Harness<'static> {
     let mut shell = shell(Screen::Runs, name);
-    *shell.desk_slot() = Some(apply_run(final_event));
+    *shell.desk_slot() = Some(desk);
     let mut harness = Harness::builder()
         .with_size([1040.0, 640.0])
         .with_context_setup(install_look)
@@ -273,14 +308,69 @@ fn smallest_window(final_event: AgentEvent, name: &str) -> Harness<'static> {
 
 #[test]
 fn a_permission_prompt_fits_the_smallest_window() {
-    let harness = smallest_window(permission_prompt(), "smallest_permission");
+    let harness = smallest_window(apply_run(permission_prompt()), "smallest_permission");
     assert_in_window(&harness, [1040.0, 640.0], &["Allow once", "Allow for this run", "Deny"]);
 }
 
 #[test]
 fn a_question_with_many_choices_fits_the_smallest_window() {
-    let harness = smallest_window(many_choices("q"), "smallest_question");
+    let harness = smallest_window(apply_run(many_choices("q")), "smallest_question");
     assert_in_window(&harness, [1040.0, 640.0], &["Send answer", "Decline"]);
+}
+
+#[test]
+fn a_stop_point_fits_the_smallest_window() {
+    let harness = smallest_window(apply_stop_after_evaluate(), "smallest_stop_point");
+    assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…"]);
+}
+
+/// A quick reply is an ordinary reply on the same run: it starts no other run.
+#[test]
+fn a_quick_reply_is_sent_as_a_reply() {
+    let mut shell = shell(Screen::Runs, "quick_reply");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    let lines = harness.query_all_by_label(APPLY_LINE).count();
+
+    harness.get_by_label("Go ahead with the draft").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, "Yes, proceed with drafting."));
+    assert!(!is_shown(&harness, "Go ahead with the draft"));
+    assert!(!is_shown(&harness, "Stop here"));
+    assert_eq!(harness.query_all_by_label(APPLY_LINE).count(), lines, "Recent runs still lists one /apply run");
+}
+
+#[test]
+fn quick_replies_only_at_a_known_stop() {
+    let mut shell = shell(Screen::Runs, "no_quick_replies");
+    *shell.desk_slot() = Some(apply_run(stop_point()));
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Send"));
+    assert!(!is_shown(&harness, "Go ahead with the draft"));
+}
+
+#[test]
+fn end_session_asks_first() {
+    let mut shell = shell(Screen::Runs, "end_session");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    let your_turn = |harness: &Harness| harness.query_all_by_label("Your turn").count() > 0;
+
+    harness.get_by_label("End session…").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "End session"), "the popover asks first");
+    assert!(your_turn(&harness), "the click alone ends nothing");
+    harness.get_by_label("Keep it open").click();
+    harness.run_steps(3);
+    assert!(your_turn(&harness));
+    assert!(!is_shown(&harness, "Keep it open"));
+
+    harness.get_by_label("End session…").click();
+    harness.run_steps(3);
+    harness.get_by_label("End session").click();
+    harness.run_steps(3);
+    assert!(!your_turn(&harness));
 }
 
 fn many_choices(request_id: &str) -> AgentEvent {
@@ -318,7 +408,7 @@ fn the_launcher_shortcut_works_while_typing() {
     harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
     harness.run_steps(3);
     harness.get_by_label("All commands");
-    harness.get_by_label("Runs").click();
+    harness.get_by_label("Runs, 1 run waits for you").click();
     harness.run_steps(3);
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
 }
@@ -847,6 +937,16 @@ fn run_question_light() {
 #[test]
 fn run_stop_point_dark() {
     render_run(stop_point(), Theme::Dark, "run_stop_point_dark");
+}
+
+#[test]
+fn run_turn_light() {
+    render_desk(apply_stop_after_evaluate(), Theme::Light, "run_turn_light");
+}
+
+#[test]
+fn run_turn_dark() {
+    render_desk(apply_stop_after_evaluate(), Theme::Dark, "run_turn_dark");
 }
 
 #[test]

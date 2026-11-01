@@ -328,7 +328,12 @@ impl Shell {
                     _ => 0,
                 };
                 let count = (count > 0).then(|| count.to_string());
-                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit, None).clicked() {
+                // The Runs count is runs waiting for you, so it carries the turn mark.
+                let mark = (screen == Screen::Runs && waiting > 0).then(|| match waiting {
+                    1 => "Runs, 1 run waits for you".to_owned(),
+                    _ => format!("Runs, {waiting} runs wait for you"),
+                });
+                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit, mark.as_deref()).clicked() {
                     picked = Some(screen);
                 }
             }
@@ -376,7 +381,7 @@ impl Shell {
             let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
             if waiting > 0 {
                 let text = if waiting == 1 { "1 run needs you".to_owned() } else { format!("{waiting} runs need you") };
-                tag(ui, text, Tone::Interview);
+                tag(ui, text, Tone::Turn);
             }
             let issues = self.snapshot.issues.len();
             if issues > 0 {

@@ -73,8 +73,9 @@ impl RunDesk {
         !self.sessions.is_empty()
     }
 
+    /// Runs where it is the user's turn: a prompt is open, or Claude waits for a reply.
     pub fn waiting_count(&self) -> usize {
-        self.runs.iter().filter(|run| run.needs_user()).count()
+        self.runs.iter().filter(|run| run.is_your_turn()).count()
     }
 
     /// Applies what arrived from the agent processes. Call once per frame.
@@ -259,6 +260,24 @@ mod tests {
         assert_eq!(script.borrow().requests.len(), 1);
         assert_eq!(script.borrow().sent, ["yes"]);
         assert!(desk.is_busy());
+    }
+
+    #[test]
+    fn a_stop_point_counts_as_waiting() {
+        let (mut desk, _) = desk();
+        let id = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        assert_eq!(desk.waiting_count(), 1);
+
+        desk.reply(&id, "yes").unwrap();
+        assert_eq!(desk.waiting_count(), 0);
+
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.2, duration_ms: 1 });
+        desk.sink_for(&id)(AgentEvent::BackgroundTasksChanged { count: 1 });
+        desk.poll();
+        assert_eq!(desk.waiting_count(), 0, "background agents are still working");
     }
 
     #[test]

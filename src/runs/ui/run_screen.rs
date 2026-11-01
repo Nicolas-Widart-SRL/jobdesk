@@ -1,18 +1,27 @@
 use std::collections::{HashMap, HashSet};
 
-use egui::{Frame, Margin, ScrollArea, TextEdit, Ui};
+use egui::text::LayoutJob;
+use egui::{FontSelection, Frame, Grid, Margin, Popup, PopupCloseBehavior, RectAlign, Response, Role, ScrollArea, TextEdit, Ui, UiBuilder};
 use egui_commonmark::CommonMarkCache;
 
-use crate::runs::application::{Activity, ActivityKind, Decision, Prompt, PromptKind, Question, Run, RunDesk, RunStatus, ToolState};
+use crate::runs::application::{
+    Activity, ActivityKind, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, ToolState, closing_question, stop_point,
+};
 use crate::ui_kit::tokens::{
-    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, OFFSET_SHADOW, PROMPT_MARGIN, PROMPT_PADDING, ROW_GAP, SCREEN_GAP, SPLIT_SIDE_BASIS,
+    BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, OFFSET_SHADOW, PROMPT_PADDING, ROW_GAP, SCREEN_GAP, SPLIT_SIDE_BASIS,
 };
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, list_row, markdown, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button, prompt_box, rich,
-    slip, slip_bar, split, step_rail, strong, tag,
+    Ink, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, list_row, markdown, muted, page_body, page_head, panel, panel_body, panel_header, pick_row, primary_button,
+    prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_rail, strong, tag,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
+/// What the activity keeps under the turn bar, its heading included, however much the bar asks for.
+const ACTIVITY_MIN_HEIGHT: f32 = 160.0;
+/// Claude's closing question is cut after this many lines, with the full text on hover.
+const QUESTION_ROWS: usize = 3;
+const END_POPOVER_WIDTH: f32 = 320.0;
+const END_SESSION: &str = "End session…";
 /// A prompt's scrolling part: at least two choices or lines, at most what reads at a glance.
 const CHOICES_MIN_HEIGHT: f32 = 60.0;
 const CHOICES_MAX_HEIGHT: f32 = 260.0;
@@ -28,40 +37,67 @@ pub struct RunScreen {
     picks: HashMap<(String, String), HashSet<String>>,
     /// The run and request the picks belong to.
     picks_for: Option<(String, String)>,
+    /// The run and turn whose reply field took focus, so it takes it once.
+    focused_for: Option<(String, usize)>,
+    /// The run whose End session popover is open.
+    ending: Option<String>,
+    /// Keep it open takes focus once the popover shows.
+    focus_keep: bool,
     markdown: CommonMarkCache,
 }
 
-fn status_tone(run: &Run) -> Tone {
-    if run.needs_user() {
-        return Tone::Interview;
+/// A click in the head, reported out of `page_head`'s actions.
+#[derive(Clone, Copy)]
+enum HeadAction {
+    Stop,
+    ForceStop,
+    AskToEnd,
+}
+
+/// Whose turn it is, in words and tone. Your turn is the one filled tag.
+fn status(run: &Run) -> (&str, Tone, bool) {
+    if run.is_your_turn() {
+        return ("Your turn", Tone::Turn, true);
     }
-    if run.background_agents > 0 {
-        return Tone::Active;
-    }
-    match run.status {
-        RunStatus::Starting | RunStatus::Working | RunStatus::Stopping => Tone::Active,
-        RunStatus::AwaitingReply => Tone::Interview,
-        RunStatus::Failed(_) => Tone::Closed,
-        RunStatus::Stopped | RunStatus::Closed => Tone::Plain,
+    let (text, tone) = match run.status {
+        RunStatus::Starting => ("Starting", Tone::Active),
+        RunStatus::Stopping => (run.status.label(), Tone::Active),
+        _ if run.background_agents > 0 => ("Claude's turn", Tone::Active),
+        RunStatus::Working | RunStatus::AwaitingReply => ("Claude's turn", Tone::Active),
+        RunStatus::Failed(_) => (run.status.label(), Tone::Closed),
+        RunStatus::Stopped | RunStatus::Closed => (run.status.label(), Tone::Plain),
+    };
+    (text, tone, false)
+}
+
+fn status_tag(ui: &mut Ui, run: &Run) {
+    let (text, tone, solid) = status(run);
+    if solid {
+        solid_tag(ui, text, tone);
+    } else {
+        tag(ui, text, tone);
     }
 }
 
-/// Whether the run waits on a prompt, or its session can take a reply.
-fn takes_input(run: &Run) -> bool {
-    run.needs_user() || (run.session_id.is_some() && !run.is_busy())
+/// Whether a reply would resume the session: the run closed, failed or was stopped.
+fn resumable(run: &Run) -> bool {
+    run.session_id.is_some() && !run.is_busy() && matches!(run.status, RunStatus::Closed | RunStatus::Failed(_) | RunStatus::Stopped)
 }
 
-/// Whether anything sits under the activity: a prompt, the reply box, or word of background agents.
+/// Whether anything sits under the activity: word of background agents, or the field that resumes the session.
 fn has_footer(run: &Run) -> bool {
-    takes_input(run) || run.background_agents > 0
+    resumable(run) || run.background_agents > 0
 }
 
-fn status_label(run: &Run) -> &str {
+/// What a screen reader says for the turn bar.
+fn turn_label(run: &Run, question: Option<&ClosingQuestion>) -> String {
     match run.current_prompt().map(|prompt| &prompt.kind) {
-        Some(PromptKind::Permission { .. }) => "Waiting for permission",
-        Some(PromptKind::Questions(_)) => "Waiting for your answer",
-        None if run.background_agents > 0 => "Agents working",
-        None => run.status.label(),
+        Some(PromptKind::Permission { tool, .. }) => format!("Your turn. Claude wants to use {tool}"),
+        Some(PromptKind::Questions(questions)) => format!("Your turn. Claude asks: {}", questions.first().map_or("", |question| question.text.as_str())),
+        None => match question {
+            Some(question) => format!("Your turn. Claude asks: {}", question.text),
+            None => "Your turn. Claude finished this step.".to_owned(),
+        },
     }
 }
 
@@ -94,8 +130,61 @@ impl RunScreen {
             });
             return;
         };
-        page_head(ui, Title::Typed(first_line(&run.line)), None, |ui| head_actions(ui, desk, &run));
+        let (mut action, mut end_button) = (None, None);
+        page_head(ui, Title::Typed(first_line(&run.line)), None, |ui| {
+            let (clicked, button) = head_actions(ui, &run);
+            action = clicked.or(action);
+            // The real pass comes last, so its button is the one kept.
+            end_button = button;
+        });
+        match action {
+            Some(HeadAction::Stop) => desk.stop(&run.id),
+            Some(HeadAction::ForceStop) => desk.close(&run.id),
+            Some(HeadAction::AskToEnd) => {
+                self.ending = Some(run.id.clone());
+                self.focus_keep = true;
+            }
+            None => {}
+        }
+        match end_button {
+            Some(button) => self.end_popover(desk, &run, &button),
+            None => self.ending = None,
+        }
         page_body(ui, |ui| self.body(ui, desk, &run));
+    }
+
+    /// Asks before the session ends. Keep it open is the default, and Esc keeps it open too.
+    fn end_popover(&mut self, desk: &mut RunDesk, run: &Run, button: &Response) {
+        let mut open = self.ending.as_deref() == Some(run.id.as_str());
+        let (mut keep, mut end) = (false, false);
+        Popup::from_response(button)
+            .open_bool(&mut open)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+            .align(RectAlign::BOTTOM_END)
+            .gap(ITEM_GAP)
+            .width(END_POPOVER_WIDTH)
+            .accessible_name("End this session?")
+            .show(|ui| {
+                ui.set_max_width(END_POPOVER_WIDTH);
+                strong(ui, "End this session?");
+                let note = "Claude is waiting for your reply. Ending stops its process, and a reply sent later resumes the session.";
+                ui.add(egui::Label::new(rich(ui, note, Type::BODY, Ink::Muted)).wrap());
+                ui.add_space(ITEM_GAP);
+                ui.horizontal(|ui| {
+                    let kept = primary_button(ui, "Keep it open");
+                    if self.focus_keep && !ui.is_sizing_pass() {
+                        kept.request_focus();
+                        self.focus_keep = false;
+                    }
+                    keep = kept.clicked();
+                    end = danger_button(ui, "End session").clicked();
+                });
+                ui.label(rich(ui, "Esc keeps it open.", Type::NOTE, Ink::Faint));
+            });
+        if end {
+            desk.close(&run.id);
+        }
+        self.ending = (open && !keep && !end).then(|| run.id.clone());
     }
 
     fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
@@ -105,29 +194,25 @@ impl RunScreen {
             step_rail(ui, steps.labels, steps.current, live, complete);
             ui.add_space(SCREEN_GAP);
         }
+        if run.is_your_turn() {
+            self.turn_bar(ui, desk, run);
+            ui.add_space(ROW_GAP);
+        }
         split(ui, SPLIT_SIDE_BASIS, |main, side| {
             self.facts(side, desk, run);
             self.detail(main, desk, run);
         });
     }
 
-    /// The activity, then the prompt under it, outside the activity's scroll area.
-    /// The activity takes what the prompt left on the frame before. Each prompt, and the reply box,
-    /// has its own measure: with none yet, it gets the whole column. Its own scroll areas are sized
-    /// from the column, so it fits there and measures the same on the next frame.
-    /// A new measure redraws the frame, so a prompt is never left below the window.
+    /// The activity, then the footer under it, outside the activity's scroll area.
+    /// The activity takes what the footer left on the frame before. Each footer has its own measure:
+    /// with none yet, it gets the whole column. A new measure redraws the frame, so the footer is never left below the window.
     fn detail(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
-        let gap = ui.spacing().item_spacing.y;
-        let shown = run.current_prompt().map(|prompt| prompt.request_id.as_str());
-        let reserved_id = ui.scope_id().with(("prompt_height", &run.id, shown));
+        let reserved_id = ui.scope_id().with(("prompt_height", &run.id, resumable(run)));
         let input = has_footer(run);
         let reserved = if input { ui.data(|data| data.get_temp::<f32>(reserved_id)).unwrap_or(ui.available_height()) } else { 0.0 };
-        let mut budget = 0.0;
         panel(ui, |ui| {
             panel_header(ui, "Activity", run.is_busy().then_some("live"));
-            // What a prompt's content may take: the column under the heading, less the prompt's frame and gaps.
-            let (_, padding) = PROMPT_PADDING;
-            budget = ui.available_height() - gap * 2.0 - PROMPT_MARGIN.0 - padding as f32 * 2.0 - OFFSET_SHADOW as f32;
             let room = (ui.available_height() - reserved).max(0.0);
             ScrollArea::vertical().id_salt(("run_activity", &run.id)).max_height(room).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -150,16 +235,16 @@ impl RunScreen {
         if !input {
             return;
         }
-        // The cursor moves past a gap after each item, so this counts the gap below the prompt.
+        // The cursor moves past a gap after each item, so this counts the gap below the footer.
         // The gap above it, between the activity and the cursor, is added.
         let start = ui.cursor().top();
-        self.prompt_or_reply(ui, desk, run, budget);
+        self.footer(ui, desk, run);
         let used = ui.cursor().top() - start + ui.spacing().item_spacing.y;
         if (used - reserved).abs() > 0.5 {
             ui.data_mut(|data| data.insert_temp(reserved_id, used));
             // A discard redraws within this frame when a pass is left. The repaint covers the
             // frames where none is, so an idle window still settles on the new measure.
-            ui.ctx().request_discard("the prompt under the activity changed height");
+            ui.ctx().request_discard("the footer under the activity changed height");
             ui.ctx().request_repaint();
         }
     }
@@ -205,51 +290,88 @@ impl RunScreen {
         });
     }
 
-    /// Shown under the activity, outside its scroll area.
-    /// `budget` is the height the prompt's content may take, buttons included.
-    fn prompt_or_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, budget: f32) {
-        if let Some(prompt) = run.current_prompt().cloned() {
-            ui.add_space(PROMPT_MARGIN.0);
-            self.prompt(ui, desk, run, &prompt, budget);
-        } else if run.background_agents > 0 {
-            divider(ui);
-            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| muted(ui, background_note(run.background_agents)));
-        } else if takes_input(run) {
-            divider(ui);
-            Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| {
-                if run.status == RunStatus::AwaitingReply {
-                    muted(ui, "Claude finished this step. Reply to continue, or press End session when you are done.");
-                }
-                self.reply_box(ui, desk, run);
-            });
-        }
+    /// Under the activity, outside its scroll area: word of background agents, or the field that resumes the session.
+    fn footer(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+        divider(ui);
+        Frame::new().inner_margin(Margin { top: ROW_GAP as i8, ..Default::default() }).show(ui, |ui| {
+            if run.background_agents > 0 {
+                muted(ui, background_note(run.background_agents));
+            } else {
+                self.reply_row(ui, desk, run, &[], "Reply to resume this session", false);
+            }
+        });
     }
 
-    /// The field, then Send on its right. The field comes first, so it is first in focus order.
-    fn reply_box(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+    /// Above the activity while it is the user's turn, framed in the turn colour:
+    /// the open prompt, or Claude's closing question and the reply row.
+    fn turn_bar(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+        let question = closing_question(run);
+        // What a prompt's content may take: the room above the activity's least height, less the bar's frame and the gap under it.
+        let (_, padding) = PROMPT_PADDING;
+        let budget = ui.available_height() - ACTIVITY_MIN_HEIGHT - ROW_GAP - padding as f32 * 2.0 - OFFSET_SHADOW as f32;
+        let group = UiBuilder::new().accessibility_role(Role::Group).accessibility_label(turn_label(run, question.as_ref()));
+        ui.scope_builder(group, |ui| {
+            prompt_box_tone(ui, Tone::Turn, |ui| match run.current_prompt().cloned() {
+                Some(prompt) => match &prompt.kind {
+                    PromptKind::Permission { tool, detail, can_remember } => permission(ui, desk, run, &prompt, tool, detail, *can_remember, budget),
+                    PromptKind::Questions(questions) => self.questions(ui, desk, run, &prompt, questions, budget),
+                },
+                None => self.stop_reply(ui, desk, run, question.as_ref()),
+            });
+        });
+    }
+
+    /// Claude's question, cut to a few lines, then one row: the stop point's quick replies, the field and Send.
+    fn stop_reply(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, question: Option<&ClosingQuestion>) {
+        match question {
+            Some(question) => {
+                // Plain text: Claude's message is untrusted, and the question is read, not rendered.
+                let style = ui.style().clone();
+                let mut job = LayoutJob::default();
+                for (text, ink) in [("Claude asks: ", Ink::Muted), (question.text.as_str(), Ink::Text)] {
+                    rich(ui, text, Type::BODY, ink).append_to(&mut job, &style, FontSelection::Default, egui::Align::Min);
+                }
+                job.wrap.max_rows = QUESTION_ROWS;
+                ui.add(egui::Label::new(job).wrap()).on_hover_text(&question.text);
+            }
+            None => {
+                muted(ui, "Claude finished this step. Read its message, then reply.");
+            }
+        }
+        let replies = stop_point(run).map_or(&[][..], |stop| stop.replies);
+        let hint = if replies.is_empty() { "Reply to Claude" } else { "Or write your own reply" };
+        self.reply_row(ui, desk, run, replies, hint, true);
+    }
+
+    /// Quick replies, the field, then Send on its right. A quick reply sends its words as a typed reply would.
+    /// With `focus`, the field takes focus once per run and turn, when nothing else has it.
+    fn reply_row(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, replies: &[QuickReply], hint: &str, focus: bool) {
         let blocked = desk.is_busy();
+        let mut sent = None;
         ui.horizontal(|ui| {
-            let hint = if run.status == RunStatus::AwaitingReply { "Reply to Claude" } else { "Reply to resume this session" };
+            for reply in replies {
+                let response = ui.add_enabled_ui(!blocked, |ui| button(ui, reply.button)).inner.on_hover_text(reply.text).on_disabled_hover_text(reply.text);
+                if response.clicked() {
+                    sent = Some(reply.text.to_owned());
+                }
+            }
             let room = ui.available_width() - button_width(ui, "Send") - ui.spacing().item_spacing.x;
             let edit = ui.add(TextEdit::singleline(&mut self.reply).hint_text(hint).desired_width(room));
-            let send = ui
-                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.add_enabled_ui(!self.reply.trim().is_empty() && !blocked, |ui| primary_button(ui, "Send")).inner.clicked())
-                .inner;
+            let turn = (run.id.clone(), run.turn_number());
+            if focus && self.focused_for.as_ref() != Some(&turn) && ui.memory(|memory| memory.focused().is_none()) {
+                edit.request_focus();
+                self.focused_for = Some(turn);
+            }
+            let typed = !self.reply.trim().is_empty();
+            let send = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.add_enabled_ui(typed && !blocked, |ui| primary_button(ui, "Send")).inner.clicked()).inner;
             let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if (send || entered) && !self.reply.trim().is_empty() && !blocked {
-                let text = std::mem::take(&mut self.reply);
-                let _ = desk.reply(&run.id, text.trim());
+            if (send || entered) && typed && !blocked {
+                sent = Some(std::mem::take(&mut self.reply).trim().to_owned());
             }
         });
-    }
-
-    fn prompt(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, budget: f32) {
-        prompt_box(ui, |ui| {
-            match &prompt.kind {
-                PromptKind::Permission { tool, detail, can_remember } => permission(ui, desk, run, prompt, tool, detail, *can_remember, budget),
-                PromptKind::Questions(questions) => self.questions(ui, desk, run, prompt, questions, budget),
-            }
-        });
+        if let Some(text) = sent {
+            let _ = desk.reply(&run.id, &text);
+        }
     }
 
     fn questions(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, prompt: &Prompt, questions: &[Question], budget: f32) {
@@ -263,32 +385,48 @@ impl RunScreen {
         let room = budget - ui.spacing().item_spacing.y - BUTTON_HEIGHT;
         let height = room.clamp(CHOICES_MIN_HEIGHT, CHOICES_MAX_HEIGHT);
         ScrollArea::vertical().id_salt(("run_questions", &run.id, &prompt.request_id)).max_height(height).show(ui, |ui| {
-            for question in questions {
+            ui.set_width(ui.available_width());
+            // The choices sit in two columns, read across.
+            let column = ((ui.available_width() - SCREEN_GAP) / 2.0).max(0.0);
+            for (index, question) in questions.iter().enumerate() {
                 strong(ui, &question.text);
                 let picked = self.picks.entry((prompt.request_id.clone(), question.text.clone())).or_default();
-                for option in &question.options {
-                    let mut on = picked.contains(&option.label);
-                    let changed = if question.multi_select {
-                        ui.checkbox(&mut on, &option.label).changed()
-                    } else {
-                        let clicked = ui.radio(on, &option.label).clicked();
-                        on |= clicked;
-                        clicked
-                    };
-                    if !option.description.is_empty() {
-                        muted(ui, &option.description);
-                    }
-                    if changed {
-                        if !question.multi_select {
-                            picked.clear();
+                let grid = Grid::new(("run_choices", &prompt.request_id, index)).num_columns(2).min_col_width(column).max_col_width(column).spacing([SCREEN_GAP, ROW_GAP]);
+                grid.show(ui, |ui| {
+                    for (at, option) in question.options.iter().enumerate() {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = DETAIL_GAP;
+                            let mut on = picked.contains(&option.label);
+                            let changed = if question.multi_select {
+                                ui.checkbox(&mut on, &option.label).changed()
+                            } else {
+                                let clicked = ui.radio(on, &option.label).clicked();
+                                on |= clicked;
+                                clicked
+                            };
+                            if !option.description.is_empty() {
+                                // Under the choice's words, past its radio or checkbox.
+                                let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
+                                Frame::new().inner_margin(Margin { left: indent as i8, ..Default::default() }).show(ui, |ui| {
+                                    ui.add(egui::Label::new(rich(ui, &option.description, Type::BODY, Ink::Muted)).wrap());
+                                });
+                            }
+                            if changed {
+                                if !question.multi_select {
+                                    picked.clear();
+                                }
+                                if on {
+                                    picked.insert(option.label.clone());
+                                } else {
+                                    picked.remove(&option.label);
+                                }
+                            }
+                        });
+                        if at % 2 == 1 {
+                            ui.end_row();
                         }
-                        if on {
-                            picked.insert(option.label.clone());
-                        } else {
-                            picked.remove(&option.label);
-                        }
                     }
-                }
+                });
                 ui.add_space(6.0);
             }
         });
@@ -374,7 +512,7 @@ impl RunScreen {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint));
-                    tag(ui, status_label(run), status_tone(run));
+                    status_tag(ui, run);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let ink = if on { Ink::Text } else { Ink::Muted };
                         ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());
@@ -387,19 +525,27 @@ impl RunScreen {
 }
 
 /// Stop, force or end, by the run's state. Added right to left, so the button comes before the tag.
-fn head_actions(ui: &mut Ui, desk: &mut RunDesk, run: &Run) {
+/// `page_head` runs this twice a frame, so it only reports a click, and End session's button to anchor the popover on.
+fn head_actions(ui: &mut Ui, run: &Run) -> (Option<HeadAction>, Option<Response>) {
+    let mut action = None;
+    let mut end_button = None;
     if run.status == RunStatus::Stopping {
-        if button(ui, "Force stop").clicked() {
-            desk.close(&run.id);
+        if small_danger_button(ui, "Force stop").clicked() {
+            action = Some(HeadAction::ForceStop);
         }
     } else if run.is_busy() || run.needs_user() {
-        if danger_button(ui, "Stop run").clicked() {
-            desk.stop(&run.id);
+        if small_danger_button(ui, "Stop run").clicked() {
+            action = Some(HeadAction::Stop);
         }
-    } else if run.status == RunStatus::AwaitingReply && button(ui, "End session").clicked() {
-        desk.close(&run.id);
+    } else if run.awaits_reply() {
+        let response = small_button(ui, END_SESSION);
+        if response.clicked() {
+            action = Some(HeadAction::AskToEnd);
+        }
+        end_button = Some(response);
     }
-    tag(ui, status_label(run), status_tone(run));
+    status_tag(ui, run);
+    (action, end_button)
 }
 
 /// `budget` is the height the prompt's content may take, buttons included.

@@ -1,6 +1,147 @@
 # Mockups handoff
 
-One refresh brief, one Runs brief and two In tray briefs. The newest comes first.
+Two refresh briefs, one Runs brief and two In tray briefs. The newest comes first.
+
+## Refresh, grid and highlighter
+
+### Brief
+
+The user approved direction B, Postmark, and it is built on `feat/postmark-refresh`. They now want two things from direction C on top of it:
+
+1. C's squared paper behind every screen, in place of B's plain sheet.
+2. No navy bar. The brand, the tabs and New task sit on the grid, and the open tab gets a highlighter in our magenta (`Tone::Turn`), not C's yellow.
+
+Everything else stays B: Zilla Slab and Schibsted Grotesk, white cards, the day stamp, Done today and Coming up, the pinned footer, and the magenta count chips.
+Out of scope: code, tests, snapshots. The canvas starts from the built snapshots (`intray_light`, `intray_dark`, `jobs_light`, `tracker_light`, `run_turn_light`, `first_run_light`), with their fictional data.
+
+### Canvas
+
+`Grid.html` uses `app.css` and `support.js`. Its rules are scoped to `.gp` in its own `<style>`. Choose with `?screen=today|jobs|tracker|turn|firstrun` and `?theme=light|dark`.
+
+| PNG (1280x820) | State |
+| --- | --- |
+| `Grid-today.png` | Today, full, light: 10 things need you, Harbor Bank ready to send. The Today tab carries the highlighter and the count chip. |
+| `Grid-today-dark.png` | The same in dark, with the dark grid and the dark highlighter. |
+| `Grid-jobs.png` | Jobs: the table moves onto paper, the detail card is paper, and the segments and actions sit on the grid. |
+| `Grid-tracker.png` | Applications: the note band and the lanes are opaque panels on the grid, with the grid showing in the 8px gutters. |
+| `Grid-tasks-turn.png` | Tasks, a run waiting on you. The Tasks tab is highlighted with its chip. The band's Yours cell and the dock keep the solid magenta. The run's story is on paper. |
+| `Grid-firstrun.png` | First run: the welcome card on the grid. The other tabs and New task are dimmed. |
+
+### Decisions
+
+**The highlighter: a pale swipe with a magenta edge.**
+- Full magenta behind dark text fails: navy `#12263f` on `#b0246a` is 2.41:1, and `#e6edf5` on `#f48cc0` is 1.9:1.
+- So the swipe is a tint of the turn ink, 14px tall, under the lower part of the label, reaching 6px past each side. A 2px `turn` rule runs along its bottom. The tint carries the "highlighter" look and the rule carries the brand magenta.
+- The label stays `text` in `Type::TAB_ON`.
+
+| | Light | Dark |
+| --- | --- | --- |
+| `mark` (the tint) | `#f4c2db` | `#5c3057` |
+| Label on `mark` | `#12263f`: 9.88:1 | `#e6edf5`: 8.83:1 |
+| `turn` rule on `mark` | 4.11:1 | 4.64:1 |
+| `turn` rule on `sheet` | 5.70:1 | 6.98:1 |
+| `mark` against `sheet` | 1.39:1 (the swipe is a tint, not a boundary) | 1.50:1 |
+
+Every non-text part clears 3:1 where it must be seen: the rule and the chip. Inactive tabs are `muted` on the grid, at 6.8:1 even where a grid line crosses the glyphs. Hover draws the same swipe in `raised` with no rule.
+
+**The count chip** stays solid: `turn` with `on_turn` in both themes, white on `#b0246a` at 6.35:1 and `#0d1a2b` on `#f48cc0` at 7.8:1.
+- It sits after the label, outside the swipe, so it never stacks magenta on magenta.
+- With the navy bar gone, the separate on-navy chip ink is no longer needed.
+
+**The status bar is a light strip, not transparent.** It is a `sheet` fill with a `line` hairline on top.
+- Its 13px text and the theme switch never sit on grid lines.
+- It gives the window a bottom edge.
+- The grid is the desk, and the strip is the edge of the desk.
+
+**New task is a plain button on paper**: `card` fill, `line` hairline, `text` label, keys in `muted`.
+- C drew it dark. A dark button would be a second primary on every screen, competing with the card's Y action and with the Jobs and Applications primaries.
+- If the user wants the C look, `primary` works and needs no new token.
+
+**The grid**: 1px lines every 20px, painted once per frame behind everything, anchored to the window's top-left, so they never move when content scrolls.
+
+| | Light | Dark |
+| --- | --- | --- |
+| Base (`sheet`, unchanged) | `#eff3f8` | `#13243a` |
+| Lines (`grid`, new) | `#d4dee9`, 1.22:1 on the base, about C's 1.21:1 | `#1e3554`, 1.26:1 |
+| `muted` text crossing a line | 6.8:1 | 6.96:1 |
+
+The dark lines are a step lighter than the base, between `sheet` and `panel`, so slips (`panel`) still read as blocks on the grid.
+
+**The grid and the surfaces: the grid is the desk, and anything you read in rows sits on paper.**
+- **Opaque, unchanged**: `paper` (deal card, job detail, first-run card, dock), `slip` (Done today, Coming up, This run), `lane`, `note`, the turn band, index cards, the stack edges. The grid stops at their edges.
+- **Newly on paper**: sections that hold rows of text under a `panel` rule, so lines never run between rows:
+  - the Jobs table;
+  - "The run so far";
+  - Setup's Profile and Portals;
+  - Insights' four columns;
+  - dossier sections;
+  - the command list.
+  - The 2px section rule is dropped inside paper. The table head's `text` rule stays.
+- **On the grid**:
+  - the menu;
+  - page heads (headline, subtitle, page actions);
+  - the day stamp, which gets a `sheet` disc under its outer ring so no line crosses the date;
+  - the Jobs segments;
+  - the position counter ("1 of 10");
+  - one-line footnotes ("A pink edge means…").
+  - Large or single-line text reads fine over the lines.
+- **Controls on the grid are opaque**: plain buttons fill `card` instead of transparent, and fields keep `field`.
+
+**The menu is one row**: brand, tabs, New task at the right.
+- Without the bar, the two-row frame only spent height. One row gives the page about 44px back, which matters most at the user's 1040x650 window.
+- At 1040 the row needs about 760px, so it fits.
+
+### Token changes (`src/ui_kit/palette.rs`, `tokens.rs`)
+
+| Change | Token | Light | Dark |
+| --- | --- | --- | --- |
+| New | `grid` | `#d4dee9` | `#1e3554` |
+| New | `mark` | `#f4c2db` | `#5c3057` |
+| Removed | `chrome`, `chrome_tab`, `chrome_ink`, `chrome_line` | | |
+| Removed, now `muted` | `chrome_muted` (inactive tabs, status text, segment labels) | | |
+| Removed, now `closed` | `chrome_alert` (the failed-source square, the status alert) | | |
+| Removed, now `turn` and `on_turn` | `turn_on_chrome`, `on_turn_chrome` | | |
+| Unchanged | `sheet`, `card`, `turn`, `on_turn`, `panel`, `raised`, `line` | | |
+| New measure | `GRID_PITCH = 20.0` | | |
+| New measure | `MARK_HEIGHT = 14.0`, `MARK_RULE = 2.0`, `MARK_OVERHANG = 6.0` | | |
+| Changed measure | `SHELL_PADDING = (28.0, 14.0, 4.0)`: one row | | |
+| Changed measure | `NAV_TAB_PADDING = 10.0` (was 18), `NAV_TAB_GAP = 6.0` (was 3): no tab shapes to separate | | |
+
+The `Palette` doc comment becomes: "Depth comes from a gridded desk (`sheet` with `grid` lines), folders (`panel`) and paper (`card`)."
+
+### Widget changes
+
+| Widget | Change |
+| --- | --- |
+| New `paint_grid(painter, rect)` in `surfaces.rs` | Fills `sheet`, then draws vertical and horizontal `HAIRLINE` segments in `grid` every `GRID_PITCH`, from the window origin, on half pixels. About 105 segments at 1280x820. The shell calls it once on the full window rect, before any panel. |
+| `sheet_frame` | No fill. The grid is already painted under it. |
+| `shell_top_frame` | No fill. One row: `brand`, the tabs, then `shortcut_button` right-aligned. |
+| `status_frame` | `sheet` fill, plus a `HAIRLINE` in `line` along its top edge. |
+| `folder_tab` | No tab shape. The label is `Type::TAB` in `muted`, or `TAB_ON` in `text` when on. When on, it paints the swipe: a rect `MARK_HEIGHT` tall, label width plus `MARK_OVERHANG` each side, bottom 1px below the baseline, filled `mark`, then a `MARK_RULE` rect in `turn` along its bottom. Hover paints the swipe in `raised` with no rule. `TabMark::Count` draws `attention_count(ui, n)`, and the failed square is `closed`. The hit rect stays `NAV_TAB_HEIGHT` tall. |
+| `attention_count(ui, n, on_chrome)` | Drop `on_chrome`. Always `turn` and `on_turn`. |
+| `shortcut_button` | `card` fill, `line` hairline, `text` label, keys in `muted`. |
+| `status_segmented` | Off: `muted`. Hover: `panel` fill. On: `raised` fill with `text` semibold. |
+| `brand` | Mark in `text` with its cutout in `sheet`, word in `text`. |
+| `chrome_status`, `chrome_note` | Rename to `status_line` and `status_note`. Inks `muted`, alerts `closed`, the ready square `hired`. |
+| `day_stamp` | Paint a `sheet` circle under the outer ring first. |
+| Plain buttons (`install_theme`) | `widgets.inactive.weak_bg_fill` becomes `card` instead of transparent, so a button on the grid is opaque. |
+| `paper(ui, false, …)` | Now also wraps the row sections listed above. |
+
+### Doc changes (for the lead)
+
+- **`ARCHITECTURE.md` line 24**: replace "The frame is a fixed navy in both themes." with:
+  > The window is a gridded desk in both themes, and anything read in rows sits on paper.
+- **`src/ui_kit/mod.rs` line 1** (for the builder): the same replacement.
+- **`README.md`**: no change. It does not describe the frame.
+- **`AGENTS.md`**: no change.
+
+### For the user to decide
+
+1. **Magenta now marks two things**: what waits on you, and where you are.
+   - B kept magenta for "needs you" only. The pale swipe keeps the two apart, because only chips, Now, Yours and the dock are solid.
+   - If they want magenta to stay strictly "needs you", the swipe can use `raised` with a `text` rule instead.
+2. **The New task button**: plain on paper (drawn) or dark as in C.
+3. **Grid strength**: the drawn lines are as faint as C's. A stronger line every 5 squares (100px), as on a real engineering pad, is one more token if they want more texture.
 
 ## 0. Refresh: clearer words, and a less bland look
 

@@ -867,6 +867,21 @@ fn the_tabs_use_plain_names() {
     assert!(harness.query_by_label_contains("In-tray").is_none());
 }
 
+/// A square marks each job with a card in Today, and the legend under the table says what it means.
+#[test]
+fn jobs_mark_what_waits_in_today() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_waiting"));
+    let legend = "Waiting in Today. Decide there, or open the drafting task from here.";
+    assert!(is_shown(&harness, legend));
+    let marks = harness.query_all_by_label("Waiting in Today").count();
+    assert_eq!(marks, 4 + 1, "every shortlisted job waits, and the legend has its own square");
+
+    harness.get_by_label_contains("Skipped").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, legend));
+    assert!(!is_shown(&harness, "Waiting in Today"));
+}
+
 /// The frame a prompt arrives in shows it, before it is measured and with no second pass to redraw in.
 /// A taller prompt after a measured one in the same run starts from no measure too.
 #[test]

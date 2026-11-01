@@ -417,7 +417,7 @@ impl Shell {
                     self.follow(ui.ctx(), request);
                 }
             }
-            Screen::Jobs => self.jobs.show(ui, &snapshot.board),
+            Screen::Jobs => self.jobs.show(ui, &snapshot.board, &queue.waiting_jobs()),
             Screen::Tracker => {
                 if let Some(folder) = self.tracker.show(ui, &snapshot.pipeline) {
                     self.show_dossier(folder);

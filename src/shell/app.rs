@@ -16,7 +16,7 @@ use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
-use crate::runs::ui::{Launcher, RunScreen};
+use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
@@ -485,8 +485,8 @@ impl Shell {
             Screen::Runs => {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
                 let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
-                if let Some(desk) = &mut self.desk {
-                    self.run_screen.show(ui, desk, &root);
+                if let Some(desk) = &mut self.desk && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask) {
+                    self.screen = Screen::Launcher;
                 }
             }
             Screen::Workspace => {

@@ -4,8 +4,8 @@ use egui_extras::{Column, TableBuilder};
 use crate::insights::application::{GapRow, SearchInsights, SkillGapView, WorkflowBand, gap_rows};
 use crate::ui_kit::tokens::{SCREEN_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FlowNode, Ink, Subtitle, Title, Tone, Type, command_action, command_button, flow_band, list_row, muted, note, page_body, page_head, panel, panel_body, panel_header,
-    primary_command_action, rich, slip, small_command_action, split, strong, table_cell, table_head, tag, tally_strip, wrapped_height,
+    CellRule, FlowNode, Ink, Subtitle, Title, Tone, Type, command_action, empty_state, flow_band, list_row, muted, note, page_body, page_head, panel, panel_body, panel_header,
+    primary_command_action, rich, slip, small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
@@ -158,13 +158,8 @@ fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)]) {
 
 fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
     let Some(report) = report else {
-        panel(ui, |ui| {
-            panel_body(ui, |ui| {
-                ui.set_width(ui.available_width());
-                strong(ui, "No skill gap report yet");
-                muted(ui, "Run the analysis once you have ranked jobs or tracked applications.");
-                command_button(ui, "/upskill");
-            });
+        empty_state(ui, "No skill gap report yet", "Skill gaps are drawn from your ranked jobs and tracked applications. Run the analysis once you have some.", |ui| {
+            command_action(ui, "Find skill gaps…", "/upskill");
         });
         return;
     };

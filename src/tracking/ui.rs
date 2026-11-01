@@ -5,7 +5,7 @@ use egui::{Frame, ScrollArea, Ui};
 
 use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
 use crate::ui_kit::{
-    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, command_button, divider, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel, panel_body,
+    CardLook, Ink, Subtitle, Title, Tone, Type, command_action, divider, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel_body,
     paper_with_footer, primary_button, primary_command_action, rich, side_column, small_command_action, stamp_square, strong, tag,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
@@ -116,12 +116,8 @@ impl TrackerScreen {
     fn body(&mut self, ui: &mut Ui, pipeline: &Pipeline, waiting: &Waiting) -> Option<String> {
         let mut open = None;
         if pipeline.is_empty() {
-            panel(ui, |ui| {
-                panel_body(ui, |ui| {
-                    strong(ui, "No applications yet");
-                    muted(ui, "The tracker appears when /apply records your first application.");
-                    command_button(ui, "/apply");
-                });
+            empty_state(ui, "No applications yet", "Your tracker appears here once your first application is recorded.", |ui| {
+                command_action(ui, "Draft an application…", "/apply");
             });
             return None;
         }

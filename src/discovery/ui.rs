@@ -6,7 +6,7 @@ use egui_extras::{Column, TableBuilder};
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
-    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, hand, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, primary_command_action, rich,
+    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, hand, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, primary_command_action, rich,
     score, segmented, side_column, stamp, stamp_square, strong, table_cell, table_head, tag, title_over,
 };
 
@@ -122,12 +122,7 @@ impl JobsScreen {
 
         let jobs = board.jobs_in(self.lane);
         if jobs.is_empty() {
-            panel(ui, |ui| {
-                panel_body(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    empty_state(ui, self.lane, board);
-                });
-            });
+            lane_empty(ui, self.lane, board);
             return;
         }
         if !self.selected.as_ref().is_some_and(|key| jobs.iter().any(|job| &job.key == key)) {
@@ -239,20 +234,21 @@ impl JobsScreen {
     }
 }
 
-fn empty_state(ui: &mut Ui, lane: Lane, board: &JobBoard) {
+fn lane_empty(ui: &mut Ui, lane: Lane, board: &JobBoard) {
     let new = board.count(Lane::New);
     match lane {
         Lane::Shortlist if new > 0 => {
-            strong(ui, if new == 1 { "1 new job waits for a score.".to_owned() } else { format!("{new} new jobs wait for a score.") });
-            primary_command_action(ui, &score_jobs_label(new), "/rank");
+            let title = if new == 1 { "1 new job waits for a score.".to_owned() } else { format!("{new} new jobs wait for a score.") };
+            empty_state(ui, &title, "", |ui| {
+                primary_command_action(ui, &score_jobs_label(new), "/rank");
+            });
         }
         Lane::Shortlist | Lane::New => {
-            strong(ui, "No jobs wait here. Search your job sites for new ones.");
-            command_action(ui, "Find new jobs…", "/scrape");
+            empty_state(ui, "No jobs wait here.", "Search your job sites for new ones.", |ui| {
+                command_action(ui, "Find new jobs…", "/scrape");
+            });
         }
-        _ => {
-            strong(ui, format!("Nothing in {}.", lane_label(lane)));
-        }
+        _ => empty_note(ui, &format!("Nothing in {}.", lane_label(lane)), ""),
     }
 }
 

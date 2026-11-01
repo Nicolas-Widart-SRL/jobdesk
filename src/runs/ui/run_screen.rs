@@ -15,8 +15,8 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, hand, markdown, muted, page_body, page_head, panel,
-    panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, empty_state, hand, markdown, muted, page_body, page_head, panel,
+    panel_body, panel_header, path_label, pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
 
@@ -41,6 +41,13 @@ const CHOICES_MAX_HEIGHT: f32 = 260.0;
 const DETAIL_MIN_HEIGHT: f32 = 40.0;
 const DETAIL_MAX_HEIGHT: f32 = 180.0;
 const DETAIL_GAP: f32 = 4.0;
+
+/// What the run screen asks of the shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunScreenRequest {
+    /// Open the launcher with no command in it.
+    NewTask,
+}
 
 #[derive(Default)]
 pub struct RunScreen {
@@ -259,7 +266,8 @@ impl RunScreen {
     }
 
     /// `root` is the workspace folder, cut from the front of the paths the story shows.
-    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, root: &str) {
+    /// Returns what the screen asks of the shell, for a button that opens another screen.
+    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, root: &str) -> Option<RunScreenRequest> {
         let known = self.selected.as_ref().is_some_and(|id| desk.run(id).is_some());
         if !known {
             match desk.runs().first() {
@@ -269,16 +277,17 @@ impl RunScreen {
         }
         let Some(run) = self.selected.as_ref().and_then(|id| desk.run(id)).cloned() else {
             page_head(ui, Title::Slab("Tasks"), Some(Subtitle::Text("Every command Jobdesk ran in this workspace")), |_| {});
+            let mut request = None;
             page_body(ui, |ui| {
-                panel(ui, |ui| {
-                    panel_body(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        strong(ui, "No runs yet");
-                        muted(ui, "Press New task to start one.");
-                    });
+                let body = "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends.";
+                empty_state(ui, "No tasks yet", body, |ui| {
+                    primary_command_action(ui, "Find new jobs…", "/scrape");
+                    if button(ui, "New task…").clicked() {
+                        request = Some(RunScreenRequest::NewTask);
+                    }
                 });
             });
-            return;
+            return request;
         };
         let narrow = ui.ctx().content_rect().width() < DETAILS_BELOW_WIDTH;
         // A run that stopped or failed can still hold its process, idle: its session can be ended too.
@@ -308,6 +317,7 @@ impl RunScreen {
         }
         let view = View::of(&run);
         page_body(ui, |ui| self.body(ui, desk, &run, &view, root, narrow));
+        None
     }
 
     /// Asks before the session ends. Keep it open is the default, and Esc keeps it open too.

@@ -100,6 +100,10 @@ pub const WELCOME_WIDTH: f32 = 620.0;
 pub const OFFER_PADDING: i8 = 32;
 pub const OFFER_WIDTH: f32 = 480.0;
 pub const OFFER_GAP: f32 = 14.0;
+/// The empty state of a screen: its inset, the width of its sentence and the gap between its parts.
+pub const EMPTY_PADDING: i8 = 24;
+pub const EMPTY_WIDTH: f32 = 560.0;
+pub const EMPTY_GAP: f32 = 12.0;
 /// The welcome card's room above it, its padding, and the padding above and below each step.
 pub const WELCOME_TOP: f32 = 36.0;
 pub const WELCOME_PADDING: (i8, i8) = (27, 26);

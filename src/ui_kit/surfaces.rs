@@ -11,7 +11,7 @@ use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
     ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
@@ -534,6 +534,33 @@ pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnO
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
             add(ui);
+        });
+    });
+}
+
+/// What a screen shows when it has nothing yet: a title, a sentence on what to do, then the actions, all on paper.
+/// The actions only open the launcher: the user starts the run there.
+pub fn empty_state(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui)) {
+    empty_sheet(ui, title, body, Some(Box::new(actions)));
+}
+
+/// The same with no actions, such as a lane that is empty with nothing to offer. A blank `body` leaves the sentence out.
+pub fn empty_note(ui: &mut Ui, title: &str, body: &str) {
+    empty_sheet(ui, title, body, None);
+}
+
+fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<Box<dyn FnOnce(&mut Ui) + '_>>) {
+    paper(ui, false, |ui| {
+        Frame::new().inner_margin(Margin::same(EMPTY_PADDING)).show(ui, |ui| {
+            ui.set_max_width(EMPTY_WIDTH);
+            ui.spacing_mut().item_spacing.y = EMPTY_GAP;
+            add_text(ui, title, Type::SLIP_TITLE, Ink::Text);
+            if !body.is_empty() {
+                add_text(ui, body, Type::BODY, Ink::Muted);
+            }
+            if let Some(actions) = actions {
+                ui.horizontal(actions);
+            }
         });
     });
 }

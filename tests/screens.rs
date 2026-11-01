@@ -1598,12 +1598,66 @@ fn intray_set_aside_dark() {
 
 /// A workspace with one command and no applications.
 fn empty_shell(name: &str) -> Shell {
+    empty_shell_on(Screen::InTray, name)
+}
+
+fn empty_shell_on(screen: Screen, name: &str) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join(".claude/commands")).unwrap();
     fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
     let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+    Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+/// An empty screen offers a verb, and the raw command stays in the hover text. Each button opens the launcher and starts nothing.
+#[test]
+fn empty_screens_offer_verbs_not_commands() {
+    for (screen, verb, command) in [(Screen::Tracker, "Draft an application…", "/apply"), (Screen::Insights, "Find skill gaps…", "/upskill")] {
+        let started = SharedSink::default();
+        let mut shell = empty_shell_on(screen, "empty_verbs");
+        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        // Tall, so Insights shows its skill gap section without scrolling.
+        let mut harness = Harness::builder().with_size([1280.0, 1400.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+        harness.run_steps(3);
+        assert!(is_shown(&harness, verb), "{verb} is shown");
+        assert!(harness.query_by_label_contains(command).is_none(), "{command} is not");
+
+        harness.get_by_label(verb).click();
+        harness.run_steps(3);
+        assert!(is_shown(&harness, "All commands"), "{verb} opens the launcher");
+        assert!(harness.query_all_by_label(command).count() > 0, "the line is filled in");
+        assert!(started.lock().unwrap().is_none(), "no run starts");
+    }
+}
+
+/// With no tasks, Find new jobs opens `/scrape` and New task opens the launcher empty. Neither starts a run.
+#[test]
+fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
+    for (button, line) in [("Find new jobs…", Some("/scrape")), ("New task…", None)] {
+        let started = SharedSink::default();
+        let mut shell = empty_shell_on(Screen::Runs, "empty_tasks");
+        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        let mut harness = tray_harness(shell);
+        assert!(is_shown(&harness, "No tasks yet"));
+        assert!(is_shown(&harness, "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends."));
+        assert!(!is_shown(&harness, "All commands"));
+
+        harness.get_by_label(button).click();
+        harness.run_steps(3);
+        assert!(is_shown(&harness, "All commands"), "{button} opens the launcher");
+        if line.is_some() {
+            assert!(harness.query_all_by_label("/scrape").count() > 0, "{button}: the line is filled in");
+        }
+        assert!(started.lock().unwrap().is_none(), "no run starts");
+    }
+}
+
+#[test]
+fn runs_empty_light() {
+    let mut shell = shell(Screen::Runs, "runs_empty_light");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    render_with(shell, Theme::Light, "runs_empty_light");
 }
 
 #[test]

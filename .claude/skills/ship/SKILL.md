@@ -27,12 +27,17 @@ which print one line per check. Read a subagent's report once, then keep only it
 
 ## Steps
 
-1. **Start the branch.** Run `git fetch --quiet origin`.
+1. **Start the branch.** Always run `git fetch --quiet origin` first.
    Name the change's branch, such as `feat/standing-orders`, when the user did not.
    If it does not exist, create it with `git branch <change> origin/main`.
-   If `git merge-base --is-ancestor origin/main <change>` fails, rebase it yourself in a worktree:
-   `git worktree add .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase origin/main`,
-   then `git worktree remove .claude/worktrees/sync`.
+   Never create it from local `main` or from what the main checkout has checked out:
+   that checkout may be stale, or another session may be using it.
+   Never check out, reset or pull in the main checkout.
+   Never check out the change's branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
+   If `git merge-base --is-ancestor origin/main <change>` fails, rebase it yourself in a detached worktree:
+   `git worktree add --detach .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase origin/main`.
+   Move the branch to the result with `git update-ref refs/heads/<change> <new sha> <old sha>`,
+   then run `git worktree remove .claude/worktrees/sync`.
    On a conflict, run `git -C .claude/worktrees/sync rebase --abort`, remove the worktree and ask the user.
    When the branch is already pushed, push the rebased branch with `git push --force-with-lease origin <change>`.
    Never send a rebase of the change's branch to a builder.
@@ -74,7 +79,7 @@ Give each subagent a brief that stands alone. It has none of your context.
 Give a builder:
 
 - the step from the plan, word for word, with its files and its check;
-- the change's branch, so it branches from the right commit;
+- the change's branch and its head SHA, so it resets its worktree to the right commit;
 - what is out of scope.
 
 When the change builds a design, add the canvas paths.

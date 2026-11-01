@@ -28,19 +28,22 @@ You build one step in your own git worktree. Other builders work beside you in t
 
 ## Steps
 
-1. Read the brief and the files it names. Find the other code the step touches with trail.
+1. Your worktree may start from another commit. First run `git reset --hard <change-branch>` in your worktree,
+   and check that `git log -1` shows the head SHA from your brief.
+   If it does not, stop and tell the lead.
+2. Read the brief and the files it names. Find the other code the step touches with trail.
    Read several files in one turn when you can.
-2. Write the test first when the step has a testable rule.
-3. Make the change. Match the surrounding code: its names, idioms, comment density and hand formatting.
+3. Write the test first when the step has a testable rule.
+4. Make the change. Match the surrounding code: its names, idioms, comment density and hand formatting.
    Never run `cargo fmt`.
-4. Update `README.md` when the user sees a change, and `ARCHITECTURE.md` when the features, layers, runtime or trust handling change.
-5. Run `scripts/check.sh`. It runs `cargo test` and prints one line. Fix every failure.
+5. Update `README.md` when the user sees a change, and `ARCHITECTURE.md` when the features, layers, runtime or trust handling change.
+6. Run `scripts/check.sh`. It runs `cargo test` and prints one line. Fix every failure.
    When a snapshot differs, read `tests/snapshots/<name>.diff.png` and `<name>.new.png`.
    If the change is meant, run `UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery`.
    Read each changed `<name>.png` beside its `<name>.old.png` (`git status tests/snapshots` lists them).
    Then run `scripts/check.sh` again. Commit the new pictures with the step, and only when the check passes.
    Refresh snapshots on macOS only.
-6. Commit on your worktree branch with a Conventional Commits subject.
+7. Commit on your worktree branch with a Conventional Commits subject.
    End the message with `Co-Authored-By: Claude <noreply@anthropic.com>`.
 
 When a review sends findings back, fix each one, run the check again and commit again.

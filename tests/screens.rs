@@ -1935,7 +1935,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             subtitle: "The whole workflow, search health and skill gaps, read live from your files",
             alert: "Your skill gap reports could not be read.",
             shown: &["Skill gap report", "Your skill gap reports are hidden, not gone. They come back by themselves once the report file is fixed."],
-            not_shown: &["No skill gap report yet", "Find skill gaps…"],
+            not_shown: &["No skill gap report yet"],
         },
         Case {
             screen: Screen::Workspace,

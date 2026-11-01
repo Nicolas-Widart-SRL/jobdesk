@@ -38,6 +38,14 @@ fn day(date: NaiveDate) -> String {
     date.format("%a %-d %b").to_string()
 }
 
+fn ago(days: i64) -> String {
+    match days {
+        0 => "today".into(),
+        1 => "yesterday".into(),
+        days => format!("{days} days ago"),
+    }
+}
+
 fn times(count: usize) -> String {
     match count {
         1 => "once".into(),
@@ -63,22 +71,23 @@ fn card_meta(card: &ApplicationCard) -> String {
             None => card.status_label.clone(),
         },
         // Quiet days restart with each dated note, so only the applied date says when it was sent.
-        _ => match (card.days_quiet, card.days_sent) {
-            (Some(days), _) if days >= FOLLOW_UP_DAYS && card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
-            (Some(days), _) if days >= FOLLOW_UP_DAYS => format!("No reply in {days} days"),
-            (_, Some(0)) => "Sent today".into(),
-            (_, Some(1)) => "Sent yesterday".into(),
-            (_, Some(days)) => format!("Sent {days} days ago"),
-            (_, None) => card.status_label.clone(),
+        // A recent follow-up is the newer news, so it reads in place of the sent date.
+        _ => match (card.days_quiet, card.days_followed_up, card.days_sent) {
+            (Some(days), ..) if days >= FOLLOW_UP_DAYS && card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
+            (Some(days), ..) if days >= FOLLOW_UP_DAYS => format!("No reply in {days} days"),
+            (_, Some(days), _) => format!("Followed up {}", ago(days)),
+            (_, None, Some(days)) => format!("Sent {}", ago(days)),
+            (_, None, None) => card.status_label.clone(),
         },
     }
 }
 
-/// The role of every application with a card in Today, by company.
+/// The role of every application with a card in Today, by company, both lowercased as a Today card key is.
 type Waiting = HashMap<String, HashSet<String>>;
 
+/// Case does not tell applications apart, so a row renamed only in case still waits.
 fn card_waits(card: &ApplicationCard, waiting: &Waiting) -> bool {
-    waiting.get(&card.company).is_some_and(|roles| roles.contains(&card.role))
+    waiting.get(&card.company.to_lowercase()).is_some_and(|roles| roles.contains(&card.role.to_lowercase()))
 }
 
 impl TrackerScreen {
@@ -283,10 +292,14 @@ mod tests {
     use crate::tracking::application::ReachedStage;
 
     fn applied(days_quiet: i64, days_sent: i64, follow_ups_sent: usize) -> ApplicationCard {
+        ApplicationCard { days_followed_up: (follow_ups_sent > 0).then_some(days_quiet), ..plain(days_quiet, days_sent, follow_ups_sent) }
+    }
+
+    fn plain(days_quiet: i64, days_sent: i64, follow_ups_sent: usize) -> ApplicationCard {
         ApplicationCard {
             company: "Acme".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
             status_label: "Applied".into(), bucket: StatusBucket::Active, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: Some(days_quiet), days_sent: Some(days_sent),
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: Some(days_quiet), days_sent: Some(days_sent), days_followed_up: None,
             follow_ups_sent, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
             is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
             archive_folder: None, outcome: None,
@@ -295,10 +308,24 @@ mod tests {
 
     #[test]
     fn sent_counts_from_the_applied_date() {
-        assert_eq!(card_meta(&applied(3, 30, 1)), "Sent 30 days ago", "a follow-up three days ago");
         assert_eq!(card_meta(&applied(-9, 5, 0)), "Sent 5 days ago", "a note dated ahead of today");
+        assert_eq!(card_meta(&ApplicationCard { days_quiet: Some(2), ..plain(2, 30, 0) }), "Sent 30 days ago", "a dated note that is not a follow-up");
         assert_eq!(card_meta(&applied(1, 1, 0)), "Sent yesterday");
         assert_eq!(card_meta(&applied(12, 30, 1)), "No reply in 12 days, followed up once");
         assert_eq!(card_meta(&applied(15, 15, 0)), "No reply in 15 days");
+    }
+
+    #[test]
+    fn a_recent_follow_up_shows_in_place_of_the_sent_date() {
+        assert_eq!(card_meta(&applied(3, 30, 1)), "Followed up 3 days ago");
+        assert_eq!(card_meta(&applied(0, 30, 2)), "Followed up today");
+    }
+
+    #[test]
+    fn a_case_only_rename_still_waits() {
+        let waiting = Waiting::from([("acme".to_owned(), HashSet::from(["lead".to_owned()]))]);
+        assert!(card_waits(&ApplicationCard { company: "ACME".into(), role: "lead".into(), ..plain(1, 1, 0) }, &waiting));
+        assert!(card_waits(&plain(1, 1, 0), &waiting));
+        assert!(!card_waits(&ApplicationCard { role: "Architect".into(), ..plain(1, 1, 0) }, &waiting));
     }
 }

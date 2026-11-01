@@ -1,7 +1,10 @@
 use crate::discovery::application::JobView;
 use crate::discovery::domain::{FreelanceGates, Gate, Verdict};
+use crate::shared_kernel::CheckState;
 
 const NOT_STATED: &str = "Not stated";
+/// Where every score comes from. Jobs says it in its subtitle, so only Today adds it to a summary that passes all.
+pub const AD_ALONE: &str = "Scored from the job ad alone.";
 
 /// What one check on a posting is about. Its label and its sentence both come from here, so no screen matches on words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,15 +55,6 @@ impl CheckKind {
     }
 }
 
-/// How a check came out. Only the safety check can be unchecked: the ad never went through it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckState {
-    Pass,
-    Unclear,
-    Fail,
-    Unchecked,
-}
-
 impl From<Gate> for CheckState {
     fn from(gate: Gate) -> Self {
         match gate {
@@ -83,6 +77,7 @@ pub struct CheckRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobChecks {
     pub rows: Vec<CheckRow>,
+    /// The summary without `AD_ALONE`.
     pub summary: String,
 }
 
@@ -93,14 +88,36 @@ impl JobChecks {
         let summary = summary(&job.freelance, &rows, kept);
         Self { rows, summary }
     }
+
+    pub fn passes_all(&self) -> bool {
+        self.rows.iter().all(|row| row.state == CheckState::Pass)
+    }
+}
+
+/// The checks that can suggest a skip. Each needs a Skip action, so a match on this stays exhaustive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreelanceGate {
+    Contract,
+    DayRate,
+    Commute,
+}
+
+impl FreelanceGate {
+    pub fn kind(self) -> CheckKind {
+        match self {
+            Self::Contract => CheckKind::Contract,
+            Self::DayRate => CheckKind::DayRate,
+            Self::Commute => CheckKind::Commute,
+        }
+    }
 }
 
 /// The first freelance gate that fails, which is why Claude suggests a skip.
-pub fn failed_gate(gates: &FreelanceGates) -> Option<CheckKind> {
-    [(CheckKind::Contract, &gates.contract), (CheckKind::DayRate, &gates.day_rate), (CheckKind::Commute, &gates.commute)]
+pub fn failed_gate(gates: &FreelanceGates) -> Option<FreelanceGate> {
+    [(FreelanceGate::Contract, &gates.contract), (FreelanceGate::DayRate, &gates.day_rate), (FreelanceGate::Commute, &gates.commute)]
         .into_iter()
         .find(|(_, reading)| reading.gate == Gate::Fail)
-        .map(|(kind, _)| kind)
+        .map(|(gate, _)| gate)
 }
 
 fn check_rows(job: &JobView) -> Vec<CheckRow> {
@@ -143,12 +160,12 @@ fn weakest(rows: &[CheckRow], kept: bool) -> &'static str {
 
 /// A failed freelance gate leads, because it is why Claude suggests a skip. Otherwise the passes, then the weakest check.
 fn summary(gates: &FreelanceGates, rows: &[CheckRow], kept: bool) -> String {
-    if let Some(kind) = failed_gate(gates) {
-        return format!("Claude suggests you skip this. {}", kind.failed());
+    if let Some(gate) = failed_gate(gates) {
+        return format!("Claude suggests you skip this. {}", gate.kind().failed());
     }
     let passing = rows.iter().filter(|row| row.state == CheckState::Pass).count();
     if passing == rows.len() {
-        return format!("All {} checks pass. Scored from the job ad alone.", number_word(rows.len()).to_lowercase());
+        return format!("All {} checks pass.", number_word(rows.len()).to_lowercase());
     }
     let passes = if passing == 1 { "check passes" } else { "checks pass" };
     format!("{} {passes}. {}", number_word(passing), weakest(rows, kept))
@@ -208,7 +225,8 @@ mod tests {
     fn a_clean_guard_passes_with_spaces_around_it() {
         let checks = JobChecks::of(&JobView { guard: Some(" clean\n".into()), ..job() }, false);
         assert_eq!((safety(&checks).state, safety(&checks).value.as_str()), (CheckState::Pass, "Nothing hidden in the ad"));
-        assert_eq!(checks.summary, "All four checks pass. Scored from the job ad alone.");
+        assert_eq!(checks.summary, "All four checks pass.");
+        assert!(checks.passes_all());
     }
 
     #[test]
@@ -223,7 +241,7 @@ mod tests {
     #[test]
     fn a_failed_freelance_gate_leads_the_summary() {
         let rate = JobView { freelance: FreelanceGates { day_rate: read(Gate::Fail), ..job().freelance }, ..job() };
-        assert_eq!(failed_gate(&rate.freelance), Some(CheckKind::DayRate));
+        assert_eq!(failed_gate(&rate.freelance), Some(FreelanceGate::DayRate));
         assert_eq!(JobChecks::of(&rate, false).summary, "Claude suggests you skip this. The stated rate is under your floor.");
     }
 }

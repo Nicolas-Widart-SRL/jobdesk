@@ -79,6 +79,12 @@ impl TrackedApplication {
         Some(days_from(sent, today).max(0))
     }
 
+    /// Days since the latest follow-up, never below zero.
+    pub fn days_since_follow_up(&self, today: NaiveDate) -> Option<i64> {
+        let last = self.follow_up_dates().into_iter().max()?;
+        Some(days_from(last, today).max(0))
+    }
+
     pub fn follow_up_is_due(&self, today: NaiveDate, threshold_days: i64) -> bool {
         let sent = self.follow_up_dates();
         let last = sent.iter().copied().max().or(self.applied_on.date());
@@ -164,6 +170,8 @@ mod tests {
     fn days_since_sent_ignore_notes_and_never_go_negative() {
         let followed = application(ApplicationStatus::Applied, "2026-10-01", "followed up 2026-10-28");
         assert_eq!((followed.days_since_sent(today()), followed.days_quiet(today())), (Some(30), Some(3)));
+        assert_eq!(followed.days_since_follow_up(today()), Some(3));
+        assert_eq!(application(ApplicationStatus::Applied, "2026-10-01", "").days_since_follow_up(today()), None);
         let ahead = application(ApplicationStatus::Applied, "2026-11-05", "");
         assert_eq!(ahead.days_since_sent(today()), Some(0));
         assert_eq!(application(ApplicationStatus::Drafted, "2026-10-01", "").days_since_sent(today()), None);

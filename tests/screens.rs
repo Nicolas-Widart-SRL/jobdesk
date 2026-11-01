@@ -1233,10 +1233,30 @@ fn today_and_jobs_word_a_job_the_same() {
     let mut jobs = tray_harness(shell(Screen::Jobs, "checks_jobs"));
     jobs.query_all_by_label(MERIDIAN).next().expect("a Meridian row").click();
     jobs.run_steps(3);
-    assert!(is_shown(&jobs, &line), "{line} on Jobs");
+    // Jobs says in its subtitle that scores rest on the ad alone, so its line leaves that out.
+    let on_jobs = line.strip_suffix(" Scored from the job ad alone.").expect("Today says where the score comes from");
+    assert!(is_shown(&jobs, on_jobs), "{on_jobs} on Jobs");
     for value in values {
         assert!(jobs.query_all_by_label(value).count() > 0, "{value} on Jobs");
     }
+
+    // Halden's ad was flagged. Kept in Today, Jobs words it as Today's card does.
+    let halden = |kept: &str| format!("Moderate fit, 58 of 100. Five checks pass. The safety check flagged this ad{kept}");
+    jobs.get_by_label_contains("Low score").click();
+    jobs.run_steps(3);
+    assert!(is_shown(&jobs, &halden(", so read what it found before you apply.")), "not kept yet");
+
+    let mut harness = tray_harness(shell(Screen::InTray, "checks_kept"));
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+    }
+    harness.get_by_label("Harmless, keep posting").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("Jobs").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("Low score").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &halden(" and you kept it.")), "kept in Today");
 }
 
 /// The top of the dealt card's tab. Only the card's body scrolls, so a decision never moves it.

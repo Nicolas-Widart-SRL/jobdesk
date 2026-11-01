@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
-use crate::intray::application::compose::{Sources, derive_cards};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, horizon_words, rank};
+use crate::intray::application::compose::{Sources, derive_cards, guarded_job};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, HORIZON_WORDS, rank};
 use crate::shared_kernel::{LoadError, WebUrl};
 
 /// What a card asks of the rest of the app.
@@ -214,7 +214,7 @@ impl Queue {
         rows.truncate(AGENDA_ROWS);
         let until = (self.today + chrono::Duration::days(HORIZON_DAYS - 1)).format("%a %-d %b");
         let closing = if rows.is_empty() {
-            format!("No deadlines in the next {}.", horizon_words().1)
+            format!("No deadlines in the next {}.", HORIZON_WORDS.1)
         } else if cut > 0 {
             format!("{cut} more before {until}.")
         } else {
@@ -242,12 +242,12 @@ pub struct UndoOffer {
     pub reason: Option<SkipReason>,
 }
 
-/// What waits in Today, so the Jobs and Applications screens can mark it. Build it once per queue change.
+/// What waits in Today, so the Jobs and Applications screens can mark it. Build it only where one of them is drawn.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Waiting {
     /// The key of every job with a card pending.
     pub jobs: HashSet<String>,
-    /// The role of every application with a card pending, by company.
+    /// The role of every application with a card pending, by company, both lowercased as a card key is.
     pub applications: HashMap<String, HashSet<String>>,
 }
 
@@ -260,17 +260,12 @@ impl Queue {
                     waiting.jobs.insert(key.clone());
                 }
                 Subject::Application { company, role } => {
-                    waiting.applications.entry(company.clone()).or_default().insert(role.clone());
+                    waiting.applications.entry(company.to_lowercase()).or_default().insert(role.to_lowercase());
                 }
                 Subject::Run(_) => {}
             }
         }
         waiting
-    }
-
-    /// Whether the cards are still the ones `keys` lists, in order, so what waits needs no new build.
-    pub fn deals(&self, keys: &[String]) -> bool {
-        self.cards.iter().map(|card| &card.key).eq(keys)
     }
 }
 
@@ -313,6 +308,12 @@ impl InTray {
 
     fn is_set_aside(&self, key: &str, today: NaiveDate) -> bool {
         self.decisions.iter().any(|decision| decision.key == key && decision.sets_aside(today))
+    }
+
+    /// The key of every job whose flagged ad the user kept, so Jobs words it as Today does.
+    pub fn kept_jobs(&self) -> HashSet<String> {
+        let kept = self.decisions.iter().filter(|decision| decision.outcome == Outcome::Kept);
+        kept.filter_map(|decision| guarded_job(&decision.key)).map(str::to_owned).collect()
     }
 
     fn was_kept(&self, key: &str) -> bool {
@@ -1032,7 +1033,7 @@ mod tests {
         let offer = ApplicationCard {
             company: "Beta".into(), role: "Dev".into(), sector: String::new(), channel: String::new(),
             status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
             follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
             is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
             archive_folder: None, outcome: None,
@@ -1041,10 +1042,7 @@ mod tests {
         let queue = tray.queue(&Sources { board: &jobs, pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
         let waiting = queue.waiting();
         assert_eq!(waiting.jobs, HashSet::from(["acme".to_owned()]));
-        assert_eq!(waiting.applications, HashMap::from([("Beta".to_owned(), HashSet::from(["Dev".to_owned()]))]));
-        let keys: Vec<String> = queue.cards.iter().map(|card| card.key.clone()).collect();
-        assert!(queue.deals(&keys));
-        assert!(!queue.deals(&keys[1..]));
+        assert_eq!(waiting.applications, HashMap::from([("beta".to_owned(), HashSet::from(["dev".to_owned()]))]), "lowercased, as the card key is");
     }
 
     fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {
@@ -1096,7 +1094,7 @@ mod tests {
         let offer = ApplicationCard {
             company: "Juniper".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
             status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: Some(today() - chrono::Days::new(2)), deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None,
+            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
             follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
             is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
             archive_folder: None, outcome: None,

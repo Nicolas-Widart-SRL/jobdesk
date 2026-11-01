@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-use crate::discovery::application::{CheckRow, CheckState, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
+use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
     CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, muted, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
@@ -66,16 +66,6 @@ fn days_words(days: i64) -> String {
     }
 }
 
-/// A check the ad never went through shows no tag.
-fn check_mark(state: CheckState) -> Option<CheckMark> {
-    match state {
-        CheckState::Pass => Some(CheckMark::Ok),
-        CheckState::Unclear => Some(CheckMark::Unclear),
-        CheckState::Fail => Some(CheckMark::Fails),
-        CheckState::Unchecked => None,
-    }
-}
-
 fn fit_words(fit: FitLevel) -> &'static str {
     match fit {
         FitLevel::High => "high",
@@ -108,18 +98,18 @@ fn score_jobs_label(new: usize) -> String {
 }
 
 impl JobsScreen {
-    /// `waiting` holds the key of every job with a card in Today.
-    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>) {
+    /// `waiting` holds the key of every job with a card in Today, and `kept` every job whose flagged ad the user kept there.
+    pub fn show(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
         let subtitle = Subtitle::Text("Scored from the job ad alone. Drafting an application also checks the company.");
         let new = board.count(Lane::New);
         page_head(ui, Title::Slab("Jobs"), Some(subtitle), |ui| {
             primary_command_action(ui, &score_jobs_label(new), "/rank");
             command_action(ui, "Find new jobs…", "/scrape");
         });
-        page_body(ui, |ui| self.body(ui, board, waiting));
+        page_body(ui, |ui| self.body(ui, board, waiting, kept));
     }
 
-    fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>) {
+    fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
         if !lane_shown(self.lane, board) {
             self.lane = Lane::Shortlist;
         }
@@ -148,7 +138,7 @@ impl JobsScreen {
         side_column("job_details", 340.0).show(ui, |ui| {
             if let Some(job) = selected {
                 paper(ui, false, |ui| {
-                    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, job));
+                    egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| details(ui, job, kept.contains(&job.key)));
                 });
             }
         });
@@ -269,6 +259,7 @@ fn empty_state(ui: &mut Ui, lane: Lane, board: &JobBoard) {
 }
 
 /// The verdict and the checks in one line, worded as the Today card words them.
+/// The page subtitle already says the score rests on the ad alone, so the line leaves that out.
 fn verdict_line(job: &JobView, checks: &JobChecks) -> String {
     match (job.verdict, job.scraper_fit) {
         (Some(verdict), _) => format!("{} {}", fit_band(Some(verdict), job.score.unwrap_or_default()), checks.summary),
@@ -277,8 +268,8 @@ fn verdict_line(job: &JobView, checks: &JobChecks) -> String {
     }
 }
 
-fn details(ui: &mut Ui, job: &JobView) {
-    let checks = JobChecks::of(job, false);
+fn details(ui: &mut Ui, job: &JobView, kept: bool) {
+    let checks = JobChecks::of(job, job.guard_flagged && kept);
     panel_body(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = ROW_GAP;
@@ -341,7 +332,7 @@ fn check_row(ui: &mut Ui, check: &CheckRow) {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         muted(ui, check.kind.label());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(mark) = check_mark(check.state) {
+            if let Some(mark) = CheckMark::of(check.state) {
                 check_tag(ui, mark);
             }
             ui.add(egui::Label::new(check.value.as_str()).wrap());

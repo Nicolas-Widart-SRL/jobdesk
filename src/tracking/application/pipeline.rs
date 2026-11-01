@@ -28,6 +28,8 @@ pub struct ApplicationCard {
     pub days_quiet: Option<i64>,
     /// Days since the applied date alone, never below zero.
     pub days_sent: Option<i64>,
+    /// Days since the latest follow-up, never below zero. None until one is sent.
+    pub days_followed_up: Option<i64>,
     pub follow_ups_sent: usize,
     pub follow_up_due: bool,
     pub stale: bool,
@@ -121,6 +123,7 @@ fn card_of(application: &TrackedApplication, today: NaiveDate) -> ApplicationCar
         source: application.source.clone(),
         days_quiet: application.days_quiet(today),
         days_sent: application.days_since_sent(today),
+        days_followed_up: application.days_since_follow_up(today),
         follow_ups_sent: application.follow_ups_sent(),
         follow_up_due: application.follow_up_is_due(today, FOLLOW_UP_DAYS),
         stale: application.is_stale(today, STALE_DAYS),

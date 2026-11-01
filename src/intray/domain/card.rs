@@ -1,23 +1,19 @@
 use chrono::NaiveDate;
 
 use crate::intray::domain::SkipReason;
-use crate::shared_kernel::WebUrl;
+use crate::shared_kernel::{CheckState, WebUrl};
 use crate::shared_kernel::dates::days_from;
 
 /// How far ahead a date counts as a deadline, the span of Coming up.
 pub const HORIZON_DAYS: i64 = 14;
 
 /// The horizon as a heading, "2 weeks", and in a sentence, "two weeks".
-pub fn horizon_words() -> (String, String) {
-    span_words(HORIZON_DAYS)
-}
-
-fn span_words(days: i64) -> (String, String) {
-    match days {
-        14 => ("2 weeks".to_owned(), "two weeks".to_owned()),
-        days => (format!("{days} days"), format!("{days} days")),
-    }
-}
+/// Another span will not compile until it has words here.
+pub const HORIZON_WORDS: (&str, &str) = match HORIZON_DAYS {
+    14 => ("2 weeks", "two weeks"),
+    7 => ("1 week", "one week"),
+    _ => panic!("name HORIZON_DAYS in words"),
+};
 
 /// Declared in the order cards of one tier and date are dealt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,20 +51,11 @@ enum Tier {
     Rest,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Check {
-    Pass,
-    Flag,
-    Fail,
-    /// The ad never went through this check, so it shows no result.
-    Unchecked,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateRow {
     pub label: &'static str,
     pub value: String,
-    pub check: Check,
+    pub check: CheckState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,10 +236,8 @@ mod tests {
     }
 
     #[test]
-    fn the_horizon_reads_in_weeks_only_at_fourteen_days() {
-        assert_eq!(span_words(14), ("2 weeks".to_owned(), "two weeks".to_owned()));
-        assert_eq!(span_words(10), ("10 days".to_owned(), "10 days".to_owned()));
-        assert_eq!(horizon_words(), span_words(HORIZON_DAYS));
+    fn the_horizon_reads_in_weeks() {
+        assert_eq!(HORIZON_WORDS, ("2 weeks", "two weeks"));
     }
 
     #[test]

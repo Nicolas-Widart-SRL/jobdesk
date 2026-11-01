@@ -4,6 +4,7 @@ use egui::emath::TSTransform;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, pos2, vec2};
 
+use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred};
@@ -264,6 +265,18 @@ pub enum CheckMark {
     Ok,
     Unclear,
     Fails,
+}
+
+impl CheckMark {
+    /// The tag for a check's state. A check the ad never went through has none.
+    pub fn of(state: CheckState) -> Option<Self> {
+        match state {
+            CheckState::Pass => Some(Self::Ok),
+            CheckState::Unclear => Some(Self::Unclear),
+            CheckState::Fail => Some(Self::Fails),
+            CheckState::Unchecked => None,
+        }
+    }
 }
 
 /// A check's result as a tag in plain words.

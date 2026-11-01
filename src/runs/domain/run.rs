@@ -273,7 +273,7 @@ impl Run {
                 self.rail_moved_at = self.activity.len();
             }
         }
-        if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") &&!self.files_changed.contains(&summary) {
+        if matches!(name.as_str(), "Write" | "Edit" | "MultiEdit") && !self.files_changed.contains(&summary) {
             self.files_changed.push(summary.clone());
         }
         self.push(ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested);

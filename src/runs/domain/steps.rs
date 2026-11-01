@@ -118,7 +118,7 @@ fn basename(token: &str) -> &str {
 /// A runner starts a script rather than naming it.
 fn is_interpreter(token: &str) -> bool {
     let file = basename(token).to_ascii_lowercase();
-    matches!(file.as_str(),"python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
+    matches!(file.as_str(), "python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
 }
 
 const APPLY_LABELS: &[&str] = &["Fetch", "Evaluate", "Draft", "Review", "Revise", "Compile", "Finish"];

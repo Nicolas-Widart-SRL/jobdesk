@@ -109,7 +109,7 @@ impl Launcher {
                     let width = ui.available_width();
                     ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0).labelled_by(label);
                 });
-                labelled(budget, "Budget cap, USD", |ui, label| {
+                labelled(budget, "Spend at most, USD", |ui, label| {
                     let edit = TextEdit::singleline(&mut self.budget).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
                     ui.add(edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY)).labelled_by(label);
                 });
@@ -117,10 +117,10 @@ impl Launcher {
             let line = self.line();
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = FIELD_GAP;
-                ui.label(rich(ui, "Sent to Claude", Type::SMALL, Ink::Muted));
+                ui.label(rich(ui, "Claude will run", Type::SMALL, Ink::Muted));
                 code_box(ui, |ui| ui.add(egui::Label::new(rich(ui, &line, Type::MONO, Ink::Text)).wrap()));
             });
-            muted(ui, "Runs in your repo checkout, with your project settings and permissions.");
+            muted(ui, "Runs in your job search folder.");
             if self.command.destructive {
                 ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");

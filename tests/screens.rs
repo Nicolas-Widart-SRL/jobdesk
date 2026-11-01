@@ -344,7 +344,7 @@ fn a_command_button_leads_to_a_started_run() {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
-    harness.get_by_label("Calibrate").click();
+    harness.get_by_label("Tune scoring").click();
     harness.run_steps(3);
     harness.get_by_label("All commands");
 
@@ -1381,7 +1381,7 @@ fn dossier_prep_light() {
 
 #[test]
 fn dossier_outcome_dark() {
-    render_dossier(Some("Outcome and follow-ups"), Theme::Dark, "dossier_outcome_dark");
+    render_dossier(Some("Results and follow-ups"), Theme::Dark, "dossier_outcome_dark");
 }
 
 #[test]

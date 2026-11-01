@@ -89,7 +89,7 @@ impl DossierScreen {
             (Section::Evaluation, "Evaluation".to_owned()),
             (Section::Posting, "Posting".to_owned()),
             (Section::Prep, format!("Interview prep  {}", dossier.contents.prep_packs.len())),
-            (Section::Outcome, format!("Outcome and follow-ups  {}", dossier.contents.follow_ups.len())),
+            (Section::Outcome, format!("Results and follow-ups  {}", dossier.contents.follow_ups.len())),
         ];
         if let Some(section) = segmented(ui, self.section, &sections) {
             self.section = section;
@@ -121,7 +121,7 @@ impl DossierScreen {
                         compiled_pages(ui, textures, &documents);
                     });
                     divider(ui);
-                    panel_header(ui, "Keyword coverage", Some("from CV text layer"));
+                    panel_header(ui, "Keywords from the ad, found in your CV", None);
                     keywords(ui, &dossier.findings.keywords);
                 });
             },

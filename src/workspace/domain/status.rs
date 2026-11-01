@@ -73,7 +73,7 @@ const fn tool(name: &'static str, purpose: &'static str, required: bool) -> Tool
 pub const TOOLS: [ToolSpec; 6] = [
     tool("claude", "Runs commands", true),
     tool("python3", "State tools", true),
-    tool("bun", "Portal CLIs", true),
+    tool("bun", "Job site search", true),
     tool("lualatex", "CV", true),
     tool("xelatex", "Cover letter", true),
     tool("pdftotext", "Layout check", false),

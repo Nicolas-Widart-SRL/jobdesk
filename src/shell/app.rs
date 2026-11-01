@@ -339,7 +339,6 @@ impl Shell {
                 let open = pipeline.open_count();
                 Some(format!("{open} open, {} closed", pipeline.cards().count() - open))
             }
-            Screen::Insights => Some("Drafted rows stay out of every statistic".to_owned()),
             Screen::Dossier => Some("Source: tracker row and application archive".to_owned()),
             Screen::Workspace => Some(match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
                 AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),

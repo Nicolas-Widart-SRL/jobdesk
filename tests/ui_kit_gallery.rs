@@ -1,12 +1,13 @@
 //! One sheet showing every Ledger component, in both themes.
 
 use egui::{Grid, ScrollArea, Theme, Ui};
+use egui_commonmark::CommonMarkCache;
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, Title, Tone, Type, alert, bar, brand_mark, button, card_tab, clear_panel, code_box, command_button, command_row, danger_button,
-    deal, desk_frame, divider, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
+    deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
     knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button, primary_key_button,
     prompt_box, prompt_box_tone, rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
     status_dot, status_segmented, step_line, step_rail, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
@@ -407,12 +408,19 @@ fn runs(ui: &mut Ui) {
     step_line(ui, Some(("5", KnotState::Failed)), "Compile", "The cover letter did not build.", Some(("Show 2 actions", false)));
 }
 
+const DOCUMENT: &str = "# Job fit evaluation: Tech Lead, Java Platform\n\nVerdict: Good fit, 74 out of 100. Every hard gate passes, and the two gaps are small.\n\n## Gates\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week | Pass |\n| Salary | Not stated | Check |\n\n## Strengths\n\n- Eight years of Java and Spring Boot, the core stack in the posting.\n- You led a platform team of six. This role leads five.\n\nShall I go ahead and draft the CV and cover letter for this role, or stop here?";
+
+fn document_sample(ui: &mut Ui) {
+    let marked = DOCUMENT.rfind("\n\n").map(|at| at + 2);
+    document(ui, &mut CommonMarkCache::default(), DOCUMENT, marked.map(|start| start..DOCUMENT.len()));
+}
+
 type Section = (&'static str, fn(&mut Ui));
 
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [Section; 11] = [
+        let sections_of_gallery: [Section; 12] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -424,6 +432,7 @@ fn gallery(ui: &mut Ui) {
             ("Board", board),
             ("In-tray", tray),
             ("Runs", runs),
+            ("Document", document_sample),
         ];
         for (title, section) in sections_of_gallery {
             ui.heading(title);
@@ -436,7 +445,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 5250.0])
+        .with_size([1000.0, 5900.0])
         .with_pixels_per_point(1.5)
         .with_theme(theme)
         .with_context_setup(install_look)

@@ -152,6 +152,10 @@ pub const GATE_COLUMN_GAP: f32 = 20.0;
 pub const GATE_MIN: f32 = 210.0;
 pub const SCRIM_TOP: f32 = 110.0;
 pub const SCRIM_OPACITY: f32 = 0.72;
+/// The widest a run of prose gets, so a line stays readable on a wide screen.
+pub const DOC_MEASURE: f32 = 620.0;
+/// The rule beside the paragraph a question came from.
+pub const QUOTE_RULE: f32 = 3.0;
 pub const ASK_WIDTH: f32 = 640.0;
 pub const ASK_PADDING: f32 = 16.0;
 pub const ASK_GAP: f32 = 12.0;

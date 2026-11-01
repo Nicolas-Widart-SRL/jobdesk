@@ -55,6 +55,17 @@ fn swatches(ui: &mut Ui) {
         ("page", p.page),
         ("page_line", p.page_line),
         ("page_head", p.page_head),
+        ("chrome", p.chrome),
+        ("chrome_tab", p.chrome_tab),
+        ("chrome_ink", p.chrome_ink),
+        ("chrome_muted", p.chrome_muted),
+        ("chrome_line", p.chrome_line),
+        ("chrome_alert", p.chrome_alert),
+        ("stamp", p.stamp),
+        ("on_stamp", p.on_stamp),
+        ("stamp_on_chrome", p.stamp_on_chrome),
+        ("on_stamp_chrome", p.on_stamp_chrome),
+        ("card", p.card),
     ];
     for row in colors.chunks(SWATCHES_PER_ROW) {
         ui.horizontal(|ui| {
@@ -440,7 +451,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 5800.0])
+        .with_size([1000.0, 5950.0])
         .with_pixels_per_point(1.25)
         .with_theme(theme)
         .with_context_setup(install_look)

@@ -8,8 +8,8 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT, HORIZON_CHIP_HEIGHT,
-    HORIZON_CHIP_PADDING, HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
+    CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
+    HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
     STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
@@ -74,13 +74,13 @@ pub fn horizon_count(ui: &mut Ui, count: usize, overdue: usize, kinds: &[(usize,
 pub fn horizon_return(ui: &mut Ui, text: &str, label: &str, active: bool, tip: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
     let room = ui.available_width();
-    let galley = line(ui, text, Type::TAG, p.text, (room - HORIZON_CHIP_PADDING * 2.0).max(0.0));
-    let size = vec2((galley.size().x + HORIZON_CHIP_PADDING * 2.0).min(room), HORIZON_CHIP_HEIGHT);
+    let galley = line(ui, text, Type::TAG, p.text, (room - CHIP_PADDING * 2.0).max(0.0));
+    let size = vec2((galley.size().x + CHIP_PADDING * 2.0).min(room), CHIP_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let edge = if response.hovered() { p.text } else { p.line };
     ui.painter().rect_filled(rect, RADIUS_CARD, p.sheet);
     ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
-    let at = pos2(rect.left() + HORIZON_CHIP_PADDING, rect.center().y - galley.size().y / 2.0);
+    let at = pos2(rect.left() + CHIP_PADDING, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(at, galley, p.text);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
     let tip = |ui: &mut Ui| {

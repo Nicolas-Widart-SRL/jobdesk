@@ -1,4 +1,4 @@
-//! The Ledger design system: tokens and generic widgets. Colour is reserved for data; chrome stays neutral.
+//! The Ledger design system: tokens and generic widgets. Colour is for job status, plus one stamp ink for what waits on the user. The frame is a fixed navy in both themes.
 //! Every colour, measure and painted shape lives here. No widget knows about a feature.
 
 mod controls;

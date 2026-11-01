@@ -59,8 +59,8 @@ pub const LANE_GAP: f32 = 6.0;
 
 pub const HORIZON_CELL_HEIGHT: f32 = 72.0;
 pub const HORIZON_PADDING: (i8, i8, i8) = (7, 7, 9);
-pub const HORIZON_CHIP_HEIGHT: f32 = 20.0;
-pub const HORIZON_CHIP_PADDING: f32 = 6.0;
+pub const CHIP_HEIGHT: f32 = 20.0;
+pub const CHIP_PADDING: f32 = 6.0;
 pub const HORIZON_NOTE_PADDING: (f32, f32) = (14.0, 7.0);
 pub const HORIZON_TIP_WIDTH: f32 = 250.0;
 pub const CARD_TAB_HEIGHT: f32 = 30.0;
@@ -68,6 +68,18 @@ pub const CARD_TAB_PADDING: (i8, i8) = (14, 6);
 pub const CARD_TAB_GAP: f32 = 10.0;
 pub const DEAL_PADDING: (i8, i8) = (22, 20);
 pub const DEAL_GAP: f32 = 16.0;
+/// The day stamp's size, its two ring radii, and a tick's inner radius, outer radius and width.
+pub const DAY_STAMP_SIZE: f32 = 84.0;
+pub const DAY_STAMP_RINGS: (f32, f32) = (40.4, 28.4);
+pub const DAY_STAMP_TICK: (f32, f32, f32) = (31.0, 37.8, 4.7);
+pub const DAY_STAMP_EMPTY_TICKS: usize = 12;
+pub const DAY_STAMP_MAX_TICKS: usize = 40;
+pub const AGENDA_DAY_WIDTH: f32 = 50.0;
+/// The stamp-ink edge on a card that waits on the user.
+pub const WAITS_EDGE: f32 = 3.0;
+/// The opacity of a card that is decided or set aside.
+pub const FADED_OPACITY: f32 = 0.8;
+pub const WELCOME_WIDTH: f32 = 620.0;
 pub const OFFSET_SHADOW: i8 = 5;
 pub const WINDOW_SHADOW: i8 = 6;
 pub const STACK_EDGE_HEIGHT: f32 = 5.0;

@@ -29,6 +29,21 @@ pub struct Palette {
     pub page: Color32,
     pub page_line: Color32,
     pub page_head: Color32,
+    /// The fixed navy frame, the same in both themes.
+    pub chrome: Color32,
+    pub chrome_tab: Color32,
+    pub chrome_ink: Color32,
+    pub chrome_muted: Color32,
+    pub chrome_line: Color32,
+    /// The failed-source square on a chrome tab.
+    pub chrome_alert: Color32,
+    /// The one ink for what waits on the user.
+    pub stamp: Color32,
+    pub on_stamp: Color32,
+    pub stamp_on_chrome: Color32,
+    pub on_stamp_chrome: Color32,
+    /// The fill of deal, job slip and application cards.
+    pub card: Color32,
 }
 
 const fn hex(rgb: u32) -> Color32 {
@@ -59,6 +74,17 @@ const DARK: Palette = Palette {
     page: hex(0xf7f9fc),
     page_line: hex(0xc7d3e0),
     page_head: hex(0x35495f),
+    chrome: hex(0x0d1a2b),
+    chrome_tab: hex(0x1a2f49),
+    chrome_ink: hex(0xe6edf5),
+    chrome_muted: hex(0xb3c4d6),
+    chrome_line: hex(0x33506f),
+    chrome_alert: hex(0xf7a697),
+    stamp: hex(0xf48cc0),
+    on_stamp: hex(0x0d1a2b),
+    stamp_on_chrome: hex(0xf48cc0),
+    on_stamp_chrome: hex(0x0d1a2b),
+    card: hex(0x1a2f49),
 };
 
 const LIGHT: Palette = Palette {
@@ -85,6 +111,17 @@ const LIGHT: Palette = Palette {
     page: hex(0xffffff),
     page_line: hex(0xd0dae6),
     page_head: hex(0x35495f),
+    chrome: hex(0x12263f),
+    chrome_tab: hex(0x233b59),
+    chrome_ink: hex(0xe6edf5),
+    chrome_muted: hex(0xb3c4d6),
+    chrome_line: hex(0x33506f),
+    chrome_alert: hex(0xf7a697),
+    stamp: hex(0xb0246a),
+    on_stamp: hex(0xffffff),
+    stamp_on_chrome: hex(0xf48cc0),
+    on_stamp_chrome: hex(0x0d1a2b),
+    card: hex(0xffffff),
 };
 
 impl Palette {
@@ -100,7 +137,7 @@ impl Palette {
     }
 }
 
-/// Colour is for job status only, except `Turn`, which marks that a run needs you.
+/// Colour is for job status only, except `Turn`, the stamp ink for what waits on you, such as a run's turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Plain,
@@ -128,13 +165,14 @@ impl Tone {
     }
 }
 
-/// How strongly text or a mark reads: a neutral step, or a job status.
+/// How strongly text or a mark reads: a neutral step, a job status, or the stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ink {
     Text,
     Muted,
     Faint,
     Status(Tone),
+    Stamp,
 }
 
 impl From<Tone> for Ink {
@@ -150,6 +188,7 @@ impl Ink {
             Self::Muted => p.muted,
             Self::Faint => p.faint,
             Self::Status(tone) => tone.color(p),
+            Self::Stamp => p.stamp,
         }
     }
 }
@@ -212,4 +251,39 @@ fn visuals(theme: Theme) -> Visuals {
         state.expansion = 0.0;
     }
     visuals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(color: Color32) -> f64 {
+        let channel = |c: u8| {
+            let c = f64::from(c) / 255.0;
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn stamp_and_chrome_inks_read_on_their_fills() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let p = Palette::for_theme(theme);
+            for (name, ink, fill) in [
+                ("on_stamp on stamp", p.on_stamp, p.stamp),
+                ("on_stamp_chrome on stamp_on_chrome", p.on_stamp_chrome, p.stamp_on_chrome),
+                ("chrome_ink on chrome", p.chrome_ink, p.chrome),
+                ("chrome_muted on chrome", p.chrome_muted, p.chrome),
+                ("chrome_ink on chrome_tab", p.chrome_ink, p.chrome_tab),
+            ] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 4.5, "{name} in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
+            }
+        }
+    }
 }

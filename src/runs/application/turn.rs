@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::runs::domain::{ActivityKind, Run, StopPoint, stop_points};
+use crate::runs::domain::{ActivityKind, Run, RunStatus, StopPoint, stop_points};
 use crate::shared_kernel::markdown;
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -36,7 +36,11 @@ pub fn stop_point(run: &Run) -> Option<&'static StopPoint> {
 /// Claude ended its turn and wants something from the user: a known stop, a closing question,
 /// or a stop part-way through the command's steps. An open prompt always does.
 /// A run that ended its last step, or has no steps, without asking anything is done, not waiting.
+/// A run being stopped never waits: a prompt raised while it stops is withdrawn with the process.
 pub fn wants_reply(run: &Run) -> bool {
+    if run.status == RunStatus::Stopping {
+        return false;
+    }
     if run.needs_user() {
         return true;
     }
@@ -106,7 +110,7 @@ fn ends_blocks(tag: &TagEnd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest, RunStatus};
+    use crate::runs::domain::{AgentEvent, Prompt, PromptKind, RunRequest};
 
     fn run(line: &str) -> Run {
         Run::new(&RunRequest { run_id: "1".into(), line: line.into(), model: None, budget_usd: 1.0, started_at: String::new(), resume_session: None })
@@ -332,18 +336,29 @@ mod tests {
     }
 
     #[test]
-    fn is_your_turn() {
+    fn wants_reply_follows_the_turn() {
         let mut run = run("/apply x");
-        assert!(!run.is_your_turn());
+        assert!(!wants_reply(&run));
         ends_turn(&mut run);
-        assert!(run.is_your_turn());
+        assert!(wants_reply(&run), "the rail is unfinished");
         run.apply(AgentEvent::BackgroundTasksChanged { count: 1 });
-        assert!(!run.is_your_turn());
+        assert!(!wants_reply(&run));
         run.apply(AgentEvent::PromptRaised(prompt()));
-        assert!(run.is_your_turn());
+        assert!(wants_reply(&run));
         run.apply(AgentEvent::PromptWithdrawn { request_id: "a".into() });
         run.apply(AgentEvent::BackgroundTasksChanged { count: 0 });
         run.note_reply("go");
-        assert!(!run.is_your_turn());
+        assert!(!wants_reply(&run));
+    }
+
+    #[test]
+    fn stopping_is_never_your_turn() {
+        let mut run = run("/apply x");
+        reads(&mut run, ".claude/skills/a/04-job-evaluation.md");
+        run.note_stop_requested();
+        assert!(!wants_reply(&run));
+        run.apply(AgentEvent::PromptRaised(prompt()));
+        assert!(run.needs_user());
+        assert!(!wants_reply(&run), "a prompt raised while the run stops");
     }
 }

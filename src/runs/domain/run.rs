@@ -136,11 +136,6 @@ impl Run {
         !self.prompts.is_empty()
     }
 
-    /// Whether Claude waits on the user: a prompt is open, or its turn ended and nothing else still works.
-    pub fn is_your_turn(&self) -> bool {
-        self.needs_user() || self.awaits_reply()
-    }
-
     /// Whether Claude's turn ended, nothing else still works and no prompt is open, so only a reply moves the run on.
     pub fn awaits_reply(&self) -> bool {
         self.status == RunStatus::AwaitingReply && !self.is_busy() && !self.needs_user()

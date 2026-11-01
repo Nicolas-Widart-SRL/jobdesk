@@ -10,7 +10,7 @@ use jobdesk::ui_kit::{
     deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint,
     knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button, primary_key_button,
     prompt_box, prompt_box_tone, rich, score, segmented, select_row, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
-    status_dot, status_segmented, step_line, step_rail, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    status_dot, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -234,10 +234,6 @@ fn sections(ui: &mut Ui) {
     prompt_box_tone(ui, Tone::Turn, |ui| {
         strong(ui, "A prompt that needs you");
     });
-    ui.add_space(10.0);
-    step_rail(ui, &["Fetch", "Evaluate", "Draft", "Verify"], 2, true, false);
-    ui.add_space(10.0);
-    step_rail(ui, &["Fetch", "Evaluate", "Draft", "Verify"], 3, false, true);
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         page_frame(ui, |ui| {

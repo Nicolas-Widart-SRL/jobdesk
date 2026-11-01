@@ -462,8 +462,10 @@ impl Shell {
             }
             Screen::Insights => insights::ui::show(ui, &snapshot.insights, &snapshot.band, snapshot.skill_gaps.as_ref()),
             Screen::Runs => {
+                // The workspace folder as text, so the story can shorten paths without reading the disk.
+                let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
                 if let Some(desk) = &mut self.desk {
-                    self.run_screen.show(ui, desk);
+                    self.run_screen.show(ui, desk, &root);
                 }
             }
             Screen::Workspace => {

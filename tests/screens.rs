@@ -113,6 +113,10 @@ fn run_started() -> NaiveDateTime {
 }
 
 fn apply_run(final_event: AgentEvent) -> RunDesk {
+    apply_run_ending([final_event])
+}
+
+fn apply_run_ending(final_events: impl IntoIterator<Item = AgentEvent>) -> RunDesk {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
     // Permission prompts, as the coming setting will show them.
@@ -137,11 +141,10 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
         tool("8", "Bash", "ls -Z \"$SCRATCHPAD\"", false),
         failed("8", "ls: invalid option -- 'Z'\nTry 'ls --help' for more information."),
         tool("7", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
-        final_event,
     ];
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
-    events.into_iter().for_each(emit);
+    events.into_iter().chain(final_events).for_each(emit);
     drop(guard);
     desk
 }
@@ -207,6 +210,11 @@ fn apply_stop_after_evaluate() -> RunDesk {
 
 /// The same stop, on a gateway that records into `calls`.
 fn stop_after_evaluate(calls: SharedCalls) -> RunDesk {
+    stop_with(calls, STOP_EVALUATION).0
+}
+
+/// /apply stopped after Evaluate on `message`, with the sink to play more events into.
+fn stop_with(calls: SharedCalls, message: &str) -> (RunDesk, SharedSink) {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), calls)), Arc::new(|| {}));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
@@ -223,13 +231,63 @@ fn stop_after_evaluate(calls: SharedCalls) -> RunDesk {
         done("4"),
         tool("5", "Bash", "python3 salary_lookup.py \"Kestrel\" --json", false),
         done("5"),
-        AgentEvent::AssistantText { text: STOP_EVALUATION.into(), nested: false },
+        AgentEvent::AssistantText { text: message.into(), nested: false },
         AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.12, duration_ms: 303_000 },
     ];
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
     events.into_iter().for_each(emit);
     drop(guard);
+    (desk, sink)
+}
+
+fn emit_all(sink: &SharedSink, events: impl IntoIterator<Item = AgentEvent>) {
+    let guard = sink.lock().unwrap();
+    let emit = guard.as_ref().unwrap();
+    events.into_iter().for_each(emit);
+}
+
+const GO_AHEAD: &str = "Yes, proceed with drafting.";
+
+/// /apply past its stop: the CV is written, and the cover letter is being written.
+fn apply_drafting() -> (RunDesk, SharedSink) {
+    let (mut desk, sink) = stop_with(SharedCalls::default(), STOP_EVALUATION);
+    desk.poll();
+    let id = desk.runs()[0].id.clone();
+    desk.reply(&id, GO_AHEAD).unwrap();
+    emit_all(&sink, [
+        tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
+        done("6"),
+        tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
+        done("7"),
+        tool("8", "Write", "cover_letters/cover_kestrel_solution_architect.tex", false),
+    ]);
+    (desk, sink)
+}
+
+const SUMMARY: &str = "# Application ready: Kestrel Payments, Solution Architect\n\nThe CV (2 pages) and the cover letter (1 page) are built, and both checks passed.\n\n## What changed after review\n\n- 6 reviewer edits applied. 1 was skipped because your profile does not back it.\n- The letter now opens with the payments migration.\n\n## Next\n\n- Read both PDFs in the dossier.\n- Send it yourself. Jobdesk never sends applications.";
+
+/// /apply through Finish, its closing summary, and the process gone.
+fn apply_finished() -> RunDesk {
+    let (desk, sink) = apply_drafting();
+    emit_all(&sink, [
+        done("8"),
+        tool("9", "Agent", "application-reviewer: Research and critique", false),
+        done("9"),
+        tool("10", "Edit", "cv/main_kestrel_solution_architect.tex", false),
+        done("10"),
+        tool("11", "Edit", "cover_letters/cover_kestrel_solution_architect.tex", false),
+        done("11"),
+        tool("12", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
+        done("12"),
+        tool("13", "Bash", "python3 tools/verify_pdf.py cv/main_kestrel_solution_architect.pdf", false),
+        done("13"),
+        tool("14", "Edit", "job_search_tracker.csv", false),
+        done("14"),
+        AgentEvent::AssistantText { text: SUMMARY.into(), nested: false },
+        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 2.41, duration_ms: 557_000 },
+        AgentEvent::ProcessExited { failure: None },
+    ]);
     desk
 }
 
@@ -294,7 +352,8 @@ fn a_command_button_leads_to_a_started_run() {
     harness.run_steps(3);
 
     harness.get_by_label("Recent runs");
-    assert_eq!(harness.get_all_by_label("Starting").count(), 2, "run head and recent runs");
+    harness.get_by_label("Where the run is");
+    assert_eq!(harness.get_all_by_label("Starting").count(), 1, "recent runs, as the head has no tag");
 }
 
 /// However long the activity, the prompt's buttons stay in the window.
@@ -363,7 +422,8 @@ fn a_stop_point_fits_the_smallest_window() {
 fn a_quick_reply_is_sent_as_a_reply() {
     let mut shell = shell(Screen::Runs, "quick_reply");
     let calls = SharedCalls::default();
-    *shell.desk_slot() = Some(stop_after_evaluate(Arc::clone(&calls)));
+    let (desk, sink) = stop_with(Arc::clone(&calls), STOP_EVALUATION);
+    *shell.desk_slot() = Some(desk);
     let mut harness = tray_harness(shell);
     let lines = harness.query_all_by_label(APPLY_LINE).count();
     harness.get_by_role(egui::accesskit::Role::TextInput).type_text("half typed");
@@ -372,7 +432,7 @@ fn a_quick_reply_is_sent_as_a_reply() {
     harness.get_by_label("Go ahead with the draft").click();
     harness.run_steps(3);
 
-    assert!(is_shown(&harness, "Yes, proceed with drafting."));
+    assert!(is_shown(&harness, "\u{201c}Yes, proceed with drafting.\u{201d}"), "the story quotes the reply");
     assert!(!is_shown(&harness, "Go ahead with the draft"));
     assert!(!is_shown(&harness, "Stop here"));
     assert_eq!(harness.query_all_by_label(APPLY_LINE).count(), lines, "Recent runs still lists one /apply run");
@@ -380,14 +440,24 @@ fn a_quick_reply_is_sent_as_a_reply() {
     assert_eq!(calls.starts, 1, "no other process started");
     assert_eq!(calls.sent, ["Yes, proceed with drafting."], "the reply reached the live session");
     drop(calls);
-    assert!(harness.query_by_role(egui::accesskit::Role::TextInput).is_none_or(|field| field.value().as_deref().unwrap_or_default().is_empty()), "the field is cleared");
+
+    // Claude ends its next turn with a question, and the field comes back empty.
+    emit_all(&sink, [
+        AgentEvent::AssistantText { text: "Before I draft: shall I lead with the Kafka migration?".into(), nested: false },
+        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.3, duration_ms: 20_000 },
+    ]);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Send"));
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    assert_eq!(field.value().as_deref().unwrap_or_default(), "", "the field is cleared");
 }
 
 /// While another run works, the stop's replies wait, and the bar says why.
 #[test]
 fn replies_wait_while_another_run_works() {
     let mut shell = shell(Screen::Runs, "replies_blocked");
-    let mut desk = apply_stop_after_evaluate();
+    let calls = SharedCalls::default();
+    let mut desk = stop_after_evaluate(Arc::clone(&calls));
     desk.poll();
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     *shell.desk_slot() = Some(desk);
@@ -397,9 +467,116 @@ fn replies_wait_while_another_run_works() {
     harness.run_steps(3);
 
     assert!(is_shown(&harness, "Another run is working. You can reply when it finishes."));
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("Draft it, please.");
+    harness.run_steps(2);
     for label in ["Go ahead with the draft", "Stop here", "Send"] {
         assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label} is disabled");
     }
+
+    press(&mut harness, Key::Enter);
+    let calls = calls.lock().unwrap();
+    assert!(calls.sent.is_empty(), "Enter sends nothing");
+    assert_eq!(calls.starts, 2, "the stopped run and the rank run, and no process for the reply");
+    drop(calls);
+    assert!(!is_shown(&harness, "\u{201c}Draft it, please.\u{201d}"));
+}
+
+/// The story folds each step's actions behind its toggle, closed until asked.
+#[test]
+fn actions_open_only_when_asked() {
+    let mut shell = shell(Screen::Runs, "actions_toggle");
+    *shell.desk_slot() = Some(apply_run(stop_point()));
+    let mut harness = tray_harness(shell);
+    let file = "main_kestrel_solution_architect.tex";
+    let named = |harness: &Harness| harness.query_all_by_label_contains(file).count();
+    let before = named(&harness);
+    assert_eq!(before, 1, "only Files changed in the side column, while every toggle is closed");
+
+    // Draft's toggle is the one on Draft's line.
+    let draft = harness.get_by_label("Draft").rect().center().y;
+    let toggle = harness.get_all_by_label("Show 1 action").find(|toggle| (toggle.rect().center().y - draft).abs() < 4.0).expect("Draft's toggle");
+    toggle.click();
+    harness.run_steps(3);
+    assert!(named(&harness) > before, "Draft's Write row");
+    assert!(is_shown(&harness, "Hide actions"));
+
+    harness.get_by_label("Hide actions").click();
+    harness.run_steps(3);
+    assert_eq!(named(&harness), before);
+}
+
+/// At a stop, the story opens on the top of Claude's newest message, not on its last line.
+#[test]
+fn a_stop_opens_on_the_newest_message() {
+    let mut shell = shell(Screen::Runs, "stop_opens_on_message");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let harness = tray_harness(shell);
+    let story = harness.get_by_label("The run so far").rect();
+    let heading = harness.get_by_label_contains("Job fit evaluation").rect();
+    assert!(heading.top() > story.bottom(), "{heading:?} is under the story's heading at {story:?}");
+    assert!(heading.top() < story.bottom() + 40.0, "{heading:?} opens at the top of the story under {story:?}");
+}
+
+#[test]
+fn a_finished_run_has_no_head_action() {
+    let mut shell = shell(Screen::Runs, "finished_head");
+    *shell.desk_slot() = Some(apply_finished());
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "All 7 steps"));
+    assert!(is_shown(&harness, "The run"));
+    for label in ["Stop run", "Force stop", "End session…", "Run details"] {
+        assert!(!is_shown(&harness, label), "{label} is in the head");
+    }
+}
+
+/// An AskUserQuestion stays answerable in the smallest window, with word of a background agent under the story.
+#[test]
+fn a_question_stays_answerable_in_the_smallest_window() {
+    let desk = apply_run_ending([many_choices("q"), AgentEvent::BackgroundTasksChanged { count: 1 }]);
+    let mut harness = smallest_window(desk, "smallest_question_footer");
+    assert!(is_shown(&harness, "1 background agent is still working. Claude continues when it reports back."));
+    assert_in_window(&harness, [1040.0, 640.0], &["Choice 1", "Send answer", "Decline"]);
+    harness.get_by_label("Choice 1").click();
+    harness.run_steps(3);
+    assert!(!harness.get_by_label("Send answer").accesskit_node().is_disabled(), "Send answer is enabled");
+}
+
+const LONG_QUESTION: &str = "Every hard gate passes.\n\nShall I go ahead and draft the CV and the cover letter for the Solution Architect role at Kestrel Payments, leading with the event-sourcing work and the Kafka migration, keeping the CV to two pages and the letter to one, naming the hybrid days in Leuven as fine, and noting in the letter that the posting states no salary, so the range can be asked for on the first call with the hiring manager, or would you rather stop here and look at the evaluation first?";
+
+/// The turn bar keeps Send in the smallest window, with a long question, the blocked line and the quick replies.
+#[test]
+fn the_turn_bar_fits_the_smallest_window() {
+    let (mut desk, _sink) = stop_with(SharedCalls::default(), LONG_QUESTION);
+    desk.poll();
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    let mut harness = smallest_window(desk, "smallest_turn_bar");
+    // The newest run shows first. The stopped one is in Run details.
+    harness.get_by_label("Run details").click();
+    harness.run_steps(3);
+    harness.get_by_label("Your turn").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Another run is working. You can reply when it finishes."));
+    assert!(!is_shown(&harness, "Recent runs"), "picking a run closes Run details");
+    assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
+}
+
+/// A click on a Recent runs row's command text picks the run, as a click on its tag does.
+#[test]
+fn a_recent_run_is_picked_by_its_command_text() {
+    let mut shell = shell(Screen::Runs, "recent_by_text");
+    let mut desk = apply_stop_after_evaluate();
+    desk.poll();
+    desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label(APPLY_LINE).count(), 1, "only Recent runs lists the stopped run");
+
+    harness.get_by_label(APPLY_LINE).click();
+    harness.run_steps(3);
+
+    assert_eq!(harness.query_all_by_label(APPLY_LINE).count(), 2, "the head and Recent runs");
 }
 
 #[test]
@@ -1024,6 +1201,32 @@ fn run_turn_light() {
 #[test]
 fn run_turn_dark() {
     render_desk(apply_stop_after_evaluate(), Theme::Dark, "run_turn_dark");
+}
+
+#[test]
+fn run_working_light() {
+    render_desk(apply_drafting().0, Theme::Light, "run_working_light");
+}
+
+#[test]
+fn run_finished_dark() {
+    render_desk(apply_finished(), Theme::Dark, "run_finished_dark");
+}
+
+/// The user's own window size: Run details stands in for the side column, and the band keeps to one line.
+#[test]
+fn run_turn_1040_light() {
+    let mut shell = shell(Screen::Runs, "run_turn_1040_light");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = Harness::builder()
+        .with_size([1040.0, 650.0])
+        .with_pixels_per_point(1.5)
+        .with_theme(Theme::Light)
+        .with_context_setup(install_look)
+        .wgpu()
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness.snapshot_options("run_turn_1040_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 
 #[test]

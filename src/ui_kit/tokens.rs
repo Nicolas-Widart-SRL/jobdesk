@@ -76,9 +76,6 @@ pub const STACK_EDGES_SHOWN: usize = 6;
 /// Top and bottom padding of the undo row.
 pub const UNDO_ROW_PADDING: (i8, i8) = (10, 12);
 
-pub const STEP_HEIGHT: f32 = 34.0;
-pub const STEP_PADDING: f32 = 14.0;
-pub const STEP_GAP: f32 = 3.0;
 /// The run screen's side column.
 pub const RUN_SIDE: f32 = 280.0;
 pub const STEP_LINE_HEIGHT: f32 = 48.0;
@@ -209,9 +206,6 @@ impl Type {
     pub const SMALL_BUTTON: Self = Self { face: Face::Medium, size: 13.0 };
     pub const TAB: Self = Self { face: Face::Medium, size: 14.0 };
     pub const TAB_ON: Self = Self { face: Face::Semibold, size: 14.0 };
-    pub const STEP: Self = Self { face: Face::Sans, size: 13.0 };
-    pub const STEP_DONE: Self = Self { face: Face::Medium, size: 13.0 };
-    pub const STEP_NOW: Self = Self { face: Face::Semibold, size: 13.0 };
     pub const TAG: Self = Self { face: Face::Semibold, size: 12.5 };
     pub const KEY: Self = Self { face: Face::Semibold, size: 11.5 };
     pub const KEYS: Self = Self { face: Face::Medium, size: 13.0 };

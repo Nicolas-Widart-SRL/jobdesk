@@ -12,7 +12,7 @@ use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_GAP, STEP_HEIGHT, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, STEP_PADDING, TABLE_CELL_PADDING, TALLY_BAND, Type,
+    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -420,38 +420,6 @@ pub fn index_card(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response 
         });
     })
     .response
-}
-
-/// Where a run has got to. Steps before `current` are done; `live` lights the current one.
-/// When `complete`, every step is done and none is lit.
-pub fn step_rail(ui: &mut Ui, labels: &[&str], current: usize, live: bool, complete: bool) {
-    let p = Palette::of(ui);
-    ui.spacing_mut().item_spacing = vec2(STEP_GAP, STEP_GAP);
-    ui.horizontal_wrapped(|ui| {
-        for (index, label) in labels.iter().enumerate() {
-            let now = index == current && live && !complete;
-            let done = complete || index < current;
-            let (style, ink) = if now {
-                (Type::STEP_NOW, p.on_primary)
-            } else if done {
-                (Type::STEP_DONE, p.text)
-            } else {
-                (Type::STEP, p.muted)
-            };
-            let galley = line(ui, &format!("{index} {label}"), style, ink, f32::INFINITY);
-            let size = vec2(galley.size().x + STEP_PADDING * 2.0, STEP_HEIGHT);
-            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-            let corners = CornerRadius {
-                nw: if index == 0 { RADIUS_PANEL } else { 0 },
-                sw: if index == 0 { RADIUS_PANEL } else { 0 },
-                ne: if index + 1 == labels.len() { RADIUS_PANEL } else { 0 },
-                se: if index + 1 == labels.len() { RADIUS_PANEL } else { 0 },
-            };
-            ui.painter().rect_filled(rect, corners, if now { p.primary } else { p.panel });
-            let at = Rect::from_center_size(rect.center(), galley.size()).min;
-            ui.painter().galley(at, galley, ink);
-        }
-    });
 }
 
 pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadius) {

@@ -33,9 +33,10 @@ const SMALL: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADD
 const COMMAND: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::MONO };
 
 /// What every clickable kit widget calls last: the pointing hand while the pointer is over it, then the focus ring.
-/// A disabled widget never reports hover, so it keeps the arrow.
+/// A disabled widget never reports hover, so it keeps the arrow. `hovered` alone also holds on a key press and while a press
+/// is dragged off the widget, so the pointer must be over it too.
 pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
-    if response.hovered() {
+    if response.hovered() && response.contains_pointer() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     if response.has_focus() {

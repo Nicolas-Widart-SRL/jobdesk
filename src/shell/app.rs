@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, desk, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, copyable, desk, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -598,7 +598,7 @@ fn source_alert(ui: &mut Ui, failures: &[(Source, &LoadError)], on_setup: bool) 
                         ui.spacing_mut().item_spacing.y = 2.0;
                         for (source, error) in failures {
                             ui.label(rich(ui, failed_words(*source).0, Type::STRONG, Tone::Closed));
-                            ui.add(Label::new(error.to_string()).wrap());
+                            copyable(ui, |ui| ui.add(Label::new(error.to_string()).wrap()));
                         }
                         if let [(only, _)] = failures {
                             ui.add(Label::new(failed_words(*only).1).wrap());

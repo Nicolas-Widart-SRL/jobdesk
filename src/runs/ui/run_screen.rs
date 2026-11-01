@@ -15,7 +15,7 @@ use crate::ui_kit::tokens::{
     SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, danger_button, divider, document, hand, markdown, muted, page_body, page_head, panel,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, hand, markdown, muted, page_body, page_head, panel,
     panel_body, panel_header, path_label, pick_row, primary_button, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
@@ -552,7 +552,7 @@ impl RunScreen {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = EVENT_GAP;
                     who(ui, "You");
-                    ui.add(egui::Label::new(rich(ui, plain(text), Type::MONO, Ink::Text)).wrap());
+                    copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, plain(text), Type::MONO, Ink::Text)).wrap()));
                 });
             }
             ActivityKind::Claude(text) => {
@@ -724,7 +724,7 @@ impl RunScreen {
             // The choices sit in two columns, read across.
             let column = ((ui.available_width() - SCREEN_GAP) / 2.0).max(0.0);
             for (index, question) in questions.iter().enumerate() {
-                strong(ui, &question.text);
+                copyable(ui, |ui| strong(ui, &question.text));
                 let picked = self.picks.entry((prompt.request_id.clone(), question.text.clone())).or_default();
                 let grid = Grid::new(("run_choices", &prompt.request_id, index)).num_columns(2).min_col_width(column).max_col_width(column).spacing([SCREEN_GAP, ROW_GAP]);
                 grid.show(ui, |ui| {
@@ -873,7 +873,7 @@ fn you_line(ui: &mut Ui, text: &str) {
             ui.set_min_width(STEP_NAME_WIDTH);
             ui.label(rich(ui, "You", Type::STRONG, Ink::Text));
         });
-        ui.add(egui::Label::new(rich(ui, format!("\u{201c}{}\u{201d}", plain(text)), Type::BODY, Ink::Text)).wrap());
+        copyable(ui, |ui| ui.add(egui::Label::new(rich(ui, format!("\u{201c}{}\u{201d}", plain(text)), Type::BODY, Ink::Text)).wrap()));
     });
 }
 

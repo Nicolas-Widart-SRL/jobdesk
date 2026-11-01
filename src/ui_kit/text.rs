@@ -85,7 +85,7 @@ pub fn strong(ui: &mut Ui, text: impl Into<String>) -> Response {
 
 /// Something went wrong. Closed is the one status that reads as failure.
 pub fn alert(ui: &mut Ui, text: impl Into<String>) -> Response {
-    add_text(ui, text, Type::BODY, crate::ui_kit::Tone::Closed)
+    copyable(ui, |ui| add_text(ui, text, Type::BODY, crate::ui_kit::Tone::Closed))
 }
 
 pub fn table_head(ui: &mut Ui, text: impl Into<String>) -> Response {

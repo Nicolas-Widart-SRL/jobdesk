@@ -1618,6 +1618,15 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
 }
 
+/// Labels take no click, except where the user may copy: the alert's reason can be selected, a heading cannot.
+#[test]
+fn a_failed_sources_reason_can_be_selected() {
+    let harness = tray_harness(failed_tracker_shell("failed_selectable"));
+    let senses_click = |label: &str| harness.get_by_label(label).accesskit_node().data().supports_action(egui::accesskit::Action::Click);
+    assert!(senses_click("job_search_tracker.csv: not UTF-8 text, re-save it as CSV UTF-8"));
+    assert!(!senses_click("Your applications could not be read."));
+}
+
 /// A decisions file that cannot be read joins the same alert, on every screen, and leaves Today's count alone.
 #[test]
 fn a_decisions_file_that_fails_joins_the_alert() {

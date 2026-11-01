@@ -584,7 +584,7 @@ fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Op
     }
 }
 
-/// A row pulls its card back on top, unless the card is decided. The text names a company, so it shows as plain text.
+/// A row pulls its card back on top. The row being read and a decided row take no click. The text names a company, so it shows as plain text.
 fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<Pressed>) {
     let late = match row.state {
         RowState::Late(1) => "1 day late".to_owned(),
@@ -598,7 +598,7 @@ fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<P
         RowState::Waiting => AgendaEnd::Nothing,
     };
     let press = agenda_row(ui, &row.on.format("%a %-d").to_string(), &row.text, end, first);
-    if press.row && row.state != RowState::Done {
+    if press.row {
         *pressed = Some(Pressed::Bring(row.key.clone()));
     }
 }

@@ -6,8 +6,11 @@
 # GitHub shows a merged pull request from its current head commit. That covers a
 # squash merge after main changed the same lines. Agent branches (worktree-*) skip
 # that check. A change's branch that main already contains is new, not merged, so
-# it stays until GitHub shows its pull request merged. Deleting a branch also
-# deletes its plan file in .claude/plans/.
+# it stays until GitHub shows its pull request merged.
+# A plan file in .claude/plans/ names its branch on its first line, as "# <branch>".
+# The plan file goes when this run deletes its branch, or when the branch is gone
+# and GitHub shows its pull request merged. Without gh, it stays.
+# It never checks out, resets or pulls in the main checkout.
 #
 #   scripts/cleanup.sh                        after the user merges a pull request
 #   scripts/cleanup.sh feat/standing-orders   after steps merge into feat/standing-orders
@@ -91,6 +94,7 @@ done < <(git worktree list --porcelain | awk '
 
 if [ -n "${DRY_RUN:-}" ]; then git worktree prune --dry-run --verbose; else git worktree prune; fi
 in_use=$(git worktree list --porcelain | awk '/^branch / { print substr($0, 19) }')
+deleted=""
 for branch in $(git for-each-ref --format='%(refname:short)' refs/heads); do
   case "$branch" in main) continue ;; esac
   for base in "$@"; do [ "$branch" = "$base" ] && continue 2; done
@@ -98,16 +102,28 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads); do
   if done_with "$branch"; then
     echo "delete branch $branch"
     run git branch --quiet -D "$branch"
-    # Plan files are named after the branch, with each / turned into -.
-    plan="$root/.claude/plans/${branch//\//-}.md"
-    if [ -f "$plan" ]; then
-      echo "delete plan $plan"
-      run rm "$plan"
-    fi
+    deleted+="$branch"$'\n'
   fi
 done
 
-if [ "$(git -C "$root" symbolic-ref --short -q HEAD)" = main ] && [ -z "$(git -C "$root" status --porcelain)" ]; then
-  run git -C "$root" merge --quiet --ff-only origin/main && echo "main is at $(git -C "$root" log -1 --format='%h %s')"
-fi
+# True when GitHub shows the branch's pull request merged. Without gh, nothing is.
+pr_state_merged() {
+  command -v gh >/dev/null || return 1
+  [ "$(gh pr view "$1" --json state -q .state 2>/dev/null)" = MERGED ]
+}
+
+# A dry run deletes no branch, so trust the list of deleted branches over the refs.
+for plan in "$root"/.claude/plans/*.md; do
+  [ -f "$plan" ] || continue
+  branch=$(head -1 "$plan")
+  case "$branch" in "# "?*) branch=${branch#\# } ;; *) echo "keep $plan: no branch on its first line"; continue ;; esac
+  if grep -qxF "$branch" <<<"$deleted"; then
+    :
+  elif git rev-parse -q --verify "refs/heads/$branch" >/dev/null || ! pr_state_merged "$branch"; then
+    continue
+  fi
+  echo "delete plan $plan"
+  run rm "$plan"
+done
+
 echo "done, $kept worktrees kept"

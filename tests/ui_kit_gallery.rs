@@ -411,8 +411,7 @@ fn runs(ui: &mut Ui) {
 const DOCUMENT: &str = "# Job fit evaluation: Tech Lead, Java Platform\n\nVerdict: Good fit, 74 out of 100. Every hard gate passes, and the two gaps are small.\n\n## Gates\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week | Pass |\n| Salary | Not stated | Check |\n\n## Strengths\n\n- Eight years of Java and Spring Boot, the core stack in the posting.\n- You led a platform team of six. This role leads five.\n\nShall I go ahead and draft the CV and cover letter for this role, or stop here?";
 
 fn document_sample(ui: &mut Ui) {
-    let marked = DOCUMENT.rfind("\n\n").map(|at| at + 2);
-    document(ui, &mut CommonMarkCache::default(), DOCUMENT, marked.map(|start| start..DOCUMENT.len()));
+    document(ui, &mut CommonMarkCache::default(), DOCUMENT);
 }
 
 type Section = (&'static str, fn(&mut Ui));

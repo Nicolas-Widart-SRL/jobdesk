@@ -6,7 +6,7 @@ use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::{CountChip, paint_key};
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{code_box, hairline};
+use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
 use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
@@ -39,15 +39,16 @@ pub(in crate::ui_kit) fn focus_ring(ui: &Ui, response: &Response, radius: impl I
     }
 }
 
-fn look_colors(p: &Palette, look: Look, hovered: bool) -> (Color32, Color32) {
+/// A plain button at rest is clear on a surface, and fills with paper on the desk, so the grid never runs behind its label.
+fn look_colors(p: &Palette, look: Look, hovered: bool, desk: bool) -> (Color32, Color32) {
+    let rest = if desk { p.card } else { Color32::TRANSPARENT };
     match look {
         Look::Primary => (p.primary, p.primary),
         Look::On => (p.text, p.text),
         Look::Plain if hovered => (p.raised, p.line),
         Look::Danger if hovered => (p.raised, p.closed),
-        // Opaque, so the desk's grid never runs behind a label.
-        Look::Plain => (p.card, p.line),
-        Look::Danger => (p.card, p.closed),
+        Look::Plain => (rest, p.line),
+        Look::Danger => (rest, p.closed),
     }
 }
 
@@ -69,7 +70,7 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = look_colors(&p, look, response.hovered());
+    let (fill, border) = look_colors(&p, look, response.hovered(), on_desk(ui));
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(fit.padding, (fit.height - galley.size().y) / 2.0), galley.size());
     if matches!(look, Look::Primary) && response.hovered() {
@@ -252,12 +253,13 @@ pub enum TabMark {
     Failed,
 }
 
-/// The highlighter under a tab's label: `mark` with a `turn` rule when open, `raised` with no rule under the pointer.
+/// The highlighter under a tab's label: `mark` with a `turn` rule when open, `line` with no rule under the pointer.
+/// `line` is the palest neutral that stands off both the desk's base and its grid lines.
 fn tab_swipe(ui: &Ui, response: &Response, on: bool) -> Option<(Color32, Option<Color32>)> {
     let p = Palette::of(ui);
     match (on, response.hovered()) {
         (true, _) => Some((p.mark, Some(p.turn))),
-        (false, true) => Some((p.raised, None)),
+        (false, true) => Some((p.line, None)),
         (false, false) => None,
     }
 }
@@ -334,11 +336,14 @@ struct SegmentInks {
     hover: Color32,
 }
 
+/// A segment is as wide as its label in the heavier face, on or off, so picking one never moves the others.
 fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentInks) -> Response {
     let font = if on { look.font_on } else { look.font };
     let ink = if on { inks.on.1 } else { inks.off };
-    let galley = line(ui, label, font, ink, ui.available_width() - look.padding * 2.0);
-    let size = vec2(galley.size().x + look.padding * 2.0, look.height);
+    let room = ui.available_width() - look.padding * 2.0;
+    let galley = line(ui, label, font, ink, room);
+    let widest = line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x);
+    let size = vec2(widest + look.padding * 2.0, look.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if on {
         ui.painter().rect_filled(rect, look.radius, inks.on.0);

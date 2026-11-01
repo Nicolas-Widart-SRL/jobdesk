@@ -4,7 +4,7 @@ use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, group_title, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -65,9 +65,7 @@ impl Launcher {
     /// Each group's heading stands on the hairline of its first row.
     fn list(&mut self, ui: &mut Ui) {
         for group in CommandGroup::ALL {
-            Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
-                ui.label(rich(ui, group.label(), Type::SECTION, Ink::Text));
-            });
+            group_title(ui, group.label());
             for command in CATALOG.iter().filter(|command| command.group == group) {
                 let on = command.name == self.command.name;
                 if command_row(ui, command.name, command.summary, command.writes, on).clicked() {

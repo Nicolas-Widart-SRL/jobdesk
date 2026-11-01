@@ -4,10 +4,10 @@ use egui::{Grid, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
+use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
-    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, brand, button, card_tab,
+    check_tag, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, faint_mono, fat_tally, figure,
     flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
@@ -35,7 +35,6 @@ const SWATCHES_PER_ROW: usize = 7;
 fn swatches(ui: &mut Ui) {
     let p = Palette::of(ui);
     let colors = [
-        ("bg", p.bg),
         ("sheet", p.sheet),
         ("panel", p.panel),
         ("raised", p.raised),
@@ -125,21 +124,13 @@ fn buttons(ui: &mut Ui) {
 }
 
 fn shell(ui: &mut Ui) {
-    desk_frame(ui).inner_margin(12).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = BRAND_GAP;
-            brand_mark(ui);
-            ui.label(rich(ui, "Jobdesk", Type::BRAND, Ink::Text));
-            ui.add_space(24.0);
-            status_dot(ui, Tone::Hired);
-        });
-    });
-    shell_top_frame(ui).inner_margin(12).show(ui, |ui| {
+    shell_top_frame().inner_margin(12).show(ui, |ui| {
         ui.horizontal(|ui| {
             brand(ui);
             ui.add_space(24.0);
             shortcut_button(ui, "New task", &["Cmd", "K"]);
             attention_count(ui, 8);
+            status_dot(ui, Tone::Hired);
         });
     });
     status_frame(ui).show(ui, |ui| {
@@ -186,7 +177,7 @@ fn marks(ui: &mut Ui) {
 }
 
 fn tabs(ui: &mut Ui) {
-    shell_top_frame(ui).inner_margin(12).show(ui, |ui| {
+    shell_top_frame().inner_margin(12).show(ui, |ui| {
         ui.horizontal(|ui| {
             folder_tab(ui, "Today", TabMark::Count(8), true);
             folder_tab(ui, "Jobs", TabMark::None, false);
@@ -536,8 +527,7 @@ fn render(theme: Theme, name: &str) {
         .with_context_setup(install_look)
         .wgpu()
         .build_ui(|ui| {
-            jobdesk::ui_kit::paint_grid(ui.painter(), ui.max_rect());
-            jobdesk::ui_kit::sheet_frame(ui).inner_margin(24).show(ui, gallery);
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
         });
     harness.run_steps(3);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));

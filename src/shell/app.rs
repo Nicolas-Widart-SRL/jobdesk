@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paint_grid, paper, primary_button, prompt_box_tone, rich,
+    Ink, KnotState, TabMark, Tone, Type, alert, brand, button, desk, divider, folder_tab, install_fonts, install_theme, knot, muted, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
 use crate::workspace;
@@ -245,16 +245,17 @@ impl Shell {
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
         // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
-        paint_grid(ui.painter(), ui.max_rect());
-        Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame(ui)).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
-        // Its separator is the strip's top hairline, in `line`.
-        Panel::bottom("status_bar").show_separator_line(true).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
-        egui::CentralPanel::default().frame(sheet_frame(ui)).show(ui, |ui| {
-            if self.workspace.is_some() {
-                self.content(ui, &queue);
-            } else {
-                self.welcome(ui);
-            }
+        desk(ui, |ui| {
+            Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame()).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
+            // Its separator is the strip's top hairline, in `line`.
+            Panel::bottom("status_bar").show_separator_line(true).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
+            egui::CentralPanel::default().frame(sheet_frame()).show(ui, |ui| {
+                if self.workspace.is_some() {
+                    self.content(ui, &queue);
+                } else {
+                    self.welcome(ui);
+                }
+            });
         });
         if let Some(line) = take_command_request(ui.ctx()) {
             self.launcher.prefill(&line);

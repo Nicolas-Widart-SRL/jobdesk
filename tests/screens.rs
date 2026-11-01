@@ -12,6 +12,7 @@ use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
 use jobdesk::shell::{Screen, Shell, Snapshot, install_look};
+use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
 fn sample_workspace(root: &Path) {
@@ -609,15 +610,19 @@ fn actions_open_only_when_asked() {
 }
 
 /// At a stop, the story opens on the top of Claude's newest message, not on its last line.
-/// The smallest window, so the story is taller than its room and has to scroll.
+/// Both stories are taller than their room, so they have to scroll: the stop in the smallest window, and a long stop in the default one.
 #[test]
 fn a_stop_opens_on_the_newest_message() {
-    let harness = smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message");
-    let story = harness.get_by_label("The run so far").rect();
-    let heading = harness.get_by_label_contains("Job fit evaluation").rect();
-    assert!(heading.top() > story.bottom(), "{heading:?} is under the story's heading at {story:?}");
-    // The story's body padding and the message's own gap sit between them, under one row's height.
-    assert!(heading.top() < story.bottom() + 56.0, "{heading:?} opens at the top of the story under {story:?}");
+    let long = format!("{STOP_EVALUATION}\n\n{}", "The gaps are small and either can be closed in the letter.\n\n".repeat(24));
+    let harnesses = [smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message"), tray_harness_with(stop_with(SharedCalls::default(), &long).0, "long_stop_opens_on_message")];
+    for harness in harnesses {
+        let story = harness.get_by_label("The run so far").rect();
+        // Where the story's rows start: under its heading's padding, its rule and the body's padding.
+        let content_top = story.bottom() + f32::from(HEADER_PADDING) + HAIRLINE + f32::from(BODY_PADDING);
+        let heading = harness.get_by_label_contains("Job fit evaluation").rect();
+        assert!(heading.top() > content_top, "{heading:?} is under the story's rows at {content_top}");
+        assert!(heading.top() < content_top + 40.0, "{heading:?} opens at the top of the story's rows at {content_top}");
+    }
 }
 
 #[test]
@@ -642,6 +647,26 @@ fn a_question_stays_answerable_in_the_smallest_window() {
     harness.get_by_label("Choice 1").click();
     harness.run_steps(3);
     assert!(!harness.get_by_label("Send answer").accesskit_node().is_disabled(), "Send answer is enabled");
+}
+
+/// In the smallest window, the footer under the story ends inside the story's column, above the screen's bottom padding.
+/// A run that waits on a question with word of a background agent, and a finished run with its reply field.
+#[test]
+fn the_story_footer_stays_inside_its_column() {
+    const BACKGROUND: &str = "1 background agent is still working. Claude continues when it reports back.";
+    let (long_stop, sink) = stop_with(SharedCalls::default(), LONG_QUESTION);
+    emit_all(&sink, [AgentEvent::BackgroundTasksChanged { count: 1 }]);
+    let cases = [
+        (apply_run_ending([many_choices("q"), AgentEvent::BackgroundTasksChanged { count: 1 }]), BACKGROUND),
+        (long_stop, BACKGROUND),
+        (apply_finished(), "Send"),
+    ];
+    for (desk, footer) in cases {
+        let harness = smallest_window(desk, "footer_in_column");
+        let column_end = harness.get_by_label(STATUS_LINE).rect().top() - STATUS_PADDING.1 - SCREEN_PADDING.2;
+        let rect = harness.get_by_label(footer).rect();
+        assert!(rect.bottom() <= column_end + 0.5, "{footer} ends at {} under the column's end at {column_end}", rect.bottom());
+    }
 }
 
 const LONG_QUESTION: &str = "Every hard gate passes.\n\nShall I go ahead and draft the CV and the cover letter for the Solution Architect role at Kestrel Payments, leading with the event-sourcing work and the Kafka migration, keeping the CV to two pages and the letter to one, naming the hybrid days in Leuven as fine, and noting in the letter that the posting states no salary, so the range can be asked for on the first call with the hiring manager, or would you rather stop here and look at the evaluation first?";

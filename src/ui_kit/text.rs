@@ -8,6 +8,7 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
+use crate::ui_kit::surfaces::{backed, on_desk};
 use crate::ui_kit::tokens::{DOC_MEASURE, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
@@ -15,30 +16,37 @@ pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) 
     RichText::new(text).font(style.font()).color(ink.into().color(&Palette::of(ui)))
 }
 
+/// Adds `label`, set in `style`. Straight on the desk, text at `Type::TAKE` size or smaller backs itself with the desk's base,
+/// so no grid line runs through its glyphs. Larger type reads over the lines.
+pub(in crate::ui_kit) fn add_text(ui: &mut Ui, label: Label, style: Type) -> Response {
+    if style.size <= Type::TAKE.size && on_desk(ui) { backed(ui, |ui| ui.add(label)) } else { ui.add(label) }
+}
+
+/// Text in a named type style, as a label. On the desk, small text keeps the grid out of it.
+pub fn label(ui: &mut Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> Response {
+    let text = rich(ui, text, style, ink);
+    add_text(ui, Label::new(text), style)
+}
+
 pub fn muted(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::BODY, Ink::Muted);
-    ui.label(text)
+    label(ui, text, Type::BODY, Ink::Muted)
 }
 
 pub fn faint_mono(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::MONO, Ink::Faint);
-    ui.label(text)
+    label(ui, text, Type::MONO, Ink::Faint)
 }
 
 pub fn strong(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::STRONG, Ink::Text);
-    ui.label(text)
+    label(ui, text, Type::STRONG, Ink::Text)
 }
 
 /// Something went wrong. Closed is the one status that reads as failure.
 pub fn alert(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::BODY, crate::ui_kit::Tone::Closed);
-    ui.label(text)
+    label(ui, text, Type::BODY, crate::ui_kit::Tone::Closed)
 }
 
 pub fn table_head(ui: &mut Ui, text: impl Into<String>) -> Response {
-    let text = rich(ui, text, Type::TABLE_HEAD, Ink::Muted);
-    ui.label(text)
+    label(ui, text, Type::TABLE_HEAD, Ink::Muted)
 }
 
 pub fn score(ui: &mut Ui, text: impl Into<String>) -> Response {

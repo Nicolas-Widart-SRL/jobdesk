@@ -7,6 +7,7 @@ use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Sha
 use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
+use crate::ui_kit::surfaces::on_desk;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
@@ -15,13 +16,16 @@ use crate::ui_kit::tokens::{
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
+/// Straight on the desk it fills with the desk's base, so no grid line runs through its small type.
 pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     let text = text.into();
-    let color = tone.color(&Palette::of(ui));
+    let p = Palette::of(ui);
+    let color = tone.color(&p);
     let galley = line(ui, &text, Type::TAG, color, f32::INFINITY);
     let size = vec2(galley.size().x + TAG_PADDING * 2.0, TAG_HEIGHT);
+    let fill = if on_desk(ui) { p.sheet } else { Color32::TRANSPARENT };
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_stroke(rect, RADIUS_CARD, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
+    ui.painter().rect(rect, RADIUS_CARD, fill, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
     paint_centred(ui, rect, galley, color);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &text));
     response
@@ -291,8 +295,10 @@ pub fn check_tag(ui: &mut Ui, check: CheckMark) -> Response {
 }
 
 /// The Jobdesk mark: a folder with a J hooked into it, drawn from the logo's 652 by 600 view box.
-/// The J is stroked in `cut`, the colour the mark stands on.
-fn paint_brand_mark(ui: &mut Ui, ink: Color32, cut: Color32) -> Response {
+/// It is drawn in `text`, and the J is stroked in `sheet`, the desk it stands on.
+fn paint_brand_mark(ui: &mut Ui) -> Response {
+    let p = Palette::of(ui);
+    let (ink, cut) = (p.text, p.sheet);
     const ORIGIN: (f32, f32) = (186.0, 216.0);
     const VIEW: (f32, f32) = (652.0, 600.0);
     const ARC_SEGMENTS: usize = 12;
@@ -315,18 +321,12 @@ fn paint_brand_mark(ui: &mut Ui, ink: Color32, cut: Color32) -> Response {
     response
 }
 
-/// The mark on the desk plane.
-pub fn brand_mark(ui: &mut Ui) -> Response {
-    let p = Palette::of(ui);
-    paint_brand_mark(ui, p.text, p.bg)
-}
-
 /// The mark and the name, in the menu on the desk.
 pub fn brand(ui: &mut Ui) -> Response {
     let p = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BRAND_GAP;
-        paint_brand_mark(ui, p.text, p.sheet);
+        paint_brand_mark(ui);
         ui.label(line(ui, "Jobdesk", Type::BRAND, p.text, f32::INFINITY));
     })
     .response

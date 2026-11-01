@@ -6,7 +6,7 @@ use egui_extras::{Column, TableBuilder};
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
-    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, muted, on_desk, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
+    CellRule, CheckMark, Ink, Subtitle, Title, Tone, Type, check_tag, command_action, divider, muted, open_link, page_body, page_head, panel, panel_body, paper, primary_command_action, rich,
     score, segmented, side_column, stamp, stamp_square, strong, table_cell, table_head, tag, title_over,
 };
 
@@ -149,12 +149,10 @@ impl JobsScreen {
             });
             if jobs.iter().any(|job| waiting.contains(&job.key)) {
                 ui.add_space(ROW_GAP);
-                on_desk(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
-                        stamp_square(ui, WAITING);
-                        muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
-                    });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                    stamp_square(ui, WAITING);
+                    muted(ui, "Waiting in Today. Decide there, or open the drafting task from here.");
                 });
             }
         });

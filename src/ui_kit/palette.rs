@@ -6,7 +6,6 @@ use crate::ui_kit::tokens::{BUTTON_PADDING, HAIRLINE, ITEM_GAP, RADIUS_BUTTON, R
 /// Depth comes from a gridded desk (`sheet` with `grid` lines), folders (`panel`) and paper (`card`).
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    pub bg: Color32,
     pub sheet: Color32,
     pub panel: Color32,
     pub raised: Color32,
@@ -42,7 +41,6 @@ const fn hex(rgb: u32) -> Color32 {
 }
 
 const DARK: Palette = Palette {
-    bg: hex(0x0d1a2b),
     sheet: hex(0x13243a),
     panel: hex(0x1a2f49),
     raised: hex(0x233b59),
@@ -71,7 +69,6 @@ const DARK: Palette = Palette {
 };
 
 const LIGHT: Palette = Palette {
-    bg: hex(0xbdccdc),
     sheet: hex(0xeff3f8),
     panel: hex(0xdfe7f0),
     raised: hex(0xd0dce9),
@@ -210,9 +207,8 @@ fn visuals(theme: Theme) -> Visuals {
     visuals.interact_cursor = Some(CursorIcon::PointingHand);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(HAIRLINE, p.line);
     visuals.widgets.noninteractive.corner_radius = radius;
-    // A plain button is opaque, so the desk's grid never runs behind its label.
     for (state, fill, control) in [
-        (&mut visuals.widgets.inactive, p.card, p.field),
+        (&mut visuals.widgets.inactive, Color32::TRANSPARENT, p.field),
         (&mut visuals.widgets.hovered, p.raised, p.raised),
         (&mut visuals.widgets.active, p.raised, p.raised),
         (&mut visuals.widgets.open, p.raised, p.raised),
@@ -262,6 +258,13 @@ mod tests {
                 let ratio = contrast(ink, fill);
                 assert!(ratio >= 3.0, "{name} in {theme:?} reads at {ratio:.2}:1, under 3:1");
             }
+            // The hover swipe has to show against the desk's base and its lines, and keep a tab's label legible.
+            for (name, ink, fill) in [("line on sheet", p.line, p.sheet), ("line on grid", p.line, p.grid)] {
+                let ratio = contrast(ink, fill);
+                assert!(ratio >= 1.3, "{name} in {theme:?} stands off at {ratio:.2}:1, under 1.3:1");
+            }
+            let ratio = contrast(p.muted, p.line);
+            assert!(ratio >= 4.5, "muted on line in {theme:?} reads at {ratio:.2}:1, under 4.5:1");
         }
     }
 
@@ -274,10 +277,13 @@ mod tests {
                 ("text", p.text),
                 ("muted", p.muted),
                 ("faint", p.faint),
+                ("drafted", p.drafted),
                 ("active", p.active),
-                ("turn", p.turn),
-                ("closed", p.closed),
+                ("interview", p.interview),
+                ("offer", p.offer),
                 ("hired", p.hired),
+                ("closed", p.closed),
+                ("turn", p.turn),
             ] {
                 for (ground, fill) in [("sheet", p.sheet), ("grid", p.grid)] {
                     let ratio = contrast(ink, fill);

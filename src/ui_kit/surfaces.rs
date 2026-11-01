@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, pos2,
+    Align, Color32, CornerRadius, Frame, Galley, Layout, Margin, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, WidgetText, pos2,
     vec2,
 };
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{line, paint_centred, rich};
+use crate::ui_kit::text::{add_text, line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
@@ -19,14 +19,39 @@ fn margin((x, y): (i8, i8)) -> Margin {
     Margin::symmetric(x, y)
 }
 
-/// The desk plane, under everything.
-pub fn desk_frame(ui: &Ui) -> Frame {
-    Frame::new().fill(Palette::of(ui).bg)
+/// Marks the `Ui` that stands for the desk, so a widget can tell whether it sits straight on it.
+const DESK: &str = "jobdesk_desk";
+
+/// The gridded desk under `ui`'s whole rect, with everything `add` lays out standing on it.
+/// Widgets that stand straight on it, in no filled frame, see `on_desk` and keep the grid out of their small text.
+pub fn desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    paint_grid(ui.painter(), ui.max_rect());
+    ui.scope_builder(UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(DESK)), add).inner
 }
 
-/// The gridded desk under the whole window: `sheet`, ruled every `GRID_PITCH` in `grid`.
+/// Whether `ui` stands straight on the desk: inside `desk`, with no filled frame, such as paper or a slip, in between.
+/// Popups and windows stand on their own fill, so they are never on the desk.
+pub(in crate::ui_kit) fn on_desk(ui: &Ui) -> bool {
+    for node in ui.stack().iter() {
+        if node.tags().contains(DESK) {
+            return true;
+        }
+        if node.frame().fill != Color32::TRANSPARENT {
+            return false;
+        }
+    }
+    false
+}
+
+/// `add` on a patch of the desk's base, the size of what it lays out, so no grid line runs through it.
+pub(in crate::ui_kit) fn backed<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let fill = Palette::of(ui).sheet;
+    Frame::new().fill(fill).show(ui, add).inner
+}
+
+/// The desk's base, ruled every `GRID_PITCH` in `grid`.
 /// The lines start at the window's origin, so they hold still while content scrolls over them.
-pub fn paint_grid(painter: &Painter, rect: Rect) {
+fn paint_grid(painter: &Painter, rect: Rect) {
     let p = Palette::for_theme(painter.ctx().theme());
     painter.rect_filled(rect, 0.0, p.sheet);
     let stroke = Stroke::new(HAIRLINE, p.grid);
@@ -45,12 +70,12 @@ pub fn paint_grid(painter: &Painter, rect: Rect) {
 }
 
 /// Where a screen's content sits: straight on the desk, with no fill of its own.
-pub fn sheet_frame(_ui: &Ui) -> Frame {
+pub fn sheet_frame() -> Frame {
     Frame::new()
 }
 
 /// The menu on the desk: brand, tabs and New task in one row.
-pub fn shell_top_frame(_ui: &Ui) -> Frame {
+pub fn shell_top_frame() -> Frame {
     let (x, top, bottom) = SHELL_PADDING;
     Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 })
 }
@@ -58,16 +83,6 @@ pub fn shell_top_frame(_ui: &Ui) -> Frame {
 /// The strip at the desk's bottom edge, for the status line. The shell draws its top hairline as the panel's separator.
 pub fn status_frame(ui: &Ui) -> Frame {
     Frame::new().fill(Palette::of(ui).sheet).inner_margin(margin((STATUS_PADDING.0 as i8, STATUS_PADDING.1 as i8)))
-}
-
-/// Backs small text that sits straight on the desk with the desk's base, so no grid line runs through it.
-/// The backing is the size of what `add` lays out, and is painted under it.
-pub fn on_desk<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let backing = ui.painter().add(Shape::Noop);
-    let shown = ui.scope(add);
-    let fill = Palette::of(ui).sheet;
-    ui.painter().set(backing, Shape::rect_filled(shown.response.rect, 0.0, fill));
-    shown.inner
 }
 
 /// The big line at the top of a screen. The voice says what the line is.
@@ -114,19 +129,17 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             Title::Typed(text) => (text, Type::HEAD_COMMAND),
         };
         let title = line(ui, title, style, Palette::of(ui).text, room);
-        // A typed subtitle is a path in thin mono type, so it gets the desk's base behind it.
-        let typed = matches!(subtitle, Some(Subtitle::Typed(_)));
         let subtitle = subtitle.map(|subtitle| {
             let (text, style) = match subtitle {
                 Subtitle::Text(text) => (text, Type::BODY),
                 Subtitle::Typed(text) => (text, Type::MONO),
             };
-            line(ui, text, style, Palette::of(ui).muted, room)
+            (line(ui, text, style, Palette::of(ui).muted, room), style)
         });
         let line_gap = ITEM_GAP - 2.0;
         // A one-line head centres its actions on the title. A two-line one ends both on one line.
         let centred = subtitle.is_none();
-        let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |subtitle| line_gap + subtitle.size().y);
+        let text_height = title.size().y + subtitle.as_ref().map_or(0.0, |(subtitle, _)| line_gap + subtitle.size().y);
         let overhang = if inline { (used.y - text_height).max(0.0) } else { 0.0 };
         if overhang > 0.0 {
             ui.add_space(if centred { overhang / 2.0 } else { overhang });
@@ -135,12 +148,8 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
             .vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = line_gap;
                 ui.add(egui::Label::new(title));
-                if let Some(subtitle) = subtitle {
-                    if typed {
-                        on_desk(ui, |ui| ui.add(egui::Label::new(subtitle)));
-                    } else {
-                        ui.add(egui::Label::new(subtitle));
-                    }
+                if let Some((subtitle, style)) = subtitle {
+                    add_text(ui, egui::Label::new(subtitle), style);
                 }
             })
             .response
@@ -257,6 +266,13 @@ fn header(ui: &mut Ui, title: &str, note: Option<&str>, ink: Ink) {
         });
     });
     divider(ui);
+}
+
+/// The title of a group of rows inside a section, set in as the section's header is, with no rule of its own.
+pub fn group_title(ui: &mut Ui, title: &str) {
+    Frame::new().inner_margin(Margin::symmetric(inset(ui), HEADER_PADDING)).show(ui, |ui| {
+        ui.label(rich(ui, title, Type::SECTION, Ink::Text));
+    });
 }
 
 pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
@@ -479,7 +495,7 @@ pub fn stamped_head(ui: &mut Ui, stamp: impl FnOnce(&mut Ui), title: &str, subti
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
                 ui.add(egui::Label::new(rich(ui, title, Type::LEAD, Ink::Text)).truncate());
-                ui.add(egui::Label::new(rich(ui, subtitle, Type::TAKE, Ink::Muted)).truncate());
+                add_text(ui, egui::Label::new(rich(ui, subtitle, Type::TAKE, Ink::Muted)).truncate(), Type::TAKE);
             });
         });
     });

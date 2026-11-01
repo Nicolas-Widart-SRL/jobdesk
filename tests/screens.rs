@@ -785,6 +785,24 @@ fn the_turn_bar_fits_the_smallest_window() {
     assert_in_window(&harness, [1040.0, 640.0], &["Go ahead with the draft", "Stop here", "Send", "End session…", "Run details"]);
 }
 
+/// Only whole text is copied: a question cut to fit takes no selection and shows in full on hover. A whole one can be copied.
+#[test]
+fn only_a_whole_question_can_be_copied() {
+    let asks = |question: &str| format!("Claude asks: {}", question.rsplit("\n\n").next().unwrap());
+    let (desk, _sink) = stop_with(SharedCalls::default(), LONG_QUESTION);
+    let mut harness = smallest_window(desk, "cut_question_copy");
+    let cut = asks(LONG_QUESTION);
+    harness.get_by_label(&cut).hover();
+    harness.run_steps(4);
+    assert_ne!(harness.output().platform_output.cursor_icon, CursorIcon::Text, "a cut question takes no selection");
+    assert!(harness.query_all_by_label_contains("or would you rather stop here").count() > 1, "the tooltip shows the whole question");
+
+    let mut harness = smallest_window(apply_stop_after_evaluate(), "whole_question_copy");
+    harness.get_by_label(&asks(STOP_EVALUATION)).hover();
+    harness.run_steps(2);
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Text, "a whole question can be selected");
+}
+
 /// The theme switch, which sits in the status line.
 const STATUS_LINE: &str = "System";
 
@@ -1162,6 +1180,23 @@ fn esc_keeps_working_over_an_open_popup() {
     assert!(!is_shown(&harness, "Keep working"));
 }
 
+/// While the quit dialog asks, Cmd K opens nothing behind it.
+#[test]
+fn cmd_k_waits_for_the_quit_dialog() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "quit_cmd_k");
+    request_close(&mut harness);
+
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+
+    assert!(!is_shown(&harness, LAUNCHER));
+    assert!(is_shown(&harness, "Keep working"));
+    press(&mut harness, Key::Escape);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "once it closes, Cmd K opens the launcher");
+}
+
 /// Cmd K from a focused reply leaves the field behind, so the next Esc already leaves the launcher.
 #[test]
 fn esc_leaves_a_launcher_opened_from_a_field() {
@@ -1441,6 +1476,28 @@ fn arrow_keys_move_the_pick() {
     assert_eq!(harness.query_all_by_label(second).count(), 2);
 }
 
+/// A focused button keeps its arrows, and so does a dialog: only a row or no focus at all lets them move the pick.
+#[test]
+fn arrow_keys_leave_the_pick_alone_away_from_the_table() {
+    let mut shell = shell(Screen::Jobs, "jobs_arrows_held");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    let second = "Solution Architect, Event Sourcing";
+    harness.get_by_label("Draft application…").focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "the detail still shows the first job");
+    assert_eq!(harness.query_all_by_label(second).count(), 1);
+
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    request_close(&mut harness);
+    harness.get_by_label(MERIDIAN_ROW).focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "the quit dialog holds the pick");
+}
+
 /// The table cuts a long title, and the pointer on it shows the whole title. A row's text sits over the row's click,
 /// so it still takes the hover.
 #[test]
@@ -1462,7 +1519,7 @@ fn a_cut_job_title_shows_in_full_on_hover() {
 fn a_cut_coming_up_row_shows_in_full_on_hover() {
     let mut harness = tray_harness(shell_on(Screen::InTray, "tray_cut_row", overdue_day()));
     assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 0, "only the row's name holds the line");
-    harness.get_by_label("Tue 3, Harbor Bank deadline, 4 days late").hover();
+    harness.get_by_label("Tue 3, Harbor Bank deadline, 4 days late, now").hover();
     harness.run_steps(4);
     assert_eq!(harness.query_all_by_label("Harbor Bank deadline").count(), 1, "the tooltip shows the whole line");
 }
@@ -1973,8 +2030,27 @@ fn a_logged_offer_shows_once_above_the_log() {
 #[test]
 fn overdue_cards_lead_coming_up() {
     let harness = tray_harness(shell_on(Screen::InTray, "tray_overdue", overdue_day()));
-    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late"));
+    assert!(is_shown(&harness, "Tue 3, Harbor Bank deadline, 4 days late, now"));
     assert!(is_shown(&harness, "Nothing else dated before Fri 20 Nov."), "late rows leave the next two weeks empty");
+}
+
+/// The card on top is the one being read, late or not, so its row takes no click. The late card under it can be pulled up,
+/// until it comes on top in turn.
+#[test]
+fn the_late_card_on_top_has_an_inert_row() {
+    let mut harness = tray_harness(shell_on(Screen::InTray, "tray_overdue_top", overdue_day()));
+    let late_row = |harness: &Harness, role| harness.query_all_by_label_contains("1 day late").any(|node| node.accesskit_node().role() == role);
+    let reading = "Tue 3, Harbor Bank deadline, 4 days late, now";
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Label, reading).is_some(), "the row is no button");
+    assert!(late_row(&harness, egui::accesskit::Role::Button), "the next late card can be pulled up");
+    harness.get_by_label(reading).hover();
+    harness.step();
+    assert_ne!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand);
+
+    press(&mut harness, Key::L);
+
+    assert!(late_row(&harness, egui::accesskit::Role::Label), "on top, it is read, not pulled up");
+    assert!(!late_row(&harness, egui::accesskit::Role::Button));
 }
 
 #[test]

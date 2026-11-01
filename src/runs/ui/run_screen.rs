@@ -24,7 +24,7 @@ const ACTIVITY_SHOWN: usize = 400;
 /// What the story keeps under the turn bar, its heading included, however much the bar asks for.
 /// A prompt's least heights win over it: when room is short, the story shrinks, not the prompt.
 const STORY_MIN_HEIGHT: f32 = 160.0;
-/// Claude's closing question is cut after this many lines, with the full text on hover.
+/// Claude's closing question is cut after this many lines, with the full text on hover. Only a whole question can be copied.
 const QUESTION_ROWS: usize = 3;
 const END_POPOVER_WIDTH: f32 = 320.0;
 const END_SESSION: &str = "End session…";
@@ -654,7 +654,14 @@ impl RunScreen {
                     rich(ui, text, Type::BODY, ink).append_to(&mut job, &style, FontSelection::Default, Align::Min);
                 }
                 job.wrap.max_rows = rows;
-                copyable(ui, |ui| ui.add(egui::Label::new(job).wrap())).on_hover_text(&question.text);
+                job.wrap.max_width = ui.available_width();
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                // Only whole text is copied: a cut question shows the whole on hover instead.
+                if galley.elided {
+                    ui.add(egui::Label::new(galley)).on_hover_text(&question.text);
+                } else {
+                    copyable(ui, |ui| ui.add(egui::Label::new(galley)));
+                }
             }
             None => {
                 muted(ui, "Claude finished this step. Read its message, then reply.");

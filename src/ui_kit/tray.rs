@@ -137,6 +137,8 @@ pub enum AgendaEnd<'a> {
     Done,
     /// How late the row is, such as "2 days late".
     Late(&'a str),
+    /// The card being read, and how late it is: it cannot be clicked.
+    LateNow(&'a str),
     Button(&'a str),
 }
 
@@ -151,11 +153,12 @@ pub struct AgendaPress {
 /// `text` may come from a posting, so it is painted as plain text, cut to the room left.
 pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> AgendaPress {
     let (pressed, response) = agenda_line(ui, day, text, end, first);
-    let role = if matches!(end, AgendaEnd::Done | AgendaEnd::Now) { Role::Label } else { Role::Button };
+    let role = if matches!(end, AgendaEnd::Done | AgendaEnd::Now | AgendaEnd::LateNow(_)) { Role::Label } else { Role::Button };
     let spoken = match end {
         AgendaEnd::Done => format!("{day}, {text}, done"),
         AgendaEnd::Now => format!("{day}, {text}, now"),
         AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
+        AgendaEnd::LateNow(late) => format!("{day}, {text}, {late}, now"),
         _ => format!("{day}, {text}"),
     };
     response.widget_info(|| WidgetInfo::labeled(role, true, &spoken));
@@ -187,7 +190,7 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     }
     let done = end == AgendaEnd::Done;
     // A decided row and the card being read have nothing to open: they take no click, light no fill and keep the arrow.
-    let inert = done || end == AgendaEnd::Now;
+    let inert = done || matches!(end, AgendaEnd::Now | AgendaEnd::LateNow(_));
     let sense = if inert { Sense::hover() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
     let fill = if inert { Color32::TRANSPARENT } else { pick_look(&p, false, pointer_over(&response), pressed(&response)).fill };
@@ -205,7 +208,7 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
         AgendaEnd::Done => {
             add_text(&mut end_ui, "Done", Type::SMALL, Ink::Faint);
         }
-        AgendaEnd::Late(late) => {
+        AgendaEnd::Late(late) | AgendaEnd::LateNow(late) => {
             add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
         }
         AgendaEnd::Button(label) => pressed.button = small_button(&mut end_ui, label).clicked(),

@@ -7,7 +7,7 @@ use egui::{
 
 use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
+use crate::ui_kit::controls::{dialog_open, interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head};
@@ -218,10 +218,6 @@ pub struct ScreenState<'a> {
 impl ScreenState<'_> {
     pub fn reading(&self) -> bool {
         self.load == Load::Reading
-    }
-
-    pub fn failed(&self) -> bool {
-        self.load == Load::Failed
     }
 
     pub fn cannot_read(&self, source: Source) -> bool {
@@ -469,7 +465,7 @@ pub struct PickTable<'a> {
 /// A table whose every row picks something, such as a job. A row is one target under its cells: one Tab stop, named
 /// `spoken(row)` for screen readers, lit as every pickable thing is and ringed inside when it has focus. Its text takes
 /// no click, so a click on it picks the row, and a cut title or a mark beneath the pointer still shows its tooltip.
-/// Up and Down move the pick while no text field has focus. `cell(ui, row, column)` fills one cell.
+/// Up and Down move the pick while a row or nothing has the focus. `cell(ui, row, column)` fills one cell.
 /// The head stays put while the rows scroll. Returns the row picked this frame.
 pub fn pick_table(ui: &mut Ui, table: &PickTable, spoken: impl Fn(usize) -> String, mut cell: impl FnMut(&mut Ui, usize, usize)) -> Option<usize> {
     let p = Palette::of(ui);
@@ -477,24 +473,16 @@ pub fn pick_table(ui: &mut Ui, table: &PickTable, spoken: impl Fn(usize) -> Stri
     let row_id = |row: usize| id.with(("pick_table_row", row));
     let widths = column_widths(table.columns, ui.available_width());
     let width: f32 = widths.iter().sum();
-    let moved = arrow_pick(ui, table);
-    if let Some(row) = moved {
-        let focused = ui.memory(|mem| mem.focused());
-        if focused.is_some_and(|focused| (0..table.rows).any(|row| row_id(row) == focused)) {
-            ui.memory_mut(|mem| mem.request_focus(row_id(row)));
-        }
+    let is_row = |focused: egui::Id| (0..table.rows).any(|row| row_id(row) == focused);
+    let moved = arrow_pick(ui, table, is_row);
+    if let Some(row) = moved
+        && ui.memory(|mem| mem.focused()).is_some_and(is_row)
+    {
+        ui.memory_mut(|mem| mem.request_focus(row_id(row)));
     }
     let shown = moved.or(table.picked);
     let mut clicked = None;
-    // Cells pad themselves, so rules and the picked row run unbroken.
-    ui.spacing_mut().item_spacing = Vec2::ZERO;
-    let head = Rect::from_min_size(ui.cursor().min, vec2(width, TABLE_HEAD_HEIGHT));
-    for (column, rect) in column_rects(head, &widths).enumerate() {
-        table_cell_in(ui, rect, CellRule::Head, |ui| {
-            table_head(ui, table.columns[column].head);
-        });
-    }
-    ui.advance_cursor_after_rect(head);
+    table_heads(ui, table.columns, &widths);
     egui::ScrollArea::vertical().id_salt(id.with("rows")).auto_shrink([false, true]).show_rows(ui, table.row_height, table.rows, |ui, range| {
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         let top = ui.max_rect().top() - range.start as f32 * table.row_height;
@@ -532,9 +520,44 @@ pub fn pick_table(ui: &mut Ui, table: &PickTable, spoken: impl Fn(usize) -> Stri
     clicked.or(moved)
 }
 
-/// The row Up or Down picks this frame, if either was pressed and the pick moves. Typing in a field keeps its arrows.
-fn arrow_pick(ui: &mut Ui, table: &PickTable) -> Option<usize> {
-    if table.rows == 0 || ui.ctx().text_edit_focused() {
+/// The shape of a `pick_table` before its rows are read: the same head and column widths over `rows` grey rows, each
+/// cell holding the lines `lines(column)` gives, as wide as it says. Nothing in it takes a click.
+pub fn skeleton_table<'a>(ui: &mut Ui, columns: &[TableColumn], row_height: f32, rows: usize, lines: impl Fn(usize) -> &'a [f32]) {
+    let widths = column_widths(columns, ui.available_width());
+    let width: f32 = widths.iter().sum();
+    table_heads(ui, columns, &widths);
+    for row in 0..rows {
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(width, row_height));
+        let rule = if row + 1 == rows { CellRule::Last } else { CellRule::Row };
+        for (column, cell_rect) in column_rects(rect, &widths).enumerate() {
+            let widths = lines(column);
+            let height = widths.len() as f32 * (SKELETON_LINE + SKELETON_GAP) - SKELETON_GAP;
+            // A box as tall as the lines, so the row centres them as it centres text.
+            table_cell_in(ui, cell_rect, rule, |ui| {
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), height.max(0.0)), Layout::top_down(Align::Min), |ui| skeleton_lines(ui, widths, skeleton));
+            });
+        }
+        ui.advance_cursor_after_rect(rect);
+    }
+}
+
+/// A table's head row, each head over its column. From here on cells pad themselves, so rules and a picked row run unbroken.
+fn table_heads(ui: &mut Ui, columns: &[TableColumn], widths: &[f32]) {
+    ui.spacing_mut().item_spacing = Vec2::ZERO;
+    let head = Rect::from_min_size(ui.cursor().min, vec2(widths.iter().sum(), TABLE_HEAD_HEIGHT));
+    for (column, rect) in column_rects(head, widths).enumerate() {
+        table_cell_in(ui, rect, CellRule::Head, |ui| {
+            table_head(ui, columns[column].head);
+        });
+    }
+    ui.advance_cursor_after_rect(head);
+}
+
+/// The row Up or Down picks this frame, if either was pressed and the pick moves. The arrows are the table's only while
+/// one of its rows or nothing has the focus, so a field or a button keeps them, and never while a dialog asks.
+fn arrow_pick(ui: &mut Ui, table: &PickTable, is_row: impl Fn(egui::Id) -> bool) -> Option<usize> {
+    let focused = ui.memory(|mem| mem.focused());
+    if table.rows == 0 || focused.is_some_and(|focused| !is_row(focused)) || dialog_open(ui.ctx()) {
         return None;
     }
     let (up, down) = ui.input_mut(|input| (input.consume_key(Modifiers::NONE, Key::ArrowUp), input.consume_key(Modifiers::NONE, Key::ArrowDown)));

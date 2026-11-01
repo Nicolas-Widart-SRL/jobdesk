@@ -242,6 +242,11 @@ pub fn primary_shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Respon
     press_as(ui, text, Look::Primary, NORMAL, Hint::Keys(keys), None)
 }
 
+/// The command key and `key`, as a shortcut button names them. The bundled fonts have no command key glyph, so macOS spells it out.
+pub const fn command_chord(key: &'static str) -> [&'static str; 2] {
+    if cfg!(target_os = "macos") { ["Cmd", key] } else { ["Ctrl", key] }
+}
+
 /// A plain button in the menu that names its keyboard shortcut. The keys are plain glyphs, with no box.
 pub fn shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
     let p = Palette::of(ui);
@@ -319,6 +324,22 @@ fn leaves_a_field(ctx: &egui::Context) -> bool {
 pub fn back_pressed(ctx: &egui::Context) -> bool {
     let esc = ctx.input(|input| input.key_pressed(egui::Key::Escape));
     esc && !egui::Popup::is_any_open(ctx) && !leaves_a_field(ctx) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+}
+
+fn dialog_note_id() -> egui::Id {
+    egui::Id::NULL.with("dialog_open")
+}
+
+/// Notes that a dialog asks this frame. Called before any widget runs, so the keys behind it hold still.
+pub fn note_dialog(ctx: &egui::Context) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|data| data.insert_temp(dialog_note_id(), frame));
+}
+
+/// Whether a dialog asks this frame, as `note_dialog` noted.
+pub(in crate::ui_kit) fn dialog_open(ctx: &egui::Context) -> bool {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data(|data| data.get_temp::<u64>(dialog_note_id())) == Some(frame)
 }
 
 fn command_request_id() -> egui::Id {

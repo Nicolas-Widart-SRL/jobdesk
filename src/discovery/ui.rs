@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
 use egui::Ui;
-use egui_extras::{Column, TableBuilder};
 
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
-use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT, SKELETON_GAP, SKELETON_LINE, TABLE_HEAD_HEIGHT};
+use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT};
 use crate::ui_kit::{
-    CellRule, CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel,
-    panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented, skeleton, skeleton_lines, stamp, stamp_square, strong, table_cell, table_head, tag, title_over, with_side_column,
+    CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel,
+    panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented, skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
@@ -172,12 +171,10 @@ impl JobsScreen {
     }
 
     fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &HashSet<String>) {
-        // The detail names the site too, so a narrow window drops the column.
-        let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
-        let shown: Vec<_> = COLUMNS.iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect();
+        let shown = shown_columns(ui);
         let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
         let picked = jobs.iter().position(|job| Some(&job.key) == self.selected.as_ref());
-        let table = PickTable { id_salt: "jobs_table", columns: &heads, row_height: 58.0, rows: jobs.len(), picked };
+        let table = PickTable { id_salt: "jobs_table", columns: &heads, row_height: ROW_HEIGHT, rows: jobs.len(), picked };
         if let Some(row) = pick_table(ui, &table, |row| spoken(&jobs[row]), |ui, row, column| job_cell(ui, &jobs[row], shown[column].0, waiting)) {
             self.selected = Some(jobs[row].key.clone());
         }
@@ -209,6 +206,15 @@ const COLUMNS: [(JobColumn, TableColumn<'static>); 8] = [
 
 /// Below this window width the table drops its Found on column.
 const FOUND_ON_FROM_WIDTH: f32 = 1100.0;
+
+/// The columns the table shows. The detail names the site too, so a narrow window drops the column.
+fn shown_columns(ui: &Ui) -> Vec<(JobColumn, TableColumn<'static>)> {
+    let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
+    COLUMNS.into_iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect()
+}
+
+/// The table's row height, read or loading.
+const ROW_HEIGHT: f32 = 58.0;
 
 /// What a screen reader says for a job's row, such as "Tech Lead Java, Real-Time Traffic, Meridian Rail Systems, 84".
 fn spoken(job: &JobView) -> String {
@@ -243,8 +249,10 @@ fn job_cell(ui: &mut Ui, job: &JobView, column: JobColumn, waiting: &HashSet<Str
                 let (text, tone) = signal_tag(first);
                 tag(ui, text, tone);
                 if !rest.is_empty() {
-                    let also: Vec<_> = rest.iter().map(|signal| signal_tag(signal).0).collect();
-                    muted(ui, format!("+{}", rest.len())).on_hover_text(format!("Also: {}", also.join(", ")));
+                    muted(ui, format!("+{}", rest.len())).on_hover_ui(|ui| {
+                        let also: Vec<_> = rest.iter().map(|signal| signal_tag(signal).0).collect();
+                        ui.label(format!("Also: {}", also.join(", ")));
+                    });
                 }
             }
         }
@@ -286,42 +294,12 @@ fn loading(ui: &mut Ui) {
         340.0,
         |ui| {
             panel(ui, |ui| {
-                let wide = ui.ctx().content_rect().width() >= FOUND_ON_FROM_WIDTH;
-                let shown: Vec<_> = COLUMNS.iter().filter(|(column, _)| wide || *column != JobColumn::FoundOn).collect();
-                // Cells pad themselves, so the rules run unbroken.
-                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                let mut table = TableBuilder::new(ui).id_salt("jobs_loading").vscroll(false).striped(false).cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-                for (_, column) in &shown {
-                    table = table.column(match column.width {
-                        ColumnWidth::Exact(width) => Column::exact(width),
-                        ColumnWidth::Rest { least } => Column::remainder().at_least(least),
-                    });
-                }
-                table
-                    .header(TABLE_HEAD_HEIGHT, |mut header| {
-                        for (_, column) in &shown {
-                            header.col(|ui| {
-                                table_cell(ui, CellRule::Head, |ui| table_head(ui, column.head));
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(58.0, LOADING_ROWS, |mut line| {
-                            let rule = if line.index() + 1 == LOADING_ROWS { CellRule::Last } else { CellRule::Row };
-                            for (column, _) in &shown {
-                                line.col(|ui| {
-                                    let widths = column_skeleton(*column);
-                                    let height = widths.len() as f32 * (SKELETON_LINE + SKELETON_GAP) - SKELETON_GAP;
-                                    // A box as tall as the lines, so the row centres them as it centres text.
-                                    table_cell(ui, rule, |ui| {
-                                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height.max(0.0)), egui::Layout::top_down(egui::Align::Min), |ui| {
-                                            skeleton_lines(ui, widths, skeleton);
-                                        });
-                                    });
-                                });
-                            }
-                        });
-                    });
+                // In the same sideways scroll as the table, so the columns land where the rows will.
+                egui::ScrollArea::horizontal().id_salt("jobs_loading_x").auto_shrink([false, true]).show(ui, |ui| {
+                    let shown = shown_columns(ui);
+                    let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
+                    skeleton_table(ui, &heads, ROW_HEIGHT, LOADING_ROWS, |column| column_skeleton(shown[column].0));
+                });
             });
         },
         |ui| {

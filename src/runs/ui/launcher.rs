@@ -4,10 +4,10 @@ use egui::{ComboBox, Frame, Key, Margin, Modifiers, ScrollArea, TextEdit, Ui, ve
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_shortcut_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_shortcut_button, rich, slip, split, strong};
 
-/// The bundled fonts have no command key glyph, so macOS spells it out.
-const RUN_KEYS: [&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "Enter"] } else { ["Ctrl", "Enter"] };
+/// The keys that start the run.
+const RUN_KEYS: [&str; 2] = command_chord("Enter");
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 

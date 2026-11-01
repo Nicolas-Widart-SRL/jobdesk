@@ -24,7 +24,7 @@ use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_focus, page_body, paper,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, command_chord, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper,
     primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
 };
@@ -34,10 +34,10 @@ use crate::workspace::ui::WorkspaceAction;
 
 const WORKSPACE_KEY: &str = "workspace";
 
-/// The bundled fonts have no command key glyph, so macOS spells it out.
 /// What the tabs and New task say while they wait for a folder.
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
-const ASK_KEYS:[&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "K"] } else { ["Ctrl", "K"] };
+/// The keys that open the launcher.
+const ASK_KEYS: [&str; 2] = command_chord("K");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -332,16 +332,21 @@ impl Shell {
                 self.confirm_quit = false;
             }
         }
-        // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
-        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
-        if ask && self.workspace.is_some() {
-            self.open_launcher();
-        }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         if ctx.input(|input| input.viewport().close_requested()) && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.quit_focus |= !self.confirm_quit;
             self.confirm_quit = true;
+        }
+        // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
+        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
+        // While the quit dialog asks, no shortcut reaches the screens behind it.
+        if self.confirm_quit {
+            note_dialog(ctx);
+            return;
+        }
+        if ask && self.workspace.is_some() {
+            self.open_launcher();
         }
     }
 

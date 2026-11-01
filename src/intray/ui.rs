@@ -573,12 +573,13 @@ fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Op
 /// A row pulls its card back on top. The row being read and a decided row take no click. The text names a company, so it shows as plain text.
 fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<Pressed>) {
     let late = match row.state {
-        RowState::Late(1) => "1 day late".to_owned(),
-        RowState::Late(days) => format!("{days} days late"),
+        RowState::Late(1) | RowState::LateNow(1) => "1 day late".to_owned(),
+        RowState::Late(days) | RowState::LateNow(days) => format!("{days} days late"),
         _ => String::new(),
     };
     let end = match row.state {
         RowState::Late(_) => AgendaEnd::Late(&late),
+        RowState::LateNow(_) => AgendaEnd::LateNow(&late),
         RowState::Now => AgendaEnd::Now,
         RowState::Done => AgendaEnd::Done,
         RowState::Waiting => AgendaEnd::Nothing,

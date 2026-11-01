@@ -9,7 +9,7 @@ use crate::ui_kit::surfaces::hairline;
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
-    SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
+    SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -117,6 +117,10 @@ pub fn danger_button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Danger, NORMAL, None)
 }
 
+pub fn small_danger_button(ui: &mut Ui, text: &str) -> Response {
+    press(ui, text, Look::Danger, SMALL, None)
+}
+
 /// A button that also answers to a single key.
 pub fn key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
     press(ui, text, Look::Plain, NORMAL, Some(key))
@@ -215,27 +219,34 @@ pub fn open_link_button(ui: &mut Ui, label: &str, url: Option<&WebUrl>) {
     open_link_with(ui, label, url, NORMAL);
 }
 
-/// The label of a tab, with its count in a quieter voice.
+/// The label of a tab, with its count in a quieter voice. A mark says a run waits for you.
 struct TabText {
     label: Arc<Galley>,
     count: Option<Arc<Galley>>,
+    mark: bool,
 }
 
 impl TabText {
-    fn layout(ui: &Ui, label: &str, count: Option<&str>, on: bool, ink: Color32, room: f32) -> Self {
+    fn layout(ui: &Ui, label: &str, count: Option<&str>, mark: bool, on: bool, ink: Color32, room: f32) -> Self {
         let label = line(ui, label, if on { Type::TAB_ON } else { Type::TAB }, ink, room);
         let faint = Palette::of(ui).faint;
         let count = count.map(|count| line(ui, count, Type::SMALL, faint, room - label.size().x - BUTTON_GAP));
-        Self { label, count }
+        Self { label, count, mark }
     }
 
     fn width(&self) -> f32 {
-        self.label.size().x + self.count.as_ref().map_or(0.0, |count| count.size().x + BUTTON_GAP)
+        let mark = if self.mark { STATUS_DOT + BUTTON_GAP } else { 0.0 };
+        self.label.size().x + mark + self.count.as_ref().map_or(0.0, |count| count.size().x + BUTTON_GAP)
     }
 
     fn paint(self, ui: &Ui, left: f32, centre: f32, ink: Color32) {
-        let right = left + self.label.size().x;
+        let mut right = left + self.label.size().x;
         ui.painter().galley(egui::pos2(left, centre - self.label.size().y / 2.0), self.label, ink);
+        if self.mark {
+            let at = egui::pos2(right + BUTTON_GAP, centre - STATUS_DOT / 2.0);
+            ui.painter().rect_filled(Rect::from_min_size(at, vec2(STATUS_DOT, STATUS_DOT)), 0.0, Palette::of(ui).turn);
+            right += STATUS_DOT + BUTTON_GAP;
+        }
         if let Some(count) = self.count {
             ui.painter().galley(egui::pos2(right + BUTTON_GAP, centre - count.size().y / 2.0), count, ink);
         }
@@ -251,22 +262,27 @@ fn tab_look(ui: &Ui, response: &Response, on: bool) -> (Color32, Color32) {
     }
 }
 
-fn tab_info(label: &str, count: Option<&str>, on: bool) -> WidgetInfo {
-    let title = count.map_or_else(|| label.to_owned(), |count| format!("{label}  {count}"));
+fn tab_info(label: &str, count: Option<&str>, mark: Option<&str>, on: bool) -> WidgetInfo {
+    let title = match (mark, count) {
+        (Some(spoken), _) => spoken.to_owned(),
+        (None, Some(count)) => format!("{label}  {count}"),
+        (None, None) => label.to_owned(),
+    };
     WidgetInfo::selected(Role::Tab, true, on, title)
 }
 
 /// A folder tab standing on the desk. The active tab takes the sheet's fill.
-pub fn folder_tab(ui: &mut Ui, label: &str, count: Option<&str>, on: bool) -> Response {
+/// `mark` paints the turn square before the count and is what a screen reader says instead of the label.
+pub fn folder_tab(ui: &mut Ui, label: &str, count: Option<&str>, on: bool, mark: Option<&str>) -> Response {
     let muted = Palette::of(ui).muted;
-    let measured = TabText::layout(ui, label, count, on, muted, f32::INFINITY);
+    let measured = TabText::layout(ui, label, count, mark.is_some(), on, muted, f32::INFINITY);
     let size = vec2(measured.width() + NAV_TAB_PADDING * 2.0, NAV_TAB_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let (fill, ink) = tab_look(ui, &response, on);
     ui.painter().rect_filled(rect, TAB_TOP, fill);
-    TabText::layout(ui, label, count, on, ink, f32::INFINITY).paint(ui, rect.left() + NAV_TAB_PADDING, rect.center().y, ink);
+    TabText::layout(ui, label, count, mark.is_some(), on, ink, f32::INFINITY).paint(ui, rect.left() + NAV_TAB_PADDING, rect.center().y, ink);
     focus_ring(ui, &response, TAB_TOP);
-    response.widget_info(|| tab_info(label, count, on));
+    response.widget_info(|| tab_info(label, count, mark, on));
     response
 }
 

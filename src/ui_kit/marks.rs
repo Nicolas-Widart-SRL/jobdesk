@@ -21,6 +21,21 @@ pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     response
 }
 
+/// A tag filled with its colour, for what needs you now. The same size as `tag`.
+pub fn solid_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
+    let text = text.into();
+    let p = Palette::of(ui);
+    let fill = tone.color(&p);
+    let ink = if tone == Tone::Turn { p.on_turn } else { p.sheet };
+    let galley = line(ui, &text, Type::TAG, ink, f32::INFINITY);
+    let size = vec2(galley.size().x + TAG_PADDING * 2.0, TAG_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect_filled(rect, RADIUS_CARD, fill);
+    paint_centred(ui, rect, galley, ink);
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &text));
+    response
+}
+
 /// A lane's heading: the tag's colour without its box.
 pub fn lane_title(ui: &mut Ui, text: &str, tone: Tone) -> Response {
     let text = crate::ui_kit::rich(ui, text, Type::SECTION, tone);

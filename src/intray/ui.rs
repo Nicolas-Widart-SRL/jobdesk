@@ -162,7 +162,7 @@ fn stack(ui: &mut Ui, card: &Card, left: usize, pressed: &mut Option<Pressed>) {
     let (kind, tone) = kind_tag(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     card_tab(ui, kind, tone, card.when.as_str());
-    deal(ui, waits_for_reading(card.kind), |ui| card_face(ui, card, pressed));
+    deal(ui, waits_for_reading(card.kind).then_some(Tone::Interview), |ui| card_face(ui, card, pressed));
     stack_edges(ui, left);
     ui.add_space(4.0);
     if left > 0 {

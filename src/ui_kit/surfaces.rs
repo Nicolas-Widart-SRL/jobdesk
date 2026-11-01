@@ -344,17 +344,23 @@ pub fn code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 /// A hard offset shadow in the status colour: this needs reading before anything else.
-pub(in crate::ui_kit) fn offset_shadow(ui: &Ui) -> Shadow {
-    Shadow { offset: [OFFSET_SHADOW, OFFSET_SHADOW], blur: 0, spread: 0, color: Palette::of(ui).interview }
+pub(in crate::ui_kit) fn offset_shadow(_ui: &Ui, color: Color32) -> Shadow {
+    Shadow { offset: [OFFSET_SHADOW, OFFSET_SHADOW], blur: 0, spread: 0, color }
 }
 
 /// A run's question or permission request, set apart from the sheet.
 pub fn prompt_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    prompt_box_tone(ui, Tone::Interview, add)
+}
+
+/// A prompt box framed in the colour of what it asks for.
+pub fn prompt_box_tone<R>(ui: &mut Ui, tone: Tone, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
+    let color = tone.color(&p);
     Frame::new()
         .fill(p.sheet)
-        .stroke(Stroke::new(HAIRLINE, p.interview))
-        .shadow(offset_shadow(ui))
+        .stroke(Stroke::new(HAIRLINE, color))
+        .shadow(offset_shadow(ui, color))
         .corner_radius(RADIUS_CARD)
         .inner_margin(margin(PROMPT_PADDING))
         .outer_margin(Margin { right: OFFSET_SHADOW, bottom: OFFSET_SHADOW, ..Default::default() })

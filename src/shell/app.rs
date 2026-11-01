@@ -328,7 +328,7 @@ impl Shell {
                     _ => 0,
                 };
                 let count = (count > 0).then(|| count.to_string());
-                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit).clicked() {
+                if folder_tab(ui, screen.title(), count.as_deref(), screen == lit, None).clicked() {
                     picked = Some(screen);
                 }
             }

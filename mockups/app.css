@@ -1,6 +1,6 @@
 /* Ledger: a filing desk. Blue-tinted office paper in light, night-blue desk in dark.
    Depth comes from three flat planes: desk, folder, sheet. Colour is for job
-   status only. One mark in a tally is one posting or application.
+   status only, except Turn, which marks that a run needs you. One mark in a tally is one posting or application.
    Every rule maps to egui: flat fills, 1px strokes, per-corner radii, Painter
    shapes for tabs and ticks, no gradients, no soft shadows. */
 .app {

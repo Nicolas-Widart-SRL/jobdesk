@@ -1498,6 +1498,18 @@ fn arrow_keys_leave_the_pick_alone_away_from_the_table() {
     assert_eq!(harness.query_all_by_label(MERIDIAN).count(), 2, "the quit dialog holds the pick");
 }
 
+/// A click leaves no keyboard focus behind on a segment, so the arrows still move the pick after one.
+#[test]
+fn arrow_keys_work_after_clicking_a_segment() {
+    let mut harness = tray_harness(shell(Screen::Jobs, "jobs_arrows_clicked"));
+    let second = "Solution Architect, Event Sourcing";
+    harness.get_by_label_contains("Shortlist").click();
+    harness.run_steps(2);
+    assert!(!harness.get_by_label_contains("Shortlist").is_focused(), "the click leaves no focus on the segment");
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.query_all_by_label(second).count(), 2, "the detail shows the second job");
+}
+
 /// The table cuts a long title, and the pointer on it shows the whole title. A row's text sits over the row's click,
 /// so it still takes the hover.
 #[test]

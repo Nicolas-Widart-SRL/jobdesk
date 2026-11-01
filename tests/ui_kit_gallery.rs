@@ -487,6 +487,7 @@ fn postmark(ui: &mut Ui) {
                     ui.label("Juniper Retail");
                 });
                 agenda_row(ui, "Tue 3", "Harbor Bank deadline", AgendaEnd::Done, false);
+                agenda_row(ui, "Mon 2", "Juniper Retail deadline", AgendaEnd::LateNow("3 days late"), false);
                 agenda_row(ui, "Wed 4", "Quarry Labs reply", AgendaEnd::Late("2 days late"), false);
                 agenda_row(ui, "Thu 5", "Meridian Rail closes", AgendaEnd::Now, false);
                 agenda_row(ui, "Fri 6", "Ardent Software offer reply", AgendaEnd::Nothing, false);

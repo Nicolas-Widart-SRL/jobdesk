@@ -208,7 +208,12 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
         AgendaEnd::Done => {
             add_text(&mut end_ui, "Done", Type::SMALL, Ink::Faint);
         }
-        AgendaEnd::Late(late) | AgendaEnd::LateNow(late) => {
+        AgendaEnd::Late(late) => {
+            add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
+        }
+        // Right to left: the tag closes the row, and the lateness reads before it.
+        AgendaEnd::LateNow(late) => {
+            solid_tag(&mut end_ui, "Now", Tone::Turn);
             add_text(&mut end_ui, late, Type::TAG, Tone::Interview);
         }
         AgendaEnd::Button(label) => pressed.button = small_button(&mut end_ui, label).clicked(),

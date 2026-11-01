@@ -18,8 +18,10 @@ Each feature is a bounded context with its own language.
 | `dossier` | archive, document, findings, page | `documents/applications/*`, compiled PDFs, `company_research/`, tracking's and runs' application layers |
 | `workspace` | workspace root, profile state, portal, tool check | the checkout folder, installed tools, file changes |
 
+Screen names differ from feature names: `intray` is Today, `tracking` is Applications, `runs` is Tasks, and `workspace` is Setup.
+
 `shared_kernel` holds the few value types every feature agrees on, plus the host `PATH` lookup that `runs` and `workspace` both need, `visible_text`, the filter that drops hidden characters from untrusted text, and `markdown::options()`, the one Markdown option set that the viewer and the closing-question parser share. `ui_kit` is the single owner of
-the Ledger design system: colour, spacing, radius, stroke and type tokens, plus every widget that paints them. It knows no feature, and screens only arrange its widgets, which `tests/architecture.rs` enforces. `tests/ui_kit_gallery.rs` snapshots every component in both themes. `shell` is the composition root: it loads every feature into one
+the Ledger design system: colour, spacing, radius, stroke and type tokens, plus every widget that paints them. Colour is for job status, plus one stamp ink for what waits on the user. The frame is a fixed navy in both themes. It knows no feature, and screens only arrange its widgets, which `tests/architecture.rs` enforces. `tests/ui_kit_gallery.rs` snapshots every component in both themes. `shell` is the composition root: it loads every feature into one
 snapshot and owns the window.
 
 ## Layers
@@ -68,7 +70,7 @@ No card action runs anything by itself: Y opens the launcher on the slash comman
 
 Posting text, notes and reports are third-party or generated data. Screens render them as
 plain text, and a link opens only on click and only for `http` or `https`. Claude's replies and prep packs
-render as Markdown with no image loading. On the Runs screen they read as documents, with headings capped at the section size. Claude's closing question, pinned above the reply box and shown on the In tray card, renders as plain text with Markdown markup and hidden characters removed. Archived postings always render as plain text. Paths read
+render as Markdown with no image loading. On the Tasks screen they read as documents, with headings capped at the section size. Claude's closing question, pinned above the reply box and shown on the Today card, renders as plain text with Markdown markup and hidden characters removed. Archived postings always render as plain text. Paths read
 from the tracker must stay inside the workspace. The reason for a failed tool renders as plain text, with control, escape, bidi and zero-width characters removed. A load error's reason renders as plain text, with control, escape, bidi and zero-width characters removed.
 
 By default `RunDesk` allows every tool permission itself and records each one as an allowance row in the activity, so a run never stalls on a prompt nobody sees. Each step folds its allowances behind its toggle. Other notices, such as why a run failed or stopped or which action was denied, show inline in the story as plain text with hidden characters removed, one row per non-blank line. The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover. This trades away the prompt as a check against injected posting text. Postings rely on `posting_guard` in the workspace instead. Questions from `AskUserQuestion` always reach the user. With `ask_permission` on, which a setting will expose later, every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB. The CLI suggests saving allow rules to project settings, so `stream_json` rewrites every remembered rule to session scope to keep the checkout unchanged.

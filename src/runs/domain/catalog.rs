@@ -76,6 +76,38 @@ pub fn spec_for_line(line: &str) -> Option<&'static CommandSpec> {
     CATALOG.iter().find(|spec| spec.name == name)
 }
 
+/// A canned answer to a stop point's question.
+#[derive(Debug, PartialEq, Eq)]
+pub struct QuickReply {
+    pub button: &'static str,
+    pub text: &'static str,
+}
+
+/// A step after which a command ends its turn and waits for the user.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StopPoint {
+    pub after_step: usize,
+    pub label: &'static str,
+    pub replies: &'static [QuickReply],
+}
+
+const APPLY_STOPS: &[StopPoint] = &[StopPoint {
+    after_step: 1,
+    label: "proceed with drafting",
+    replies: &[
+        QuickReply { button: "Go ahead with the draft", text: "Yes, proceed with drafting." },
+        QuickReply { button: "Stop here", text: "No, stop here. Do not draft." },
+    ],
+}];
+
+/// The stop points of the command on `line`, found by its command word like `spec_for_line`.
+pub fn stop_points(line: &str) -> &'static [StopPoint] {
+    match line.split_whitespace().next() {
+        Some("/apply") => APPLY_STOPS,
+        _ => &[],
+    }
+}
+
 /// One user message. Only multi-line fields may carry line breaks.
 pub fn compose_line(spec: &CommandSpec, value_of: impl Fn(&FieldSpec) -> String) -> String {
     let mut line = spec.name.to_owned();
@@ -110,6 +142,14 @@ mod tests {
     fn single_line_fields_lose_line_breaks() {
         let outcome = spec_for_line("/outcome").unwrap();
         assert_eq!(compose_line(outcome, |_| "acme\n/reset all".into()), "/outcome acme /reset all");
+    }
+
+    #[test]
+    fn only_apply_stops_to_ask() {
+        let stops = stop_points("/apply https://x.example");
+        assert_eq!((stops.len(), stops[0].after_step), (1, 1));
+        assert_eq!(stops[0].replies[1].text, "No, stop here. Do not draft.");
+        assert!(stop_points("/rank").is_empty() && stop_points("").is_empty());
     }
 
     #[test]

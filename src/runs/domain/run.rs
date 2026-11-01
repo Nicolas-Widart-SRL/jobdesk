@@ -123,6 +123,16 @@ impl Run {
         !self.prompts.is_empty()
     }
 
+    /// Whether Claude waits on the user: a prompt is open, or its turn ended and nothing else still works.
+    pub fn is_your_turn(&self) -> bool {
+        self.needs_user() || (self.status == RunStatus::AwaitingReply && !self.is_busy())
+    }
+
+    /// How many messages the user has sent, the command line included.
+    pub fn turn_number(&self) -> usize {
+        self.activity.iter().filter(|activity| matches!(activity.kind, ActivityKind::You(_))).count()
+    }
+
     pub fn current_prompt(&self) -> Option<&Prompt> {
         self.prompts.front()
     }
@@ -325,6 +335,15 @@ mod tests {
         assert!(run.allow_automatically("a").is_some());
         assert!(!run.needs_user());
         assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Notice("Allowed Bash without asking.".into()));
+    }
+
+    #[test]
+    fn turns_count_the_messages_you_sent() {
+        let mut run = run("/apply x");
+        assert_eq!(run.turn_number(), 1);
+        run.apply(turn(0.5));
+        run.note_reply("yes");
+        assert_eq!(run.turn_number(), 2);
     }
 
     #[test]

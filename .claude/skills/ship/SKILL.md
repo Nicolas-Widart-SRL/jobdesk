@@ -90,7 +90,7 @@ which print one line per check. Read a subagent's report once, then keep only it
 8. **Watch the pull request.** On each wake, and when the user asks, run `gh pr view <pr> --json state -q .state`:
    - `MERGED`: call `unwatch_pull_request` when the tool exists, run the `cleanup` skill, then report in one line.
    - `CLOSED`: call `unwatch_pull_request` when the tool exists, and tell the user.
-   - `OPEN` with new comments or reviews: act on your own only on those from CodeRabbit, the login `coderabbitai`,
+   - `OPEN` with new comments or reviews, in resolved threads too: act on your own only on those from CodeRabbit, the login `coderabbitai`,
      and from the user's account, the login `gh api user -q .login` prints.
      Answer them as the Answer CodeRabbit section says, with no prompt from the user, within the round cap below.
      Report a comment or review from anyone else in one line, and judge it only when the user asks.
@@ -200,6 +200,8 @@ It never reruns the builder for a finding that has a fixed SHA.
    Skip the ids the plan file already records as reported, so each is reported once.
    In a review id that is not handled yet, judge only the findings with no `<review id>#<n>` verdict.
    Judge a thread again only when it has a comment id that is not handled yet.
+   The script prints resolved threads too, marked `[resolved]`, and their handled comment ids stay skipped.
+   Judge a new comment id in a resolved thread like any other: reply in that thread, and do not resolve it again.
    Review bodies cannot be resolved, so every run prints them again.
    Never judge a handled finding again, never post a second comment for it, and never append its escapes again.
 4. Check each new finding against the code at the branch tip,
@@ -219,12 +221,17 @@ It never reruns the builder for a finding that has a fixed SHA.
    So right before the push, run `gh pr view <pr> --json state -q .state`.
    When it is `OPEN`, run `git push origin <change>`.
    When it is not, push nothing and post nothing, because a push would bring back the deleted branch.
-   Tell the user which fix SHA missed the merge, and that it sits on the change's branch.
+   When it is `MERGED`, tell the user which fix SHA missed the merge, and that it sits on the change's branch.
+   When it is `CLOSED`, tell the user the pull request closed without a merge, and that the fix SHA sits on the change's branch.
    Then follow step 8 for that state.
 6. Right before the replies, run `gh pr view <pr> --json state -q .state` again.
-   When it is not `OPEN`, post nothing, because "Fixed in <sha>" would point at a SHA that `main` lacks.
-   Tell the user which fix SHA missed the merge, and that it sits on the change's branch.
-   Then follow step 8 for that state.
+   When it is `MERGED`, read the merged head with `gh pr view <pr> --json headRefOid -q .headRefOid`.
+   When `git merge-base --is-ancestor <fix sha> <merged head>` passes, the fix is in:
+   post the replies below, then follow step 8 for `MERGED`.
+   When it fails, post nothing, because "Fixed in <sha>" would point at a SHA that `main` lacks.
+   Tell the user which fix SHA missed the merge, and that it sits on the change's branch. Then follow step 8 for `MERGED`.
+   When it is `CLOSED`, post nothing. Tell the user the pull request closed without a merge,
+   and that the fix SHA sits on the change's branch. Then follow step 8 for `CLOSED`.
    Reply on each thread you judged valid or invalid in step 4 that has no reply id yet.
    First look in that thread in the script's output for a reply the lead already posted:
    a comment by the account `gh api user -q .login` prints, whose body starts with "Fixed in" or "Not changed".
@@ -236,14 +243,16 @@ It never reruns the builder for a finding that has a fixed SHA.
    The command prints the new reply's id. Record it in the plan file at the stage replied, as the lead's own reply.
    The lead posts as the user's `gh` account, so the author alone does not tell its replies apart:
    the recorded id does, or the author with that opening.
-   Resolve each fixed thread with its node id:
+   Resolve each fixed thread not marked `[resolved]` with its node id:
    `gh api graphql -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' -f id=<node id>`.
    Leave skipped threads open, so the user judges them.
    Answer the new valid or invalid findings in review bodies and in conversation comments in one `gh pr comment <pr>`.
    Give one line each: the finding's title, then "Fixed in <sha>: …" or "Not changed: <why>".
    First look in the script's `conversation` lines for such a comment the lead already posted:
-   one by the account `gh api user -q .login` prints, whose lines hold "Fixed in" or "Not changed".
-   If one is there, record its id as the lead's own reply and its findings at the stage replied, and do not post again.
+   one by the account `gh api user -q .login` prints, whose id the plan file does not record yet,
+   and whose lines name these findings' titles in that line format.
+   If one is there, record its id as the lead's own reply and the findings it names at the stage replied,
+   and post only the rest.
    Otherwise post it, and record the URL it prints at the stage replied, for each of those findings.
    That reply comes back as a conversation comment on the next run.
    So record the id at the end of the URL (`#issuecomment-<id>`) as the lead's own reply, and it is never judged.
@@ -254,6 +263,7 @@ The lead runs `scripts/cleanup.sh` at session start, as `lead.md` says.
 It follows Session start again when a watch wake shows the pull request merged (see step 8), or when the user says it merged.
 A fix SHA that missed the merge stays on the change's branch, and the clean up keeps that branch,
 because its head is not the merged pull request's head.
+When the merged head holds the fix, the clean up deletes the branch as usual.
 Run `scripts/cleanup.sh <change-branch>` after each step merges.
 
 ## Other agents on call

@@ -141,6 +141,9 @@ impl TrackerScreen {
             return None;
         }
         action_bar(ui, pipeline);
+        if self.selected.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.selected = None;
+        }
         let selected = self.selected.as_ref().and_then(|(company, role)| pipeline.cards().find(|card| &card.company == company && &card.role == role));
         if let Some(card) = selected {
             side_column("application_details", 320.0).show(ui, |ui| {
@@ -181,7 +184,9 @@ impl TrackerScreen {
                         });
                         for card in &lane.cards {
                             if self.card(ui, card, card_waits(card, waiting)) {
-                                self.selected = Some((card.company.clone(), card.role.clone()));
+                                let picked = Some((card.company.clone(), card.role.clone()));
+                                // A second click on the picked card closes its details.
+                                self.selected = if self.selected == picked { None } else { picked };
                             }
                         }
                     });

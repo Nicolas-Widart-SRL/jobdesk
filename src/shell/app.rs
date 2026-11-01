@@ -94,6 +94,10 @@ pub struct Shell {
     tray: Option<InTray>,
     today: TodayScreen,
     confirm_quit: bool,
+    /// Keep working takes the focus once, on the frame the quit dialog opens.
+    quit_focus: bool,
+    /// Where Esc leaves the launcher for: the screen it was opened from.
+    launcher_from: Screen,
     dossier_screen: DossierScreen,
     pages: Option<PageStore>,
     open_dossier: Option<OpenDossier>,
@@ -125,6 +129,8 @@ impl Shell {
             tray: None,
             today: TodayScreen::default(),
             confirm_quit: false,
+            quit_focus: false,
+            launcher_from: screen.tab(),
             dossier_screen: DossierScreen::default(),
             pages: None,
             open_dossier: None,
@@ -261,7 +267,7 @@ impl Shell {
         });
         if let Some(line) = take_command_request(ui.ctx()) {
             self.launcher.prefill(&line);
-            self.screen = Screen::Launcher;
+            self.open_launcher();
         }
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
@@ -283,7 +289,7 @@ impl Shell {
         match request {
             Request::Command(line) => {
                 self.launcher.prefill(&line);
-                self.screen = Screen::Launcher;
+                self.open_launcher();
             }
             Request::Dossier(folder) => self.show_dossier(folder),
             Request::Run(id) => {
@@ -295,24 +301,49 @@ impl Shell {
         }
     }
 
+    /// Opens the launcher and keeps where it came from, for Esc.
+    fn open_launcher(&mut self) {
+        if self.screen != Screen::Launcher {
+            self.launcher_from = self.screen;
+        }
+        self.screen = Screen::Launcher;
+    }
+
     fn handle_shortcuts_and_quit(&mut self, ctx: &egui::Context) {
+        // While the quit dialog asks, Esc means Keep working, and the launcher's Cmd Enter starts nothing.
+        if self.confirm_quit {
+            let keep = ctx.input_mut(|input| {
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter);
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            });
+            if keep {
+                self.confirm_quit = false;
+            }
+        }
         // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
         let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
         if ask && self.workspace.is_some() {
-            self.screen = Screen::Launcher;
+            self.open_launcher();
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         if ctx.input(|input| input.viewport().close_requested()) && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_focus |= !self.confirm_quit;
             self.confirm_quit = true;
         }
     }
 
+    /// Keep working is the default, and Esc keeps working too, as on End session's popover.
     fn quit_dialog(&mut self, ctx: &egui::Context) {
         egui::Window::new("Quit Jobdesk?").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.label("A Claude session is still open. Quitting ends it. You can resume it later from Tasks.");
             ui.horizontal(|ui| {
-                if primary_button(ui, "Keep working").clicked() {
+                let keep = primary_button(ui, "Keep working");
+                if self.quit_focus && !ui.is_sizing_pass() {
+                    keep.request_focus();
+                    self.quit_focus = false;
+                }
+                if keep.clicked() {
                     self.confirm_quit = false;
                 }
                 if button(ui, "End session and quit").clicked() {
@@ -320,6 +351,7 @@ impl Shell {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.label(rich(ui, "Esc keeps working.", Type::NOTE, Ink::Faint));
         });
     }
 
@@ -355,7 +387,7 @@ impl Shell {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if enabled_when(ui, open, CHOOSE_FOLDER, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).clicked() {
-                    self.screen = Screen::Launcher;
+                    self.open_launcher();
                 }
             });
         });
@@ -522,7 +554,7 @@ impl Shell {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
                 let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
                 if let Some(desk) = &mut self.desk && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask) {
-                    self.screen = Screen::Launcher;
+                    self.open_launcher();
                 }
             }
             Screen::Workspace => {
@@ -541,7 +573,12 @@ impl Shell {
                 }
             }
             Screen::Launcher => {
-                if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
+                // An open list, such as the model's, takes Esc first and closes. The popups are still open from the frame before.
+                let back = !egui::Popup::is_any_open(ui.ctx()) && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                if back {
+                    self.screen = self.launcher_from;
+                    ui.ctx().request_repaint();
+                } else if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
                     self.run_screen.select(id);
                     self.screen = Screen::Runs;
                 }

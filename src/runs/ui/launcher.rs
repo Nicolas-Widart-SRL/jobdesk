@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use egui::{ComboBox, Frame, Margin, ScrollArea, TextEdit, Ui, vec2};
+use egui::{ComboBox, Frame, Key, Margin, Modifiers, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_button, rich, slip, split, strong};
+use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_shortcut_button, rich, slip, split, strong};
+
+/// The bundled fonts have no command key glyph, so macOS spells it out.
+const RUN_KEYS: [&str; 2] = if cfg!(target_os = "macos") { ["Cmd", "Enter"] } else { ["Ctrl", "Enter"] };
 
 const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
 
@@ -50,15 +53,17 @@ impl Launcher {
 
     /// Returns the id of a run the user just started.
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
+        // Taken before any field runs, so a multiline field never reads the keys as a new line, even while Run waits.
+        let run_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
         let subtitle = Subtitle::Text("Pick a command. Nothing runs until you press Run.");
         page_head(ui, Title::Slab("New task"), Some(subtitle), |_| {});
-        page_body(ui, |ui| self.body(ui, desk))
+        page_body(ui, |ui| self.body(ui, desk, run_keys))
     }
 
-    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run_keys: bool) -> Option<String> {
         split(ui, FORM_WIDTH, |main, side| {
             ScrollArea::vertical().auto_shrink([false, false]).show(main, |ui| panel(ui, |ui| self.list(ui)));
-            slip(side, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.form(ui, desk)).inner)
+            slip(side, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.form(ui, desk, run_keys)).inner)
         })
     }
 
@@ -75,7 +80,8 @@ impl Launcher {
         }
     }
 
-    fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
+    /// `run_keys` is Cmd or Ctrl Enter, which starts the run only when the button could.
+    fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk, run_keys: bool) -> Option<String> {
         let mut started = None;
         Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -141,8 +147,8 @@ impl Launcher {
                 "Tick \"I understand\" first."
             };
             enabled_when(ui, ready, why, |ui| {
-                let run = primary_button(ui, "Run");
-                if run.clicked() {
+                let run = primary_shortcut_button(ui, "Run", &RUN_KEYS);
+                if run.clicked() || (ready && run_keys) {
                     let options = StartOptions { model: MODELS[self.model].1.map(str::to_owned), budget_usd: budget.unwrap_or_default() };
                     started = desk.start(&line, &options, chrono::Local::now().naive_local()).ok();
                 }

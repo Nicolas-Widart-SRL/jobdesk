@@ -909,6 +909,137 @@ fn esc_keeps_the_session_open() {
     assert!(is_shown(&harness, "End session…"));
 }
 
+/// The window's close button asks first while a session is open. Keep working takes the focus, and Esc keeps working.
+#[test]
+fn esc_in_the_quit_dialog_keeps_working() {
+    let mut shell = shell(Screen::Runs, "quit_esc");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let mut harness = tray_harness(shell);
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+    assert!(harness.get_by_label("Keep working").is_focused());
+
+    press(&mut harness, Key::Escape);
+
+    assert!(!is_shown(&harness, "Keep working"));
+    assert!(harness.query_all_by_label("Your turn").count() > 0, "the session is still open");
+}
+
+fn cmd_enter(harness: &mut Harness) {
+    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::Enter);
+    harness.run_steps(3);
+}
+
+fn recording_shell(screen: Screen, name: &str, calls: &SharedCalls) -> Shell {
+    let mut shell = shell(screen, name);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(calls))), Arc::new(|| {})));
+    shell
+}
+
+/// On /apply the posting is the multiline field, and the budget the only single line.
+fn posting<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::MultilineTextInput)
+}
+
+fn budget<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::TextInput)
+}
+
+/// Cmd or Ctrl Enter starts the run only while Run could, and a multiline field never takes it as a new line.
+#[test]
+fn cmd_enter_runs_only_when_run_is_enabled() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Launcher, "launcher_cmd_enter", &calls));
+    harness.get_by_label_contains("/apply").click();
+    harness.run_steps(3);
+    // An empty budget leaves Run disabled.
+    budget(&harness).focus();
+    harness.run_steps(2);
+    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::A);
+    press(&mut harness, Key::Backspace);
+    posting(&harness).focus();
+    posting(&harness).type_text("Kestrel Payments");
+    harness.run_steps(2);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "no budget, so Run is disabled");
+    assert_eq!(posting(&harness).value().as_deref(), Some("Kestrel Payments"), "and the posting took no new line");
+
+    budget(&harness).focus();
+    budget(&harness).type_text("2");
+    harness.run_steps(2);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "Run was enabled, so the keys started the run");
+    harness.get_by_label("Recent runs");
+
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Launcher, "launcher_cmd_enter_reset", &calls));
+    harness.get_by_label_contains("/reset").scroll_to_me();
+    harness.run_steps(3);
+    harness.get_by_label_contains("/reset").click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "I understand is unticked");
+    harness.get_by_label(LAUNCHER);
+
+    harness.get_by_label("I understand").scroll_to_me();
+    harness.run_steps(3);
+    harness.get_by_label("I understand").click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "exactly one run");
+}
+
+#[test]
+fn cmd_enter_starts_nothing_outside_the_launcher() {
+    let calls = SharedCalls::default();
+    for screen in [Screen::InTray, Screen::Jobs, Screen::Tracker, Screen::Insights, Screen::Runs, Screen::Workspace] {
+        let mut harness = tray_harness(recording_shell(screen, "cmd_enter_elsewhere", &calls));
+        cmd_enter(&mut harness);
+        assert!(!is_shown(&harness, LAUNCHER), "{screen:?} stays");
+    }
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
+/// Esc goes back to the screen that opened the launcher, but an open list takes it first.
+#[test]
+fn esc_leaves_the_launcher_for_where_it_came_from() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_esc", &SharedCalls::default()));
+    harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
+    harness.run_steps(3);
+    harness.get_by_label(LAUNCHER);
+
+    harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Haiku"), "the model list is open");
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, "Haiku"), "Esc closed the list");
+    assert!(is_shown(&harness, LAUNCHER), "and left the launcher open");
+
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, LAUNCHER));
+    harness.get_by_label("Tune scoring");
+}
+
+const GRANITE_CARD: &str = "Granite Cloud, Platform Lead, No reply in 15 days, waits for you in Today";
+
+#[test]
+fn a_second_click_closes_the_application() {
+    let mut harness = tray_harness(shell(Screen::Tracker, "application_close"));
+    let open = |harness: &Harness| harness.query_all_by_label("Granite Cloud").count() == 2;
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(open(&harness), "the first click opens the details");
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    assert!(!open(&harness), "the second closes them");
+
+    harness.get_by_label(GRANITE_CARD).click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(!open(&harness), "Esc closes them too");
+}
+
 #[test]
 fn quick_replies_only_at_a_known_stop() {
     let mut shell = shell(Screen::Runs, "no_quick_replies");

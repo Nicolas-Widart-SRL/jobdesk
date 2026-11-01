@@ -29,6 +29,14 @@ struct Fit {
     font: Type,
 }
 
+/// What a button shows after its text: nothing, one key in a box, or a chord spelled out in plain glyphs.
+#[derive(Clone, Copy)]
+enum Hint<'a> {
+    None,
+    Key(&'a str),
+    Keys(&'a [&'a str]),
+}
+
 const NORMAL: Fit = Fit { height: BUTTON_HEIGHT, padding: BUTTON_PADDING, font: Type::BUTTON };
 const SMALL: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::SMALL_BUTTON };
 const COMMAND: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::MONO };
@@ -143,11 +151,11 @@ pub fn enabled_when(ui: &mut Ui, enabled: bool, why: &str, add: impl FnOnce(&mut
 }
 
 fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Response {
-    press_as(ui, text, look, fit, key, None)
+    press_as(ui, text, look, fit, key.map_or(Hint::None, Hint::Key), None)
 }
 
 /// `selected` makes a screen reader hear the button as a toggle that is on or off.
-fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, selected: Option<bool>) -> Response {
+fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected: Option<bool>) -> Response {
     let p = Palette::of(ui);
     let ink = match look {
         Look::Plain => p.text,
@@ -158,7 +166,16 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
     let enabled = ui.is_enabled();
     // A filled button keeps its ink: its fill is what goes pale.
     let ink = if enabled || matches!(look, Look::Primary | Look::On) { ink } else { dimmed(ink) };
-    let keys = key.map_or(0.0, |_| KEY_SIZE + BUTTON_GAP);
+    let glyphs: Vec<_> = match hint {
+        Hint::Keys(keys) => keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect(),
+        _ => Vec::new(),
+    };
+    // A chord sits 2px further out than a button's own gap, as on `shortcut_button`.
+    let keys = match hint {
+        Hint::None => 0.0,
+        Hint::Key(_) => KEY_SIZE + BUTTON_GAP,
+        Hint::Keys(_) => BUTTON_GAP + 2.0 + glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32,
+    };
     let room = ui.available_width() - fit.padding * 2.0 - keys;
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
@@ -170,9 +187,15 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>, se
         ui.painter().hline(text_rect.x_range(), text_rect.bottom() - 1.0, Stroke::new(HAIRLINE, ink));
     }
     paint_text(ui, text_rect.min, galley, ink, fill);
-    if let Some(key) = key {
+    if let Hint::Key(key) = hint {
         let hint = Rect::from_center_size(egui::pos2(text_rect.right() + BUTTON_GAP + KEY_SIZE / 2.0, rect.center().y), vec2(KEY_SIZE, KEY_SIZE));
         paint_key(ui, hint, key, ink, fill);
+    }
+    let mut x = text_rect.right() + BUTTON_GAP + 2.0;
+    for glyph in glyphs {
+        let at = egui::pos2(x, rect.center().y - glyph.size().y / 2.0);
+        x += glyph.size().x + KEYS_GAP;
+        paint_text(ui, at, glyph, ink, fill);
     }
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
@@ -202,7 +225,7 @@ pub fn small_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
 
 /// A small button that stays pressed while `on`.
 pub fn small_toggle(ui: &mut Ui, text: &str, on: bool) -> Response {
-    press_as(ui, text, if on { Look::On } else { Look::Plain }, SMALL, None, Some(on))
+    press_as(ui, text, if on { Look::On } else { Look::Plain }, SMALL, Hint::None, Some(on))
 }
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
@@ -224,6 +247,11 @@ pub fn key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
 
 pub fn primary_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, Some(key))
+}
+
+/// A primary button that names the chord it also answers to, such as Cmd Enter.
+pub fn primary_shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
+    press_as(ui, text, Look::Primary, NORMAL, Hint::Keys(keys), None)
 }
 
 /// A plain button in the menu that names its keyboard shortcut. The keys are plain glyphs, with no box.

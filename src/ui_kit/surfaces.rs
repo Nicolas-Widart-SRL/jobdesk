@@ -12,7 +12,7 @@ use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_HEIGHT, CARD_PADDING, CLEAR_PADDING, CODE_PADDING, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type,
+    ROW_PADDING, SCREEN_PADDING, SECTION_RULE, SHELL_PADDING, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TALLY_BAND, Type, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -368,7 +368,7 @@ pub fn prompt_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     prompt_box_tone(ui, Tone::Interview, add)
 }
 
-/// A prompt box framed in the colour of what it asks for.
+/// A prompt box framed in the colour of what it asks for, such as `Closed` for a source that could not be read.
 pub fn prompt_box_tone<R>(ui: &mut Ui, tone: Tone, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = Palette::of(ui);
     let color = tone.color(&p);
@@ -384,6 +384,53 @@ pub fn prompt_box_tone<R>(ui: &mut Ui, tone: Tone, add: impl FnOnce(&mut Ui) -> 
             add(ui)
         })
         .inner
+}
+
+/// A sheet of paper on the desk: the card fill in a hairline. `shadow` lifts it with a hard offset in the line colour.
+/// It has no padding, so a body and a footer can each set their own.
+pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = Palette::of(ui);
+    let frame = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL);
+    let frame = if shadow {
+        frame
+            .shadow(Shadow { offset: [WINDOW_SHADOW, WINDOW_SHADOW], blur: 0, spread: 0, color: p.line })
+            .outer_margin(Margin { right: WINDOW_SHADOW, bottom: WINDOW_SHADOW, ..Default::default() })
+    } else {
+        frame
+    };
+    frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// A grey block where content will be, while it loads. On a slip it takes the slip's raised plane.
+pub fn skeleton(ui: &mut Ui, width: f32, height: f32) {
+    let p = Palette::of(ui);
+    // Only a slip's content sits `INSET` in, so that inset says the block is on a slip.
+    let on_slip = ui.data(|data| data.get_temp::<i8>(inset_id())) == Some(INSET);
+    let (rect, _) = ui.allocate_exact_size(vec2(width.min(ui.available_width()), height), Sense::hover());
+    ui.painter().rect_filled(rect, RADIUS_CARD, if on_slip { p.raised } else { p.panel });
+}
+
+/// A screen's head led by a stamp: the stamp, then the lead title over a muted subtitle, centred beside it.
+pub fn stamped_head(ui: &mut Ui, stamp: impl FnOnce(&mut Ui), title: &str, subtitle: &str) {
+    let (x, top, bottom) = HEAD_PADDING;
+    Frame::new().inner_margin(Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = HEAD_GAP.0;
+            stamp(ui);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                ui.add(egui::Label::new(rich(ui, title, Type::LEAD, Ink::Text)).truncate());
+                ui.add(egui::Label::new(rich(ui, subtitle, Type::TAKE, Ink::Muted)).truncate());
+            });
+        });
+    });
 }
 
 /// The hairline around a rendered document page.

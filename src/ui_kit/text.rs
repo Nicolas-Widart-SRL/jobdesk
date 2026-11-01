@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Galley, OutputCommand, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
+use egui::text::{LayoutJob, TextFormat};
+use egui::{Align2, Color32, Galley, Label, OutputCommand, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -63,6 +64,15 @@ pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
         ui.label(detail);
     })
     .response
+}
+
+/// One wrapped sentence that leads with a bold phrase, such as a verdict.
+pub fn lead_line(ui: &mut Ui, strong: &str, rest: &str) -> Response {
+    let p = Palette::of(ui);
+    let mut job = LayoutJob::default();
+    job.append(strong, 0.0, TextFormat::simple(Type::STRONG.font(), p.text));
+    job.append(&format!(" {rest}"), 0.0, TextFormat::simple(Type::BODY.font(), p.text));
+    ui.add(Label::new(job).wrap())
 }
 
 /// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.

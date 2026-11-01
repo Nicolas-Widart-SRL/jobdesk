@@ -7,9 +7,9 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{line, paint_centred};
 use crate::ui_kit::tokens::{
-    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING,
-    STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
-    TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
+    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP, KEY_PADDING,
+    KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT, TALLY_GAP_Y,
+    TALLY_THIN, TallySize, Type,
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
@@ -95,19 +95,19 @@ fn tally_marks(ui: &mut Ui, colors: &[Color32], mark: TallySize) -> Response {
     response
 }
 
-fn lit_marks(ui: &Ui, marked: usize, total: usize, tone: Tone) -> Vec<Color32> {
+fn lit_marks(ui: &Ui, marked: usize, total: usize, ink: Ink) -> Vec<Color32> {
     let p = Palette::of(ui);
-    (0..total).map(|index| if index < marked { tone.color(&p) } else { p.off }).collect()
+    (0..total).map(|index| if index < marked { ink.color(&p) } else { p.off }).collect()
 }
 
 /// One mark per item, like the edges of a stack of files. `total` past `marked` show unlit.
-pub fn tally(ui: &mut Ui, marked: usize, total: usize, tone: Tone) -> Response {
-    let colors = lit_marks(ui, marked, total, tone);
+pub fn tally(ui: &mut Ui, marked: usize, total: usize, ink: impl Into<Ink>) -> Response {
+    let colors = lit_marks(ui, marked, total, ink.into());
     tally_marks(ui, &colors, TALLY_THIN)
 }
 
-pub fn fat_tally(ui: &mut Ui, marked: usize, total: usize, tone: Tone) -> Response {
-    let colors = lit_marks(ui, marked, total, tone);
+pub fn fat_tally(ui: &mut Ui, marked: usize, total: usize, ink: impl Into<Ink>) -> Response {
+    let colors = lit_marks(ui, marked, total, ink.into());
     tally_marks(ui, &colors, TALLY_FAT)
 }
 
@@ -138,10 +138,14 @@ pub enum KnotState {
     Working,
     Waiting,
     Failed,
+    /// The step to do next, outside a run, such as the first-run welcome's.
+    Next,
+    /// A step still to come.
+    Ahead,
 }
 
 /// A step's numbered square, `size` tall: `KNOT_SIZE`, or `KNOT_SIZE_SMALL` in a line of text.
-/// Done and failed are drawn in a hairline, working and waiting are filled.
+/// Done and failed are drawn in a hairline, the others are filled.
 pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
     let p = Palette::of(ui);
     let (fill, ink, edge) = match state {
@@ -149,6 +153,8 @@ pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
         KnotState::Working => (p.primary, p.on_primary, None),
         KnotState::Waiting => (p.turn, p.on_turn, None),
         KnotState::Failed => (p.sheet, p.closed, Some(p.closed)),
+        KnotState::Next => (p.primary, p.on_primary, None),
+        KnotState::Ahead => (p.panel, p.muted, None),
     };
     let style = if size < KNOT_SIZE { Type::KEY } else { Type::TAG };
     let galley = line(ui, text, style, ink, f32::INFINITY);
@@ -164,6 +170,8 @@ pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
         KnotState::Working => "working",
         KnotState::Waiting => "waiting for you",
         KnotState::Failed => "failed",
+        KnotState::Next => "next",
+        KnotState::Ahead => "to do",
     };
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{text}, {said}")));
     response
@@ -177,6 +185,72 @@ pub fn path_label(ui: &mut Ui, dir: &str, file: &str) -> Response {
     job.append(dir, 0.0, TextFormat::simple(Type::MONO.font(), p.faint));
     job.append(file, 0.0, TextFormat::simple(Type::MONO.font(), p.text));
     ui.add(egui::Label::new(job).truncate())
+}
+
+/// The centres of the weekday, day and month lines, below the stamp's centre, from the canvas's 80px view box.
+const DAY_STAMP_LINES: (f32, f32, f32) = (-17.0, 0.0, 17.5);
+
+/// The ticks lit on a ring of `ticks` for `done` of `total`. Past the ring's room they light in proportion.
+fn lit_ticks(total: usize, done: usize, ticks: usize) -> usize {
+    let done = done.min(total);
+    if total <= ticks { done } else { (done * ticks + total / 2) / total }
+}
+
+/// The day's postmark: two rings, one tick per decision filled as it is made, and the date inside.
+/// With nothing to decide, the ring shows `DAY_STAMP_EMPTY_TICKS` unlit ticks in quieter rings.
+pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usize, done: usize, spoken: &str) -> Response {
+    let p = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(DAY_STAMP_SIZE), Sense::hover());
+    let centre = rect.center();
+    let empty = total == 0;
+    let ticks = if empty { DAY_STAMP_EMPTY_TICKS } else { total.min(DAY_STAMP_MAX_TICKS) };
+    let lit = if empty { 0 } else { lit_ticks(total, done, ticks) };
+    let (inner, outer, width) = DAY_STAMP_TICK;
+    for index in 0..ticks {
+        let angle = -std::f32::consts::FRAC_PI_2 + (index as f32 + 0.5) * std::f32::consts::TAU / ticks as f32;
+        let along = Vec2::angled(angle);
+        let color = if index < lit { p.text } else { p.off };
+        ui.painter().line_segment([centre + along * inner, centre + along * outer], Stroke::new(width, color));
+    }
+    let edge = if empty { p.line } else { p.text };
+    for radius in [DAY_STAMP_RINGS.0, DAY_STAMP_RINGS.1] {
+        ui.painter().circle_stroke(centre, radius, Stroke::new(HAIRLINE, edge));
+    }
+    let (top, middle, bottom) = DAY_STAMP_LINES;
+    for (text, style, color, below) in [(weekday, Type::SMALL, p.muted, top), (day, Type::CLOCK, p.text, middle), (month, Type::SMALL, p.muted, bottom)] {
+        let galley = line(ui, text, style, color, DAY_STAMP_RINGS.1 * 2.0);
+        // Centred on the ink, as the stamp is: dates have few descenders.
+        ui.painter().galley(centre + vec2(0.0, below) - galley.mesh_bounds.center().to_vec2(), galley, color);
+    }
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, spoken));
+    response
+}
+
+/// A small square of the stamp ink beside something that waits on the user.
+pub fn stamp_square(ui: &mut Ui, spoken: &str) -> Response {
+    let color = Palette::of(ui).stamp;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, color);
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, spoken));
+    response
+}
+
+/// How one check on a posting came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckMark {
+    Ok,
+    Unclear,
+    Fails,
+}
+
+/// A check's result as a tag in plain words.
+pub fn check_tag(ui: &mut Ui, check: CheckMark) -> Response {
+    let (text, tone) = match check {
+        CheckMark::Ok => ("OK", Tone::Hired),
+        CheckMark::Unclear => ("Unclear", Tone::Interview),
+        CheckMark::Fails => ("Fails", Tone::Closed),
+    };
+    tag(ui, text, tone)
 }
 
 /// The Jobdesk mark: a folder with a J hooked into it, drawn from the logo's 652 by 600 view box.
@@ -336,4 +410,53 @@ pub fn doughnut(ui: &mut Ui, size: f32, segments: &[(usize, Tone)]) -> Response 
         start += sweep;
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    fn harness(add: impl FnMut(&mut Ui) + 'static) -> Harness<'static> {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(add)
+    }
+
+    #[test]
+    fn the_day_stamp_reads_its_spoken_label() {
+        let spoken = "Saturday 31 October. 3 of 11 decided today.";
+        let mut harness = harness(move |ui| {
+            day_stamp(ui, "Sat", "31", "Oct", 11, 3, spoken);
+        });
+        harness.step();
+        assert_eq!(harness.get_by_label(spoken).rect().width(), DAY_STAMP_SIZE);
+    }
+
+    #[test]
+    fn a_long_day_lights_its_ticks_in_proportion() {
+        assert_eq!(lit_ticks(11, 3, 11), 3);
+        assert_eq!(lit_ticks(80, 40, DAY_STAMP_MAX_TICKS), 20);
+        assert_eq!(lit_ticks(80, 80, DAY_STAMP_MAX_TICKS), DAY_STAMP_MAX_TICKS);
+        assert_eq!(lit_ticks(5, 9, 5), 5);
+    }
+
+    #[test]
+    fn check_tags_use_plain_words() {
+        let mut harness = harness(|ui| {
+            ui.horizontal(|ui| {
+                check_tag(ui, CheckMark::Ok);
+                check_tag(ui, CheckMark::Unclear);
+                check_tag(ui, CheckMark::Fails);
+            });
+        });
+        harness.step();
+        for word in ["OK", "Unclear", "Fails"] {
+            harness.get_by_label(word);
+        }
+    }
 }

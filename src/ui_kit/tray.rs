@@ -3,13 +3,14 @@
 use egui::{CornerRadius, Frame, Label, Margin, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{small_key_button, small_toggle};
+use crate::ui_kit::controls::{focus_ring, small_button, small_key_button, small_toggle};
+use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{inset, offset_shadow, paint_outlined};
+use crate::ui_kit::surfaces::{divider, inset, offset_shadow, paint_outlined};
 use crate::ui_kit::text::{line, rich};
 use crate::ui_kit::tokens::{
-    CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
-    HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
+    AGENDA_DAY_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, CHIP_HEIGHT, CHIP_PADDING, DEAL_CORNERS, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, HORIZON_CELL_HEIGHT,
+    HORIZON_NOTE_PADDING, HORIZON_PADDING, HORIZON_TIP_WIDTH, ITEM_GAP, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_CARD, RADIUS_PANEL, STACK_EDGE_HEIGHT, STACK_EDGE_STEP,
     STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
@@ -151,6 +152,93 @@ pub fn deal<R>(ui: &mut Ui, frame: Option<Tone>, add: impl FnOnce(&mut Ui) -> R)
     inner
 }
 
+/// The row under a card's body that holds its actions, ruled off on top.
+pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    divider(ui);
+    let (x, y) = DEAL_PADDING;
+    Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(BUTTON_GAP, BUTTON_GAP);
+            add(ui);
+        });
+    });
+}
+
+/// What closes an agenda row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgendaEnd<'a> {
+    Nothing,
+    /// The row is the card being read.
+    Now,
+    /// The row's card is decided: the row reads faint and cannot be clicked.
+    Done,
+    /// How late the row is, such as "2 days late".
+    Late(&'a str),
+    Button(&'a str),
+}
+
+/// What was pressed on an agenda row: the row itself, or its button.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgendaPress {
+    pub row: bool,
+    pub button: bool,
+}
+
+/// One dated line in a list of what is coming: the day, what happens, and how it ends. Ruled off from the row above unless `first`.
+/// `text` may come from a posting, so it is painted as plain text, cut to the room left.
+pub fn agenda_row(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) -> AgendaPress {
+    let p = Palette::of(ui);
+    if !first {
+        divider(ui);
+    }
+    let done = end == AgendaEnd::Done;
+    let sense = if done { Sense::hover() } else { Sense::click() };
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), PICK_ROW_HEIGHT), sense);
+    if !done && response.hovered() {
+        ui.painter().rect_filled(rect, 0.0, p.raised);
+    }
+    let left = rect.left() + PICK_ROW_INLINE;
+    let right = rect.right() - PICK_ROW_INLINE;
+    let mut end_ui = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_x_y_ranges(left..=right, rect.y_range())).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let mut pressed = AgendaPress::default();
+    match end {
+        AgendaEnd::Nothing => {}
+        AgendaEnd::Now => {
+            solid_tag(&mut end_ui, "Now", Tone::Turn);
+        }
+        AgendaEnd::Done => {
+            end_ui.label(rich(ui, "Done", Type::SMALL, Ink::Faint));
+        }
+        AgendaEnd::Late(late) => {
+            end_ui.label(rich(ui, late, Type::TAG, Tone::Interview));
+        }
+        AgendaEnd::Button(label) => pressed.button = small_button(&mut end_ui, label).clicked(),
+    }
+    let used = end_ui.min_rect().width();
+    let (ink, day_ink) = if done { (p.faint, p.faint) } else { (p.text, p.muted) };
+    let dated = line(ui, day, Type::NOTE, day_ink, AGENDA_DAY_WIDTH);
+    let text_left = left + AGENDA_DAY_WIDTH;
+    let room = (right - used - BUTTON_GAP - text_left).max(0.0);
+    let said = line(ui, text, Type::BODY, ink, room);
+    let centred = |height: f32| rect.center().y - height / 2.0;
+    let (dated_at, said_at) = (pos2(left, centred(dated.size().y)), pos2(text_left, centred(said.size().y)));
+    ui.painter().galley(dated_at, dated, day_ink);
+    ui.painter().galley(said_at, said, ink);
+    if !done {
+        focus_ring(ui, &response, 0);
+    }
+    let role = if done { Role::Label } else { Role::Button };
+    let spoken = match end {
+        AgendaEnd::Done => format!("{day}, {text}, done"),
+        AgendaEnd::Late(late) => format!("{day}, {text}, {late}"),
+        _ => format!("{day}, {text}"),
+    };
+    response.widget_info(|| WidgetInfo::labeled(role, true, &spoken));
+    pressed.row = response.clicked();
+    pressed
+}
+
 /// The edges of the cards behind the dealt one. The count caps; the words say how many.
 pub fn stack_edges(ui: &mut Ui, left: usize) {
     ui.spacing_mut().item_spacing.y = 0.0;
@@ -258,6 +346,35 @@ mod tests {
         // egui reports a selected button to a screen reader as toggled.
         assert_eq!(harness.get_by_label("Scope").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
         assert_eq!(harness.get_by_label("Rate").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    }
+
+    #[test]
+    fn a_done_agenda_row_cannot_be_clicked() {
+        let presses = Rc::new(RefCell::new(Vec::new()));
+        let seen = presses.clone();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
+            ui.set_max_width(SLIP);
+            let rows = [("Sun 1", "1 comes back", AgendaEnd::Button("Bring back")), ("Tue 3", "Harbor Bank deadline", AgendaEnd::Done), ("Thu 5", "Meridian Rail closes", AgendaEnd::Now)];
+            for (index, (day, text, end)) in rows.into_iter().enumerate() {
+                let pressed = agenda_row(ui, day, text, end, index == 0);
+                if pressed != AgendaPress::default() {
+                    seen.borrow_mut().push((index, pressed));
+                }
+            }
+        });
+        harness.step();
+        harness.get_by_label("Tue 3, Harbor Bank deadline, done").click();
+        harness.run();
+        assert_eq!(*presses.borrow(), Vec::new());
+        harness.get_by_label("Thu 5, Meridian Rail closes").click();
+        harness.run();
+        harness.get_by_label("Bring back").click();
+        harness.run();
+        assert_eq!(*presses.borrow(), vec![(2, AgendaPress { row: true, button: false }), (0, AgendaPress { row: false, button: true })]);
     }
 
     #[test]

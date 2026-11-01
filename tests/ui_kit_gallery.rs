@@ -6,11 +6,12 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{BRAND_GAP, GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    BandCell, CellLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, alert, attention_count, bar, brand, brand_mark, button, card_tab, chrome_status, clear_panel, code_box, command_button,
-    command_row, danger_button, deal, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure, flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card,
-    key_button, key_hint, knot, lane, lane_title, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, path_label, pick_row, primary_button,
-    primary_key_button, prompt_box, prompt_box_tone, rich, score, segmented, select_row, shell_top_frame, shortcut_button, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle,
-    solid_tag, stack_edges, stamp, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    AgendaEnd, BandCell, CellLook, CheckMark, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_row, alert, attention_count, bar, brand, brand_mark, button, card_tab,
+    check_tag, chrome_status, clear_panel, code_box, command_button, command_row, danger_button, day_stamp, deal, deal_footer, desk_frame, divider, document, doughnut, faint_mono, fat_tally, figure,
+    flow_band, folder_tab, horizon, horizon_count, horizon_day, horizon_mark, horizon_return, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, list_row, measure, muted, note,
+    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
+    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stack_edges, stamp,
+    stamp_square, stamped_head, status_dot, status_frame, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -437,12 +438,77 @@ fn document_sample(ui: &mut Ui) {
     document(ui, &mut CommonMarkCache::default(), DOCUMENT);
 }
 
+fn postmark(ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        day_stamp(ui, "Sat", "31", "Oct", 11, 3, "Saturday 31 October. 3 of 11 decided today.");
+        day_stamp(ui, "Sat", "31", "Oct", 11, 11, "Saturday 31 October. All 11 decided today.");
+        day_stamp(ui, "Sat", "31", "Oct", 0, 0, "Saturday 31 October");
+        day_stamp(ui, "Sun", "1", "Nov", 60, 20, "Sunday 1 November. 20 of 60 decided today.");
+    });
+    ui.horizontal(|ui| {
+        solid_tag(ui, "Now", Tone::Turn);
+        stamp_square(ui, "Needs you");
+        knot(ui, "1", KnotState::Next, KNOT_SIZE);
+        knot(ui, "2", KnotState::Ahead, KNOT_SIZE);
+        check_tag(ui, CheckMark::Ok);
+        check_tag(ui, CheckMark::Unclear);
+        check_tag(ui, CheckMark::Fails);
+        tally(ui, 3, 8, Ink::Stamp);
+    });
+    lead_line(ui, "Good fit, 78 of 100.", "Five checks pass. The day rate is not in the ad, so check it before you apply.");
+    reveal_command(ui, "/apply https://meridian.example/jobs/42");
+    ui.add_space(10.0);
+    prompt_box_tone(ui, Tone::Closed, |ui| {
+        ui.label(rich(ui, "Your applications could not be read.", Type::STRONG, Tone::Closed));
+        ui.label("Line 14 has 13 columns instead of 14.");
+    });
+    ui.add_space(10.0);
+    ui.columns_const(|[left, right]| {
+        paper(left, true, |ui| {
+            stamped_head(ui, |ui| {
+                day_stamp(ui, "Sat", "31", "Oct", 5, 0, "Saturday 31 October. 0 of 5 decided today.");
+            }, "5 to decide", "Start with Meridian Rail. It closes Thursday.");
+            deal_footer(ui, |ui| {
+                primary_button(ui, "Open the task");
+                button(ui, "Later");
+            });
+        });
+        slip(right, |ui| {
+            panel_header(ui, "Coming up", Some("2 weeks"));
+            panel_body(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                agenda_row(ui, "Sun 1", "1 comes back", AgendaEnd::Button("Bring back"), true);
+                agenda_row(ui, "Tue 3", "Harbor Bank deadline", AgendaEnd::Done, false);
+                agenda_row(ui, "Wed 4", "Quarry Labs reply", AgendaEnd::Late("2 days late"), false);
+                agenda_row(ui, "Thu 5", "Meridian Rail closes", AgendaEnd::Now, false);
+                agenda_row(ui, "Fri 6", "Ardent Software offer reply", AgendaEnd::Nothing, false);
+            });
+        });
+        right.add_space(10.0);
+        slip(right, |ui| {
+            panel_header(ui, "Done today", None);
+            panel_body(ui, |ui| {
+                skeleton(ui, 200.0, 18.0);
+                skeleton(ui, 140.0, 12.0);
+            });
+        });
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        skeleton(ui, 68.0, 56.0);
+        ui.vertical(|ui| {
+            skeleton(ui, 120.0, 12.0);
+            skeleton(ui, 260.0, 22.0);
+        });
+    });
+}
+
 type Section = (&'static str, fn(&mut Ui));
 
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [Section; 12] = [
+        let sections_of_gallery: [Section; 13] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -455,6 +521,7 @@ fn gallery(ui: &mut Ui) {
             ("In-tray", tray),
             ("Runs", runs),
             ("Document", document_sample),
+            ("Postmark", postmark),
         ];
         for (title, section) in sections_of_gallery {
             ui.heading(title);
@@ -467,7 +534,7 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
-        .with_size([1000.0, 5950.0])
+        .with_size([1000.0, 6900.0])
         .with_pixels_per_point(1.25)
         .with_theme(theme)
         .with_context_setup(install_look)

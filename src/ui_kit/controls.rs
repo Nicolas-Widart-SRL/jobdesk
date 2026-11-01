@@ -5,8 +5,9 @@ use egui::{Color32, CornerRadius, Galley, Rect, Response, Role, Sense, Stroke, S
 use crate::shared_kernel::WebUrl;
 use crate::ui_kit::Palette;
 use crate::ui_kit::marks::{CountChip, paint_key};
-use crate::ui_kit::surfaces::hairline;
-use crate::ui_kit::text::{line, paint_centred};
+use crate::ui_kit::palette::{Ink, Tone};
+use crate::ui_kit::surfaces::{code_box, hairline};
+use crate::ui_kit::text::{line, paint_centred, rich};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
     SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TAB_TOP, Type,
@@ -31,7 +32,7 @@ const NORMAL: Fit = Fit { height: BUTTON_HEIGHT, padding: BUTTON_PADDING, font: 
 const SMALL: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::SMALL_BUTTON };
 const COMMAND: Fit = Fit { height: SMALL_BUTTON_HEIGHT, padding: SMALL_BUTTON_PADDING, font: Type::MONO };
 
-fn focus_ring(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
+pub(in crate::ui_kit) fn focus_ring(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
     if response.has_focus() {
         let color = Palette::of(ui).active;
         ui.painter().rect_stroke(response.rect.expand(FOCUS_OFFSET), radius, Stroke::new(FOCUS_RING, color), StrokeKind::Outside);
@@ -199,6 +200,25 @@ pub fn small_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
 
 pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
     ctx.data_mut(|data| data.remove_temp(command_request_id()))
+}
+
+/// "Show the command" under an action, which opens the command line it stands for in a code box.
+/// The line shows as plain wrapped text, never as Markdown or a link, and clicking starts nothing.
+pub fn reveal_command(ui: &mut Ui, line: &str) -> Response {
+    let id = egui::Id::NULL.with(("reveal_command", line));
+    let open = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+    let text = if open { "Hide the command" } else { "Show the command" };
+    let link = rich(ui, text, Type::NOTE, Tone::Active);
+    let response = ui.add(egui::Link::new(link));
+    let open = open != response.clicked();
+    ui.data_mut(|data| data.insert_temp(id, open));
+    if open {
+        code_box(ui, |ui| {
+            let line = rich(ui, line, Type::MONO, Ink::Text);
+            ui.add(egui::Label::new(line).wrap());
+        });
+    }
+    response
 }
 
 fn open_link_with(ui: &mut Ui, label: &str, url: Option<&WebUrl>, fit: Fit) {
@@ -399,6 +419,8 @@ mod tests {
 
     use super::*;
 
+    const LINE: &str = "/apply https://tessel.example/jobs/1";
+
     #[test]
     fn a_tab_reads_its_count_as_need_you() {
         let setup = |ctx: &egui::Context| {
@@ -418,5 +440,25 @@ mod tests {
         harness.get_by_label("Jobs");
         harness.get_by_label("Applications, could not be read");
         harness.get_by_label("Tasks, 1 need you");
+    }
+
+    #[test]
+    fn the_command_shows_only_after_a_click() {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(|ui| {
+            reveal_command(ui, LINE);
+        });
+        harness.run();
+        assert!(harness.query_by_label(LINE).is_none());
+        harness.get_by_label("Show the command").click();
+        harness.run();
+        harness.get_by_label(LINE);
+        harness.get_by_label("Hide the command").click();
+        harness.run();
+        assert!(harness.query_by_label(LINE).is_none());
+        assert!(take_command_request(&harness.ctx).is_none());
     }
 }

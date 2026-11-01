@@ -24,8 +24,12 @@ pub struct Sources {
 
 pub fn show(ui: &mut Ui, state: &ScreenState, sources: &Sources, report: &SearchInsights, band: &WorkflowBand, gaps: Option<&SkillGapView>) {
     let tracker = sources.tracker_failed.then_some(TRACKER_HIDDEN);
+    // With no report to show, the skill gap section offers this action itself, so the head does not repeat it.
+    let offered_below = gaps.is_none() && !sources.skill_gaps_failed;
     page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text("The whole workflow, search health and skill gaps, read live from your files")), |ui| {
-        primary_command_action(ui, "Find skill gaps", "/upskill");
+        if !offered_below {
+            primary_command_action(ui, "Find skill gaps", "/upskill");
+        }
         command_action(ui, "Rebuild dashboard", "/html-report");
     });
     page_body(ui, |ui| {
@@ -210,7 +214,7 @@ fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)], hidden: Option<&st
 fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
     let Some(report) = report else {
         empty_state(ui, "No skill gap report yet", "Skill gaps are drawn from your ranked jobs and tracked applications. Run the analysis once you have some.", |ui| {
-            command_action(ui, "Find skill gaps…", "/upskill");
+            command_action(ui, "Find skill gaps", "/upskill");
         });
         return;
     };

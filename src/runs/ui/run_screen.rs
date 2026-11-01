@@ -281,7 +281,7 @@ impl RunScreen {
             page_body(ui, |ui| {
                 let body = "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends.";
                 empty_state(ui, "No tasks yet", body, |ui| {
-                    primary_command_action(ui, "Find new jobs…", "/scrape");
+                    primary_command_action(ui, "Find new jobs", "/scrape");
                     if button(ui, "New task…").clicked() {
                         request = Some(RunScreenRequest::NewTask);
                     }

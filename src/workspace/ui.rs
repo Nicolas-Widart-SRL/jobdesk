@@ -3,7 +3,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
+    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone,
     hidden_note, rich, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
 use crate::workspace::application::{EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
@@ -44,9 +44,13 @@ pub enum WorkspaceAction {
 pub fn show(ui: &mut Ui, state: &ScreenState, jobs_failed: bool, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
+    let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
     page_head(ui, Title::Slab("Setup"), Some(Subtitle::Typed(name)), |ui| {
         if button(ui, "Change folder").clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
+        }
+        if has_documents {
+            command_action(ui, "Look for more in your documents", "/expand");
         }
     });
     page_body(ui, |ui| {
@@ -83,10 +87,9 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
                     faint_mono(ui, file.name.as_str());
                 });
                 right(ui, |ui| {
-                    match file.state {
-                        ProfileState::Filled => small_command_action(ui, "Look for more in your documents\u{2026}", "/expand"),
-                        ProfileState::NeedsSetup { .. } | ProfileState::Missing => small_command_action(ui, "Update", "/setup"),
-                    };
+                    if !matches!(file.state, ProfileState::Filled) {
+                        small_command_action(ui, "Update", "/setup");
+                    }
                     match file.state {
                         ProfileState::Filled => tag(ui, "Filled", Tone::Hired),
                         ProfileState::NeedsSetup { placeholders } => tag(ui, format!("{placeholders} to fill"), Tone::Interview),

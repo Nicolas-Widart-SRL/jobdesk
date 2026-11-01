@@ -464,10 +464,10 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             let intro = "Jobdesk can search your job sites for new ads and score them against your profile. Each opens as a task, and you start it there.";
             ui.label(rich(ui, intro, Type::BODY, Ink::Muted));
             ui.horizontal(|ui| {
-                primary_command_action(ui, "Find new jobs…", "/scrape");
+                primary_command_action(ui, "Find new jobs", "/scrape");
                 if queue.unranked > 0 {
                     let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
-                    command_action(ui, &format!("Score {jobs}…"), "/rank");
+                    command_action(ui, &format!("Score {jobs}"), "/rank");
                 }
             });
             if !queue.set_aside.is_empty() {

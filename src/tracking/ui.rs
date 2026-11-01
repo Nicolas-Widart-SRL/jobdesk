@@ -108,8 +108,8 @@ impl TrackerScreen {
         }
         let subtitle = if state.failed() { Some("Not shown while the tracker cannot be read.") } else { (!pipeline.is_empty()).then_some(subtitle.as_str()) };
         page_head(ui, Title::Slab("Applications"), subtitle.map(Subtitle::Text), |ui| {
-            primary_command_action(ui, "Record a result…", "/outcome");
-            command_action(ui, "Check mail for replies…", "/gmail-sync");
+            primary_command_action(ui, "Record a result", "/outcome");
+            command_action(ui, "Check mail for replies", "/gmail-sync");
         });
         page_body(ui, |ui| {
             (state.alerts)(ui);
@@ -126,7 +126,7 @@ impl TrackerScreen {
         let mut open = None;
         if pipeline.is_empty() {
             empty_state(ui, "No applications yet", "Your tracker appears here once your first application is recorded.", |ui| {
-                command_action(ui, "Draft an application…", "/apply");
+                command_action(ui, "Draft an application", "/apply");
             });
             return None;
         }
@@ -137,15 +137,16 @@ impl TrackerScreen {
                 paper_with_footer(ui, |ui| open = details(ui, card), |ui| actions(ui, card));
             });
         }
-        if pipeline.cards().any(|card| card_waits(card, waiting)) {
-            let frame = Frame::new().inner_margin(egui::Margin { top: NOTE_GAP.1 as i8, ..Default::default() });
-            egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
-                ui.horizontal(|ui| {
+        let frame = Frame::new().inner_margin(egui::Margin { top: NOTE_GAP.1 as i8, ..Default::default() });
+        egui::Panel::bottom("applications_legend").show_separator_line(false).frame(frame).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                desk_label(ui, "Pick an application for its details and dossier.", Type::NOTE, Ink::Muted);
+                if pipeline.cards().any(|card| card_waits(card, waiting)) {
                     stamp_square(ui, "Pink edge");
                     desk_label(ui, "A pink edge means the application waits for you in Today.", Type::NOTE, Ink::Muted);
-                });
+                }
             });
-        }
+        });
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.board(ui, pipeline, waiting));
         });
@@ -230,10 +231,10 @@ fn action_bar(ui: &mut Ui, pipeline: &Pipeline) {
             ui.label(clauses.join(" "));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if stale > 0 {
-                    small_command_action(ui, "Close quiet ones…", "/outcome stale");
+                    small_command_action(ui, "Close quiet ones", "/outcome stale");
                 }
                 if due > 0 {
-                    small_command_action(ui, "Draft follow-ups…", "/outcome followup");
+                    small_command_action(ui, "Draft follow-ups", "/outcome followup");
                 }
             });
         });
@@ -280,8 +281,8 @@ fn details(ui: &mut Ui, card: &ApplicationCard) -> Option<String> {
 
 /// What the user can do with the application, pinned under its details.
 fn actions(ui: &mut Ui, card: &ApplicationCard) {
-    small_command_action(ui, "Record a result…", &format!("/outcome {}", card.company.to_lowercase()));
-    small_command_action(ui, "Prepare for the interview…", &format!("/interview {}", card.company.to_lowercase()));
+    small_command_action(ui, "Record a result", &format!("/outcome {}", card.company.to_lowercase()));
+    small_command_action(ui, "Prepare for the interview", &format!("/interview {}", card.company.to_lowercase()));
     open_link(ui, "Open job ad", card.source.as_ref());
 }
 

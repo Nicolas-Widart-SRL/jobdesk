@@ -90,9 +90,9 @@ fn day_rate(job: &JobView) -> &str {
 
 fn score_jobs_label(new: usize) -> String {
     match new {
-        0 => "Score new jobs…".to_owned(),
-        1 => "Score 1 new job…".to_owned(),
-        new => format!("Score {new} new jobs…"),
+        0 => "Score new jobs".to_owned(),
+        1 => "Score 1 new job".to_owned(),
+        new => format!("Score {new} new jobs"),
     }
 }
 
@@ -104,7 +104,7 @@ impl JobsScreen {
         let new = board.count(Lane::New);
         page_head(ui, Title::Slab("Jobs"), Some(Subtitle::Text(subtitle)), |ui| {
             primary_command_action(ui, &score_jobs_label(new), "/rank");
-            command_action(ui, "Find new jobs…", "/scrape");
+            command_action(ui, "Find new jobs", "/scrape");
         });
         page_body(ui, |ui| {
             (state.alerts)(ui);
@@ -264,7 +264,7 @@ fn lane_empty(ui: &mut Ui, lane: Lane, board: &JobBoard) {
         }
         Lane::Shortlist | Lane::New => {
             empty_state(ui, "No jobs wait here.", "Search your job sites for new ones.", |ui| {
-                command_action(ui, "Find new jobs…", "/scrape");
+                command_action(ui, "Find new jobs", "/scrape");
             });
         }
         _ => empty_note(ui, &format!("Nothing in {}.", lane_label(lane)), ""),
@@ -331,8 +331,8 @@ fn details(ui: &mut Ui, job: &JobView, kept: bool) {
 /// What the user can do with the job, pinned under its details.
 fn actions(ui: &mut Ui, job: &JobView) {
     let apply = job.url.as_ref().map_or_else(|| "/apply".to_owned(), |url| format!("/apply {}", url.as_str()));
-    primary_command_action(ui, "Draft application…", &apply);
-    command_action(ui, "Find skill gaps…", "/upskill");
+    primary_command_action(ui, "Draft application", &apply);
+    command_action(ui, "Find skill gaps", "/upskill");
     open_link(ui, "Open job ad", job.url.as_ref());
 }
 

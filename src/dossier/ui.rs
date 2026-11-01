@@ -72,8 +72,8 @@ impl DossierScreen {
         let folder = card.archive_folder.as_ref().map(|folder| format!("documents/applications/{folder}/"));
         page_head(ui, Title::Slab(&title), folder.as_deref().map(Subtitle::Typed), |ui| {
             let company = card.company.to_lowercase();
-            open_link_button(ui, "Open posting", card.source.as_ref());
-            command_action(ui, "Prepare interview", &format!("/interview {company}"));
+            open_link_button(ui, "Open job ad", card.source.as_ref());
+            command_action(ui, "Prepare for the interview", &format!("/interview {company}"));
             command_action(ui, "Record a result", &format!("/outcome {company}"));
             if let Some(fit) = card.fit_rating {
                 desk_label(ui, format!("Fit {fit}"), Type::BODY, Ink::Text);
@@ -168,7 +168,7 @@ impl DossierScreen {
                         panel_body(ui, |ui| {
                             ui.set_width(ui.available_width());
                             muted(ui, "No prep pack yet. /interview writes one into this folder.");
-                            command_action(ui, "Prepare interview", &format!("/interview {company}"));
+                            command_action(ui, "Prepare for the interview", &format!("/interview {company}"));
                         });
                     });
                     return;

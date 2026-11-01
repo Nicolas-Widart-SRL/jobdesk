@@ -265,7 +265,7 @@ fn request_command(ui: &Ui, command: &str) {
 }
 
 /// A button showing `label` that opens `line` in the launcher. The shell picks the request up.
-fn command_action_with(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, fit: Fit) -> Response {
+fn command_press(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, fit: Fit) -> Response {
     let response = press(ui, label, look, fit, None).on_hover_text(hint);
     if response.clicked() {
         request_command(ui, line);
@@ -273,13 +273,22 @@ fn command_action_with(ui: &mut Ui, label: &str, line: &str, hint: &str, look: L
     response
 }
 
+/// A command action: it opens the launcher before anything runs, so its label ends in "…".
+fn command_action_with(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, fit: Fit) -> Response {
+    if label.ends_with('…') {
+        command_press(ui, label, line, hint, look, fit)
+    } else {
+        command_press(ui, &format!("{label}…"), line, hint, look, fit)
+    }
+}
+
 /// A command button on any screen, labelled with the command itself.
 pub fn command_button(ui: &mut Ui, command: &str) {
-    command_action_with(ui, command, command, "Open in command launcher", Look::Plain, COMMAND);
+    command_press(ui, command, command, "Open in command launcher", Look::Plain, COMMAND);
 }
 
 pub fn danger_command_button(ui: &mut Ui, command: &str) {
-    command_action_with(ui, command, command, "Open in command launcher", Look::Danger, COMMAND);
+    command_press(ui, command, command, "Open in command launcher", Look::Danger, COMMAND);
 }
 
 /// A button with a plain label that opens `line` in the command launcher.
@@ -669,6 +678,33 @@ mod tests {
         harness.run();
         harness.get_by_label("Copy");
         assert!(harness.query_by_label("Copied").is_none());
+    }
+
+    #[test]
+    fn command_actions_end_in_an_ellipsis() {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([800.0, 120.0]).with_context_setup(setup).build_ui(|ui| {
+            ui.horizontal(|ui| {
+                command_action(ui, "Tune scoring", "/setup");
+                primary_command_action(ui, "Find skill gaps", "/upskill");
+                small_command_action(ui, "Add portal", "/add-portal");
+                command_action(ui, "Find new jobs…", "/scrape");
+                command_button(ui, "/reset");
+            });
+        });
+        harness.run();
+        for label in ["Tune scoring…", "Find skill gaps…", "Add portal…", "Find new jobs…", "/reset"] {
+            harness.get_by_label(label);
+        }
+        for label in ["Tune scoring", "Find new jobs……", "/reset…"] {
+            assert!(harness.query_by_label(label).is_none(), "{label} is shown");
+        }
+        harness.get_by_label("Add portal…").click();
+        harness.run();
+        assert_eq!(take_command_request(&harness.ctx).as_deref(), Some("/add-portal"));
     }
 
     #[test]

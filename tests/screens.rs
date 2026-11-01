@@ -201,6 +201,8 @@ fn stop_point() -> AgentEvent {
     AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.94, duration_ms: 401_000 }
 }
 
+/// The launcher's subtitle, which only the launcher shows. Its title, "New task", is also the menu button's label.
+const LAUNCHER: &str = "Pick a command. Nothing runs until you press Run.";
 const APPLY_LINE: &str = "/apply https://kestrel.example/jobs/2";
 const STOP_EVALUATION: &str = "# Job fit evaluation: Solution Architect at Kestrel Payments\n\nVerdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week in Leuven | Pass |\n| Language | English, Dutch is a plus | Pass |\n| Salary | Not stated | Check |\n\nShall I go ahead and draft the CV and cover letter?";
 
@@ -345,9 +347,9 @@ fn a_command_button_leads_to_a_started_run() {
         .build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
-    harness.get_by_label("Tune scoring").click();
+    harness.get_by_label("Tune scoring…").click();
     harness.run_steps(3);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
 
     harness.get_by_label("Run").click();
     harness.run_steps(3);
@@ -973,7 +975,7 @@ fn the_launcher_shortcut_works_while_typing() {
     harness.key_press(Key::Home);
     harness.key_press_modifiers(egui::Modifiers { ctrl: true, command: true, ..Default::default() }, Key::K);
     harness.run_steps(3);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
     harness.get_by_label("Tasks, 1 need you").click();
     harness.run_steps(3);
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
@@ -1076,6 +1078,42 @@ fn applications_mark_what_waits_in_today() {
     assert!(is_shown(&harness, "Mosaic Data, Architect, You withdrew"));
     assert!(harness.query_by_label_contains("of them wait for you in Today.").is_some());
     assert!(is_shown(&harness, "A pink edge means the application waits for you in Today."));
+    assert!(is_shown(&harness, "Pick an application for its details and dossier."));
+}
+
+/// The hint that a card opens details shows even when nothing waits in Today, and then the pink edge goes unexplained.
+#[test]
+fn the_applications_legend_hints_at_details_when_nothing_waits() {
+    let mut harness = tray_harness(shell(Screen::InTray, "applications_legend_plain"));
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    harness.get_by_label_contains("Applications").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("wait for you in Today.").is_none(), "nothing waits in Today");
+    assert!(is_shown(&harness, "Pick an application for its details and dossier."));
+    assert!(!is_shown(&harness, "A pink edge means the application waits for you in Today."));
+}
+
+/// One action in the Setup header opens `/expand` in the launcher, and the rows carry none. No run starts.
+#[test]
+fn setup_offers_one_look_for_more_in_your_documents() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::Workspace, "setup_expand");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Look for more in your documents…").count(), 1, "one action, in the header, not one per row");
+    assert!(!is_shown(&harness, LAUNCHER));
+
+    harness.get_by_label("Look for more in your documents…").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/expand").count() > 0, "the line is /expand, with no file");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
 }
 
 /// Text in a row takes no click of its own, so a click on a job's title picks the job, and the pointer shows the hand.
@@ -1192,7 +1230,7 @@ fn y_leads_from_a_card_to_a_started_run() {
     assert!(is_shown(&harness, HARBOR));
 
     press(&mut harness, Key::Y);
-    harness.get_by_label("All commands");
+    harness.get_by_label(LAUNCHER);
     harness.get_by_label("/outcome");
 
     harness.get_by_label("Run").click();
@@ -1259,12 +1297,12 @@ fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
     assert!(is_shown(&harness, "Want more to look at?"));
     assert!(is_shown(&harness, "Score 2 new jobs…"), "the sample board holds two unscored jobs");
     assert!(is_shown(&harness, &format!("{TRAY_CARDS} cards set aside with Later come back tomorrow. ")));
-    assert!(!is_shown(&harness, "All commands"));
+    assert!(!is_shown(&harness, LAUNCHER));
 
     harness.get_by_label("Find new jobs…").click();
     harness.run_steps(3);
 
-    assert!(is_shown(&harness, "All commands"), "the launcher opens");
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
     assert!(harness.query_all_by_label("/scrape").count() > 0, "the line is filled in");
     assert!(started.lock().unwrap().is_none(), "no run starts");
 }
@@ -1421,7 +1459,7 @@ fn bring_back_returns_set_aside_cards_without_a_run() {
     assert!(is_shown(&harness, HARBOR), "the card brought back is on top again");
     assert!(tallied(&harness, 0, TRAY_CARDS));
     assert!(harness.query_by_label_contains("set aside, back tomorrow").is_none());
-    assert!(!is_shown(&harness, "All commands"), "the row opens no launcher");
+    assert!(!is_shown(&harness, LAUNCHER), "the row opens no launcher");
     assert!(started.lock().unwrap().is_none(), "the row starts no run");
 }
 
@@ -1598,7 +1636,7 @@ fn show_the_command_reveals_the_line_and_starts_nothing() {
     assert!(is_shown(&harness, line));
     assert!(is_shown(&harness, "Hide the command"));
     assert!(is_shown(&harness, MERIDIAN), "the card stays dealt");
-    assert!(!is_shown(&harness, "All commands"), "no launcher opens");
+    assert!(!is_shown(&harness, LAUNCHER), "no launcher opens");
     assert!(started.lock().unwrap().is_none(), "no run starts");
 
     press(&mut harness, Key::L);
@@ -1769,12 +1807,12 @@ fn empty_screens_offer_verbs_not_commands() {
         // Tall, so Insights shows its skill gap section without scrolling.
         let mut harness = Harness::builder().with_size([1280.0, 1400.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
         harness.run_steps(3);
-        assert!(is_shown(&harness, verb), "{verb} is shown");
+        assert!(is_shown(&harness, verb), "{verb} is shown, once");
         assert!(harness.query_by_label_contains(command).is_none(), "{command} is not");
 
         harness.get_by_label(verb).click();
         harness.run_steps(3);
-        assert!(is_shown(&harness, "All commands"), "{verb} opens the launcher");
+        assert!(is_shown(&harness, LAUNCHER), "{verb} opens the launcher");
         assert!(harness.query_all_by_label(command).count() > 0, "the line is filled in");
         assert!(started.lock().unwrap().is_none(), "no run starts");
     }
@@ -1790,11 +1828,11 @@ fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
         let mut harness = tray_harness(shell);
         assert!(is_shown(&harness, "No tasks yet"));
         assert!(is_shown(&harness, "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends."));
-        assert!(!is_shown(&harness, "All commands"));
+        assert!(!is_shown(&harness, LAUNCHER));
 
         harness.get_by_label(button).click();
         harness.run_steps(3);
-        assert!(is_shown(&harness, "All commands"), "{button} opens the launcher");
+        assert!(is_shown(&harness, LAUNCHER), "{button} opens the launcher");
         if line.is_some() {
             assert!(harness.query_all_by_label("/scrape").count() > 0, "{button}: the line is filled in");
         }
@@ -2166,7 +2204,7 @@ fn loading_deals_no_card_and_ignores_keys() {
     press(&mut harness, Key::Y);
     press(&mut harness, Key::L);
 
-    assert!(!is_shown(&harness, "All commands"), "Y opens no launcher");
+    assert!(!is_shown(&harness, LAUNCHER), "Y opens no launcher");
     assert!(!is_shown(&harness, "Set aside until tomorrow"), "L sets nothing aside");
     assert!(is_shown(&harness, "Reading your job search…"));
 }

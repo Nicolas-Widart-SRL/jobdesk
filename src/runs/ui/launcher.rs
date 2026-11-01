@@ -50,8 +50,8 @@ impl Launcher {
 
     /// Returns the id of a run the user just started.
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
-        let subtitle = Subtitle::Text("Every action is the unchanged slash command. Forms only build its arguments.");
-        page_head(ui, Title::Slab("All commands"), Some(subtitle), |_| {});
+        let subtitle = Subtitle::Text("Pick a command. Nothing runs until you press Run.");
+        page_head(ui, Title::Slab("New task"), Some(subtitle), |_| {});
         page_body(ui, |ui| self.body(ui, desk))
     }
 

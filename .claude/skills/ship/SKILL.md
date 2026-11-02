@@ -1,6 +1,6 @@
 ---
 name: ship
-description: The lead's workflow for every code change, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or a fix, even a one-line one, or to answer CodeRabbit on a pull request.
+description: The lead's workflow for a code change, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or a fix that does not qualify for `quick-fix`, or to answer CodeRabbit on a pull request.
 argument-hint: "<feature or task>"
 ---
 
@@ -14,10 +14,13 @@ The user's words in the task win over this workflow, for example "do it yourself
 
 Task: $ARGUMENTS
 
-## One session per change
+## Pick the flow
 
-Run one change per session, so the lead's context holds only that change.
-Keep its state in a plan file in `.claude/plans/`, which git ignores.
+A task that qualifies for `quick-fix` goes to that skill instead. Its Does it qualify section holds the criteria.
+
+## State per change, many changes per session
+
+Keep each change's state in a plan file in `.claude/plans/`, which git ignores.
 Name it and write its first line as `lead.md` says: the branch with each `/` turned into `-`, and `# <branch>` on top.
 It holds the plan, the waves, the user's decisions, each step's branch, worktree, head SHA and status,
 the review findings, and the CodeRabbit ids already handled.
@@ -34,35 +37,46 @@ So first ask the user whether the earlier session is closed, and call `watch_pul
 Until then, watch nothing and answer nothing on your own.
 After the call, record in the plan file that this session watches the pull request.
 Right after that call, run step 8 once, because comments posted while no session watched never wake you.
-Tell the user to start the next change in a new session.
+
+A new change may start in the same session, even while earlier pull requests wait for review or merge.
+Each change has its own plan file and its own watch.
+Suggest a new session only when the lead's context is heavy,
+never because a pull request merged or a design finished.
 
 Keep command output out of your context. Run checks only through `scripts/check.sh` and `scripts/merge-step.sh`,
 which print one line per check. Read a subagent's report once, then keep only its SHAs and findings in the plan file.
 
 ## Steps
 
-1. **Start the branch.** Always run `git fetch --quiet origin` first.
+1. **Start the branch.** Always start with `scripts/sync-main.sh`, then `git fetch --quiet origin`.
+   The main checkout stays on `main`, clean, and never holds a change's work: all edits happen in agent worktrees, except the plan file.
    Name the change's branch, such as `feat/standing-orders`, when the user did not.
    If it does not exist, create it with `git branch <change> origin/main`.
+   A change that needs an unmerged change waits. Tell the user, and start it, in the same session,
+   once the user says that change merged or `cleanup` shows it merged. Until then it has no branch and no plan file.
    Never create it from local `main` or from what the main checkout has checked out:
    that checkout may be stale, or another session may be using it.
    Never check out, reset or pull in the main checkout.
    Never check out the change's branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
    If `git merge-base --is-ancestor origin/main <change>` fails, rebase it yourself in a detached worktree:
-   `git worktree add --detach .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase origin/main`.
+   `git worktree add --detach .claude/worktrees/sync-<change> <change>`, then `git -C .claude/worktrees/sync-<change> rebase origin/main`.
+   Here `<change>` in the path is the change's branch with each `/` turned into `-`, so two sessions cannot collide.
+   If that path exists, it is a leftover of this change: remove it only when it is detached and clean, and never force.
    Move the branch to the result with `git update-ref refs/heads/<change> <new sha> <old sha>`,
-   then run `git worktree remove .claude/worktrees/sync`.
-   On a conflict, run `git -C .claude/worktrees/sync rebase --abort`, remove the worktree and ask the user.
+   then run `git worktree remove .claude/worktrees/sync-<change>`.
+   On a conflict, run `git -C .claude/worktrees/sync-<change> rebase --abort`, remove the worktree and ask the user.
    When the branch is already pushed, push the rebased branch with `git push --force-with-lease origin <change>`.
    Never send a rebase of the change's branch to a builder.
 2. **Plan.** `planner` turns the task into 4 to 6 steps, each with a check, grouped in waves.
    Write the plan to the change's plan file.
-   Show the user the waves and stop, unless the user said to go on without it.
+   Show the user the waves in a few lines, and say which defaults the planner and the lead chose.
+   Stop there only when the planner's Open questions hold a question for the user. Otherwise go on.
    For a one-step fix, skip the planner: write the one step yourself, with its files and its check, and go on.
 3. **Build wave by wave.** A builder builds one step in its own git worktree and commits it.
    Use `builder-sonnet` only when the planner marked the step written down. Use `builder` for every other step.
    Spawn every builder of a wave in one message. Start the next wave once the current one has merged.
-4. **Review a risky step** with `reviewer` (see Briefs). Send its findings to the step's builder with SendMessage.
+4. **Review a risky step** with `reviewer` (see Briefs). Send all risky steps of a wave to `reviewer` in one message, in parallel.
+   Send each step's findings to its builder with SendMessage.
    Every other step gets only the check in `scripts/merge-step.sh`, and the change review in step 6.
 5. **Merge the step.** Once the review passes, or at once when the step is not risky,
    run `scripts/merge-step.sh <step-branch> <change-branch>`.
@@ -70,10 +84,14 @@ which print one line per check. Read a subagent's report once, then keep only it
    Then run `scripts/cleanup.sh <change-branch>` (see Clean up).
 6. **Review the change** with `reviewer`, once every step is in.
    The base is `git merge-base origin/main <change>`, and the head is the branch tip.
-   Right before each review, round 2 included, make a head checkout at the current tip
-   with `git worktree add --detach .claude/worktrees/review <change>`.
-   Remove it with `git worktree remove .claude/worktrees/review` right after the review,
-   so no review reads a stale checkout.
+   Right before each review, every round included, make a head checkout at the current tip
+   with `git worktree add --detach .claude/worktrees/review-<change> <change>`,
+   where `<change>` in the path is the change's branch with each `/` turned into `-`, as in the plan file name.
+   Another session may review its own change at the same time, so never touch another change's `review-*` checkout.
+   When a stale `.claude/worktrees/review-<change>` exists for this change, remove it first with `git worktree remove .claude/worktrees/review-<change>`,
+   but only when it is detached and clean. When it is not, or the removal fails, tell the user and never force.
+   Remove it with `git worktree remove .claude/worktrees/review-<change>` right after the review,
+   on the same terms, so no review reads a stale checkout.
    It must be detached, so that `merge-step.sh` still moves the change's branch with `update-ref`.
    Nothing goes into a pull request without this pass.
 7. **Open the pull request.** Push the change's branch and open a pull request against `main`.
@@ -122,7 +140,8 @@ which print one line per check. Read a subagent's report once, then keep only it
 
 A change with one step skips the step review: the change review is its only review.
 A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
-A change to `.claude/agents/*.md` or `.claude/skills/*.md` is not docs-only: it is risky and gets a review.
+A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
+It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
 
 The planner may write only in its memory, and the reviewer has no edit tools,
 so neither can change what it plans or reviews.
@@ -142,20 +161,26 @@ When the change builds a design, add the canvas paths.
 Give the reviewer:
 
 - the range `<base>..<head>`;
-- the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review` for the change review;
+- the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review-<change>` for the change review;
 - the plan step word for word, or the whole plan for the change review;
 - the risky lens, taken from the planner's reason for marking the step risky;
 - for a visible change, the changed snapshot PNGs and the canvas paths.
 
 Never pass on the builder's account, and never say what a fix does.
-In round 2, pass the round-1 findings word for word and the fix range `<old head>..<new head>`.
+In each later round, pass the round-1 findings word for word, with the later rounds' findings,
+and the fix range `<old head>..<new head>`.
 
 ## Review rounds
 
-Review in two rounds at most: the first review, then one more after the builder fixes the findings.
-This holds for each risky step and for the change.
-A third review needs the user's go.
-When the second round still fails, stop and report its open findings to the user.
+Review in three rounds at most, for each risky step and for the change.
+The lead decides each round and each fix, not the user.
+Fix every High and Medium finding.
+Fix a Low in the same builder pass only when it is cheap. A Low never starts a round.
+After round 1, review again only when a High or a finding in the risky lens was fixed, and review only the fix range.
+After round 3, when a High is still open, stop and report each one to the user in one line.
+Otherwise go on: merge the step, or open the pull request after the change review.
+Record the open Medium and Low findings, and list them in the pull request body.
+Ask the user only for product, security or data choices.
 Keep only the findings in the plan file, one line each with `file:line` and severity, and drop the rest of the report.
 In your final message, say what the reviews covered and what they found.
 
@@ -283,10 +308,12 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
 
 ## Other agents on call
 
-- `designer` draws HTML canvases for a new screen in `mockups/`. It runs in its own session, through the `designer` skill.
-  When the task names canvases, give the planner the index and every changed handoff file of the canvases' folder (`mockups/README.md` and `mockups/handoff/` by default).
-  Before planning, run `git status --porcelain -- <folder>` and `git diff --quiet origin/main -- <folder>` on the canvases' folder.
-  If the first prints anything or the second exits non-zero, ask the user to commit and merge the design first, because the builders' worktrees start from `origin/main`.
+- `designer` draws HTML canvases for a new screen in `mockups/`, in its own worktree, through the `designer` skill.
+  The design lives on a branch of the change, so no pull request and no new session are needed before planning.
+  When the task names canvases on a designer's branch that the change's branch does not hold yet,
+  merge it with `NO_CHECK=1 scripts/merge-step.sh <design-branch> <change>`.
+  Give the planner the change's branch, the canvas paths, the index and every changed handoff file of the canvases' folder
+  (`mockups/README.md` and `mockups/handoff/` by default). It reads them with `git show <change>:<path>`.
   The planner puts the handoff files' Doc changes in a docs step, and that step deletes the section from each file after applying it.
 
 Use cheap models only for work that is fully written down.

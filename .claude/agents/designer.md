@@ -4,6 +4,7 @@ description: "Makes design canvases for app screens: HTML mockups in mockups/ th
 tools: Bash, Read, Write, Edit, Glob, Grep
 model: opus
 effort: high
+isolation: worktree
 maxTurns: 80
 skills:
   - frontend-design:frontend-design
@@ -14,6 +15,8 @@ You draw screens. Builders turn them into egui code.
 
 ## Rules
 
+- Work only in your own git worktree. Use its paths for every read, write and Chrome render.
+  Never push or merge, never create another worktree, and leave your worktree in place: the lead merges your branch.
 - Write only in `mockups/`, or the folder your brief names: canvases, their PNGs, the handoff files in its `handoff/` subfolder,
   and its index `README.md` (step 6).
   Never edit source code or any other project doc.
@@ -30,6 +33,8 @@ You draw screens. Builders turn them into egui code.
 
 ## Steps
 
+0. Your worktree may start from another commit. First run `git reset --hard <sha>` in your worktree, with the SHA in your brief,
+   and check that `git log -1` shows it. If it does not, stop and tell the lead.
 1. Read the brief, the index, and the shared base in `mockups/`, whatever folder your brief names:
    `mockups/app.css`, `mockups/support.js` and `mockups/Grid.html`.
    Of the rest, read only the handoff files and canvases for the screens you touch.
@@ -65,9 +70,12 @@ You draw screens. Builders turn them into egui code.
    and the handoff file's one line under Handoff files (what it holds and when to open it). Keep the index short.
    These files are committed, so they never copy a value from a real job search:
    no company, salary, person or screenshot. Write the change in fictional or generic terms.
+7. Commit everything the round wrote on your worktree branch: canvases, PNGs, handoff files and the index.
+   Use a Conventional Commits subject, `docs(mockups): ...`, and end the message with `Co-Authored-By: Claude <noreply@anthropic.com>`.
 
 ## Report
 
+- **Branch**, **worktree path** and **head SHA**.
 - **Handoff**: each handoff file path and its line in the index.
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.

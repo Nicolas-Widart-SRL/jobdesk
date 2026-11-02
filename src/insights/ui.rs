@@ -5,8 +5,9 @@ use crate::insights::application::{GapRow, SearchInsights, SkillGapView, Workflo
 use crate::shared_kernel::Source;
 use crate::ui_kit::tokens::{SCREEN_GAP, SKELETON_GAP, SKELETON_LINE, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FlowNode, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note, list_row, muted, note, page_body, page_head,
-    panel, panel_body, panel_header, primary_command_action, rich, skeleton, skeleton_lines, slip, small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
+    CellRule, FlowNode, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note, list_row, muted, note,
+    page_body, page_head, panel, panel_body, panel_header, primary_command_action, rich, skeleton, skeleton_lines, slip, small_command_action, split,
+    table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
@@ -26,7 +27,11 @@ pub fn show(ui: &mut Ui, state: &ScreenState, report: &SearchInsights, band: &Wo
     // With no report to show, the skill gap section offers this action itself, so the head does not repeat it.
     // The loading view offers nothing below, so the head keeps it while reading.
     let offered_below = !state.reading() && gaps.is_none() && !state.cannot_read(Source::SkillGaps);
-    let subtitle = if state.reading() { "Reading your jobs, applications and reports…" } else { "The whole workflow, search health and skill gaps, read live from your files" };
+    let subtitle = if state.reading() {
+        "Reading your jobs, applications and reports…"
+    } else {
+        "The whole workflow, search health and skill gaps, read live from your files"
+    };
     page_head(ui, Title::Slab("Insights"), Some(Subtitle::Text(subtitle)), |ui| {
         if !offered_below {
             primary_command_action(ui, "Find skill gaps", "/upskill");
@@ -171,7 +176,13 @@ fn counted_row(ui: &mut Ui, label: impl FnOnce(&mut Ui), count: usize) {
 fn tallied(ui: &mut Ui, label: &str, count: usize, ink: Ink) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        counted_row(ui, |ui| { ui.label(label); }, count);
+        counted_row(
+            ui,
+            |ui| {
+                ui.label(label);
+            },
+            count,
+        );
         tally_strip(ui, &[(count, Some(ink))], true);
     });
 }
@@ -210,7 +221,13 @@ fn status_chart(ui: &mut Ui, report: &SearchInsights, hidden: Option<&str>) {
             ui.add_space(6.0);
             ui.spacing_mut().item_spacing.y = 2.0;
             for (label, value, tone) in rows {
-                counted_row(ui, |ui| { tag(ui, label, tone); }, value);
+                counted_row(
+                    ui,
+                    |ui| {
+                        tag(ui, label, tone);
+                    },
+                    value,
+                );
             }
         });
     });
@@ -258,9 +275,14 @@ fn counts(ui: &mut Ui, title: &str, rows: &[(String, usize)], hidden: Option<&st
 
 fn skill_gaps(ui: &mut Ui, report: Option<&SkillGapView>) {
     let Some(report) = report else {
-        empty_state(ui, "No skill gap report yet", "Skill gaps are drawn from your ranked jobs and tracked applications. Run the analysis once you have some.", |ui| {
-            command_action(ui, "Find skill gaps", "/upskill");
-        });
+        empty_state(
+            ui,
+            "No skill gap report yet",
+            "Skill gaps are drawn from your ranked jobs and tracked applications. Run the analysis once you have some.",
+            |ui| {
+                command_action(ui, "Find skill gaps", "/upskill");
+            },
+        );
         return;
     };
     if report.gaps.is_empty() {

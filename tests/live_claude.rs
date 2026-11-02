@@ -46,7 +46,11 @@ fn a_full_session_works() {
     let mut desk = desk(&workspace, &logs);
 
     let id = desk
-        .start("Use AskUserQuestion to ask yes or no about colours. Then use Bash to run exactly: touch probe.txt . Then stop and say DONE.", &options(), chrono::Local::now().naive_local())
+        .start(
+            "Use AskUserQuestion to ask yes or no about colours. Then use Bash to run exactly: touch probe.txt . Then stop and say DONE.",
+            &options(),
+            chrono::Local::now().naive_local(),
+        )
         .unwrap();
 
     // Question, then permission with a remembered rule, then a stop point.

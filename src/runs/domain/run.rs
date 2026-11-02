@@ -40,7 +40,12 @@ pub enum ToolState {
 pub enum ActivityKind {
     You(String),
     Claude(String),
-    Tool { id: String, name: String, summary: String, state: ToolState },
+    Tool {
+        id: String,
+        name: String,
+        summary: String,
+        state: ToolState,
+    },
     Notice(String),
     /// A tool Jobdesk allowed without asking. Routine, unlike a notice that explains the run.
     Allowed(String),
@@ -252,7 +257,9 @@ impl Run {
                     Err(reason) => ToolState::Failed(reason),
                 };
                 for activity in self.activity.iter_mut().rev() {
-                    if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind && *known == id {
+                    if let ActivityKind::Tool { id: known, state: current, .. } = &mut activity.kind
+                        && *known == id
+                    {
                         *current = state;
                         break;
                     }
@@ -460,7 +467,15 @@ mod tests {
         let mut run = run("/rank");
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), nested: false });
         run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Err(Some("ls: invalid option -- 'Z'".into())) });
-        assert_eq!(run.activity[1].kind, ActivityKind::Tool { id: "1".into(), name: "Bash".into(), summary: "ls -Z".into(), state: ToolState::Failed(Some("ls: invalid option -- 'Z'".into())) });
+        assert_eq!(
+            run.activity[1].kind,
+            ActivityKind::Tool {
+                id: "1".into(),
+                name: "Bash".into(),
+                summary: "ls -Z".into(),
+                state: ToolState::Failed(Some("ls: invalid option -- 'Z'".into()))
+            }
+        );
     }
 
     #[test]

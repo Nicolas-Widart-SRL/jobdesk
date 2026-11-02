@@ -276,7 +276,8 @@ mod tests {
 
     #[test]
     fn nested_tools_stay_nested_and_deltas_stay_top_level() {
-        let tool = r#"{"type":"assistant","parent_tool_use_id":"p","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let tool =
+            r#"{"type":"assistant","parent_tool_use_id":"p","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]}}"#;
         assert_eq!(parse_line(tool), [AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "ls".into(), nested: true }]);
         let delta = r#"{"type":"stream_event","parent_tool_use_id":"p","event":{"delta":{"type":"text_delta","text":"x"}}}"#;
         assert_eq!(parse_line(delta), []);

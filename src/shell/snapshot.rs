@@ -52,7 +52,12 @@ impl Snapshot {
             .cards()
             .filter_map(|card| {
                 let folder = card.archive_folder.clone()?;
-                let reference = ApplicationRef { folder: folder.clone(), company: card.company.clone(), cv_file: card.cv_file.clone(), cover_letter_file: card.cover_letter_file.clone() };
+                let reference = ApplicationRef {
+                    folder: folder.clone(),
+                    company: card.company.clone(),
+                    cv_file: card.cv_file.clone(),
+                    cover_letter_file: card.cover_letter_file.clone(),
+                };
                 Some((folder, dossier::load_archive(root, &reference, today)))
             })
             .collect();

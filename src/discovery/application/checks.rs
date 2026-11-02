@@ -195,12 +195,30 @@ mod tests {
 
     fn job() -> JobView {
         JobView {
-            key: "acme".into(), title: "Lead".into(), company: "Acme".into(), location: None, url: None, portal: None, found_on: None,
-            deadline: None, days_to_deadline: None, score: Some(80), verdict: None, scraper_fit: None,
-            location_gate: None, language_gate: None, language_note: None,
+            key: "acme".into(),
+            title: "Lead".into(),
+            company: "Acme".into(),
+            location: None,
+            url: None,
+            portal: None,
+            found_on: None,
+            deadline: None,
+            days_to_deadline: None,
+            score: Some(80),
+            verdict: None,
+            scraper_fit: None,
+            location_gate: None,
+            language_gate: None,
+            language_note: None,
             freelance: FreelanceGates { contract: read(Gate::Pass), day_rate: read(Gate::Pass), commute: read(Gate::Pass) },
-            guard: Some("clean".into()), strengths: vec![], gaps: vec![], fetch_attempts: None, fetch_error: None,
-            signals: Vec::<Signal>::new(), closing_soon: false, guard_flagged: false,
+            guard: Some("clean".into()),
+            strengths: vec![],
+            gaps: vec![],
+            fetch_attempts: None,
+            fetch_error: None,
+            signals: Vec::<Signal>::new(),
+            closing_soon: false,
+            guard_flagged: false,
         }
     }
 
@@ -233,7 +251,10 @@ mod tests {
     fn labels_come_from_the_kind() {
         let both = JobView { location_gate: Some(Gate::Pass), language_gate: Some(Gate::Flag), ..job() };
         let checks = JobChecks::of(&both, false);
-        assert_eq!(checks.rows.iter().map(|row| row.kind.label()).collect::<Vec<_>>(), ["Contract", "Day rate", "Where", "Commute", "Language", "Safety check"]);
+        assert_eq!(
+            checks.rows.iter().map(|row| row.kind.label()).collect::<Vec<_>>(),
+            ["Contract", "Day rate", "Where", "Commute", "Language", "Safety check"]
+        );
         assert_eq!(checks.rows[4].value, "Not stated", "an unclear language with no note");
         assert_eq!(checks.summary, "Five checks pass. The language needs a look, so check it before you apply.");
     }

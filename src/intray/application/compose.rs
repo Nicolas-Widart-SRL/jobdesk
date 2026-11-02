@@ -200,8 +200,18 @@ fn posting_action(job: &JobView) -> Option<Action> {
 fn triage_card(job: &JobView, kept: bool) -> Card {
     let line = apply_line(job);
     let (primary, mut others, command, note) = match skip_suggestion(&job.freelance) {
-        Some((reason, label)) => (Action::new(label, Effect::Skip(reason)), vec![Action::new("Draft anyway…", Effect::Command(line)).opening("draft")], None, "Skips stay in the app. Nothing runs."),
-        None => (Action::new("Draft application…", Effect::Command(line.clone())).opening("draft"), vec![], Some(line), "Opens the drafting task. Nothing starts until you press Start."),
+        Some((reason, label)) => (
+            Action::new(label, Effect::Skip(reason)),
+            vec![Action::new("Draft anyway…", Effect::Command(line)).opening("draft")],
+            None,
+            "Skips stay in the app. Nothing runs.",
+        ),
+        None => (
+            Action::new("Draft application…", Effect::Command(line.clone())).opening("draft"),
+            vec![],
+            Some(line),
+            "Opens the drafting task. Nothing starts until you press Start.",
+        ),
     };
     others.extend(posting_action(job));
     let score = job.score.unwrap_or_default();
@@ -450,22 +460,61 @@ mod tests {
 
     fn job(company: &str) -> JobView {
         JobView {
-            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None, found_on: None,
-            deadline: None, days_to_deadline: None, score: Some(80), verdict: None, scraper_fit: None,
-            location_gate: None, language_gate: None, language_note: None, freelance: gates(Gate::Pass, Gate::Pass, Gate::Pass),
-            guard: Some("clean".into()), strengths: vec![], gaps: vec![], fetch_attempts: None, fetch_error: None,
-            signals: Vec::<Signal>::new(), closing_soon: false, guard_flagged: false,
+            key: company.to_lowercase(),
+            title: "Lead".into(),
+            company: company.into(),
+            location: None,
+            url: None,
+            portal: None,
+            found_on: None,
+            deadline: None,
+            days_to_deadline: None,
+            score: Some(80),
+            verdict: None,
+            scraper_fit: None,
+            location_gate: None,
+            language_gate: None,
+            language_note: None,
+            freelance: gates(Gate::Pass, Gate::Pass, Gate::Pass),
+            guard: Some("clean".into()),
+            strengths: vec![],
+            gaps: vec![],
+            fetch_attempts: None,
+            fetch_error: None,
+            signals: Vec::<Signal>::new(),
+            closing_soon: false,
+            guard_flagged: false,
         }
     }
 
     fn application(bucket: StatusBucket) -> ApplicationCard {
         ApplicationCard {
-            company: "Acme Corp".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
-            status_label: String::new(), bucket, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
-            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
-            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
-            archive_folder: Some("acme_corp_lead".into()), outcome: None,
+            company: "Acme Corp".into(),
+            role: "Lead".into(),
+            sector: String::new(),
+            channel: String::new(),
+            status_label: String::new(),
+            bucket,
+            applied_on: String::new(),
+            deadline: None,
+            deadline_state: None,
+            contact_person: String::new(),
+            fit_rating: None,
+            notes: String::new(),
+            source: None,
+            days_quiet: None,
+            days_sent: None,
+            days_followed_up: None,
+            follow_ups_sent: 0,
+            follow_up_due: false,
+            stale: false,
+            reached: ReachedStage::Applied,
+            is_rejection: false,
+            is_final: false,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
+            archive_folder: Some("acme_corp_lead".into()),
+            outcome: None,
         }
     }
 
@@ -488,7 +537,8 @@ mod tests {
     }
 
     fn paused(prompt_kind: PromptKind) -> Run {
-        let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request =
+            RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
         let mut run = Run::new(&request);
         run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: prompt_kind, input_json: "{}".into(), suggestions_json: None }));
         run
@@ -506,7 +556,15 @@ mod tests {
 
     #[test]
     fn a_passing_job_reads_as_a_fit_sentence() {
-        let both = JobView { location_gate: Some(Gate::Pass), language_gate: Some(Gate::Pass), verdict: Some(Verdict::Strong), score: Some(84), location: Some("Brussels, hybrid".into()), found_on: Some("LinkedIn".into()), ..job("Acme") };
+        let both = JobView {
+            location_gate: Some(Gate::Pass),
+            language_gate: Some(Gate::Pass),
+            verdict: Some(Verdict::Strong),
+            score: Some(84),
+            location: Some("Brussels, hybrid".into()),
+            found_on: Some("LinkedIn".into()),
+            ..job("Acme")
+        };
         let card = &cards(&shortlist(vec![both]), vec![], ArchiveContents::default(), &[])[0];
         assert_eq!(card.take, "All six checks pass. Scored from the job ad alone.");
         assert_eq!(card.subtitle, "Brussels, hybrid. Found on LinkedIn.");
@@ -525,7 +583,8 @@ mod tests {
     #[test]
     fn the_weakest_check_is_named_not_counted() {
         let take = |job: JobView| cards(&shortlist(vec![job]), vec![], ArchiveContents::default(), &[]).remove(0).take;
-        let rate = JobView { freelance: gates(Gate::Pass, Gate::Flag, Gate::Pass), location_gate: Some(Gate::Pass), language_gate: Some(Gate::Pass), ..job("Acme") };
+        let rate =
+            JobView { freelance: gates(Gate::Pass, Gate::Flag, Gate::Pass), location_gate: Some(Gate::Pass), language_gate: Some(Gate::Pass), ..job("Acme") };
         assert_eq!(take(rate), "Five checks pass. The day rate is not in the ad, so check it before you apply.");
         let mode = JobView { location_gate: Some(Gate::Flag), ..job("Acme") };
         assert_eq!(take(mode), "Four checks pass. The work mode is not clear from the ad, so check it before you apply.");
@@ -607,7 +666,8 @@ mod tests {
         let board = shortlist(vec![flagged.clone()]);
         let pipeline = Pipeline::default();
         let archives = HashMap::new();
-        let kept = derive_cards(&Sources { board: &board, pipeline: &pipeline, archives: &archives, runs: &[], today: today() }, |key| key == guard_key(&flagged));
+        let kept =
+            derive_cards(&Sources { board: &board, pipeline: &pipeline, archives: &archives, runs: &[], today: today() }, |key| key == guard_key(&flagged));
         assert_eq!(kept[0].kind, CardKind::Triage);
         assert_eq!(kept[0].take, "Three checks pass. The safety check flagged this ad and you kept it.");
         let Body::Triage { gates, .. } = &kept[0].body else { panic!("a triage body") };
@@ -621,7 +681,10 @@ mod tests {
         let checks = JobChecks::of(&job, false);
         assert_eq!(card.take, checks.summary, "with a check unclear, Today adds nothing to the summary");
         let Body::Triage { gates, .. } = &card.body else { panic!("a triage body") };
-        assert_eq!(gates.iter().map(|row| (row.label, row.value.as_str())).collect::<Vec<_>>(), checks.rows.iter().map(|row| (row.kind.label(), row.value.as_str())).collect::<Vec<_>>());
+        assert_eq!(
+            gates.iter().map(|row| (row.label, row.value.as_str())).collect::<Vec<_>>(),
+            checks.rows.iter().map(|row| (row.kind.label(), row.value.as_str())).collect::<Vec<_>>()
+        );
         assert_eq!(gates[5].check, CheckState::Unchecked);
     }
 
@@ -640,7 +703,8 @@ mod tests {
 
     /// An `/apply` run that read the evaluation guide, said `message` and ended its turn.
     fn waiting(message: &str) -> Run {
-        let request = RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request =
+            RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
         let mut run = Run::new(&request);
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Read".into(), summary: "skills/04-job-evaluation.md".into(), nested: false });
         run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Ok(()) });
@@ -764,7 +828,12 @@ mod tests {
     #[test]
     fn a_prompt_deals_its_own_card_and_not_a_turn_card() {
         let mut run = waiting("Shall I proceed with drafting?");
-        run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
+        run.apply(AgentEvent::PromptRaised(Prompt {
+            request_id: "p1".into(),
+            kind: PromptKind::Questions(vec![]),
+            input_json: "{}".into(),
+            suggestions_json: None,
+        }));
         let dealt = cards(&JobBoard::default(), vec![], ArchiveContents::default(), std::slice::from_ref(&run));
         assert_eq!(dealt.iter().map(|card| card.kind).collect::<Vec<_>>(), [CardKind::Question]);
         assert!(turn_card(&run, false).is_none(), "a pending prompt never deals a turn card, though wants_reply holds");
@@ -844,7 +913,8 @@ mod tests {
     fn a_follow_up_offers_the_newest_draft() {
         let due = ApplicationCard { follow_up_due: true, ..application(StatusBucket::Active) };
         let draft = |name: &str| NamedText { name: name.into(), text: name.into() };
-        let card = &one_app(due, ArchiveContents { follow_ups: vec![draft("followup_2026-10-31.md"), draft("followup_2026-10-01.md")], ..Default::default() })[0];
+        let card =
+            &one_app(due, ArchiveContents { follow_ups: vec![draft("followup_2026-10-31.md"), draft("followup_2026-10-01.md")], ..Default::default() })[0];
         assert_eq!(card.others[0].effect, Effect::Copy("followup_2026-10-31.md".into()));
         assert_eq!(card.primary.as_ref().unwrap().label, "Copied and sent…");
     }
@@ -868,7 +938,8 @@ mod tests {
         all.extend(one_app(application(StatusBucket::Drafted), compiled()));
         all.extend(one_app(ApplicationCard { stale: true, follow_up_due: true, ..application(StatusBucket::Active) }, ArchiveContents::default()));
 
-        let commands: Vec<&Action> = all.iter().flat_map(|card| card.primary.iter().chain(&card.others)).filter(|action| matches!(action.effect, Effect::Command(_))).collect();
+        let commands: Vec<&Action> =
+            all.iter().flat_map(|card| card.primary.iter().chain(&card.others)).filter(|action| matches!(action.effect, Effect::Command(_))).collect();
         assert!(commands.len() >= 6, "{} command actions found", commands.len());
         for action in commands {
             assert!(action.task.is_some(), "{} has no task key", action.label);

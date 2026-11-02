@@ -89,7 +89,9 @@ impl RunDesk {
         while let Ok((id, event)) = self.events.try_recv() {
             let exited = matches!(event, AgentEvent::ProcessExited { .. });
             let permission = match &event {
-                AgentEvent::PromptRaised(prompt) if !self.asks_permission && matches!(prompt.kind, PromptKind::Permission { .. }) => Some(prompt.request_id.clone()),
+                AgentEvent::PromptRaised(prompt) if !self.asks_permission && matches!(prompt.kind, PromptKind::Permission { .. }) => {
+                    Some(prompt.request_id.clone())
+                }
                 _ => None,
             };
             if let Some(run) = self.run_mut(&id) {
@@ -239,7 +241,9 @@ mod tests {
     fn a_failed_turn_keeps_its_session_until_closed() {
         let (mut desk, _) = desk();
         let id = desk.start("/rank", &options(), now()).unwrap();
-        desk.event_sender.send((id.clone(), AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 })).unwrap();
+        desk.event_sender
+            .send((id.clone(), AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 1.0, duration_ms: 1 }))
+            .unwrap();
         desk.poll();
         assert!(matches!(desk.run(&id).unwrap().status, RunStatus::Failed(_)));
         assert!(desk.has_session(&id));

@@ -51,26 +51,92 @@ const fn flag(key: &'static str, label: &'static str, flag: &'static str, defaul
     FieldSpec { key, label, flag: Some(flag), default, multiline: false }
 }
 
-const fn spec(name: &'static str, summary: &'static str, writes: &'static str, group: CommandGroup, fields: &'static [FieldSpec], budget_usd: u32) -> CommandSpec {
+const fn spec(
+    name: &'static str,
+    summary: &'static str,
+    writes: &'static str,
+    group: CommandGroup,
+    fields: &'static [FieldSpec],
+    budget_usd: u32,
+) -> CommandSpec {
     CommandSpec { name, summary, writes, group, fields, budget_usd, destructive: false }
 }
 
 /// Forms only build the argument string. Each command's own spec stays the authority.
 pub const CATALOG: &[CommandSpec] = &[
     spec("/scrape", "Find new postings on installed portals", "seen_jobs.json", CommandGroup::Find, &[text("focus", "Focus area, broad, or health")], 2),
-    spec("/rank", "Score new postings and build a shortlist", "seen_jobs.json", CommandGroup::Find, &[text("focus", "Focus area"), flag("limit", "Maximum jobs to score", "--limit", "10"), flag("top", "Shortlist size", "--top", "5")], 3),
-    spec("/apply", "Evaluate a posting, then draft and review documents", "cv, cover_letters, tracker", CommandGroup::Apply, &[FieldSpec { key: "posting", label: "Posting URL or pasted text", flag: None, default: "", multiline: true }], 5),
+    spec(
+        "/rank",
+        "Score new postings and build a shortlist",
+        "seen_jobs.json",
+        CommandGroup::Find,
+        &[text("focus", "Focus area"), flag("limit", "Maximum jobs to score", "--limit", "10"), flag("top", "Shortlist size", "--top", "5")],
+        3,
+    ),
+    spec(
+        "/apply",
+        "Evaluate a posting, then draft and review documents",
+        "cv, cover_letters, tracker",
+        CommandGroup::Apply,
+        &[FieldSpec { key: "posting", label: "Posting URL or pasted text", flag: None, default: "", multiline: true }],
+        5,
+    ),
     spec("/interview", "Build a prep pack for one application", "interview_prep_<stage>.md", CommandGroup::Apply, &[text("target", "Company and role")], 2),
-    spec("/outcome", "Record progress, follow up, or sweep stale rows", "tracker, outcome.md", CommandGroup::Apply, &[text("target", "Company, followup [N], or stale [N]")], 2),
-    spec("/upskill", "Find skill gaps and build a learning plan", "upskill/report-*.md", CommandGroup::Analyse, &[text("url", "Posting URL, empty for all jobs")], 3),
+    spec(
+        "/outcome",
+        "Record progress, follow up, or sweep stale rows",
+        "tracker, outcome.md",
+        CommandGroup::Apply,
+        &[text("target", "Company, followup [N], or stale [N]")],
+        2,
+    ),
+    spec(
+        "/upskill",
+        "Find skill gaps and build a learning plan",
+        "upskill/report-*.md",
+        CommandGroup::Analyse,
+        &[text("url", "Posting URL, empty for all jobs")],
+        3,
+    ),
     spec("/html-report", "Rebuild the portable HTML dashboard", "reports/*.html", CommandGroup::Analyse, &[text("path", "Output path, optional")], 1),
-    spec("/gmail-sync", "Read application mail and update status", "tracker, state.json", CommandGroup::Sync, &[text("target", "Company, or since YYYY-MM-DD")], 2),
-    spec("/notion-sync", "Push ranked jobs and applications to Notion", "notion_sync.json", CommandGroup::Sync, &[flag("score", "Minimum score", "--min-score", "60")], 2),
-    spec("/setup", "Build or update your profile, calibrate scoring", "skill files", CommandGroup::Profile, &[flag("section", "Section, optional", "--section", "")], 5),
+    spec(
+        "/gmail-sync",
+        "Read application mail and update status",
+        "tracker, state.json",
+        CommandGroup::Sync,
+        &[text("target", "Company, or since YYYY-MM-DD")],
+        2,
+    ),
+    spec(
+        "/notion-sync",
+        "Push ranked jobs and applications to Notion",
+        "notion_sync.json",
+        CommandGroup::Sync,
+        &[flag("score", "Minimum score", "--min-score", "60")],
+        2,
+    ),
+    spec(
+        "/setup",
+        "Build or update your profile, calibrate scoring",
+        "skill files",
+        CommandGroup::Profile,
+        &[flag("section", "Section, optional", "--section", "")],
+        5,
+    ),
     spec("/expand", "Find new competency signals in your documents", "skill files", CommandGroup::Profile, &[], 3),
     spec("/add-portal", "Generate a search skill for a job board", ".agents/skills/", CommandGroup::Profile, &[text("url", "Portal URL")], 3),
     spec("/add-template", "Register a CV or cover letter template", "templates/", CommandGroup::Profile, &[text("path", "Template file path")], 2),
-    CommandSpec { destructive: true, ..spec("/reset", "Clear profile data, documents, or both", "skill files, documents", CommandGroup::Profile, &[text("scope", "profile, documents, or all")], 1) },
+    CommandSpec {
+        destructive: true,
+        ..spec(
+            "/reset",
+            "Clear profile data, documents, or both",
+            "skill files, documents",
+            CommandGroup::Profile,
+            &[text("scope", "profile, documents, or all")],
+            1,
+        )
+    },
 ];
 
 pub fn spec_for_line(line: &str) -> Option<&'static CommandSpec> {

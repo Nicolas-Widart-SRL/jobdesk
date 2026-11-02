@@ -61,10 +61,18 @@ pub fn step_states(run: &Run) -> Option<Vec<StepState>> {
         _ if run.needs_user() => (StepState::Waiting, StepState::Next),
         // Claude is done for now and asks nothing, so no step waits. A step it left part-way is not lit, and not done either.
         RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
-            if current_step_finished(run) { (StepState::Done, StepState::Next) } else { (StepState::Next, StepState::Next) }
+            if current_step_finished(run) {
+                (StepState::Done, StepState::Next)
+            } else {
+                (StepState::Next, StepState::Next)
+            }
         }
         RunStatus::AwaitingReply if !run.is_busy() => {
-            if stop_point(run).is_some() { (StepState::Done, StepState::Waiting) } else { (StepState::Waiting, StepState::Next) }
+            if stop_point(run).is_some() {
+                (StepState::Done, StepState::Waiting)
+            } else {
+                (StepState::Waiting, StepState::Next)
+            }
         }
         _ => (StepState::Working, StepState::Next),
     };
@@ -229,7 +237,9 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
         }
         RunStatus::AwaitingReply if !run.is_busy() => {
             let (place, place_note) = match (stop_point(run), rail) {
-                (Some(_), Some(rail)) => (where_value(run, ", done"), rail.labels.get(rail.current + 1).map(|label| format!("{label} waits for your go")).unwrap_or_default()),
+                (Some(_), Some(rail)) => {
+                    (where_value(run, ", done"), rail.labels.get(rail.current + 1).map(|label| format!("{label} waits for your go")).unwrap_or_default())
+                }
                 (None, Some(_)) => (where_value(run, ""), "Paused inside the step".to_owned()),
                 _ => (where_value(run, ""), String::new()),
             };
@@ -247,7 +257,9 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
                 (true, _, _) => ("Starting the CLI".to_owned(), "", ""),
                 (_, true, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Stopping", ""),
                 (_, true, None) => (String::new(), "Stopping", ""),
-                (_, _, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Claude is working", "You can leave. The Tasks tab marks it when it needs you."),
+                (_, _, Some(rail)) => {
+                    (format!("{done} of {} steps done", rail.labels.len()), "Claude is working", "You can leave. The Tasks tab marks it when it needs you.")
+                }
                 (_, _, None) => (String::new(), "Claude is working", "You can leave. The Tasks tab marks it when it needs you."),
             };
             (say(&where_value(run, ""), &place_note, Plain), say("Claude's", who_note, Claude), say("Nothing for now", next_note, Plain))

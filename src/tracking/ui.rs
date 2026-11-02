@@ -3,12 +3,15 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDate;
 use egui::{Frame, ScrollArea, Ui};
 
-use crate::tracking::application::{ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket};
-use crate::ui_kit::{
-    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, back_pressed, blank_card, card_skeleton, command_action, divider, empty_note, empty_state, desk_label, index_card, lane as lane_frame, lane_title, muted, note,
-    open_link, page_body, page_head, panel_body, paper_with_footer, primary_button, primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
+use crate::tracking::application::{
+    ApplicationCard, ApplicationStatus, DeadlineState, FOLLOW_UP_DAYS, MAX_FOLLOW_UPS, Pipeline, PipelineLane, STALE_DAYS, StatusBucket,
 };
 use crate::ui_kit::tokens::{BOARD_GAP, NOTE_GAP, SCREEN_GAP};
+use crate::ui_kit::{
+    CardLook, Ink, Load, ScreenState, Subtitle, Title, Tone, Type, back_pressed, blank_card, card_skeleton, command_action, desk_label, divider, empty_note,
+    empty_state, index_card, lane as lane_frame, lane_title, muted, note, open_link, page_body, page_head, panel_body, paper_with_footer, primary_button,
+    primary_command_action, rich, side_column, skeleton_lines, small_command_action, stamp_square, strong, tag,
+};
 
 #[derive(Default)]
 pub struct TrackerScreen {
@@ -78,7 +81,9 @@ fn card_meta(card: &ApplicationCard) -> String {
         // Quiet days restart with each dated note, so only the applied date says when it was sent.
         // A recent follow-up is the newer news, so it reads in place of the sent date.
         _ => match (card.days_quiet, card.days_followed_up, card.days_sent) {
-            (Some(days), ..) if days >= FOLLOW_UP_DAYS && card.follow_ups_sent > 0 => format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent)),
+            (Some(days), ..) if days >= FOLLOW_UP_DAYS && card.follow_ups_sent > 0 => {
+                format!("No reply in {days} days, followed up {}", times(card.follow_ups_sent))
+            }
             (Some(days), ..) if days >= FOLLOW_UP_DAYS => format!("No reply in {days} days"),
             (_, Some(days), _) => format!("Followed up {}", ago(days)),
             (_, None, Some(days)) => format!("Sent {}", ago(days)),
@@ -123,7 +128,8 @@ impl TrackerScreen {
                     None
                 }
                 Load::Failed => {
-                    let body = "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
+                    let body =
+                        "Jobdesk changed nothing in your folder. The board comes back by itself once the tracker file is fixed, because Jobdesk watches it.";
                     empty_note(ui, "Your applications are hidden, not gone", body);
                     None
                 }
@@ -347,12 +353,32 @@ mod tests {
 
     fn plain(days_quiet: i64, days_sent: i64, follow_ups_sent: usize) -> ApplicationCard {
         ApplicationCard {
-            company: "Acme".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
-            status_label: "Applied".into(), bucket: StatusBucket::Active, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: Some(days_quiet), days_sent: Some(days_sent), days_followed_up: None,
-            follow_ups_sent, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
-            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
-            archive_folder: None, outcome: None,
+            company: "Acme".into(),
+            role: "Lead".into(),
+            sector: String::new(),
+            channel: String::new(),
+            status_label: "Applied".into(),
+            bucket: StatusBucket::Active,
+            applied_on: String::new(),
+            deadline: None,
+            deadline_state: None,
+            contact_person: String::new(),
+            fit_rating: None,
+            notes: String::new(),
+            source: None,
+            days_quiet: Some(days_quiet),
+            days_sent: Some(days_sent),
+            days_followed_up: None,
+            follow_ups_sent,
+            follow_up_due: false,
+            stale: false,
+            reached: ReachedStage::Applied,
+            is_rejection: false,
+            is_final: false,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
+            archive_folder: None,
+            outcome: None,
         }
     }
 

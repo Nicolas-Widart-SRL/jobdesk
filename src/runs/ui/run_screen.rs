@@ -2,21 +2,25 @@ use std::collections::{HashMap, HashSet};
 
 use egui::style::ScrollAnimation;
 use egui::text::LayoutJob;
-use egui::{Align, FontSelection, Frame, Grid, Layout, Margin, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, TextEdit, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{
+    Align, FontSelection, Frame, Grid, Layout, Margin, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, TextEdit, Ui, UiBuilder,
+    Vec2, pos2, vec2,
+};
 use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
-    Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine, StepState, ToolState,
-    action_noun, band, closing_question, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point, wants_reply,
+    Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine,
+    StepState, ToolState, action_noun, band, closing_question, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point, wants_reply,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
-    BAND_COMPACT_HEIGHT, BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, KNOT_SIZE_SMALL, OFFSET_SHADOW, PROMPT_PADDING, ROW_GAP, RUN_SIDE,
-    SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
+    BAND_COMPACT_HEIGHT, BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, KNOT_SIZE_SMALL, OFFSET_SHADOW,
+    PROMPT_PADDING, ROW_GAP, RUN_SIDE, SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document, empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel,
-    panel_body, panel_header, path_label, pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
+    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document,
+    empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel, panel_body, panel_header, path_label, pick_row, primary_button,
+    primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
     wrapped_height,
 };
 
@@ -238,8 +242,10 @@ impl View {
     fn of(run: &Run) -> Self {
         let from = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
         let lines = step_lines(run);
-        let steps: Vec<(Option<usize>, Option<StepLine>)> = if lines.is_empty() { vec![(None, None)] } else { lines.into_iter().map(|line| (Some(line.step), Some(line))).collect() };
-        let mut parts: Vec<Part> = steps.into_iter().map(|(step, line)| Part { step, line, folded: Vec::new(), shown: Vec::new(), actions: 0, cut: 0 }).collect();
+        let steps: Vec<(Option<usize>, Option<StepLine>)> =
+            if lines.is_empty() { vec![(None, None)] } else { lines.into_iter().map(|line| (Some(line.step), Some(line))).collect() };
+        let mut parts: Vec<Part> =
+            steps.into_iter().map(|(step, line)| Part { step, line, folded: Vec::new(), shown: Vec::new(), actions: 0, cut: 0 }).collect();
         let slot: HashMap<Option<usize>, usize> = parts.iter().enumerate().map(|(at, part)| (part.step, at)).collect();
         // One pass over the rows, each into its step's part. The command line, row 0, is the head's title.
         for (index, item) in run.activity.iter().enumerate().skip(1) {
@@ -469,7 +475,9 @@ impl RunScreen {
         let mut first = true;
         let mut anchor = None;
         if view.from > 0 {
-            Frame::new().inner_margin(Margin::symmetric(0, EVENT_PADDING as i8)).show(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
+            Frame::new()
+                .inner_margin(Margin::symmetric(0, EVENT_PADDING as i8))
+                .show(ui, |ui| muted(ui, format!("{} earlier items are in the run log.", view.from)));
             first = false;
         }
         for part in &view.parts {
@@ -717,7 +725,9 @@ impl RunScreen {
             let typed = !self.reply.trim().is_empty();
             // While another run works, the muted line above says why, and the pointer says so again here.
             let why = if blocked { BLOCKED } else { "Type a reply first." };
-            let send = ui.with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, typed && !blocked, why, |ui| primary_button(ui, "Send")).clicked()).inner;
+            let send = ui
+                .with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, typed && !blocked, why, |ui| primary_button(ui, "Send")).clicked())
+                .inner;
             let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if (send || entered) && typed && !blocked {
                 sent = Some(self.reply.trim().to_owned());
@@ -746,7 +756,11 @@ impl RunScreen {
             for (index, question) in questions.iter().enumerate() {
                 copyable(ui, |ui| strong(ui, &question.text));
                 let picked = self.picks.entry((prompt.request_id.clone(), question.text.clone())).or_default();
-                let grid = Grid::new(("run_choices", &prompt.request_id, index)).num_columns(2).min_col_width(column).max_col_width(column).spacing([SCREEN_GAP, ROW_GAP]);
+                let grid = Grid::new(("run_choices", &prompt.request_id, index))
+                    .num_columns(2)
+                    .min_col_width(column)
+                    .max_col_width(column)
+                    .spacing([SCREEN_GAP, ROW_GAP]);
                 grid.show(ui, |ui| {
                     for (at, option) in question.options.iter().enumerate() {
                         ui.vertical(|ui| {

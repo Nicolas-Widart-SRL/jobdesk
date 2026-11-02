@@ -5,8 +5,9 @@ use egui::Ui;
 use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT};
 use crate::ui_kit::{
-    CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note, empty_state, muted, open_link, page_body, page_head, panel,
-    panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented, skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
+    CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note,
+    empty_state, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented,
+    skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
@@ -116,7 +117,8 @@ impl JobsScreen {
             match state.load {
                 Load::Reading => loading(ui),
                 Load::Failed => {
-                    let body = "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
+                    let body =
+                        "Jobdesk changed nothing in your folder. The list comes back by itself once the saved jobs file is fixed, because Jobdesk watches it.";
                     empty_note(ui, "Your saved jobs are hidden, not gone", body);
                 }
                 Load::Ready => self.body(ui, board, waiting, kept),
@@ -128,7 +130,8 @@ impl JobsScreen {
         if !lane_shown(self.lane, board) {
             self.lane = Lane::Shortlist;
         }
-        let options: Vec<_> = LANES.into_iter().filter(|lane| lane_shown(*lane, board)).map(|lane| (lane, format!("{}  {}", lane_label(lane), board.count(lane)))).collect();
+        let options: Vec<_> =
+            LANES.into_iter().filter(|lane| lane_shown(*lane, board)).map(|lane| (lane, format!("{}  {}", lane_label(lane), board.count(lane)))).collect();
         if let Some(lane) = segmented(ui, self.lane, &options) {
             self.lane = lane;
             self.selected = None;

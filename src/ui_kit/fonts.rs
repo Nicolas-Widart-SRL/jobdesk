@@ -1,6 +1,6 @@
+use egui::epaint::text::FontPriority;
 use egui::epaint::text::{FontInsert, InsertFontFamily};
 use egui::{Context, FontData, FontDefinitions, FontFamily};
-use egui::epaint::text::FontPriority;
 
 const SCHIBSTED_GROTESK: &[u8] = include_bytes!("../../assets/fonts/SchibstedGrotesk-Variable.ttf");
 const ZILLA_SLAB: &[u8] = include_bytes!("../../assets/fonts/ZillaSlab-SemiBold.ttf");
@@ -56,11 +56,7 @@ pub fn install_fonts(ctx: &Context) {
         if let Some(weight) = weight {
             data.tweak.coords = egui::epaint::text::VariationCoords::new([("wght", weight)]);
         }
-        ctx.add_font(FontInsert {
-            name: name.to_owned(),
-            data,
-            families: vec![InsertFontFamily { family: face.family(), priority: FontPriority::Highest }],
-        });
+        ctx.add_font(FontInsert { name: name.to_owned(), data, families: vec![InsertFontFamily { family: face.family(), priority: FontPriority::Highest }] });
     }
 }
 

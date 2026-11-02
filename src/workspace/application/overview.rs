@@ -26,8 +26,18 @@ impl WorkspaceView {
 }
 
 pub fn workspace_view(status: &WorkspaceStatus, board: &JobBoard) -> WorkspaceView {
-    let portals = status.portals.iter().map(|portal| PortalRow { name: portal.name.clone(), enabled: portal.enabled, jobs_seen: board.seen_on_portal(&portal.name) }).collect();
-    WorkspaceView { profile: status.profile.clone(), portals, templates: status.templates.clone(), sync: status.sync.clone(), has_salary_data: status.has_salary_data }
+    let portals = status
+        .portals
+        .iter()
+        .map(|portal| PortalRow { name: portal.name.clone(), enabled: portal.enabled, jobs_seen: board.seen_on_portal(&portal.name) })
+        .collect();
+    WorkspaceView {
+        profile: status.profile.clone(),
+        portals,
+        templates: status.templates.clone(),
+        sync: status.sync.clone(),
+        has_salary_data: status.has_salary_data,
+    }
 }
 
 /// How runs reach Claude, from the CLI's own `apiKeySource` field.
@@ -79,7 +89,10 @@ mod tests {
     }
 
     fn view_with(state: ProfileState) -> WorkspaceView {
-        let profile = vec![ProfileFile { name: "01-candidate-profile.md".into(), state: ProfileState::Filled }, ProfileFile { name: "03-writing-style.md".into(), state }];
+        let profile = vec![
+            ProfileFile { name: "01-candidate-profile.md".into(), state: ProfileState::Filled },
+            ProfileFile { name: "03-writing-style.md".into(), state },
+        ];
         WorkspaceView { profile, ..WorkspaceView::default() }
     }
 
@@ -121,7 +134,8 @@ mod tests {
     #[test]
     fn counts_filled_profile_files() {
         let file = |name: &str, state| ProfileFile { name: name.into(), state };
-        let profile = vec![file("cv.md", ProfileState::Filled), file("skills.md", ProfileState::NeedsSetup { placeholders: 2 }), file("goals.md", ProfileState::Missing)];
+        let profile =
+            vec![file("cv.md", ProfileState::Filled), file("skills.md", ProfileState::NeedsSetup { placeholders: 2 }), file("goals.md", ProfileState::Missing)];
         let view = WorkspaceView { profile, ..WorkspaceView::default() };
         assert_eq!(view.profile_counts(), (1, 3));
     }

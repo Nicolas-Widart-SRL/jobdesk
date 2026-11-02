@@ -10,8 +10,10 @@ use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
 use crate::ui_kit::text::{add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
-    FIELD_HEIGHT, FIELD_PADDING, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TOGGLE_GAP, Type,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FIELD_HEIGHT, FIELD_PADDING, FOCUS_OFFSET, FOCUS_RING,
+    HAIRLINE, KEY_SIZE, KEYS_GAP, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_EDGE, PICK_ROW_HEIGHT,
+    PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING,
+    STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TOGGLE_GAP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -179,7 +181,8 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
     let galley = line(ui, text, fit.font, ink, room);
     let size = vec2(galley.size().x + fit.padding * 2.0 + keys, fit.height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let (fill, border) = if enabled { look_colors(&p, look, pointer_over(&response), pressed(&response), on_desk(ui)) } else { disabled_colors(&p, look, on_desk(ui)) };
+    let (fill, border) =
+        if enabled { look_colors(&p, look, pointer_over(&response), pressed(&response), on_desk(ui)) } else { disabled_colors(&p, look, on_desk(ui)) };
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     let text_rect = Rect::from_min_size(rect.min + vec2(fit.padding, (fit.height - galley.size().y) / 2.0), galley.size());
     if matches!(look, Look::Primary) && pointer_over(&response) && !pressed(&response) {
@@ -311,11 +314,8 @@ impl Chord {
 
     fn new(ui: &Ui, keys: &[&str], ink: Color32) -> Self {
         let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::KEYS, ink, f32::INFINITY)).collect();
-        let width = if glyphs.is_empty() {
-            0.0
-        } else {
-            Self::LEAD + glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * (glyphs.len() - 1) as f32
-        };
+        let width =
+            if glyphs.is_empty() { 0.0 } else { Self::LEAD + glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * (glyphs.len() - 1) as f32 };
         Self { glyphs, width }
     }
 
@@ -409,11 +409,7 @@ fn command_press(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, f
 
 /// A command action: it opens the launcher before anything runs, so its label ends in "…".
 fn command_action_with(ui: &mut Ui, label: &str, line: &str, hint: &str, look: Look, fit: Fit) -> Response {
-    if label.ends_with('…') {
-        command_press(ui, label, line, hint, look, fit)
-    } else {
-        command_press(ui, &format!("{label}…"), line, hint, look, fit)
-    }
+    if label.ends_with('…') { command_press(ui, label, line, hint, look, fit) } else { command_press(ui, &format!("{label}…"), line, hint, look, fit) }
 }
 
 /// A command button on any screen, labelled with the command itself.
@@ -584,7 +580,13 @@ fn segment(ui: &mut Ui, label: &str, on: bool, look: SegmentLook, inks: SegmentI
     let font = if on { look.font_on } else { look.font };
     let enabled = ui.is_enabled();
     // The picked segment keeps its ink, as a filled button does: its fill is what goes pale.
-    let ink = if on { inks.on.1 } else if enabled { inks.off } else { dimmed(inks.off) };
+    let ink = if on {
+        inks.on.1
+    } else if enabled {
+        inks.off
+    } else {
+        dimmed(inks.off)
+    };
     let room = ui.available_width() - look.padding * 2.0;
     let galley = line(ui, label, font, ink, room);
     let widest = if on { galley.size().x } else { line(ui, label, look.font_on, ink, room).size().x.max(galley.size().x) };
@@ -614,7 +616,8 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
         ui.spacing_mut().item_spacing = vec2(SEGMENT_GAP, 0.0);
         ui.horizontal_wrapped(|ui| {
             for (value, label) in options {
-                if segment(ui, label, *value == current, look, SegmentInks { on: (p.text, p.sheet), off: p.muted, hover: p.panel, pressed: p.raised }).clicked() {
+                if segment(ui, label, *value == current, look, SegmentInks { on: (p.text, p.sheet), off: p.muted, hover: p.panel, pressed: p.raised }).clicked()
+                {
                     picked = Some(*value);
                 }
             }
@@ -802,7 +805,11 @@ pub fn copy_button(ui: &mut Ui, text: &str) -> Response {
         ctx.request_repaint_after(Duration::from_secs_f64(left));
     }
     let (label, galley) = if left > 0.0 { ("Copied", copied) } else { ("Copy", copy) };
-    let (fill, border) = if enabled { look_colors(&p, Look::Plain, pointer_over(&response), pressed(&response), on_desk(ui)) } else { disabled_colors(&p, Look::Plain, on_desk(ui)) };
+    let (fill, border) = if enabled {
+        look_colors(&p, Look::Plain, pointer_over(&response), pressed(&response), on_desk(ui))
+    } else {
+        disabled_colors(&p, Look::Plain, on_desk(ui))
+    };
     ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     paint_centred(ui, rect, galley, ink, fill);
     interactive(ui, &response, RADIUS_BUTTON);
@@ -834,7 +841,11 @@ mod tests {
             assert_ne!(pick_look(&p, false, true, true).fill, hover.fill, "{theme:?}: a pressed row looks hovered");
             for look in [Look::Plain, Look::Primary, Look::Danger, Look::On] {
                 for desk in [false, true] {
-                    assert_ne!(look_colors(&p, look, true, true, desk).0, look_colors(&p, look, true, false, desk).0, "{theme:?}: a pressed button looks hovered");
+                    assert_ne!(
+                        look_colors(&p, look, true, true, desk).0,
+                        look_colors(&p, look, true, false, desk).0,
+                        "{theme:?}: a pressed button looks hovered"
+                    );
                 }
             }
         }
@@ -945,7 +956,9 @@ mod tests {
             toggle_group(ui, None::<u8>, &[(90, "90%"), (100, "100%")]);
         });
         harness.run();
-        assert!(harness.query_all_by_role(egui::accesskit::Role::RadioButton).all(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::False)));
+        assert!(
+            harness.query_all_by_role(egui::accesskit::Role::RadioButton).all(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::False))
+        );
     }
 
     #[test]

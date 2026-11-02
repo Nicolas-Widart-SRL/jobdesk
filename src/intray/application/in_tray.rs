@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
 use crate::intray::application::compose::{Sources, derive_cards, guarded_job};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, SkipReason, Subject, HORIZON_DAYS, HORIZON_WORDS, rank};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, HORIZON_DAYS, HORIZON_WORDS, Outcome, SkipReason, Subject, rank};
 use crate::shared_kernel::{LoadError, WebUrl};
 
 /// What a card asks of the rest of the app.
@@ -346,18 +346,40 @@ impl InTray {
             .filter(|card| card.is_on_horizon(today))
             .filter_map(|card| {
                 let due = card.due.as_ref()?;
-                Some(Mark { on: due.on, label: due.label.clone(), name: card.name.clone(), key: card.key.clone(), kind: card.kind, active: !self.is_cleared(&card.key, today) })
+                Some(Mark {
+                    on: due.on,
+                    label: due.label.clone(),
+                    name: card.name.clone(),
+                    key: card.key.clone(),
+                    kind: card.kind,
+                    active: !self.is_cleared(&card.key, today),
+                })
             })
             .collect();
-        let (aside, mut cards): (Vec<Card>, Vec<Card>) = derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
+        let (aside, mut cards): (Vec<Card>, Vec<Card>) =
+            derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
         let set_aside = aside.into_iter().map(|card| card.name).collect();
         rank(&mut cards, today);
         let returned = self.returned(today);
-        cards.sort_by_key(|card| if card.pauses_a_run() { 0 } else if returned.contains(&card.key) { 1 } else { 2 });
+        cards.sort_by_key(|card| {
+            if card.pauses_a_run() {
+                0
+            } else if returned.contains(&card.key) {
+                1
+            } else {
+                2
+            }
+        });
         if let Some(at) = self.reading.as_ref().and_then(|key| cards.iter().position(|card| &card.key == key)) {
             cards[..=at].rotate_right(1);
         }
-        let cleared = self.decisions.iter().rev().filter(|decision| decision.is_logged_on(today)).map(|decision| Cleared { name: decision.name.clone(), label: decision.label() }).collect();
+        let cleared = self
+            .decisions
+            .iter()
+            .rev()
+            .filter(|decision| decision.is_logged_on(today))
+            .map(|decision| Cleared { name: decision.name.clone(), label: decision.label() })
+            .collect();
         Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked: sources.board.count(Lane::New), today }
     }
 
@@ -509,12 +531,30 @@ mod tests {
     fn job(company: &str, score: u8) -> JobView {
         let read = || GateReading { gate: Gate::Pass, value: "x".into() };
         JobView {
-            key: company.to_lowercase(), title: "Lead".into(), company: company.into(), location: None, url: None, portal: None, found_on: None,
-            deadline: None, days_to_deadline: None, score: Some(score), verdict: None, scraper_fit: None,
-            location_gate: None, language_gate: None, language_note: None,
+            key: company.to_lowercase(),
+            title: "Lead".into(),
+            company: company.into(),
+            location: None,
+            url: None,
+            portal: None,
+            found_on: None,
+            deadline: None,
+            days_to_deadline: None,
+            score: Some(score),
+            verdict: None,
+            scraper_fit: None,
+            location_gate: None,
+            language_gate: None,
+            language_note: None,
             freelance: FreelanceGates { contract: read(), day_rate: read(), commute: read() },
-            guard: Some("clean".into()), strengths: vec![], gaps: vec![], fetch_attempts: None, fetch_error: None,
-            signals: vec![], closing_soon: false, guard_flagged: false,
+            guard: Some("clean".into()),
+            strengths: vec![],
+            gaps: vec![],
+            fetch_attempts: None,
+            fetch_error: None,
+            signals: vec![],
+            closing_soon: false,
+            guard_flagged: false,
         }
     }
 
@@ -834,14 +874,20 @@ mod tests {
 
     #[test]
     fn a_turn_card_ranks_with_paused_runs() {
-        let request = RunRequest { run_id: "r2".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request =
+            RunRequest { run_id: "r2".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
         let mut waiting = Run::new(&request);
         waiting.apply(AgentEvent::AssistantText { text: "Which posting first?".into(), nested: false });
         waiting.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1 });
         // A turn card waits for every run to be idle, so the run with the question asked after its turn ended.
         let mut asking = Run::new(&RunRequest { run_id: "r1".into(), ..request.clone() });
         asking.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1 });
-        asking.apply(AgentEvent::PromptRaised(Prompt { request_id: "p".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }));
+        asking.apply(AgentEvent::PromptRaised(Prompt {
+            request_id: "p".into(),
+            kind: PromptKind::Questions(vec![]),
+            input_json: "{}".into(),
+            suggestions_json: None,
+        }));
         let runs = [waiting, asking];
         let jobs = board(vec![job("Acme", 80)]);
         let pipeline = Pipeline::default();
@@ -1035,12 +1081,32 @@ mod tests {
         let tray = InTray::unsaved();
         let jobs = board(vec![job("Acme", 90)]);
         let offer = ApplicationCard {
-            company: "Beta".into(), role: "Dev".into(), sector: String::new(), channel: String::new(),
-            status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: None, deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
-            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
-            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
-            archive_folder: None, outcome: None,
+            company: "Beta".into(),
+            role: "Dev".into(),
+            sector: String::new(),
+            channel: String::new(),
+            status_label: String::new(),
+            bucket: StatusBucket::Offer,
+            applied_on: String::new(),
+            deadline: None,
+            deadline_state: None,
+            contact_person: String::new(),
+            fit_rating: None,
+            notes: String::new(),
+            source: None,
+            days_quiet: None,
+            days_sent: None,
+            days_followed_up: None,
+            follow_ups_sent: 0,
+            follow_up_due: false,
+            stale: false,
+            reached: ReachedStage::Applied,
+            is_rejection: false,
+            is_final: false,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
+            archive_folder: None,
+            outcome: None,
         };
         let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
         let queue = tray.queue(&Sources { board: &jobs, pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
@@ -1051,8 +1117,23 @@ mod tests {
 
     fn pending(kind: CardKind, due: Option<NaiveDate>) -> Card {
         Card {
-            key: String::new(), kind, name: String::new(), over: None, subject: Subject::Run(String::new()), title: String::new(), subtitle: String::new(), take: String::new(), when: String::new(),
-            due: due.map(|on| Due { on, label: String::new() }), weight: 0, body: Body::Empty, primary: None, others: vec![], can_skip: false, note: String::new(), command: None,
+            key: String::new(),
+            kind,
+            name: String::new(),
+            over: None,
+            subject: Subject::Run(String::new()),
+            title: String::new(),
+            subtitle: String::new(),
+            take: String::new(),
+            when: String::new(),
+            due: due.map(|on| Due { on, label: String::new() }),
+            weight: 0,
+            body: Body::Empty,
+            primary: None,
+            others: vec![],
+            can_skip: false,
+            note: String::new(),
+            command: None,
         }
     }
 
@@ -1060,8 +1141,11 @@ mod tests {
     fn overdue_counts_pending_cards_past_their_date() {
         let day = |offset: i64| Some(today() + chrono::Duration::days(offset));
         let cards = vec![
-            pending(CardKind::Triage, day(-2)), pending(CardKind::Triage, day(-1)), pending(CardKind::Triage, day(0)),
-            pending(CardKind::Triage, day(3)), pending(CardKind::Triage, None),
+            pending(CardKind::Triage, day(-2)),
+            pending(CardKind::Triage, day(-1)),
+            pending(CardKind::Triage, day(0)),
+            pending(CardKind::Triage, day(3)),
+            pending(CardKind::Triage, None),
         ];
         assert_eq!(Queue { cards, today: today(), ..Default::default() }.overdue(), 2);
     }
@@ -1096,15 +1180,36 @@ mod tests {
     fn an_overdue_card_counts_until_it_is_set_aside() {
         // An expired posting is never triaged, so the overdue card is an offer whose reply date has passed.
         let offer = ApplicationCard {
-            company: "Juniper".into(), role: "Lead".into(), sector: String::new(), channel: String::new(),
-            status_label: String::new(), bucket: StatusBucket::Offer, applied_on: String::new(), deadline: Some(today() - chrono::Days::new(2)), deadline_state: None,
-            contact_person: String::new(), fit_rating: None, notes: String::new(), source: None, days_quiet: None, days_sent: None, days_followed_up: None,
-            follow_ups_sent: 0, follow_up_due: false, stale: false, reached: ReachedStage::Applied,
-            is_rejection: false, is_final: false, cv_file: String::new(), cover_letter_file: String::new(),
-            archive_folder: None, outcome: None,
+            company: "Juniper".into(),
+            role: "Lead".into(),
+            sector: String::new(),
+            channel: String::new(),
+            status_label: String::new(),
+            bucket: StatusBucket::Offer,
+            applied_on: String::new(),
+            deadline: Some(today() - chrono::Days::new(2)),
+            deadline_state: None,
+            contact_person: String::new(),
+            fit_rating: None,
+            notes: String::new(),
+            source: None,
+            days_quiet: None,
+            days_sent: None,
+            days_followed_up: None,
+            follow_ups_sent: 0,
+            follow_up_due: false,
+            stale: false,
+            reached: ReachedStage::Applied,
+            is_rejection: false,
+            is_final: false,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
+            archive_folder: None,
+            outcome: None,
         };
         let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
-        let dealt = |tray: &InTray| tray.queue(&Sources { board: &JobBoard::default(), pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
+        let dealt =
+            |tray: &InTray| tray.queue(&Sources { board: &JobBoard::default(), pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today: today() });
         let mut tray = InTray::unsaved();
 
         let before = dealt(&tray);
@@ -1182,7 +1287,10 @@ mod tests {
         let queue = Queue { cleared: logged(1), ..today_queue(vec![pending(CardKind::Close, None)]) };
         assert_eq!(queue.today_subtitle(&["Applications"]), "About 1 minute. 1 done so far today. Applications are missing from this list.");
         assert_eq!(queue.today_subtitle(&["Applications", "Jobs"]), "About 1 minute. 1 done so far today. Applications and Jobs are missing from this list.");
-        assert_eq!(queue.today_subtitle(&["Applications", "Jobs", "Tasks"]), "About 1 minute. 1 done so far today. Applications, Jobs and Tasks are missing from this list.");
+        assert_eq!(
+            queue.today_subtitle(&["Applications", "Jobs", "Tasks"]),
+            "About 1 minute. 1 done so far today. Applications, Jobs and Tasks are missing from this list."
+        );
     }
 
     #[test]
@@ -1217,7 +1325,11 @@ mod tests {
 
     #[test]
     fn tally_leaves_out_cards_set_aside() {
-        let queue = Queue { cleared: logged(3), set_aside: vec!["Acme".into(), "Beta".into()], ..today_queue(vec![pending(CardKind::Close, None), pending(CardKind::Close, None)]) };
+        let queue = Queue {
+            cleared: logged(3),
+            set_aside: vec!["Acme".into(), "Beta".into()],
+            ..today_queue(vec![pending(CardKind::Close, None), pending(CardKind::Close, None)])
+        };
         assert_eq!(queue.tally(), DayTally { done: 3, total: 5 });
         assert_eq!(today_queue(vec![]).tally(), DayTally { done: 0, total: 0 });
     }
@@ -1234,7 +1346,10 @@ mod tests {
         let agenda = Queue { marks, ..today_queue(cards) }.agenda();
 
         let rows: Vec<(&str, RowState)> = agenda.rows.iter().map(|row| (row.key.as_str(), row.state)).collect();
-        assert_eq!(rows, [("old", RowState::Late(5)), ("recent", RowState::Late(1)), ("gone", RowState::Done), ("now", RowState::Now), ("wait", RowState::Waiting)]);
+        assert_eq!(
+            rows,
+            [("old", RowState::Late(5)), ("recent", RowState::Late(1)), ("gone", RowState::Done), ("now", RowState::Now), ("wait", RowState::Waiting)]
+        );
         assert_eq!(agenda.rows[0].text, "Older closed");
         assert_eq!(agenda.rows[0].on, day(-5));
         assert_eq!(agenda.rows[3].text, "Meridian closes");
@@ -1245,7 +1360,8 @@ mod tests {
     /// A late card on top is the one being read: its row keeps its lateness and says so.
     #[test]
     fn agenda_marks_a_late_card_on_top_as_now() {
-        let cards = vec![named("top", "Harbor", CardKind::Close, Some((-4, "Harbor closed"))), named("next", "Quarry", CardKind::Close, Some((-2, "Quarry closed")))];
+        let cards =
+            vec![named("top", "Harbor", CardKind::Close, Some((-4, "Harbor closed"))), named("next", "Quarry", CardKind::Close, Some((-2, "Quarry closed")))];
         let agenda = today_queue(cards).agenda();
 
         let rows: Vec<(&str, RowState)> = agenda.rows.iter().map(|row| (row.key.as_str(), row.state)).collect();

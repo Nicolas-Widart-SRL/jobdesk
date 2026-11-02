@@ -10,10 +10,9 @@ use crate::dossier::application::{CheckResult, Dossier, KeywordRow, NamedText, P
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::ui_kit::tokens::{LEADING_TAG_WIDTH, PAGE_GAP, PAGE_SIZE, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, copy_button, copyable, divider, desk_label, list_row, markdown, muted, open_link_button, page_body, page_frame, page_head, panel, panel_body,
-    panel_header, rich, segmented, slip, split, table_cell, table_head, tag, wrapped_height,
+    CellRule, Ink, Subtitle, Title, Tone, Type, command_action, copy_button, copyable, desk_label, divider, list_row, markdown, muted, open_link_button,
+    page_body, page_frame, page_head, panel, panel_body, panel_header, rich, segmented, slip, split, table_cell, table_head, tag, wrapped_height,
 };
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Section {
@@ -530,7 +529,11 @@ fn outcome(ui: &mut Ui, dossier: &Dossier, today: NaiveDate) {
                 }
                 panel_body(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    let text = if dossier.contents.follow_ups.is_empty() { "No follow-up drafts." } else { "The app never sends mail. You copy the draft and send it yourself." };
+                    let text = if dossier.contents.follow_ups.is_empty() {
+                        "No follow-up drafts."
+                    } else {
+                        "The app never sends mail. You copy the draft and send it yourself."
+                    };
                     muted(ui, text);
                 });
             });

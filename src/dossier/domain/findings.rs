@@ -72,7 +72,10 @@ fn keyword_rows(message: &str) -> Vec<KeywordRow> {
         };
         if row.first().is_some_and(|cell| cell.eq_ignore_ascii_case("keyword")) {
             in_table = true;
-        } else if in_table && !is_rule(&row) && let [keyword, priority, status, rest @ ..] = row.as_slice() {
+        } else if in_table
+            && !is_rule(&row)
+            && let [keyword, priority, status, rest @ ..] = row.as_slice()
+        {
             rows.push(KeywordRow { keyword: keyword.clone(), priority: priority.clone(), status: status.clone(), note: rest.join(" ") });
         }
     }
@@ -134,13 +137,16 @@ mod tests {
         let message = "## Verification Checklist\n- [x] Claims match\n- [ ] Named contact\n- ✅ One page\n- Spelling: PASS\n- Report pass/fail for each item\n| Item | Result |\n|---|---|\n| Fonts match | Pass |\n";
         let items = extract_findings(&[message.to_owned()]).checklist;
         let found: Vec<_> = items.iter().map(|item| (item.label.as_str(), item.result)).collect();
-        assert_eq!(found, [
-            ("Claims match", CheckResult::Pass),
-            ("Named contact", CheckResult::Fail),
-            ("One page", CheckResult::Pass),
-            ("Spelling", CheckResult::Pass),
-            ("Fonts match", CheckResult::Pass),
-        ]);
+        assert_eq!(
+            found,
+            [
+                ("Claims match", CheckResult::Pass),
+                ("Named contact", CheckResult::Fail),
+                ("One page", CheckResult::Pass),
+                ("Spelling", CheckResult::Pass),
+                ("Fonts match", CheckResult::Pass),
+            ]
+        );
     }
 
     #[test]

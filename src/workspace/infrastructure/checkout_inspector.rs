@@ -56,7 +56,9 @@ impl CheckoutInspector {
         let templates = self.root.join("templates");
         let mut registered: Vec<String> = ["cv", "cover_letters"]
             .iter()
-            .flat_map(|kind| folders_in(&templates.join(kind)).into_iter().filter(|name| templates.join(kind).join(name).join("TEMPLATE.md").is_file()).collect::<Vec<_>>())
+            .flat_map(|kind| {
+                folders_in(&templates.join(kind)).into_iter().filter(|name| templates.join(kind).join(name).join("TEMPLATE.md").is_file()).collect::<Vec<_>>()
+            })
             .collect();
         registered.sort();
         TemplateState { custom_cv: custom("05-cv-templates.md"), custom_letter: custom("06-cover-letter-templates.md"), registered }

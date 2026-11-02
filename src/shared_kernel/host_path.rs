@@ -51,11 +51,7 @@ fn between_markers(output: &str) -> Option<String> {
 }
 
 fn candidates(dir: &Path, name: &str) -> Vec<PathBuf> {
-    if cfg!(windows) {
-        ["exe", "cmd", "bat"].iter().map(|extension| dir.join(format!("{name}.{extension}"))).collect()
-    } else {
-        vec![dir.join(name)]
-    }
+    if cfg!(windows) { ["exe", "cmd", "bat"].iter().map(|extension| dir.join(format!("{name}.{extension}"))).collect() } else { vec![dir.join(name)] }
 }
 
 /// Looks through `path`, then the folders the Claude installer uses.

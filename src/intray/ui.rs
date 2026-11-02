@@ -1,13 +1,18 @@
 use chrono::NaiveDate;
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
-use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
-use crate::ui_kit::{
-    AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
-    deal, divider, fat_tally, desk_label, key_button, lead_line, link, motion_time, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
-    skeleton_lines, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
+use crate::intray::application::{
+    Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL};
+use crate::ui_kit::tokens::{
+    BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL,
+};
+use crate::ui_kit::{
+    AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box,
+    command_action, day_stamp, deal, departing, desk_label, divider, fat_tally, key_button, lead_line, link, motion_time, muted, page_body, panel_body,
+    panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton, skeleton_lines, slip, stamp, stamped_head,
+    strong, undo_row, wrapped_height,
+};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;

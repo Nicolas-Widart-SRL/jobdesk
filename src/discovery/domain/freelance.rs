@@ -90,7 +90,8 @@ fn is_currency(word: &str) -> bool {
 /// The first amount with a currency on a line about a day rate, skipping the floor it may quote.
 fn stated_rate(line: &str) -> Option<u32> {
     let lowered = line.to_lowercase();
-    let is_about_rate = PER_DAY.iter().any(|term| lowered.contains(term)) || lowered.split(|c: char| !c.is_alphanumeric()).any(|word| RATE_WORDS.contains(&word));
+    let is_about_rate =
+        PER_DAY.iter().any(|term| lowered.contains(term)) || lowered.split(|c: char| !c.is_alphanumeric()).any(|word| RATE_WORDS.contains(&word));
     if !is_about_rate {
         return None;
     }
@@ -160,7 +161,11 @@ mod tests {
     use super::*;
 
     fn tiers() -> Vec<CommuteTier> {
-        let tier = |name: &str, places: &[&str], note: &str| CommuteTier { name: name.into(), places: places.iter().map(|p| (*p).into()).collect(), note: note.into() };
+        let tier = |name: &str, places: &[&str], note: &str| CommuteTier {
+            name: name.into(),
+            places: places.iter().map(|p| (*p).into()).collect(),
+            note: note.into(),
+        };
         vec![tier("ideal", &["Namur"], "<45 min"), tier("acceptable", &["Brussels", "Liège"], "up to 1h15"), tier("borderline", &["Ghent"], "1h30-2h")]
     }
 

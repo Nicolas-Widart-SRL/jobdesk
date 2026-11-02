@@ -7,12 +7,15 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab,
-    check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
-    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich,
-    score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
-    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return,
+    agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button,
+    danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, flow_band, folder_tab,
+    index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body,
+    panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command,
+    rich, score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
+    skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head,
+    status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band,
+    undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -247,8 +250,15 @@ fn sections(ui: &mut Ui) {
         });
     });
     ui.add_space(10.0);
-    let stages = [("Scrape", "15", vec![(9, Some(Ink::Text)), (6, None)], "new of 64 seen"), ("Rank", "5", vec![(5, Some(Ink::Text))], "on shortlist"), ("Apply", "2", vec![(2, Some(Ink::Text))], "drafted, not sent")];
-    let nodes: Vec<FlowNode> = stages.into_iter().map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned(), hidden: None }).collect();
+    let stages = [
+        ("Scrape", "15", vec![(9, Some(Ink::Text)), (6, None)], "new of 64 seen"),
+        ("Rank", "5", vec![(5, Some(Ink::Text))], "on shortlist"),
+        ("Apply", "2", vec![(2, Some(Ink::Text))], "drafted, not sent"),
+    ];
+    let nodes: Vec<FlowNode> = stages
+        .into_iter()
+        .map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned(), hidden: None })
+        .collect();
     flow_band(ui, &nodes);
     ui.add_space(10.0);
     code_box(ui, |ui| {
@@ -267,10 +277,15 @@ fn sections(ui: &mut Ui) {
         ui.allocate_exact_size(egui::vec2(120.0, 80.0), egui::Sense::hover());
     });
     ui.add_space(10.0);
-    empty_state(ui, "Nothing here yet", "A sentence on what the screen holds and how to fill it, at most 560 px wide, then the actions that open the launcher.", |ui| {
-        primary_button(ui, "Find things…");
-        button(ui, "Something else…");
-    });
+    empty_state(
+        ui,
+        "Nothing here yet",
+        "A sentence on what the screen holds and how to fill it, at most 560 px wide, then the actions that open the launcher.",
+        |ui| {
+            primary_button(ui, "Find things…");
+            button(ui, "Something else…");
+        },
+    );
 }
 
 fn board(ui: &mut Ui) {
@@ -305,30 +320,48 @@ fn board(ui: &mut Ui) {
 fn tray(ui: &mut Ui) {
     dealt(ui, "send", |ui| {
         let tab = card_tab(ui, "Ready to send", Tone::Drafted, "Due today");
-        deal(ui, tab, DealLook { key: "send", frame: None, behind: 3 }, |ui| {
-            ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
-        }, |ui| {
-            primary_key_button(ui, "Mark as sent…", "Y");
-            key_button(ui, "Later", "L");
-        });
+        deal(
+            ui,
+            tab,
+            DealLook { key: "send", frame: None, behind: 3 },
+            |ui| {
+                ui.label(rich(ui, "A dealt card", Type::DEAL, Ink::Text));
+            },
+            |ui| {
+                primary_key_button(ui, "Mark as sent…", "Y");
+                key_button(ui, "Later", "L");
+            },
+        );
     });
     ui.add_space(10.0);
     dealt(ui, "asks", |ui| {
         let tab = card_tab(ui, "Claude asks", Tone::Turn, "Paused task");
-        deal(ui, tab, DealLook { key: "asks", frame: Some(Tone::Interview), behind: 9 }, |ui| {
-            ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
-        }, |ui| {
-            key_button(ui, "Later", "L");
-        });
+        deal(
+            ui,
+            tab,
+            DealLook { key: "asks", frame: Some(Tone::Interview), behind: 9 },
+            |ui| {
+                ui.label(rich(ui, "A card that waits", Type::DEAL, Ink::Text));
+            },
+            |ui| {
+                key_button(ui, "Later", "L");
+            },
+        );
     });
     ui.add_space(10.0);
     dealt(ui, "turn", |ui| {
         let tab = card_tab(ui, "Your turn", Tone::Turn, "Task waits");
-        deal(ui, tab, DealLook { key: "turn", frame: Some(Tone::Turn), behind: 1 }, |ui| {
-            ui.label(rich(ui, "A card for a task that waits", Type::DEAL, Ink::Text));
-        }, |ui| {
-            key_button(ui, "Later", "L");
-        });
+        deal(
+            ui,
+            tab,
+            DealLook { key: "turn", frame: Some(Tone::Turn), behind: 1 },
+            |ui| {
+                ui.label(rich(ui, "A card for a task that waits", Type::DEAL, Ink::Text));
+            },
+            |ui| {
+                key_button(ui, "Later", "L");
+            },
+        );
     });
     ui.add_space(10.0);
     ui.scope(|ui| {
@@ -389,29 +422,35 @@ fn settings(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     ui.allocate_ui(egui::vec2(ui.available_width(), SETTINGS_PAGE_HEIGHT), |ui| {
-        settings_page(ui, "Appearance", "How Jobdesk looks on this computer.", |ui| {
-            button(ui, "Check again");
-        }, |ui| {
-            setting_section(ui, "Look", None, "");
-            setting_row(ui, "Theme", "System follows your Mac.", "", |ui| {
-                toggle_group(ui, Some(1), &[(0, "System"), (1, "Light"), (2, "Dark")]);
-            });
-            setting_row(ui, "Text size", "Off a step, no size is on.", "", |ui| {
-                toggle_group(ui, None, &[(90, "90%"), (100, "100%"), (110, "110%")]);
-            });
-            setting_section(ui, "Motion", Some("Decoration only: off, every change shows at once."), "");
-            setting_check(ui, &mut false, "Reduce motion", "Cards and the day stamp change at once, with no slide.", "");
-            setting_section(ui, "Spend", Some("A search for spend marks every place it shows."), "spend");
-            setting_row(ui, "Spend at most, USD", "Empty starts each command at its suggested budget, so tasks spend what they need.", "spend", |ui| {
-                button(ui, "Suggested");
-            });
-            ui.add_enabled_ui(false, |ui| {
-                setting_check(ui, &mut true, "When a task finishes", "One notification per task, with what it cost.", "");
-                setting_row(ui, "Open on", "The screen you see first.", "", |ui| {
-                    toggle_group(ui, Some(0), &[(0, "Today"), (1, "Jobs")]);
+        settings_page(
+            ui,
+            "Appearance",
+            "How Jobdesk looks on this computer.",
+            |ui| {
+                button(ui, "Check again");
+            },
+            |ui| {
+                setting_section(ui, "Look", None, "");
+                setting_row(ui, "Theme", "System follows your Mac.", "", |ui| {
+                    toggle_group(ui, Some(1), &[(0, "System"), (1, "Light"), (2, "Dark")]);
                 });
-            });
-        });
+                setting_row(ui, "Text size", "Off a step, no size is on.", "", |ui| {
+                    toggle_group(ui, None, &[(90, "90%"), (100, "100%"), (110, "110%")]);
+                });
+                setting_section(ui, "Motion", Some("Decoration only: off, every change shows at once."), "");
+                setting_check(ui, &mut false, "Reduce motion", "Cards and the day stamp change at once, with no slide.", "");
+                setting_section(ui, "Spend", Some("A search for spend marks every place it shows."), "spend");
+                setting_row(ui, "Spend at most, USD", "Empty starts each command at its suggested budget, so tasks spend what they need.", "spend", |ui| {
+                    button(ui, "Suggested");
+                });
+                ui.add_enabled_ui(false, |ui| {
+                    setting_check(ui, &mut true, "When a task finishes", "One notification per task, with what it cost.", "");
+                    setting_row(ui, "Open on", "The screen you see first.", "", |ui| {
+                        toggle_group(ui, Some(0), &[(0, "Today"), (1, "Jobs")]);
+                    });
+                });
+            },
+        );
     });
 }
 
@@ -436,7 +475,13 @@ fn runs(ui: &mut Ui) {
         &[
             BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
             BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
-            BandCell { label: "What next", value: "Nothing for now", note: "You can leave. The Tasks tab marks it when it needs you.", look: CellLook::Plain, marks: &[] },
+            BandCell {
+                label: "What next",
+                value: "Nothing for now",
+                note: "You can leave. The Tasks tab marks it when it needs you.",
+                look: CellLook::Plain,
+                marks: &[],
+            },
         ],
         false,
         "Where the run is",
@@ -532,9 +577,14 @@ fn postmark(ui: &mut Ui) {
     ui.add_space(10.0);
     ui.columns_const(|[left, right]| {
         paper(left, true, |ui| {
-            stamped_head(ui, |ui| {
-                day_stamp(ui, "Sat", "31", "Oct", 5, 0, "Saturday 31 October. 0 of 5 decided today.");
-            }, "5 to decide", "Start with Meridian Rail. It closes Thursday.");
+            stamped_head(
+                ui,
+                |ui| {
+                    day_stamp(ui, "Sat", "31", "Oct", 5, 0, "Saturday 31 October. 0 of 5 decided today.");
+                },
+                "5 to decide",
+                "Start with Meridian Rail. It closes Thursday.",
+            );
             deal_footer(ui, |ui| {
                 primary_button(ui, "Open the task");
                 button(ui, "Later");
@@ -605,15 +655,9 @@ fn gallery(ui: &mut Ui) {
 
 fn render(theme: Theme, name: &str) {
     // One point per pixel: at more, the sheet is taller than the 8192px a texture holds.
-    let mut harness = Harness::builder()
-        .with_size(SHEET)
-        .with_pixels_per_point(1.0)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(|ui| {
-            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
-        });
+    let mut harness = Harness::builder().with_size(SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(|ui| {
+        jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
+    });
     harness.run_steps(3);
     // The pointer rests on one row, so the sheet shows hover beside picked.
     harness.get_by_label(HOVERED_ROW).hover();

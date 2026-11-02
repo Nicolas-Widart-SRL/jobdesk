@@ -19,7 +19,11 @@ impl LoadError {
 /// Line breaks become spaces, so words on two lines do not run together.
 /// Vertical tab, form feed and Unicode's next line, line and paragraph separators break lines too.
 fn one_line(text: &str) -> String {
-    text.split(['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}']).map(|line| visible_chars(line).collect::<String>()).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join(" ")
+    text.split(['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'])
+        .map(|line| visible_chars(line).collect::<String>())
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl fmt::Display for LoadError {

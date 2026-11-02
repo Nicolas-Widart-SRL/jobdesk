@@ -171,7 +171,9 @@ impl Job {
                 Gate::Pass => {}
             }
         }
-        if let Some(days) = self.posted_on.map(|posted| days_from(posted, today)) && days > STALE_AFTER_DAYS {
+        if let Some(days) = self.posted_on.map(|posted| days_from(posted, today))
+            && days > STALE_AFTER_DAYS
+        {
             signals.push(Signal::PostedDaysAgo { days });
         }
         if self.guard_flagged() {
@@ -213,16 +215,7 @@ pub mod fixtures {
     }
 
     pub fn assessed(score: u8, location: Gate, language: Gate) -> RankAssessment {
-        RankAssessment {
-            score,
-            verdict: Verdict::from_score(score),
-            location,
-            language,
-            language_note: None,
-            strengths: vec![],
-            gaps: vec![],
-            ranked_on: None,
-        }
+        RankAssessment { score, verdict: Verdict::from_score(score), location, language, language_note: None, strengths: vec![], gaps: vec![], ranked_on: None }
     }
 }
 

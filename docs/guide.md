@@ -26,7 +26,7 @@ Open an application from Applications for its dossier: compiled PDFs, verificati
 
 ## Tasks
 
-The Tasks screen starts any slash command through your local `claude` CLI and shows its progress, questions, cost and history. Jobdesk allows tool permissions on its own for now and lists each one in the activity.
+The Tasks screen starts any slash command through your local `claude` CLI and shows its progress, questions, cost and history. Jobdesk allows tool permissions by default and lists each one in the activity. Settings › Permissions turns prompts on.
 
 A run reads like a report: Claude's messages come first, and each step is one plain sentence, with its actions a click away. A message's text keeps to a readable column, and a table that stands on its own uses the whole width of the run, scrolling sideways only when wider still. A table inside a list or a quote keeps to the column, and so do a message's tables when a footnote points across one. A band at the top says where the run is, whose turn it is and what comes next.
 
@@ -50,6 +50,10 @@ Settings (Cmd+, , Ctrl+, on Windows, or Settings at the right of the status bar)
 - Appearance: the theme (System, Light or Dark), the text size from 90 to 150 percent (Cmd + and Cmd −, Ctrl + and Ctrl − on Windows, change it too), and Reduce motion, which drops the card slide and the day stamp's fill.
 - Runtime status: Claude Code's version and the sign-in the last task used, then your profile, tools, portals, templates and sync, as Setup shows them. The tools' ready count leaves out Claude Code, which has its own row above. Until a folder is chosen and read, only Claude Code and the tools show, and a search matches only those.
 - Usage statistics: what your tasks cost and did, from Jobdesk's own run logs for this folder. It counts tasks only and fetches nothing. A period toggle picks the current month, the last 90 days, This year or All time. Four figures follow: Spent, Tokens in (with tokens out in the note), Cache hits, and Tasks, split into finished, stopped and failed. Per application sent divides every task's cost by the applications you marked sent in the period, and hides when there are none. Below sit the last 12 months by day: hover a day, or Tab to a day with tasks, to see its date, tasks and spend. Then come two tables, By command and By model.
+- Run defaults: the model and Spend at most that each new task starts from, a table of commands with their own model and budget (a command's row beats the defaults, and Add a command picks from the commands Jobdesk knows), and a monthly cap. Left empty, Spend at most keeps each command's suggested budget. You can still change both in the launcher. At or over the cap, Run is disabled with the reason and a link back to the cap, and it opens again on the 1st. A task already running is not stopped, and replies in a session already open still send. The cap counts this month's tasks as Usage statistics does.
+- Permissions: Allow and note in the activity, the default, or Ask me before each tool. Either way, questions from Claude always reach you, and a rule you let it remember lasts only until the task ends and is never saved to your folder.
+- Data and privacy: where Jobdesk keeps its data, with the size of the run logs and the tray decisions. Keep run logs for 30 days, 90 days or Forever, which is the default. A shorter time deletes older logs when Jobdesk starts, never those of the current month, and Usage statistics then counts only the logs kept. Clear tray decisions asks first and forgets what you decided on Today.
+- About: the Jobdesk and Claude Code versions with Copy details for a bug report, and links to the auth review, the changelog and the licences.
 
 The other sections show in the rail and open in later versions.
 
@@ -59,6 +63,6 @@ Setup shows whether your profile, tools, portals, templates and sync are ready. 
 
 ## Privacy and trust
 
-Jobdesk itself never writes to your checkout. Slash commands stay the only writers. Because Jobdesk allows their tool requests without asking, a posting written to trick Claude could get a command run before you see it. The workspace checks postings with `posting_guard` before scoring them. It stores no credentials and uses the login of your installed Claude CLI. Run logs, which include the text of your runs, and your tray decisions are kept in the app's data folder and are readable only by your user.
+Jobdesk itself never writes to your checkout. Slash commands stay the only writers. Because Jobdesk allows their tool requests without asking unless you turn prompts on in Settings › Permissions, a posting written to trick Claude could get a command run before you see it. The workspace checks postings with `posting_guard` before scoring them. It stores no credentials and uses the login of your installed Claude CLI. Run logs, which include the text of your runs, and your tray decisions are kept in the app's data folder and are readable only by your user. Run logs stay there forever unless you choose a shorter time in Settings › Data and privacy.
 
 See [ARCHITECTURE.md](../ARCHITECTURE.md#trust) for how Jobdesk renders postings, notes and reports.

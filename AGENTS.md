@@ -38,7 +38,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - Slash commands are the only writers of the checkout. Jobdesk writes only to its data folder.
 - One run works at a time, because two commands could overwrite each other's files.
 - Card actions never start a run. Y opens the launcher, and the user starts the run there.
-- Tool permissions are allowed automatically and noted in the activity, until a setting can turn prompts back on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Trust](ARCHITECTURE.md#trust).
+- Tool permissions are allowed and noted in the activity by default, and Settings › Permissions turns prompts on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Trust](ARCHITECTURE.md#trust).
 - Authentication stays with the `claude` CLI. Jobdesk offers no login and handles no credentials.
 - Postings, notes and reports are untrusted: render them as [Trust](ARCHITECTURE.md#trust) says.
 - The UI reads the `Snapshot`, never the disk.

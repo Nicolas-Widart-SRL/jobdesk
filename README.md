@@ -49,7 +49,7 @@ On first launch, choose your ai-job-search folder.
 
 ## Privacy and trust
 
-Slash commands are the only writers of your checkout. For now Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk stores no credentials.
+Slash commands are the only writers of your checkout. By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk stores no credentials.
 
 ## Authentication
 

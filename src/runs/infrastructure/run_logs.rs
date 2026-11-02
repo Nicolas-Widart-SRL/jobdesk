@@ -142,6 +142,35 @@ fn log_paths(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Deletes the run logs last written before `keep_after` and returns how many went.
+/// Only regular `<run id>.jsonl` files directly in `dir` qualify: a symlink, a folder, a nested file
+/// and every other name stay, as does a file whose age cannot be read.
+pub fn prune(dir: &Path, keep_after: SystemTime) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else { return 0 };
+    let mut deleted = 0;
+    for entry in entries.flatten() {
+        if !entry.file_name().to_str().is_some_and(is_run_log_name) || !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(modified) = fs::symlink_metadata(&path).and_then(|metadata| metadata.modified()) else { continue };
+        if modified < keep_after && fs::remove_file(&path).is_ok() {
+            deleted += 1;
+        }
+    }
+    deleted
+}
+
+/// A run id as `RunDesk::start` makes it, `20261031-101500-1`, plus `.jsonl`.
+fn is_run_log_name(name: &str) -> bool {
+    let Some(id) = name.strip_suffix(".jsonl") else { return false };
+    let mut parts = id.split('-');
+    let digits = |part: Option<&str>, len: Option<usize>| {
+        part.is_some_and(|part| len.is_none_or(|len| part.len() == len) && !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    digits(parts.next(), Some(8)) && digits(parts.next(), Some(6)) && digits(parts.next(), None) && parts.next().is_none()
+}
+
 /// What every past task of one workspace cost, read from all of its logs.
 /// A log is read again only when its size or modification time changes.
 pub struct RunLogUsage {
@@ -488,5 +517,118 @@ mod tests {
         RunLog::open(dir.path(), Path::new("/w"), &request("a", "/rank")).unwrap();
         let mode = fs::metadata(dir.path().join("a.jsonl")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    const LOG: &str = "20261001-101010-1.jsonl";
+
+    fn cutoff() -> SystemTime {
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000)
+    }
+
+    fn written(path: &Path, at: SystemTime) {
+        fs::write(path, "{}").unwrap();
+        File::options().write(true).open(path).unwrap().set_modified(at).unwrap();
+    }
+
+    fn before() -> SystemTime {
+        cutoff() - std::time::Duration::from_secs(1)
+    }
+
+    #[test]
+    fn prune_deletes_an_old_log_and_keeps_a_new_one() {
+        let dir = tempfile::tempdir().unwrap();
+        written(&dir.path().join(LOG), before());
+        written(&dir.path().join("20261002-101010-2.jsonl"), cutoff() + std::time::Duration::from_secs(1));
+
+        assert_eq!(prune(dir.path(), cutoff()), 1);
+
+        assert!(!dir.path().join(LOG).exists());
+        assert!(dir.path().join("20261002-101010-2.jsonl").exists());
+    }
+
+    #[test]
+    fn prune_keeps_a_log_written_exactly_at_the_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        written(&dir.path().join(LOG), cutoff());
+        assert_eq!(prune(dir.path(), cutoff()), 0);
+        assert!(dir.path().join(LOG).exists());
+    }
+
+    #[test]
+    fn prune_leaves_files_that_are_not_run_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = [
+            "notes.jsonl",
+            "x.jsonl.bak",
+            "20261001-101010-1.json",
+            "20261001-101010-1.jsonl.tmp",
+            "20261001-101010.jsonl",
+            "20261001-101010-1-2.jsonl",
+            "2026100-101010-1.jsonl",
+            "20261001-101010-.jsonl",
+            "20261001-101010-a.jsonl",
+            ".jsonl",
+        ];
+        for name in names {
+            written(&dir.path().join(name), before());
+        }
+
+        assert_eq!(prune(dir.path(), cutoff()), 0);
+
+        for name in names {
+            assert!(dir.path().join(name).exists(), "{name} was deleted");
+        }
+    }
+
+    #[test]
+    fn prune_does_not_enter_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(LOG)).unwrap();
+        written(&dir.path().join(LOG).join(LOG), before());
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        written(&dir.path().join("sub").join("20261001-101010-3.jsonl"), before());
+
+        assert_eq!(prune(dir.path(), cutoff()), 0);
+
+        assert!(dir.path().join(LOG).join(LOG).exists());
+        assert!(dir.path().join("sub").join("20261001-101010-3.jsonl").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_never_follows_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("old.jsonl");
+        written(&target, before());
+        std::os::unix::fs::symlink(&target, dir.path().join(LOG)).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("20261001-101010-4.jsonl")).unwrap();
+
+        assert_eq!(prune(dir.path(), cutoff()), 0);
+
+        assert!(target.exists());
+        assert!(fs::symlink_metadata(dir.path().join(LOG)).is_ok());
+        assert!(fs::symlink_metadata(dir.path().join("20261001-101010-4.jsonl")).is_ok());
+    }
+
+    #[test]
+    fn prune_leaves_the_settings_and_the_tray_beside_the_logs() {
+        let data = tempfile::tempdir().unwrap();
+        let runs = data.path().join("runs");
+        fs::create_dir_all(&runs).unwrap();
+        fs::create_dir_all(data.path().join("intray")).unwrap();
+        written(&runs.join(LOG), before());
+        written(&data.path().join("settings.json"), before());
+        written(&data.path().join("intray").join("decisions.json"), before());
+
+        assert_eq!(prune(&runs, cutoff()), 1);
+
+        assert!(data.path().join("settings.json").exists());
+        assert!(data.path().join("intray").join("decisions.json").exists());
+    }
+
+    #[test]
+    fn prune_in_a_missing_folder_deletes_nothing() {
+        assert_eq!(prune(Path::new("/nonexistent/x"), cutoff()), 0);
     }
 }

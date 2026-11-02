@@ -306,6 +306,26 @@ impl InTray {
         self.issue.as_ref()
     }
 
+    /// How many decisions the open workspace has stored.
+    pub fn decision_count(&self) -> usize {
+        self.decisions.len()
+    }
+
+    /// Forgets every decision, so today deals every card again. An unreadable store is left as it is:
+    /// saving would overwrite what it holds.
+    pub fn clear_decisions(&mut self) {
+        if self.issue.is_some() {
+            return;
+        }
+        self.decisions.clear();
+        self.can_undo = false;
+        self.reading = None;
+        self.returned.clear();
+        self.returned_on = None;
+        self.undo_returned = false;
+        self.save();
+    }
+
     fn is_cleared(&self, key: &str, today: NaiveDate) -> bool {
         self.decisions.iter().any(|decision| decision.key == key && decision.clears_card(today))
     }
@@ -700,6 +720,45 @@ mod tests {
         assert!(dealt(&reopened, &jobs).is_empty());
         assert_eq!(memory.0.borrow()[0].reason, Some(SkipReason::Domain));
         assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped for domain");
+    }
+
+    #[test]
+    fn clearing_decisions_saves_an_empty_list_and_offers_no_undo() {
+        let memory = Memory::default();
+        let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
+        let mut tray = InTray::new(Box::new(memory.clone()));
+        tray.skip(&top(&tray, &jobs), today());
+        tray.later(&top(&tray, &jobs), today());
+        assert_eq!(tray.decision_count(), 2);
+        tray.bring_back_all(today());
+        assert_eq!(tray.returned.len(), 1);
+
+        tray.clear_decisions();
+
+        assert_eq!(tray.decision_count(), 0);
+        assert!(memory.0.borrow().is_empty());
+        assert_eq!(tray.undo_offer(today()), None);
+        assert_eq!(dealt(&tray, &jobs), ["Acme", "Beta"]);
+        assert!(tray.returned.is_empty() && tray.returned_on.is_none() && tray.reading.is_none());
+    }
+
+    #[test]
+    fn clearing_decisions_after_an_undoable_follow_leaves_no_undo() {
+        let mut tray = InTray::unsaved();
+        let jobs = board(vec![job("Acme", 90)]);
+        let card = top(&tray, &jobs);
+        tray.follow(&card, card.primary.as_ref().unwrap(), today());
+        tray.clear_decisions();
+        tray.undo(today());
+        assert_eq!(tray.decision_count(), 0);
+        assert_eq!(dealt(&tray, &jobs), ["Acme"]);
+    }
+
+    #[test]
+    fn clearing_an_unreadable_store_clears_and_saves_nothing() {
+        let mut tray = InTray::new(Box::new(Corrupt));
+        tray.clear_decisions();
+        assert!(tray.issue().is_some_and(|issue| issue.to_string().contains("not JSON")));
     }
 
     #[test]

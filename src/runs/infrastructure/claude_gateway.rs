@@ -104,6 +104,9 @@ impl AgentSession for ClaudeSession {
     }
 }
 
+/// Variables from the shell that started Jobdesk that would make the CLI sign in some other way than the saved key.
+const OUTRANKING: [&str; 3] = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"];
+
 /// The key a task's process gets, read once as it starts. The Claude sign-in reads none and leaves the inherited environment as it is.
 fn task_key(sign_in: SignIn, keys: &KeyReader) -> Result<Option<ApiKey>, String> {
     match sign_in {
@@ -133,6 +136,12 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     if let Some(key) = key {
         command.env("ANTHROPIC_API_KEY", key.expose());
+        // The CLI strips the key from the environment of the tools, hooks and servers it starts, so a command cannot print it.
+        command.env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1");
+        // Another inherited credential or provider switch could outrank the key.
+        for name in OUTRANKING {
+            command.env_remove(name);
+        }
     }
     if let Some(model) = &request.model {
         command.args(["--model", model]);
@@ -143,6 +152,15 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
     command
+}
+
+/// Starts the process. A key that cannot be had ends it before any process exists, and never falls back to the Claude plan.
+fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader) -> Result<Child, String> {
+    let key = task_key(request.sign_in, keys)?;
+    // The command holds the key only until it is spawned, and the key goes with it.
+    let spawned = command_for(claude, workspace, path, request, key.as_ref()).spawn();
+    drop(key);
+    spawned.map_err(|error| format!("Could not start Claude: {error}"))
 }
 
 fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>, process: &Mutex<Process>) {
@@ -161,20 +179,10 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
         emit(AgentEvent::ProcessExited { failure: Some("Claude CLI not found. Install Claude Code, then run this again.".to_owned()) });
         return;
     };
-    let key = match task_key(request.sign_in, keys) {
-        Ok(key) => key,
+    let mut child = match spawn_claude(&claude, workspace, path, request, keys) {
+        Ok(child) => child,
         Err(failure) => {
             emit(AgentEvent::ProcessExited { failure: Some(failure) });
-            return;
-        }
-    };
-    // The command holds the key only until it is spawned, and the key goes with it.
-    let spawned = command_for(&claude, workspace, path, request, key.as_ref()).spawn();
-    drop(key);
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(error) => {
-            emit(AgentEvent::ProcessExited { failure: Some(format!("Could not start Claude: {error}")) });
             return;
         }
     };
@@ -343,8 +351,13 @@ mod key_tests {
         command_for(Path::new("/bin/claude"), Path::new("/w"), "/bin", &request(), key)
     }
 
+    /// None when the command leaves the variable alone, Some(None) when it removes it.
+    fn env_of(command: &Command, name: &str) -> Option<Option<String>> {
+        command.get_envs().find(|(var, _)| *var == name).map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
     fn api_key_in(command: &Command) -> Option<Option<String>> {
-        command.get_envs().find(|(name, _)| *name == "ANTHROPIC_API_KEY").map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+        env_of(command, "ANTHROPIC_API_KEY")
     }
 
     #[test]
@@ -360,7 +373,43 @@ mod key_tests {
 
     #[test]
     fn no_key_leaves_the_environment_alone() {
-        assert_eq!(api_key_in(&command(None)), None);
+        let command = command(None);
+        assert_eq!(command.get_envs().map(|(name, _)| name.to_string_lossy().into_owned()).collect::<Vec<_>>(), ["PATH"]);
+    }
+
+    #[test]
+    fn a_key_keeps_the_tools_from_inheriting_it() {
+        let key = ApiKey::parse(FAKE).unwrap();
+        assert_eq!(env_of(&command(Some(&key)), "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), Some(Some("1".to_owned())));
+        assert_eq!(env_of(&command(None), "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), None);
+    }
+
+    #[test]
+    fn a_key_clears_what_would_outrank_it() {
+        let key = ApiKey::parse(FAKE).unwrap();
+        let with = command(Some(&key));
+        for name in ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"] {
+            assert_eq!(env_of(&with, name), Some(None), "{name} is removed");
+            assert_eq!(env_of(&command(None), name), None, "{name} is left alone without a key");
+        }
+    }
+
+    #[test]
+    fn a_task_whose_key_cannot_be_had_spawns_nothing() {
+        // A spawn attempt at this path would fail with "Could not start Claude", so the key error shows none was made.
+        let nowhere = Path::new("/nonexistent/claude");
+        let mut request = request();
+        for (keys, expected) in [
+            (Arc::new(|| Ok(None)) as KeyReader, KEY_GONE.to_owned()),
+            (Arc::new(|| Err("access denied".to_owned())) as KeyReader, format!("Jobdesk could not read your API key from the {STORE}: access denied")),
+        ] {
+            let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys).unwrap_err();
+            assert_eq!(failure, expected);
+        }
+        request.sign_in = SignIn::ClaudeSignIn;
+        let keys: KeyReader = Arc::new(|| panic!("the reader must not be called"));
+        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys).unwrap_err();
+        assert!(failure.starts_with("Could not start Claude"), "the Claude sign-in goes on to the spawn");
     }
 
     #[test]

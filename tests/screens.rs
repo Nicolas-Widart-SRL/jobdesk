@@ -6,16 +6,17 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
-    AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
+    AgentEvent, AgentGateway, AgentSession, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions,
+    TaskCost, TaskOutcome, Usage, UsageReport,
 };
 use jobdesk::settings::application::{Page, drawn_index, index};
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
-use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
+use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
 fn sample_workspace(root: &Path) {
@@ -2926,6 +2927,191 @@ fn settings_runtime_dark() {
 #[test]
 fn settings_search_light() {
     render_settings(Page::General, Some("folder"), Theme::Light, "settings_search_light");
+}
+
+/// The tasks each day of October ran, as the canvas draws them.
+const OCTOBER: [usize; 31] = [2, 1, 0, 0, 3, 1, 2, 0, 1, 0, 1, 2, 4, 1, 0, 1, 0, 0, 2, 1, 3, 2, 0, 0, 0, 2, 1, 2, 1, 2, 2];
+
+/// Each model's tasks in October, with the tokens in and out they used between them, as the canvas's By model shows.
+const MODEL_TOKENS: [(&str, u64, u64, u64); 3] =
+    [("claude-opus-4-5", 14, 2_200_000, 310_000), ("claude-sonnet-4-5", 15, 1_500_000, 240_000), ("claude-haiku-4-5", 8, 400_000, 50_000)];
+
+/// One fictional task: its command word, model, cost and how it ended. Each model's tokens split evenly, 82% of them cached.
+fn usage_task(on: NaiveDate, (command, model, cost_usd, outcome): (&str, &str, f64, TaskOutcome)) -> TaskCost {
+    let &(_, tasks, tokens_in, tokens_out) = MODEL_TOKENS.iter().find(|(id, ..)| *id == model).unwrap();
+    let tokens_in = tokens_in / tasks;
+    let cost = ModelCost { model: model.into(), tokens_in, tokens_out: tokens_out / tasks, cache_read: tokens_in * 82 / 100, cost_usd };
+    TaskCost { started_on: on, command: Some(command.into()), outcome, cost_usd, models: vec![cost] }
+}
+
+/// Fictional tasks from 13 July to 31 October 2026. October matches the canvas: $41.20 over 37 tasks, the commands and
+/// models of its tables, and Tue 13 Oct at 4 tasks for $6.10. The weeks before follow the canvas's pattern of days.
+fn usage_tasks() -> Vec<TaskCost> {
+    use TaskOutcome::{Failed, Finished, Stopped};
+    const OPUS: &str = "claude-opus-4-5";
+    const SONNET: &str = "claude-sonnet-4-5";
+    const HAIKU: &str = "claude-haiku-4-5";
+    let the_13th =
+        [("apply", OPUS, 3.30, Finished), ("interview", OPUS, 1.45, Finished), ("rank", OPUS, 1.20, Finished), ("gmail-sync", HAIKU, 0.15, Finished)];
+    let mut rest = vec![
+        ("scrape", SONNET, 0.40, Finished),
+        ("rank", SONNET, 0.75, Finished),
+        ("apply", OPUS, 3.30, Finished),
+        ("outcome", HAIKU, 0.05, Finished),
+        ("setup", OPUS, 1.80, Finished),
+        ("scrape", SONNET, 0.40, Stopped),
+        ("rank", SONNET, 0.75, Finished),
+        ("outcome", HAIKU, 0.10, Finished),
+        ("apply", OPUS, 3.30, Finished),
+        ("scrape", SONNET, 0.40, Finished),
+        ("setup", OPUS, 1.80, Finished),
+        ("rank", OPUS, 1.20, Finished),
+        ("outcome", SONNET, 1.20, Finished),
+        ("scrape", SONNET, 0.40, Finished),
+        ("apply", OPUS, 3.30, Failed),
+        ("rank", SONNET, 0.75, Finished),
+        ("outcome", HAIKU, 0.05, Finished),
+        ("scrape", SONNET, 0.40, Stopped),
+        ("interview", OPUS, 1.45, Finished),
+        ("rank", SONNET, 0.75, Finished),
+        ("gmail-sync", HAIKU, 0.15, Finished),
+        ("apply", OPUS, 3.30, Finished),
+        ("scrape", SONNET, 0.40, Finished),
+        ("outcome", HAIKU, 0.10, Finished),
+        ("setup", OPUS, 1.70, Stopped),
+        ("rank", SONNET, 0.75, Finished),
+        ("scrape", SONNET, 0.40, Finished),
+        ("rank", OPUS, 1.20, Finished),
+        ("outcome", HAIKU, 0.05, Finished),
+        ("apply", OPUS, 3.30, Finished),
+        ("rank", SONNET, 0.75, Finished),
+        ("scrape", SONNET, 0.40, Finished),
+        ("outcome", HAIKU, 0.05, Finished),
+    ]
+    .into_iter();
+    let mut tasks = Vec::new();
+    for (at, &count) in OCTOBER.iter().enumerate() {
+        let on = NaiveDate::from_ymd_opt(2026, 10, at as u32 + 1).unwrap();
+        if at == 12 {
+            tasks.extend(the_13th.map(|task| usage_task(on, task)));
+        } else {
+            tasks.extend(rest.by_ref().take(count).map(|task| usage_task(on, task)));
+        }
+    }
+    assert!(rest.next().is_none(), "every October task has a day");
+    let earlier = [("scrape", SONNET, 0.45), ("rank", SONNET, 0.70), ("apply", OPUS, 2.90), ("outcome", HAIKU, 0.10), ("setup", OPUS, 1.60)];
+    let mut at = 0;
+    let mut on = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
+    while on.month() < 10 {
+        // The canvas's own pattern: weekdays run 0 to 4 tasks, weekends one at most.
+        let seed = (u64::from(on.day()) * 7 + u64::from(on.month0()) * 13) * 2_654_435_761 % 97;
+        let count = match () {
+            _ if on.weekday().num_days_from_monday() >= 5 => usize::from(seed > 77),
+            _ if seed > 87 => 4,
+            _ if seed > 60 => 2,
+            _ if seed > 29 => 1,
+            _ => 0,
+        };
+        for _ in 0..count {
+            let (command, model, cost) = earlier[at % earlier.len()];
+            at += 1;
+            tasks.push(usage_task(on, (command, model, cost, Finished)));
+        }
+        on = on.succ_opt().unwrap();
+    }
+    tasks
+}
+
+/// The sample folder over Today, with `tasks` as the run logs read.
+fn shell_with_usage(name: &str, tasks: Vec<TaskCost>) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    let mut snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    snapshot.usage = UsageReport::new(tasks);
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot).with_folder_label("~/Documents/ai-job-search")
+}
+
+/// Usage statistics on `shell`, with bun missing so Runtime status says "1 missing". `hover` rests the pointer on one
+/// day of the year, given as its week and weekday.
+fn render_usage(mut shell: Shell, hover: Option<(usize, usize)>, theme: Theme, name: &str) {
+    shell.open_settings(Page::Usage);
+    let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
+    if let Some((week, weekday)) = hover {
+        let map = harness.get_by_label("Tasks per day over the last 12 months").rect();
+        let pitch = STATUS_DOT + TALLY_GAP_Y;
+        let first = map.min + egui::vec2(HEAT_LABELS.0 + TALLY_GAP_Y, HEAT_LABELS.1 + TALLY_GAP_Y) + egui::Vec2::splat(STATUS_DOT / 2.0);
+        harness.hover_at(first + egui::vec2(week as f32, weekday as f32) * pitch);
+        harness.run_steps(4);
+    }
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// Tue 13 Oct: three weeks before today's column, the second day.
+const THE_13TH: (usize, usize) = (50, 1);
+
+#[test]
+fn settings_usage_light() {
+    render_usage(shell_with_usage("settings_usage_light", usage_tasks()), None, Theme::Light, "settings_usage_light");
+}
+
+#[test]
+fn settings_usage_dark() {
+    render_usage(shell_with_usage("settings_usage_dark", usage_tasks()), Some(THE_13TH), Theme::Dark, "settings_usage_dark");
+}
+
+#[test]
+fn settings_usage_empty_light() {
+    render_usage(shell_with_usage("settings_usage_empty_light", Vec::new()), None, Theme::Light, "settings_usage_empty_light");
+}
+
+#[test]
+fn settings_loading_light() {
+    let shell = loading_on(Screen::InTray, "settings_loading_light").with_folder_label("~/Documents/ai-job-search");
+    render_usage(shell, None, Theme::Light, "settings_loading_light");
+}
+
+/// The fixture matches the canvas: October's figures, both tables' rows, and the day the tooltip shows.
+#[test]
+fn the_usage_fixture_matches_the_canvas() {
+    let mut shell = shell_with_usage("settings_usage_fixture", usage_tasks());
+    shell.open_settings(Page::Usage);
+    let harness = tray_harness(shell);
+    // A count such as "2" shows in more than one row, so any match will do.
+    let shown = |text: &str| harness.query_all_by_label(text).next().is_some();
+    for text in ["$41.20 in Oct", "$41.20", "4.1M", "in, and 600K out", "82%", "37", "33 finished, 3 stopped, 1 failed"] {
+        assert!(shown(text), "{text}");
+    }
+    for (command, tasks, spent) in [("/apply", "6", "$19.80"), ("/rank", "9", "$8.10"), ("/setup", "3", "$5.30"), ("/gmail-sync", "2", "$0.30")] {
+        assert!(shown(command) && shown(tasks) && shown(spent), "{command}");
+    }
+    for (model, spent) in [("Opus", "$31.60"), ("Sonnet", "$8.90"), ("Haiku", "$0.70")] {
+        assert!(shown(model) && shown(spent), "{model}");
+    }
+    let the_13th: Vec<TaskCost> = usage_tasks().into_iter().filter(|task| task.started_on == NaiveDate::from_ymd_opt(2026, 10, 13).unwrap()).collect();
+    assert_eq!(the_13th.len(), 4);
+    assert!((the_13th.iter().map(|task| task.cost_usd).sum::<f64>() - 6.10).abs() < 1e-9);
+}
+
+/// Open Applications closes Settings on Applications, and New task… on the launcher.
+#[test]
+fn usage_links_leave_settings() {
+    let mut applications = shell_with_usage("settings_usage_links", usage_tasks());
+    applications.open_settings(Page::Usage);
+    let (mut harness, shell) = shared_harness(applications);
+    harness.get_by_label("Open Applications").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, "Record a result…"), "Applications is on show");
+
+    let mut launcher = shell_with_usage("settings_usage_new_task", Vec::new());
+    *launcher.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    launcher.open_settings(Page::Usage);
+    let (mut harness, shell) = shared_harness(launcher);
+    harness.get_by_label("New task…").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER), "the launcher is open");
 }
 
 /// Every required tool answers, so the menu has no Setup tab.

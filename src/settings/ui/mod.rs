@@ -1,6 +1,13 @@
+mod usage;
+
+use std::cell::Cell;
+
+use chrono::NaiveDate;
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
-use crate::settings::application::{Group, IssueKind, Page, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, index, search};
+use crate::settings::application::{
+    Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, UsageState, index, rail_word, search,
+};
 use crate::ui_kit::tokens::{BODY_PADDING, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING};
 use crate::ui_kit::{
     Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, pick_row, rail_title, rich, search_field, set_reduced_motion, setting_check,
@@ -12,11 +19,12 @@ const OPEN_ON_WIDTH: f32 = 180.0;
 
 const SHOW_FOLDER: &str = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
 
-/// What stays between frames: the page open and the search.
+/// What stays between frames: the page open, the search and the period Usage statistics counts.
 #[derive(Default)]
 pub struct SettingsScreen {
     page: Page,
     query: String,
+    period: Period,
 }
 
 impl SettingsScreen {
@@ -42,6 +50,9 @@ pub struct SettingsView<'a> {
     pub runtime: RuntimeWord,
     /// Why Change folder waits, if it does, as the shell words it.
     pub folder_wait: Option<&'a str>,
+    pub usage: UsageState<'a>,
+    /// The app's day, which names the month in Usage statistics before its logs are read.
+    pub today: NaiveDate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +60,10 @@ pub enum SettingsRequest {
     Back,
     ChangeFolder,
     ShowFolder,
+    /// Close Settings and show Applications.
+    OpenApplications,
+    /// Open the launcher, as New task… does on Tasks.
+    NewTask,
 }
 
 /// The Settings screen: Back to app and the rail at the left, the open page on paper beside them.
@@ -85,6 +100,20 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
         }
         Page::Appearance => {
             settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| appearance(ui, view.settings, &query));
+        }
+        Page::Usage => {
+            let lead = if matches!(view.usage, UsageState::Reading) { usage::READING } else { page.lead() };
+            // The toggles run first, so the body counts the period picked this frame.
+            let period = Cell::new(screen.period);
+            let (_, asked) = settings_page(
+                &mut page_ui,
+                page.title(),
+                lead,
+                |ui| usage::period_toggles(ui, &period, view.today),
+                |ui| usage::body(ui, view.usage, period.get(), view.today, &query),
+            );
+            screen.period = period.get();
+            request = asked.or(request);
         }
         _ => other_page(&mut page_ui, page, &query),
     }
@@ -203,6 +232,10 @@ fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
     match page {
         _ if !page.built() => ("Later".to_owned(), Ink::Muted),
         Page::Appearance => (view.settings.preferences().theme.label().to_owned(), Ink::Muted),
+        Page::Usage => match view.usage {
+            UsageState::Read { report, today, .. } => (rail_word(report, today), Ink::Muted),
+            UsageState::Reading | UsageState::NoFolder => (String::new(), Ink::Muted),
+        },
         Page::Runtime => match view.runtime {
             RuntimeWord::None => (String::new(), Ink::Muted),
             RuntimeWord::Missing(n) => (format!("{n} missing"), Tone::Closed.into()),
@@ -341,11 +374,38 @@ mod tests {
     use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
+    use crate::runs::application::{ModelCost, TaskCost, TaskOutcome};
+    use crate::settings::application::{Pipeline, UsageReport, sent_on};
 
     struct State {
         screen: SettingsScreen,
         settings: Settings,
         asked: Option<SettingsRequest>,
+        report: UsageReport,
+        pipeline: Pipeline,
+        reading: bool,
+    }
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn task(on: NaiveDate, command: Option<&str>, model: &str, cost_usd: f64) -> TaskCost {
+        let model = ModelCost { model: model.into(), tokens_in: 100_000, tokens_out: 10_000, cache_read: 80_000, cost_usd };
+        TaskCost { started_on: on, command: command.map(str::to_owned), outcome: TaskOutcome::Finished, cost_usd, models: vec![model] }
+    }
+
+    /// Fictional tasks: $41.20 in October, and $9.00 in September.
+    fn report() -> UsageReport {
+        UsageReport::new(vec![
+            task(day(2026, 10, 3), Some("apply"), "claude-opus-4-5", 30.0),
+            task(day(2026, 10, 13), Some("rank"), "claude-sonnet-4-5", 11.2),
+            task(day(2026, 9, 4), None, "claude-haiku-4-5", 9.0),
+        ])
     }
 
     fn setup(ctx: &egui::Context) {
@@ -354,14 +414,21 @@ mod tests {
     }
 
     fn harness(state: Rc<RefCell<State>>) -> Harness<'static> {
-        Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+        harness_at(state, 1280.0)
+    }
+
+    fn harness_at(state: Rc<RefCell<State>>, width: f32) -> Harness<'static> {
+        Harness::builder().with_size([width, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = &mut *state.borrow_mut();
+            let usage = if state.reading { UsageState::Reading } else { UsageState::Read { report: &state.report, pipeline: &state.pipeline, today: today() } };
             let view = SettingsView {
                 settings: &mut state.settings,
                 folder: Some("~/Documents/ai-job-search"),
                 folder_read: true,
                 runtime: RuntimeWord::Missing(1),
                 folder_wait: None,
+                usage,
+                today: today(),
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -373,7 +440,7 @@ mod tests {
     }
 
     fn state() -> Rc<RefCell<State>> {
-        Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings: Settings::unsaved(), asked: None }))
+        state_with(Settings::unsaved())
     }
 
     /// A settings file that cannot be read, or one that reads but cannot be saved.
@@ -392,7 +459,8 @@ mod tests {
     }
 
     fn state_with(settings: Settings) -> Rc<RefCell<State>> {
-        Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings, asked: None }))
+        let pipeline = sent_on(&[day(2026, 10, 7), day(2026, 10, 16), day(2026, 8, 20)]);
+        Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings, asked: None, report: report(), pipeline, reading: false }))
     }
 
     #[test]
@@ -454,7 +522,7 @@ mod tests {
             assert!(!rows.is_empty(), "{}", page.title());
             assert_eq!(rows[0].accesskit_node().is_disabled(), !page.built(), "{}", page.title());
         }
-        assert_eq!(harness.query_all_by_label("Later").count(), 9);
+        assert_eq!(harness.query_all_by_label("Later").count(), 8);
         harness.get_by_label("1 missing");
     }
 
@@ -543,7 +611,15 @@ mod tests {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
-            let view = SettingsView { settings: &mut settings, folder: None, folder_read: false, runtime: RuntimeWord::None, folder_wait: None };
+            let view = SettingsView {
+                settings: &mut settings,
+                folder: None,
+                folder_read: false,
+                runtime: RuntimeWord::None,
+                folder_wait: None,
+                usage: UsageState::NoFolder,
+                today: today(),
+            };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
         harness.run();
@@ -554,7 +630,7 @@ mod tests {
 
     #[test]
     fn every_indexed_line_shows_on_its_page() {
-        for page in [Page::General, Page::Appearance] {
+        for page in [Page::General, Page::Appearance, Page::Usage] {
             let state = state();
             state.borrow_mut().screen.open_on(page);
             let mut harness = harness(state);
@@ -586,5 +662,131 @@ mod tests {
         ctx.options_mut(|options| options.zoom_factor = 1.1);
         follow_zoom(&ctx, &mut settings);
         assert_eq!(settings.preferences().text_size.percent(), 110);
+    }
+
+    fn on_usage(state: &Rc<RefCell<State>>) {
+        state.borrow_mut().screen.open_on(Page::Usage);
+    }
+
+    #[test]
+    fn the_rail_says_this_months_spend_or_no_tasks_yet() {
+        let mut spent = harness(state());
+        spent.run();
+        spent.get_by_label("$41.20 in Oct");
+
+        let state = state();
+        state.borrow_mut().report = UsageReport::default();
+        let mut none = harness(state);
+        none.run();
+        none.get_by_label("No tasks yet");
+    }
+
+    #[test]
+    fn while_the_logs_are_read_the_rail_says_nothing_and_the_lead_says_so() {
+        let state = state();
+        state.borrow_mut().reading = true;
+        on_usage(&state);
+        let mut harness = harness(state);
+        harness.run();
+        assert!(harness.query_by_label_contains(" in Oct").is_none());
+        harness.get_by_label(usage::READING);
+    }
+
+    #[test]
+    fn choosing_a_period_changes_the_spent_figure() {
+        let state = state();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("$41.20");
+        assert_eq!(harness.get_by_label("October").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        harness.get_by_label("All time").click();
+        harness.run();
+        harness.get_by_label("$50.20");
+        assert_eq!(state.borrow().screen.period, Period::All);
+        assert!(harness.query_by_label("$41.20").is_none());
+    }
+
+    #[test]
+    fn per_application_sent_shows_only_when_something_was_sent() {
+        let state = state();
+        on_usage(&state);
+        let mut sent = harness(state.clone());
+        sent.run();
+        sent.get_by_label("Per application sent");
+        sent.get_by_label("$20.60");
+        sent.get_by_label("You marked 2 applications sent in October. Every task's cost counts, not only drafting.");
+
+        state.borrow_mut().pipeline = Pipeline::default();
+        let mut none = harness(state);
+        none.run();
+        assert!(none.query_by_label("Per application sent").is_none());
+        assert!(none.query_by_label("Open Applications").is_none());
+    }
+
+    #[test]
+    fn open_applications_asks_the_shell() {
+        let state = state();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Open Applications").click();
+        harness.run();
+        assert_eq!(state.borrow().asked, Some(SettingsRequest::OpenApplications));
+    }
+
+    #[test]
+    fn with_no_tasks_new_task_asks_for_the_launcher() {
+        let state = state();
+        state.borrow_mut().report = UsageReport::default();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Usage counts the tasks Jobdesk runs, from its own logs. Once your first task ends, its cost, tokens and model show here.");
+        assert!(!harness.get_by_label("Find new jobs…").accesskit_node().is_disabled());
+        harness.get_by_label("New task…").click();
+        harness.run();
+        assert_eq!(state.borrow().asked, Some(SettingsRequest::NewTask));
+    }
+
+    #[test]
+    fn with_no_folder_usage_waits_for_one() {
+        let mut settings = Settings::unsaved();
+        let mut screen = SettingsScreen::default();
+        screen.open_on(Page::Usage);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let view = SettingsView {
+                settings: &mut settings,
+                folder: None,
+                folder_read: false,
+                runtime: RuntimeWord::None,
+                folder_wait: None,
+                usage: UsageState::NoFolder,
+                today: today(),
+            };
+            show(ui, &mut screen, view, &mut |_, _, _| {});
+        });
+        harness.run();
+        // The rail's word is blank, so the only "No tasks yet" is the page's.
+        assert_eq!(harness.query_all_by_label("No tasks yet").count(), 1);
+        assert!(harness.get_by_label("Find new jobs…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("New task…").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn a_narrow_page_puts_by_model_under_by_command() {
+        let state = state();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        let (command, model) = (harness.get_by_label("By command").rect(), harness.get_by_label("By model").rect());
+        assert!((command.top() - model.top()).abs() < 1.0, "side by side at 1280");
+
+        let mut harness = harness_at(state, 1040.0);
+        harness.run();
+        let last_command = harness.get_by_label("/rank").rect();
+        let model = harness.get_by_label("By model").rect();
+        assert!(model.top() > last_command.bottom(), "By model sits under the By command table");
+        assert!((model.left() - harness.get_by_label("By command").rect().left()).abs() < 1.0);
     }
 }

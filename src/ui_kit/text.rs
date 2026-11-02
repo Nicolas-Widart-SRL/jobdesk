@@ -293,8 +293,8 @@ fn comments_hidden(ui: &mut Ui, html: &str) {
 }
 
 /// A message as a document: one readable column that never grows past the space it has, with headings held to the
-/// section size. A top-level table leaves the column and scrolls only past the whole width. One of two or more columns
-/// fills that width, and one of a single column keeps the width of its cells.
+/// section size. A top-level table leaves the column and scrolls only past the whole width. A table of two or more columns
+/// fills that width, and a table of a single column keeps the width of its cells.
 /// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
     document_with(ui, cache, text, markdown);

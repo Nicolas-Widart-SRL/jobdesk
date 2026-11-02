@@ -40,3 +40,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 25 `ARCHITECTURE.md`: Save's unchanged-block check read as a compare-and-swap, though another program can write the file between the check and the rename. Class: copy claims more than the data.
 - PR 25 `src/profile/infrastructure/profile_files.rs`: every save used one fixed copy path and removed a copy found there as stale, so a second Jobdesk saving the same file at once could remove the first save's copy and have its own renamed in, losing the first text while it reported Saved. Class: state over time.
 - PR 27 `.github/workflows/miri.yml`: a rust-cache step on a weekly nightly job saved entries the next run could not reuse (step since removed). Class: state over time.
+- PR 28 `docs/guide.md`: "One of two or more columns" reads as one column out of many; say "a table of two or more columns". Class: ambiguous wording.

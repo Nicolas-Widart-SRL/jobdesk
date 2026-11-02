@@ -4,9 +4,9 @@ use std::sync::Arc;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
-use crate::shared_kernel::placeholders::{blank_words, placeholder_spans};
+use crate::shared_kernel::placeholders::{blank_words, placeholder_spans, template_lines};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
@@ -213,9 +213,10 @@ fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: Option<A
     let before = ui.ctx().output(|output| output.commands.len());
     let shown = blanks.is_some();
     // The hook has to own what it reads, so it holds its own handle on the words.
-    let blank = move |ui: &mut Ui, index: &str, _inline: bool| {
+    let blank = move |ui: &mut Ui, name: &str, _inline: bool| {
+        let (index, level) = name.split_once('h').map_or((name, None), |(index, level)| (index, level.parse::<usize>().ok()));
         if let Some(words) = index.parse::<usize>().ok().and_then(|index| blanks.as_ref()?.get(index)) {
-            show_blank(ui, words);
+            show_blank(ui, words, level);
         }
     };
     let viewer = if shown { CommonMarkViewer::new().render_math_fn(Some(&blank)) } else { CommonMarkViewer::new() };
@@ -460,12 +461,21 @@ impl egui::cache::ComputerMut<&str, Arc<Blanked>> for Blanks {
 
 type BlanksCache = egui::cache::FrameCache<Arc<Blanked>, Blanks>;
 
-/// One blank in a sentence, at the size of the body text around it.
-fn show_blank(ui: &mut Ui, words: &str) {
-    let size = ui.style().text_styles.get(&TextStyle::Body).map_or(Type::BODY.size, |font| font.size);
+/// One blank in a sentence, at the size of the text around it: the body's, or in a heading of `level`, the heading's.
+fn show_blank(ui: &mut Ui, words: &str, level: Option<usize>) {
+    let size_of = |style: &TextStyle, fallback: f32| ui.style().text_styles.get(style).map_or(fallback, |font| font.size);
+    let (body, heading) = (size_of(&TextStyle::Body, Type::BODY.size), size_of(&TextStyle::Heading, Type::H1.size));
+    let size = level.map_or(body, |level| heading_size(body, heading, level));
     let mut job = LayoutJob::default();
     job.append(words, 0.0, blank_mark(ui, size));
     add_job(ui, job, TextWrapMode::Wrap);
+}
+
+/// The size egui_commonmark gives a heading of `level`, from 1 to 6: the heading style's at 1, stepping down toward the
+/// body's.
+fn heading_size(body: f32, heading: f32, level: usize) -> f32 {
+    const SHARE: [f32; 6] = [1.0, 0.835, 0.668, 0.501, 0.334, 0.167];
+    body + (heading - body) * SHARE[level.clamp(1, 6) - 1]
 }
 
 /// One plain line in `style` and `ink`, with each placeholder in it laid out as a blank, for text that is never Markdown,
@@ -490,51 +500,81 @@ fn escaped_at(text: &str, at: usize) -> bool {
     text[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
 }
 
-/// Markdown with each placeholder that `placeholder_spans` finds, and that reads as text, swapped for an inline math
-/// span holding the index of its words. egui_commonmark has no hook for an inline format, and inline math is the one
-/// inline it hands back, to `render`. Every dollar sign the text itself had is escaped first, so no text of its own can
-/// reach that hook. A placeholder in code, HTML, an image, a link's text or destination, an autolink or a reference
-/// definition, or after an escape, is not text: it stays as written, so the counter's every token still shows.
-fn with_blanks(text: &str) -> Blanked {
-    if !text.contains(['[', '$']) {
-        return Blanked { text: text.to_owned(), words: Arc::new([]) };
-    }
-    let mut prose: Vec<std::ops::Range<usize>> = Vec::new();
-    let (mut in_code, mut in_image, mut in_link) = (false, 0, 0);
-    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => in_code = true,
-            Event::End(TagEnd::CodeBlock) => in_code = false,
-            Event::Start(Tag::Image { .. }) => in_image += 1,
-            Event::End(TagEnd::Image) => in_image -= 1,
-            Event::Start(Tag::Link { .. }) => in_link += 1,
-            Event::End(TagEnd::Link) => in_link -= 1,
-            Event::Text(_) if !in_code && in_image == 0 && in_link == 0 => prose.push(range),
-            _ => {}
-        }
-    }
-    // Brackets that form no link reach the viewer as text events of their own, so neighbours merge into one run.
-    prose.sort_by_key(|range| range.start);
+/// Ranges merged where they touch or overlap, in order.
+fn merged(mut ranges: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
+    ranges.sort_by_key(|range| range.start);
     let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
-    for range in prose {
+    for range in ranges {
         match runs.last_mut() {
             Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
             _ => runs.push(range),
         }
     }
-    let in_text = |span: &std::ops::Range<usize>| runs.iter().any(|run| run.start <= span.start && span.end <= run.end);
-    let mut blanks = placeholder_spans(text).into_iter().filter(|span| in_text(span) && !escaped_at(text, span.start)).peekable();
+    runs
+}
+
+/// Markdown with each placeholder that `placeholder_spans` finds, and that reads as text, swapped for an inline math
+/// span that names its words, and its heading level inside a heading: `$0$`, or `$0h2$`. egui_commonmark has no hook
+/// for an inline format, and inline math is the one inline it hands back, to `render`. Every dollar sign the text itself
+/// had is escaped first, wherever the viewer reads it as inline text, link text and image alt included, so no text of
+/// its own can reach that hook. A placeholder in code, HTML, an image, a link's text or after an escape stays as written,
+/// so the counter's every token still shows. A reference definition labelled with a token, such as
+/// `- [SECTOR_1]: [EXAMPLE_COMPANIES]`, is a template line: its colon is escaped so the viewer shows it as text.
+fn with_blanks(text: &str) -> Blanked {
+    if !text.contains(['[', '$']) {
+        return Blanked { text: text.to_owned(), words: Arc::new([]) };
+    }
+    let lines = template_lines(text);
+    let (mut prose, mut inline): (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) = (Vec::new(), Vec::new());
+    let mut headings: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+    let (mut in_code, mut in_image, mut in_link, mut in_autolink) = (false, 0, 0, false);
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Start(Tag::Heading { level, .. }) => headings.push((range, level as usize)),
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image -= 1,
+            Event::Start(Tag::Link { link_type, .. }) => {
+                in_link += 1;
+                // An autolink's text is its address, which no escape may change, and it holds no link of its own.
+                in_autolink = matches!(link_type, LinkType::Autolink | LinkType::Email);
+            }
+            Event::End(TagEnd::Link) => {
+                in_link -= 1;
+                in_autolink = false;
+            }
+            Event::Text(_) if !in_code && !in_autolink => {
+                if in_image == 0 && in_link == 0 {
+                    prose.push(range.clone());
+                }
+                inline.push(range);
+            }
+            _ => {}
+        }
+    }
+    prose.extend(lines.iter().map(|(span, _)| span.clone()));
+    inline.extend(lines.iter().map(|(span, _)| span.clone()));
+    // Brackets that form no link reach the viewer as text events of their own, so neighbours merge into one run.
+    let (prose, inline) = (merged(prose), merged(inline));
+    let within = |runs: &[std::ops::Range<usize>], span: &std::ops::Range<usize>| runs.iter().any(|run| run.start <= span.start && span.end <= run.end);
+    let mut blanks = placeholder_spans(text).into_iter().filter(|span| within(&prose, span) && !escaped_at(text, span.start)).peekable();
+    let mut colons = lines.iter().map(|(_, colon)| *colon).peekable();
     let (mut out, mut words) = (String::with_capacity(text.len()), Vec::new());
     let mut at = 0;
     while let Some(c) = text[at..].chars().next() {
         if let Some(span) = blanks.next_if(|span| span.start == at) {
-            out.push_str(&format!("${}$", words.len()));
+            match headings.iter().find(|(heading, _)| heading.contains(&at)) {
+                Some((_, level)) => out.push_str(&format!("${}h{level}$", words.len())),
+                None => out.push_str(&format!("${}$", words.len())),
+            }
             words.push(blank_words(&text[span.clone()]));
             at = span.end;
             continue;
         }
         let next = at + c.len_utf8();
-        if c == '$' && in_text(&(at..next)) && !escaped_at(text, at) {
+        let colon = colons.next_if(|colon| *colon == at).is_some();
+        if colon || c == '$' && within(&inline, &(at..next)) && !escaped_at(text, at) {
             out.push('\\');
         }
         out.push(c);
@@ -882,7 +922,7 @@ mod tests {
     fn placeholders_read_as_blanks() {
         assert_eq!(rewritten("Name: [FIRST_NAME] [LAST_NAME]"), ("Name: $0$ $1$".to_owned(), words(&["to fill: first name", "to fill: last name"])));
         assert_eq!(rewritten("- Budget you owned: [PLACEHOLDER]"), ("- Budget you owned: $0$".to_owned(), words(&["to fill"])));
-        assert_eq!(rewritten("### Role - [COMPANY] ([DATES])"), ("### Role - $0$ ($1$)".to_owned(), words(&["to fill: company", "to fill: dates"])));
+        assert_eq!(rewritten("### Role - [COMPANY] ([DATES])"), ("### Role - $0h3$ ($1h3$)".to_owned(), words(&["to fill: company", "to fill: dates"])));
         assert_eq!(rewritten("Bracketed [[NAME]] and a[0], [x], [AB], [Note], - [ ] task").0, "Bracketed [$0$] and a[0], [x], [AB], [Note], - [ ] task");
         assert_eq!(rewritten("Use the ` key for [FIRST_NAME]."), ("Use the ` key for $0$.".to_owned(), words(&["to fill: first name"])));
         assert_eq!(rewritten("Owner: `[NAME]").0, "Owner: `$0$");
@@ -911,9 +951,7 @@ mod tests {
             "```\n[YOUR_CITY]\n```",
             "[LINK](https://x.example/a) and [REF][r]\n\n[r]: https://x.example/b",
             "[[NAME]](https://x.example/a) and [the [COMPANY] page](https://x.example/b)",
-            "[s](https://x.example/[PATH])",
             "<https://x.example/[PATH]>",
-            "[NAME]: https://x.example/c\n\nSee [the page][NAME].",
             "\\[NAME] is escaped",
             "<div>\n[NAME]\n</div>",
             "![badge [NAME]](https://x.example/b.png)",
@@ -943,11 +981,88 @@ mod tests {
             ("```\n[YOUR_CITY]\n```", 1, 0, "[YOUR_CITY]"),
             ("Open [[NAME]](https://x.example) now.", 1, 0, "[NAME]"),
             ("Pay [AMOUNT]5 and [LEVEL, e.g. \"Native\"]", 2, 2, ""),
+            ("- [SECTOR_1]: [EXAMPLE_COMPANIES]", 2, 2, ""),
+            ("[SECTOR_1]: [EXAMPLE_COMPANIES]", 1, 1, "SECTOR_1"),
         ] {
             assert_eq!(crate::shared_kernel::placeholders::placeholder_count(source), count, "{source}");
             let labels = labels_with_blanks(source);
             assert_eq!(labels.iter().filter(|label| label.starts_with("to fill")).count(), blanks, "{source}: {labels:?}");
             assert!(raw.is_empty() || !painted(blanked, source, raw).is_empty(), "{source} hides {raw}");
+        }
+    }
+
+    /// A placeholder the viewer would hide, in a link's destination, a reference link's label or a definition, is not
+    /// counted, so the paper owes it nothing.
+    #[test]
+    fn link_syntax_holds_no_placeholder() {
+        for source in [
+            "[LinkedIn](https://linkedin.com/in/[YOUR_HANDLE])",
+            "See [the page][NAME].\n\n[NAME]: https://x.example/c",
+            "[s](https://x.example/[PATH])",
+            "![logo](https://x.example/[LOGO_FILE].png)",
+            "[r]: https://x.example/[PATH]\n\nSee [r].",
+        ] {
+            assert_eq!(crate::shared_kernel::placeholders::placeholder_count(source), 0, "{source}");
+            assert_eq!(rewritten(source), (source.to_owned(), Vec::new()));
+            assert!(labels_with_blanks(source).iter().all(|label| !label.starts_with("to fill")), "{source}");
+        }
+    }
+
+    /// Every painted text in order, joined, when `source` renders through `render`, and how many blanks it drew.
+    fn shown_text(render: Render, source: &'static str) -> (String, usize) {
+        let ink = Palette::for_theme(egui::Theme::Dark).interview;
+        let shown = painted(render, source, "");
+        let blanks = shown.iter().filter(|(color, ..)| *color == ink).count();
+        let found = Rc::new(RefCell::new(String::new()));
+        let seen = Rc::clone(&found);
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([800.0, 600.0]).with_context_setup(setup).build_ui(move |ui| {
+            render(ui, &mut cache, source);
+            let layer = ui.layer_id();
+            *seen.borrow_mut() = ui.ctx().graphics(|layers| {
+                layers.get(layer).map_or(String::new(), |list| {
+                    list.all_entries().filter_map(|clipped| if let egui::Shape::Text(shape) = &clipped.shape { Some(shape.galley.job.text.clone()) } else { None }).collect()
+                })
+            });
+        });
+        harness.run();
+        (found.take(), blanks)
+    }
+
+    /// No dollar sign of the text's own reaches the blank hook, wherever it sits, so none of its words are lost.
+    #[test]
+    fn the_viewer_keeps_every_dollar_sign() {
+        let cases: [(&'static str, &[&str], usize); 4] = [
+            ("[Salary guide $100k-$150k](https://x.example)", &["$100k-$150k"], 0),
+            ("[FIRST_NAME] and [see $0$](https://x.example)", &["see $0$"], 1),
+            ("# Pay $1$ a day\n\n| Rate |\n|---|\n| $2$ |\n\n> Quote $3$ here\n\n- Item $4$ there\n\n![alt $5$ text](https://x.example/a.png)", &["$1$", "$2$", "$3$", "$4$", "$5$"], 0),
+            ("Term\n: Defined $6$ here[^n]\n\n[^n]: Note $7$ end", &["$6$", "$7$"], 0),
+        ];
+        for render in [blanked as Render, blanked_document] {
+            for (source, kept, blanks) in cases {
+                let (text, drawn) = shown_text(render, source);
+                for words in kept {
+                    assert!(text.contains(words), "{source} lost {words}: {text:?}");
+                }
+                assert_eq!(drawn, blanks, "{source}");
+            }
+        }
+    }
+
+    /// A blank in a heading takes the heading's size, as it would in a sentence.
+    #[test]
+    fn a_blank_in_a_heading_takes_its_size() {
+        for (source, words) in [("## Goals [GOAL_NAME]", "Goals"), ("### Lead - [COMPANY]", "Lead"), ("# Name [FIRST_NAME]", "Name")] {
+            for render in [blanked as Render, blanked_document] {
+                let heading = painted(render, source, words);
+                let blank = painted(render, source, "to fill");
+                assert_eq!(blank.len(), 1, "{source}");
+                assert!((blank[0].2 - heading[0].2).abs() < 0.01, "{source}: the blank is {} px, the heading {} px", blank[0].2, heading[0].2);
+            }
         }
     }
 

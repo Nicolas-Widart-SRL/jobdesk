@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown;
 
@@ -15,13 +15,17 @@ pub fn placeholder_count(text: &str) -> usize {
 /// A name of one word has three letters or more and no digit, so `[B2]`, `[EU]` and `[AB12]` are the user's own words.
 /// The name may be followed by a hint up to the closing bracket: `[CONTEXT - what was happening]` or `[LEVEL, e.g. "Native"]`.
 /// A link or reference (`[API](url)`, `[API][ref]`, `[API]: url`), an array index or option (`a[0]`, `\usepackage[T1]`),
-/// a lower-case bracket and a one-word name in a code span or a fenced block (`[DEFAULT]`) are not tokens.
+/// a lower-case bracket and a one-word name in a code span or a fenced block (`[DEFAULT]`) are not tokens. Nor is a name
+/// that the viewer never shows as written: in a link's or image's destination (`[me](https://x.example/in/[HANDLE])`),
+/// in a reference link's label (`[the page][NAME]`) or in a reference definition. A definition whose own label is a token
+/// is a template line, not a definition (`template_lines`), so its tokens count.
 /// A name with `_` or spaces counts in code too, because the templates keep blanks like `[YOUR_CITY]` in their example queries and LaTeX.
 pub fn placeholder_spans(text: &str) -> Vec<Range<usize>> {
     let code = code_ranges(text);
+    let unseen = link_syntax(text);
     let mut spans: Vec<Range<usize>> = Vec::new();
     for (start, _) in text.match_indices('[') {
-        if spans.last().is_some_and(|last| start < last.end) {
+        if spans.last().is_some_and(|last| start < last.end) || unseen.iter().any(|range| range.contains(&start)) {
             continue;
         }
         let in_code = code.iter().any(|range| range.contains(&start));
@@ -46,6 +50,73 @@ fn code_ranges(text: &str) -> Vec<Range<usize>> {
             _ => None,
         })
         .collect()
+}
+
+/// The parts of links, images and reference definitions that the viewer does not show as written: everything after a
+/// link's or image's text, such as `](url)` or `][label]`, and each reference definition whole.
+fn link_syntax(text: &str) -> Vec<Range<usize>> {
+    if !text.contains("](") && !text.contains("][") && !text.contains("]:") {
+        return Vec::new();
+    }
+    let parser = Parser::new_ext(text, markdown::options());
+    let mut unseen: Vec<Range<usize>> = definitions(text, &parser).into_iter().filter(|definition| !definition.template).map(|definition| definition.span).collect();
+    // Each open link or image: where its text has reached so far.
+    let mut open: Vec<usize> = Vec::new();
+    for (event, range) in parser.into_offset_iter() {
+        match event {
+            Event::Start(Tag::Link { .. }) => open.push(range.start + 1),
+            Event::Start(Tag::Image { .. }) => open.push(range.start + 2),
+            Event::End(TagEnd::Link | TagEnd::Image) => {
+                if let Some(text_end) = open.pop() {
+                    unseen.push(text_end.min(range.end)..range.end);
+                    if let Some(outer) = open.last_mut() {
+                        *outer = (*outer).max(range.end);
+                    }
+                }
+            }
+            _ => {
+                if let Some(text_end) = open.last_mut() {
+                    *text_end = (*text_end).max(range.end);
+                }
+            }
+        }
+    }
+    unseen
+}
+
+/// A reference definition in `text`: its span, where the colon after its label sits, and whether it is a template line.
+struct Definition {
+    span: Range<usize>,
+    colon: usize,
+    template: bool,
+}
+
+/// Each reference definition in `text`, in order. One is a template line when its label is a token and it points at no
+/// address, such as `[SECTOR_1]: [EXAMPLE_COMPANIES]`, where `[NAME]: https://x.example` stays a definition.
+fn definitions(text: &str, parser: &Parser) -> Vec<Definition> {
+    let mut found: Vec<_> = parser
+        .reference_definitions()
+        .iter()
+        .filter_map(|(_, definition)| {
+            let span = definition.span.clone();
+            let colon = span.start + text[span.clone()].find("]:")? + 1;
+            let label = &text[text[..colon].rfind('[')? + 1..colon - 1];
+            let address = definition.dest.contains(':') || definition.dest.starts_with(['/', '#', '.']);
+            Some(Definition { span, colon, template: !label.is_empty() && name_len(label) == label.len() && !address })
+        })
+        .collect();
+    found.sort_by_key(|definition| definition.span.start);
+    found
+}
+
+/// The reference definitions that are template lines, such as `- [SECTOR_1]: [EXAMPLE_COMPANIES]`, each with where its
+/// colon sits. The viewer would draw nothing for them, so a screen that shows their tokens breaks them at the colon.
+pub fn template_lines(text: &str) -> Vec<(Range<usize>, usize)> {
+    if !text.contains("]:") {
+        return Vec::new();
+    }
+    let parser = Parser::new_ext(text, markdown::options());
+    definitions(text, &parser).into_iter().filter(|definition| definition.template).map(|definition| (definition.span, definition.colon)).collect()
 }
 
 /// Where the token that opens at `start` ends, just after its closing bracket, and whether its name is a single plain word such as `DEFAULT`.
@@ -141,7 +212,7 @@ fn matching_close(text: &str, from: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{blank_words, placeholder_count, placeholder_spans, token_name};
+    use super::{blank_words, placeholder_count, placeholder_spans, template_lines, token_name};
 
     fn found(text: &str) -> Vec<&str> {
         placeholder_spans(text).into_iter().map(|span| &text[span]).collect()
@@ -210,6 +281,23 @@ mod tests {
         assert_eq!(placeholder_count("see [REF]: later"), 1);
         assert_eq!(placeholder_count("- [ ] task\n- [x] done\n- [X] done"), 0);
         assert_eq!(placeholder_count(r"\usepackage[T1]{fontenc} a[BC]"), 0);
+    }
+
+    #[test]
+    fn a_token_the_viewer_hides_in_link_syntax_is_not_counted() {
+        assert_eq!(placeholder_count("[LinkedIn](https://linkedin.com/in/[YOUR_HANDLE])"), 0);
+        assert_eq!(placeholder_count("![logo](https://x.example/[LOGO_FILE].png)"), 0);
+        assert_eq!(placeholder_count("See [the page][NAME].\n\n[NAME]: https://x.example/c"), 0);
+        assert_eq!(placeholder_count("[r]: https://x.example/[PATH]\n\nSee [r]."), 0);
+        // The link's own text still shows, so a token there counts.
+        assert_eq!(placeholder_count("[[YOUR_NAME]](https://x.example/[YOUR_HANDLE])"), 1);
+    }
+
+    #[test]
+    fn a_definition_labelled_with_a_token_is_a_template_line() {
+        assert_eq!(found("- [SECTOR_1]: [EXAMPLE_COMPANIES]"), ["[SECTOR_1]", "[EXAMPLE_COMPANIES]"]);
+        assert_eq!(found("[SECTOR_1]: [EXAMPLE_COMPANIES]"), ["[EXAMPLE_COMPANIES]"]);
+        assert_eq!(template_lines("- [SECTOR_1]: [EXAMPLE_COMPANIES]\n[NAME]: https://x.example\n"), [(2..33, 12)]);
     }
 
     #[test]

@@ -22,21 +22,46 @@ pub fn topic_fill(blocks: &[&str], readable: bool) -> Fill {
     if !blocks.iter().any(|block| has_writing(block)) {
         return Fill::NotStarted;
     }
-    match blocks.iter().map(|block| placeholder_count(block)).sum() {
+    match blocks.iter().map(|block| open_placeholders(block)).sum() {
         0 => Fill::Filled,
         left => Fill::ToFill(left),
     }
 }
 
-/// Whether a block holds a line the user wrote: one with words and no placeholder.
+/// The setup tokens left in a block. A token in a comment is a hint, so it does not count.
+pub fn open_placeholders(block: &str) -> usize {
+    placeholder_count(&without_comments(block))
+}
+
+/// Words a template puts between its tokens, as in `[DEGREE_LEVEL] in [FIELD]`.
+const GLUE: [&str; 12] = ["in", "at", "of", "and", "or", "to", "from", "for", "the", "a", "an", "with"];
+
+/// Whether a block holds a line the user wrote: one with words that are not a label, a token or the glue between tokens.
 /// A heading, a comment, a label with nothing after it, and a table's header, rule and border carry no writing.
 fn has_writing(block: &str) -> bool {
     let text = without_comments(block);
     let lines = lines_with_endings(&text);
     lines.iter().enumerate().any(|(at, line)| {
         let header = line.contains('|') && lines.get(at + 1).is_some_and(|next| is_table_rule(next));
-        is_content(line) && !is_label_only(line) && !header && placeholder_spans(line).is_empty()
+        !header && is_writing(line)
     })
+}
+
+/// A line with a token counts when words of the user's own stand beside it, such as `Ada [LAST_NAME]`.
+fn is_writing(line: &str) -> bool {
+    if !is_content(line) || is_label_only(line) {
+        return false;
+    }
+    let spans = placeholder_spans(line);
+    if spans.is_empty() {
+        return true;
+    }
+    let mut rest = line.to_owned();
+    for span in spans.into_iter().rev() {
+        rest.replace_range(span, " ");
+    }
+    let words = rest.split_once(':').map_or(rest.as_str(), |(_, after)| after);
+    words.split(|c: char| !c.is_alphanumeric()).any(|word| !word.is_empty() && !GLUE.contains(&word.to_lowercase().as_str()))
 }
 
 fn without_comments(text: &str) -> String {
@@ -134,6 +159,22 @@ mod tests {
         assert_eq!(topic_fill(&[lone], true), Fill::NotStarted);
         let lone_written = "### Identity\r- **Languages:** English\r";
         assert_eq!(topic_fill(&[lone_written], true), Fill::Filled);
+    }
+
+    #[test]
+    fn a_line_with_the_users_words_and_a_token_is_writing() {
+        let typed = "### Identity\n<!-- hint -->\n- **Name:** Ada [LAST_NAME]\n- **Languages:**\n";
+        assert_eq!(topic_fill(&[typed], true), Fill::ToFill(1));
+        let pristine = "### Identity\n<!-- hint -->\n- **Name:** [YOUR_NAME]\n- **[DEGREE_LEVEL] in [FIELD]** at [SCHOOL]\n- [ACHIEVEMENT]\n";
+        assert_eq!(topic_fill(&[pristine], true), Fill::NotStarted);
+    }
+
+    #[test]
+    fn a_token_in_a_comment_is_not_counted() {
+        let text = "### Identity\n<!-- Format: [CITY], [COUNTRY] -->\nLisbon, Portugal\n";
+        assert_eq!(topic_fill(&[text], true), Fill::Filled);
+        assert_eq!(open_placeholders(text), 0);
+        assert_eq!(open_placeholders("a [CITY]\n<!--\n[X_Y]\n-->\n"), 1);
     }
 
     #[test]

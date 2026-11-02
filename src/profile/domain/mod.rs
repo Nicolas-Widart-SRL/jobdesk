@@ -3,7 +3,7 @@ mod fill;
 mod topic;
 
 pub use document::{Block, BlockKey, RoleHeading, blocks, find, heading_len, heading_matches, insert_at, replace, role_heading, section_blocks, select};
-pub use fill::{Fill, SaveCheck, blank_words, check, topic_fill};
+pub use fill::{Fill, SaveCheck, blank_words, check, open_placeholders, topic_fill};
 pub use topic::{CLAUDE_PROFILE, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec};
 
 use crate::shared_kernel::LoadError;

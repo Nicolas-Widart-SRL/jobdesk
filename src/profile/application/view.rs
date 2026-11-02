@@ -1,6 +1,5 @@
-use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill};
+use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, open_placeholders, role_heading, select, topic_fill};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::placeholders::placeholder_count;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileView {
@@ -150,7 +149,7 @@ fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> B
         text: full.to_owned(),
         body: text[body_start..own_end].trim().to_owned(),
         role,
-        placeholders: placeholder_count(full),
+        placeholders: open_placeholders(full),
     }
 }
 
@@ -237,6 +236,14 @@ mod tests {
         assert_eq!(how.sections.len(), 1);
         assert_eq!(how.sections[0].block.heading, "Working Style");
         assert_eq!(how.fill, Fill::NotStarted);
+    }
+
+    #[test]
+    fn the_count_and_the_fill_agree_on_comments() {
+        let view = view_of(&[(ProfileFile::Candidate, "## Identity\n<!-- Format: [CITY], [COUNTRY] -->\nLisbon, Portugal\n")]);
+        let identity = topic(&view, TopicId::Identity);
+        assert_eq!(identity.sections[0].block.placeholders, 0);
+        assert_eq!(identity.fill, Fill::Filled);
     }
 
     #[test]

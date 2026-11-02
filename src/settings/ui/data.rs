@@ -14,8 +14,9 @@ const NO_DATA: &str = "Jobdesk has no data folder on this computer.";
 const NOTHING_KEPT: &str = "Nothing is kept yet.";
 const NO_FOLDER: &str = "Choose a folder first.";
 const NO_DECISIONS: &str = "No decisions to clear.";
-/// Why Clear tray decisions waits while the tray could not be read: clearing would overwrite a file Jobdesk cannot read.
-const UNREAD: &str = "Today's decisions could not be read.";
+/// Why Clear tray decisions waits while the tray has an issue: its file could not be read, and clearing would overwrite it,
+/// or its last save failed.
+const UNREAD: &str = "Today's decisions are not available.";
 const CLEAR_NOTE: &str = "Today deals every card again, the ones you skipped too. This cannot be undone.";
 
 /// What the page shows of the data folder, as the shell read it.
@@ -24,7 +25,7 @@ pub struct DataView<'a> {
     /// The data folder as the user reads it, if there is one.
     pub folder: Option<&'a str>,
     pub sizes: Option<DataSizes>,
-    /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read.
+    /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read or saved.
     pub decisions: Option<usize>,
     /// Whether a job search folder is open, which decides why Clear tray decisions waits.
     pub workspace_open: bool,

@@ -158,7 +158,7 @@ const DEFAULTS: [&str; 12] = [
     "Monthly cap",
     "Stop at",
     "a month",
-    "Once this month's tasks cost that much, Run in the launcher is disabled until the 1st and says why. A task that is running finishes.",
+    "Once the open folder's tasks cost that much this month, Run in the launcher is disabled until the 1st and says why. A task that is running finishes.",
 ];
 
 /// The two choices, the two rows that hold either way, then the line on what allowing costs.
@@ -174,7 +174,7 @@ const PERMISSIONS: [&str; 12] = [
     "A question Claude asks you always reaches you, as Your turn on Today and Tasks.",
     "Remembered rules",
     "A tool you allow for the rest of a task stays allowed only until that task ends. It is never saved to your job search folder.",
-    "Allowing every tool means a posting written to trick Claude could get a command run before you see it. Jobdesk checks postings for hidden instructions before it scores them.",
+    "Allowing every tool means a posting written to trick Claude could get a command run before you see it. The commands in your job search folder check postings with posting_guard before they score them.",
 ];
 
 /// The data folder's section, the run logs', the tray's, then the line on who can read them.
@@ -188,7 +188,7 @@ const DATA: [&str; 11] = [
     "Each log holds the whole text of a task, postings and your replies included. Forever keeps them all. A shorter time deletes older ones when Jobdesk starts. Usage statistics count only the logs kept.",
     "Tray decisions",
     "Clear tray decisions",
-    "Forgets every decision and skip reason on Today, so Today deals those cards again. Run logs stay.",
+    "Forgets this folder's decisions and skip reasons on Today, so Today deals those cards again. Other folders keep theirs, and run logs stay.",
     "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
 ];
 

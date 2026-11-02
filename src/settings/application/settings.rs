@@ -426,8 +426,8 @@ mod tests {
     #[test]
     fn a_search_counts_lines_per_page() {
         let hits = search("FOLDER", true).unwrap();
-        assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Permissions, 1), (Page::Runtime, 1), (Page::Data, 3)]);
-        assert_eq!(hits.total, 8);
+        assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Defaults, 1), (Page::Permissions, 2), (Page::Runtime, 1), (Page::Data, 4)]);
+        assert_eq!(hits.total, 11);
         let spend = search("spend", true).unwrap();
         assert_eq!(spend.pages, vec![(Page::Defaults, 1)]);
     }

@@ -77,7 +77,7 @@ pub struct SettingsView<'a> {
     pub data: Option<&'a str>,
     /// What the data folder holds, once measured.
     pub sizes: Option<DataSizes>,
-    /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read.
+    /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read or saved.
     pub decisions: Option<usize>,
     /// This copy's version, and Claude Code's as the tool check knows it.
     pub version: &'a str,
@@ -654,10 +654,12 @@ mod tests {
         state.borrow_mut().screen.query = "folder".to_owned();
         let mut harness = harness(state.clone());
         harness.run();
-        // General and Data and privacy match three times, Permissions and Runtime status once.
-        assert_eq!(harness.query_all_by_label("3 matches").count(), 2);
+        // Data and privacy matches four times, General three, Permissions twice, Run defaults and Runtime status once.
+        assert_eq!(harness.query_all_by_label("4 matches").count(), 1);
+        assert_eq!(harness.query_all_by_label("3 matches").count(), 1);
+        assert_eq!(harness.query_all_by_label("2 matches").count(), 1);
         assert_eq!(harness.query_all_by_label("1 match").count(), 2);
-        harness.get_by_label("8 settings match. Esc clears the search.");
+        harness.get_by_label("11 settings match. Esc clears the search.");
         assert!(harness.query_by_label("Appearance").is_none());
         assert!(harness.query_by_label("Usage statistics").is_none());
         assert_eq!(state.borrow().screen.page, Page::General, "the open page had no hit");
@@ -851,7 +853,7 @@ mod tests {
 
         state.borrow_mut().decisions = None;
         harness.run();
-        waits_because(&mut harness, "Today's decisions could not be read.");
+        waits_because(&mut harness, "Today's decisions are not available.");
         assert!(harness.query_by_label("No decisions to clear.").is_none(), "a tray that could not be read is not an empty one");
         clear_button(&harness).click();
         harness.run();

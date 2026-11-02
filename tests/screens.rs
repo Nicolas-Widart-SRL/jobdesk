@@ -1412,7 +1412,7 @@ fn esc_clears_the_search_then_leaves_the_field_then_closes_settings() {
     search(&harness).focus();
     search(&harness).type_text("folder");
     harness.run_steps(3);
-    assert!(is_shown(&harness, "8 settings match. Esc clears the search."));
+    assert!(is_shown(&harness, "11 settings match. Esc clears the search."));
     assert!(search(&harness).is_focused(), "the field keeps the focus once Clear shows beside it");
 
     press(&mut harness, Key::Escape);
@@ -3278,6 +3278,52 @@ fn run_waits_while_the_months_spend_is_read() {
     assert!(!harness.get_by_label("Run").accesskit_node().is_disabled(), "under the cap once read");
 }
 
+/// A task that ends leaves its cost in a log the snapshot has not read yet. Until a snapshot read after its end arrives,
+/// the month's spend is unknown, so Run waits and Cmd Enter starts nothing, even when the old totals are under the cap.
+#[test]
+fn run_waits_for_the_spend_of_a_task_that_ended() {
+    let name = "launcher_cap_after_a_task";
+    let calls = SharedCalls::default();
+    let sink = SharedSink::default();
+    let mut shell = usage_shell_on(Screen::Launcher, name, usage_tasks());
+    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    shell.settings_mut().set_cap_on(true);
+    shell.settings_mut().set_cap_amount(Dollars::parse("60"));
+    let reloads = shell.reload_feed();
+    let feed = shell.snapshot_feed();
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let mut harness = tray_harness(shell);
+
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 19.20, duration_ms: 9_000 }]);
+    harness.run_steps(4);
+    assert!(reloads.try_recv().is_ok(), "the end of the task asks for a reload");
+    let held = |harness: &mut Harness<'static>| {
+        let run = harness.get_by_label("Run");
+        assert!(run.accesskit_node().is_disabled(), "the $41.20 read before the task no longer holds");
+        run.hover();
+        harness.run_steps(8);
+        assert!(is_shown(harness, "Run waits while this month's spend is read."));
+        assert!(!is_shown(harness, CAP_LINE), "nothing claims the cap is reached yet");
+        cmd_enter(harness);
+        assert_eq!(calls.lock().unwrap().starts, 1, "only the task that ended ever started");
+    };
+    held(&mut harness);
+
+    // A load already under way when the task ended still holds the old totals.
+    feed.send(usage_snapshot(&root, usage_tasks())).unwrap();
+    harness.run_steps(3);
+    held(&mut harness);
+
+    feed.send(Snapshot { usage_asked: 1, ..usage_snapshot(&root, over_the_cap()) }).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, CAP_LINE), "the read after the task shows the cap reached");
+    assert!(harness.get_by_label("Run").accesskit_node().is_disabled());
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1);
+}
+
 /// The cap holds back only new tasks: a reply to a live session continues a task already paid for.
 #[test]
 fn a_reached_cap_leaves_a_live_session_answering() {
@@ -3508,6 +3554,26 @@ fn copy_details_copies_the_versions() {
     harness.run_steps(3);
     let system = if cfg!(target_os = "macos") { "macOS" } else { "Windows" };
     assert_eq!(*copied.borrow(), [format!("Jobdesk 0.1.0\n{system} ({})\nClaude Code 2.1.4", std::env::consts::ARCH)]);
+}
+
+/// While the first tool check runs, About says Claude Code is being checked, never that it is missing.
+#[test]
+fn about_says_checking_until_the_tools_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let release = Arc::new(AtomicBool::new(false));
+    let mut shell = labelled(shell(Screen::InTray, "settings_about_checking"));
+    let mut checks = EnvironmentChecks::new(Arc::new(GatedTools(Arc::clone(&release))), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    shell.open_settings(Page::About);
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Checking…"));
+    assert!(!is_shown(&harness, "Not found"), "a check still running never reads as a missing program");
+
+    release.store(true, Ordering::SeqCst);
+    settle(&mut harness);
+    assert!(!is_shown(&harness, "Checking…"), "the answer replaces it");
+    assert!(!is_shown(&harness, "Not found"));
 }
 
 /// Settings on `page` over the usage fixture, with bun missing so Runtime status says "1 missing".

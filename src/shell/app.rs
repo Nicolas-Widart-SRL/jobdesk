@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -19,10 +19,13 @@ use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
-use crate::settings::application::{ClaudeVersion, DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check};
+use crate::settings::application::{
+    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check,
+};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
-use crate::shell::{Snapshot, Source, live_snapshot};
+use crate::shell::live_snapshot::{self, Reload};
+use crate::shell::{Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING,
@@ -95,7 +98,9 @@ pub struct Shell {
     loaded: bool,
     updates: Option<Receiver<Snapshot>>,
     /// Asks the snapshot worker to read again, because run logs change outside the checkout.
-    reload: Option<Sender<()>>,
+    reload: Option<Reload>,
+    /// The reload the last task's end asked for. Until a snapshot carries it, the month's spend misses that task's cost.
+    usage_due: u64,
     /// Whether a run was working on the last frame. A run that stops asks for a reload.
     was_busy: bool,
     jobs: JobsScreen,
@@ -148,6 +153,7 @@ impl Shell {
             loaded: false,
             updates: None,
             reload: None,
+            usage_due: 0,
             was_busy: false,
             jobs: JobsScreen::default(),
             tracker: TrackerScreen::default(),
@@ -251,7 +257,7 @@ impl Shell {
     /// Takes the reload requests the shell would send to the snapshot worker, for tests.
     pub fn reload_feed(&mut self) -> Receiver<()> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.reload = Some(sender);
+        self.reload = Some(Reload::new(sender));
         receiver
     }
 
@@ -332,6 +338,8 @@ impl Shell {
                 let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
                 self.updates = Some(updates);
                 self.reload = Some(reload);
+                // The new worker numbers its own asks, and reads every log first.
+                self.usage_due = 0;
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
                     let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()));
@@ -390,7 +398,7 @@ impl Shell {
         if self.was_busy && !busy {
             // The run that ended left its cost in its log. A closed worker has nothing to reload.
             if let Some(reload) = &self.reload {
-                let _ = reload.send(());
+                self.usage_due = reload.ask();
             }
             // And its log grew, so Data and privacy measures again.
             self.measure_data();
@@ -793,13 +801,13 @@ impl Shell {
                 }
             }
             Screen::Launcher => {
+                // The cap sums the month as Usage statistics does, and waits while the run logs are read.
+                let cap = self.cap();
                 if back_pressed(ui.ctx()) {
                     self.screen = self.launcher_from;
                     ui.ctx().request_repaint();
                 } else if let Some(desk) = &mut self.desk {
-                    // The cap sums the month as Usage statistics does, and waits while the run logs are read.
                     let preferences = self.settings.preferences();
-                    let cap = cap_check(&preferences.cap, snapshot.usage_read.then_some(&snapshot.usage), snapshot.today);
                     let rules = LaunchRules { defaults: &preferences.run_defaults, cap: &cap };
                     match self.launcher.show(ui, desk, &rules) {
                         Some(LauncherRequest::Started(id)) => {
@@ -818,6 +826,14 @@ impl Shell {
         } else if open_setup.get() {
             self.open_settings(Page::Runtime);
         }
+    }
+
+    /// The monthly cap against this month's spend. The spend is unknown until the run logs are read, and again from a task's
+    /// end until a snapshot read after it arrives, so a new task cannot start over the cap in between.
+    fn cap(&self) -> CapCheck {
+        let snapshot = &self.snapshot;
+        let usage = (snapshot.usage_read && snapshot.usage_asked >= self.usage_due).then_some(&snapshot.usage);
+        cap_check(&self.settings.preferences().cap, usage, snapshot.today)
     }
 
     /// Every source that could not be read. The tray reports its own file.
@@ -858,9 +874,9 @@ impl Shell {
             (Some(_), true) => UsageState::Read { report: &snapshot.usage, pipeline: &snapshot.pipeline, today: snapshot.today },
         };
         // The cap as the launcher checks it, so the rail says it is reached exactly when Run stops.
-        let cap = cap_check(&self.settings.preferences().cap, snapshot.usage_read.then_some(&snapshot.usage), snapshot.today);
+        let cap = self.cap();
         let data = self.data_label.clone().or_else(|| self.data.as_ref().map(|data| data.display().to_string()));
-        // Only the open folder's decisions can be cleared, and none from a tray that could not be read.
+        // Only the open folder's decisions can be cleared, and none from a tray that could not be read or saved.
         let decisions = self.tray.as_ref().filter(|tray| folder_open && tray.issue().is_none()).map(InTray::decision_count);
         // Until the first tool check answers, About says it is checking, as Runtime status does, never that Claude Code is missing.
         let checking = self.environment.as_ref().is_some_and(|environment| environment.results().is_none());

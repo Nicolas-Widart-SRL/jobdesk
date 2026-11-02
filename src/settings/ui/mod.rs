@@ -92,8 +92,10 @@ pub struct SettingsView<'a> {
     pub providers: &'a mut Providers,
     /// The newest task that said how it signed in, if any.
     pub last_task: Option<LastTask>,
-    /// A task is working, so Test connection waits.
+    /// A task's process is up, so Test connection waits.
     pub task_running: bool,
+    /// One of those tasks is working, not only waiting for a reply.
+    pub task_working: bool,
     /// The app's clock, for the ages Providers shows.
     pub now: NaiveDateTime,
 }
@@ -148,7 +150,8 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     match page {
         Page::Providers => {
             let last_task = view.last_task.as_ref();
-            let providers_view = ProvidersView { last_task, claude: view.claude, task_running: view.task_running, now: view.now };
+            let providers_view =
+                ProvidersView { last_task, claude: view.claude, task_running: view.task_running, task_working: view.task_working, now: view.now };
             let (state, settings, providers) = (&mut screen.providers, view.settings, view.providers);
             let (_, asked) =
                 settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| providers::body(ui, state, settings, providers, providers_view, &query));
@@ -564,6 +567,7 @@ mod tests {
                 providers: &mut state.providers,
                 last_task: state.last_task.clone(),
                 task_running: state.task_running,
+                task_working: state.task_running,
                 now: now(),
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
@@ -781,6 +785,7 @@ mod tests {
                 providers: &mut providers,
                 last_task: None,
                 task_running: false,
+                task_working: false,
                 now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
@@ -975,6 +980,7 @@ mod tests {
                 providers: &mut providers,
                 last_task: None,
                 task_running: false,
+                task_working: false,
                 now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
@@ -1193,6 +1199,7 @@ mod tests {
                 providers: &mut providers,
                 last_task: None,
                 task_running: false,
+                task_working: false,
                 now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});

@@ -1168,6 +1168,7 @@ impl Shell {
         let last_task = self.last_task();
         // Any task process still up counts, a session that waits on a reply included: one Claude process at a time.
         let task_running = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
+        let task_working = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         let now = self.now();
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
@@ -1193,6 +1194,7 @@ impl Shell {
                     providers: &mut self.providers,
                     last_task,
                     task_running,
+                    task_working,
                     now,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {

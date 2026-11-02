@@ -5235,14 +5235,16 @@ fn a_refused_keychain_write_still_empties_the_field() {
     assert_never_shown(&harness, FAKE_KEY);
 }
 
-/// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too.
+/// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too. Its
+/// reason says how to free it, as a working task's cannot.
 #[test]
 fn test_connection_waits_for_a_session_that_waits_on_a_reply() {
     let mut shell = sign_in_shell("providers_session_waits", idle_tester());
     *shell.desk_slot() = Some(tray_waiting_apply_run());
     let harness = tray_harness(shell);
     assert!(harness.get_by_label("Test connection").accesskit_node().is_disabled());
-    assert!(is_shown(&harness, "A task is running. Test once it ends."), "the reason shows without the pointer");
+    assert!(is_shown(&harness, "A task is still open. Reply or end it, then test."), "the reason shows without the pointer");
+    assert!(!is_shown(&harness, "A task is running. Test once it ends."), "nothing is working");
 }
 
 /// While Test connection runs, a reply that would start a new process waits and says why.
@@ -5315,6 +5317,19 @@ fn a_sign_in_test_names_a_key_from_the_environment() {
     harness.get_by_label("Test connection").click();
     harness.run_steps(4);
     assert!(is_shown(&harness, "Claude Code is not signed in."));
+
+    // Claude Code names an account signed in with /login this way: it is the Claude sign-in.
+    let mut harness = tray_harness(sign_in_shell("providers_login_key_pass", answering_from(Outcome::Passed, "ready", "/login managed key")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Passed"));
+    assert!(harness.query_by_label_contains("not your Claude sign-in").is_none(), "the pass is the sign-in's own");
+
+    let mut harness = tray_harness(sign_in_shell("providers_login_key_refused", answering_from(Outcome::Refused, "OAuth token expired", "/login managed key")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Claude Code is not signed in."), "/login mends it");
+    assert!(!is_shown(&harness, "Claude Code was refused with a sign-in it chose itself."));
 }
 
 /// Each way in is one control a screen reader names, with whether it is picked. Cloud providers says why it waits.

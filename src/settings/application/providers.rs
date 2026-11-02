@@ -10,6 +10,8 @@ use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 
 /// Why Test connection is off while a task runs: one Claude process at a time.
 pub const TASK_RUNNING: &str = "A task is running. Test once it ends.";
+/// Why Test connection is off while a task's process is up but only waits for the user's reply.
+pub const TASK_OPEN: &str = "A task is still open. Reply or end it, then test.";
 /// What Test connection reads while a test runs, and why a second one is refused.
 pub const TESTING: &str = "Testing…";
 const NOT_A_KEY: &str = "This is not a key. Paste the whole key, with nothing inside it but its own characters.";
@@ -328,13 +330,16 @@ pub fn age_words(at: NaiveDateTime, now: NaiveDateTime) -> String {
     }
 }
 
+/// The `apiKeySource` Claude Code gives for the account signed in with `/login`.
+const LOGIN_KEY: &str = "/login managed key";
+
 /// The CLI's `apiKeySource` in words. A value it does not name never reaches the screen as it is.
 /// `passed` is how Jobdesk started that process: only with `SignIn::ApiKey` did the key in its environment come from Jobdesk.
 /// Otherwise it came from the shell that started Jobdesk, and must not read as the key saved here.
 /// None is a process whose method is not known, such as a task read back from its log: a key then reads as no one's.
 pub fn sign_in_words(source: &str, passed: Option<SignIn>) -> &'static str {
     match (source, passed) {
-        ("" | "none", _) => "your Claude sign-in",
+        ("" | "none" | LOGIN_KEY, _) => "your Claude sign-in",
         ("ANTHROPIC_API_KEY", Some(SignIn::ApiKey)) => "your API key",
         ("ANTHROPIC_API_KEY", Some(SignIn::ClaudeSignIn)) => "an API key from your environment",
         ("ANTHROPIC_API_KEY", None) => "an API key",
@@ -344,7 +349,12 @@ pub fn sign_in_words(source: &str, passed: Option<SignIn>) -> &'static str {
 
 /// Whether `source` is Claude Code's own sign-in, as a test of it hopes: not a key it found in its environment.
 pub fn is_claude_sign_in(source: Option<&str>) -> bool {
-    matches!(source, None | Some("" | "none"))
+    matches!(source, None | Some("" | "none" | LOGIN_KEY))
+}
+
+/// Why Test connection waits for a task's process: one that works, or one that only waits for the user's reply.
+pub fn task_wait_reason(working: bool) -> &'static str {
+    if working { TASK_RUNNING } else { TASK_OPEN }
 }
 
 #[cfg(test)]
@@ -579,6 +589,7 @@ mod tests {
         assert_eq!(f.stored().as_deref(), Some(OTHER), "the key is still saved");
         assert_eq!(f.tester.calls(), 0);
         assert_eq!(TestGate::TaskRunning.reason(), Some(TASK_RUNNING));
+        assert_eq!((task_wait_reason(true), task_wait_reason(false)), (TASK_RUNNING, TASK_OPEN));
     }
 
     #[test]
@@ -731,7 +742,9 @@ mod tests {
             ("ANTHROPIC_API_KEY", sign_in, "an API key from your environment"),
             ("ANTHROPIC_API_KEY", None, "an API key"),
             ("apiKeyHelper", key, "a sign-in Claude Code chose itself"),
-            ("/login managed key", sign_in, "a sign-in Claude Code chose itself"),
+            ("/login managed key", sign_in, "your Claude sign-in"),
+            ("/login managed key", None, "your Claude sign-in"),
+            ("apiKeyHelper", None, "a sign-in Claude Code chose itself"),
             ("\u{202E}evil", None, "a sign-in Claude Code chose itself"),
         ];
         for (source, passed, words) in cases {
@@ -742,6 +755,7 @@ mod tests {
     #[test]
     fn only_no_key_is_the_claude_sign_in() {
         assert!(is_claude_sign_in(None) && is_claude_sign_in(Some("none")) && is_claude_sign_in(Some("")));
+        assert!(is_claude_sign_in(Some("/login managed key")));
         assert!(!is_claude_sign_in(Some("ANTHROPIC_API_KEY")) && !is_claude_sign_in(Some("apiKeyHelper")));
     }
 }

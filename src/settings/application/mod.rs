@@ -3,7 +3,8 @@ mod settings;
 mod usage;
 
 pub use providers::{
-    KeyFailure, Providers, SignInCheck, TASK_RUNNING, TESTING, TestGate, TestTarget, WordTone, age_words, is_claude_sign_in, said_text, sign_in_words,
+    KeyFailure, Providers, SignInCheck, TASK_OPEN, TASK_RUNNING, TESTING, TestGate, TestTarget, WordTone, age_words, is_claude_sign_in, said_text,
+    sign_in_words, task_wait_reason,
 };
 pub use settings::{
     CAP_READING, CapCheck, ClaudeVersion, IssueKind, RuntimeWord, SearchHits, Settings, about_details, addable_commands, cap_check, cap_line, cap_reason,

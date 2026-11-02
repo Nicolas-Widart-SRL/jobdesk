@@ -915,7 +915,6 @@ fn inline_replies(ui: &Ui, replies: &[QuickReply]) -> bool {
     quick_width + REPLY_FIELD_MIN_WIDTH + gap + button_width(ui, "Send") <= ui.available_width()
 }
 
-/// The height of the reply row, with the quick replies' own wrapped rows above it when they do not fit beside the field.
 /// Why a reply to `run` cannot be sent now, if it cannot: another run works, or it needs a new process while
 /// Test connection runs.
 fn reply_blocked(desk: &RunDesk, run: &Run) -> Option<&'static str> {
@@ -928,6 +927,7 @@ fn reply_blocked(desk: &RunDesk, run: &Run) -> Option<&'static str> {
     }
 }
 
+/// The height of the reply row, with the quick replies' own wrapped rows above it when they do not fit beside the field.
 fn reply_rows_height(ui: &Ui, replies: &[QuickReply]) -> f32 {
     let spacing = ui.spacing().item_spacing;
     if replies.is_empty() || inline_replies(ui, replies) {

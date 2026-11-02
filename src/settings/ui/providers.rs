@@ -3,7 +3,7 @@ use egui::{Align, Label, Layout, Rect, Response, Sense, Ui, UiBuilder, pos2, vec
 
 use crate::settings::application::{
     ClaudeVersion, KeyFailure, KeyMask, Outcome, Page, Providers, Saved, Settings, SignIn, SignInCheck, TESTING, TestGate, TestTarget, age_words, index,
-    is_claude_sign_in, sign_in_words,
+    is_claude_sign_in, sign_in_words, task_wait_reason,
 };
 use crate::settings::ui::SettingsRequest;
 use crate::settings::ui::about::open;
@@ -99,8 +99,10 @@ pub struct LastTask {
 pub struct ProvidersView<'a> {
     pub last_task: Option<&'a LastTask>,
     pub claude: ClaudeVersion<'a>,
-    /// A task is working, so Test connection waits.
+    /// A task's process is up, so Test connection waits.
     pub task_running: bool,
+    /// One of those tasks is working, not only waiting for a reply.
+    pub task_working: bool,
     /// The app's clock, for each age shown.
     pub now: NaiveDateTime,
 }
@@ -394,13 +396,13 @@ fn sign_in_detail(
             |ui| {
                 hit_mark(ui, words_of.test_help, Type::NOTE, Ink::Muted, query);
             },
-            |ui| test = test_button(ui, gate, testing).clicked(),
+            |ui| test = test_button(ui, gate, testing, view.task_working).clicked(),
         );
         if let Some(check) = providers.sign_in_check() {
             kv(ui, "Last test", "", Align::Center, |ui| last_check(ui, check.outcome, check.at, check.cost_usd, view.now), |_| {});
         }
     });
-    wait_line(ui, gate, testing);
+    wait_line(ui, gate, testing, view.task_working);
     match providers.sign_in_check() {
         // A key in the environment Jobdesk started in outranks the Claude sign-in, so a pass may not be the sign-in's.
         Some(check) if check.outcome == Outcome::Passed && !is_claude_sign_in(check.source.as_deref()) => {
@@ -464,26 +466,27 @@ fn failure_box(ui: &mut Ui, headline: &str, said: &str, next: &str) {
 
 /// Test connection, which reads Testing… while the test of the method shown runs, and waits with its reason while it
 /// cannot start.
-fn test_button(ui: &mut Ui, gate: TestGate, testing: bool) -> Response {
+fn test_button(ui: &mut Ui, gate: TestGate, testing: bool, working: bool) -> Response {
     let label = if testing { TESTING } else { TEST };
-    enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing).unwrap_or_default(), |ui| small_button(ui, label))
+    enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing, working).unwrap_or_default(), |ui| small_button(ui, label))
 }
 
 /// Why a test cannot start now, if it cannot. The test of the method shown says so on its own button, so it has none.
-/// Another test, of the other method or one the user turned away from, is still finishing.
-fn wait_reason(gate: TestGate, testing: bool) -> Option<&'static str> {
+/// Another test, of the other method or one the user turned away from, is still finishing. A task process that is up
+/// while no task is `working` only waits for the user, who can reply or end it.
+fn wait_reason(gate: TestGate, testing: bool, working: bool) -> Option<&'static str> {
     match gate {
         TestGate::Ready => None,
         TestGate::Testing if testing => Some(TESTING),
         TestGate::Testing => Some(OTHER_TEST),
-        TestGate::TaskRunning => gate.reason(),
+        TestGate::TaskRunning => Some(task_wait_reason(working)),
     }
 }
 
 /// Why a test waits, under the detail's rows, so it reads without the pointer: the hover says it too.
 /// The test of the method shown needs no line: its button reads Testing….
-fn wait_line(ui: &mut Ui, gate: TestGate, testing: bool) {
-    if let Some(why) = wait_reason(gate, testing).filter(|_| !testing) {
+fn wait_line(ui: &mut Ui, gate: TestGate, testing: bool, working: bool) {
+    if let Some(why) = wait_reason(gate, testing, working).filter(|_| !testing) {
         ui.add(Label::new(rich(ui, why, Type::NOTE, Ink::Muted)).wrap());
     }
 }
@@ -637,10 +640,10 @@ fn saved_key(
                 Some(last) => last_check(ui, if last.passed { Outcome::Passed } else { Outcome::Refused }, last.at, last.cost_usd, view.now),
                 None => words(ui, &[("Not tested yet", Type::NOTE, Ink::Muted)]),
             },
-            |ui| test = test_button(ui, gate, testing).clicked(),
+            |ui| test = test_button(ui, gate, testing, view.task_working).clicked(),
         );
     });
-    wait_line(ui, gate, testing);
+    wait_line(ui, gate, testing, view.task_working);
     if let Err(why) = mask {
         ui.add(Label::new(rich(ui, why, Type::NOTE, Ink::Muted)).wrap());
     }
@@ -658,8 +661,10 @@ fn saved_key(
     } else {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
-            use_key =
-                enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing).unwrap_or_default(), |ui| primary_button(ui, USE_FOR_TASKS)).clicked();
+            use_key = enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing, view.task_working).unwrap_or_default(), |ui| {
+                primary_button(ui, USE_FOR_TASKS)
+            })
+            .clicked();
             ui.add(Label::new(rich(ui, "Tests the key first, for about a cent. Tasks switch to it once it passes.", Type::NOTE, Ink::Muted)).wrap());
         });
     }
@@ -704,12 +709,13 @@ fn failed_key(
     });
     // This view shows only while no test of the key runs.
     let gate = providers.test_gate(view.task_running);
-    wait_line(ui, gate, false);
+    wait_line(ui, gate, false, view.task_working);
     let (mut replace, mut again) = (false, false);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BUTTON_GAP;
         replace = primary_button(ui, "Replace key").clicked();
-        again = enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, false).unwrap_or_default(), |ui| button(ui, "Test again")).clicked();
+        again =
+            enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, false, view.task_working).unwrap_or_default(), |ui| button(ui, "Test again")).clicked();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| open(ui, CONSOLE_LINK, CONSOLE_URL));
     });
     if replace {

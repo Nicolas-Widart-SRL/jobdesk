@@ -78,23 +78,18 @@ pub fn token_name(token: &str) -> &str {
 }
 
 /// The length of a token name at the start of `text`, or 0 when there is none.
-/// A name is upper-case words of A-Z, digits, `_` and `'`, joined by single spaces, and may start with a count such as `1-2 `.
+/// A name is upper-case words of A-Z, digits, `_` and `'`, joined by single spaces, and may start with a range such as `1-2 `.
+/// A word without `_` has three letters or more and no digit, so `[B2]`, `[EU UK]` and `[AB12]` are the user's own words.
 fn name_len(text: &str) -> usize {
     let bytes = text.as_bytes();
     let digits = |from: usize| bytes[from..].iter().take_while(|c| c.is_ascii_digit()).count();
     let mut start = digits(0);
     if start > 0 {
-        if bytes.get(start) == Some(&b'-') {
-            let range = digits(start + 1);
-            if range == 0 {
-                return 0;
-            }
-            start += 1 + range;
-        }
-        if bytes.get(start) != Some(&b' ') {
+        let range = if bytes.get(start) == Some(&b'-') { digits(start + 1) } else { 0 };
+        if range == 0 || bytes.get(start + 1 + range) != Some(&b' ') {
             return 0;
         }
-        start += 1;
+        start += range + 2;
     }
     if !bytes.get(start).is_some_and(u8::is_ascii_uppercase) {
         return 0;
@@ -110,8 +105,8 @@ fn name_len(text: &str) -> usize {
         len += 1;
     }
     let name = &text[start..len];
-    let one_word = !name.contains(['_', ' ']);
-    if name.len() < 3 || (one_word && !name.bytes().all(|c| c.is_ascii_uppercase() || c == b'\'')) {
+    let plain = |word: &str| word.len() >= 3 && word.bytes().all(|c| c.is_ascii_uppercase() || c == b'\'');
+    if name.len() < 3 || !name.split(' ').all(|word| word.contains('_') || plain(word)) {
         return 0;
     }
     len
@@ -159,7 +154,15 @@ mod tests {
 
     #[test]
     fn a_name_may_start_with_a_count() {
-        assert_eq!(found("[1-2 SENTENCE_SUMMARY] [3 KEY_POINTS] [1-2] [1- SUMMARY_X] [12 ab]"), ["[1-2 SENTENCE_SUMMARY]", "[3 KEY_POINTS]"]);
+        assert_eq!(found("[1-2 SENTENCE_SUMMARY] [1-2] [1- SUMMARY_X] [12 ab] [1-2 ab]"), ["[1-2 SENTENCE_SUMMARY]"]);
+        assert_eq!(placeholder_count("[2024 UPDATE] [5 YEARS] [3 KEY_POINTS] [2024 UPDATE_X]"), 0);
+    }
+
+    #[test]
+    fn every_word_of_a_name_with_spaces_is_a_word() {
+        assert_eq!(placeholder_count("Remote [EU UK] and [AI ML] and German [C1 B2] and [YOUR UK] and [WHAT 2 DO]"), 0);
+        assert_eq!(found("[WHAT YOU DID] [PREPARE YOUR ANSWER - be honest] [YOUR RESPONSIBILITY]"), ["[WHAT YOU DID]", "[PREPARE YOUR ANSWER - be honest]", "[YOUR RESPONSIBILITY]"]);
+        assert_eq!(found("[YOUR KEY_SKILL] [AWS] [AWS - Solutions Architect]"), ["[YOUR KEY_SKILL]", "[AWS]", "[AWS - Solutions Architect]"]);
     }
 
     #[test]

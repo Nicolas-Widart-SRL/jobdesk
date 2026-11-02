@@ -42,7 +42,7 @@ pub struct BlockView {
     /// The block without its heading line. For a `##` with children it stops before the first child.
     pub body: String,
     pub role: Option<Role>,
-    /// The open tokens in `body`, so none in the heading line and none counted again from a child. The topic fill counts every token of the topic once.
+    /// The open tokens in the heading line and `body`. A child counts its own, so the blocks of a topic add up to its fill.
     pub placeholders: usize,
 }
 
@@ -149,7 +149,7 @@ fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> B
         key: BlockKey { file, level: block.level, heading: block.heading.clone(), parent: block.parent.clone(), nth: block.nth },
         heading: block.heading.clone(),
         text: full.to_owned(),
-        placeholders: open_placeholders(&body),
+        placeholders: open_placeholders(&text[block.range.start..own_end]),
         body,
         role,
     }
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(section.block.body, "Intro line.");
         assert_eq!(section.children.len(), 2);
         assert_eq!(section.children[0].role.as_ref().map(|role| role.dates.as_str()), Some("2021 – present"));
-        assert_eq!(section.children[1].placeholders, 1);
+        assert_eq!(section.children[1].placeholders, 5);
         assert_eq!(section.block.placeholders, 0);
         assert_eq!(section.children[0].key.parent.as_deref(), Some("Professional Experience"));
         assert_eq!(topic(&view, TopicId::Education).fill, Fill::ToFill(2));
@@ -251,12 +251,13 @@ mod tests {
 
     #[test]
     fn a_blank_counts_once_across_a_section_and_its_children() {
-        let text = "## Professional Experience\nIntro [SUMMARY_X]\n\n### Lead - Calder (2021 – now)\n[ACHIEVEMENT_1] and [ACHIEVEMENT_2]\n\n### Dev - Acme (2018 – 2021)\n[ACHIEVEMENT_3]\n";
+        let text = "## Professional Experience\nIntro [SUMMARY_X]\n\n### Lead - Calder (2021 – now)\n[ACHIEVEMENT_1] and [ACHIEVEMENT_2]\n\n### [JOB_TITLE] - [COMPANY] ([START] - [END])\n[ACHIEVEMENT_3]\n";
         let view = view_of(&[(ProfileFile::Candidate, text)]);
         let experience = topic(&view, TopicId::Experience);
         let section = &experience.sections[0];
         let counted: usize = section.block.placeholders + section.children.iter().map(|child| child.placeholders).sum::<usize>();
-        assert_eq!((section.block.placeholders, section.children[0].placeholders, section.children[1].placeholders), (1, 2, 1));
+        assert_eq!(counted, 8);
+        assert_eq!((section.block.placeholders, section.children[0].placeholders, section.children[1].placeholders), (1, 2, 5));
         assert_eq!(experience.fill, Fill::ToFill(counted));
     }
 

@@ -18,7 +18,7 @@ A task qualifies only when all of these hold:
 
 - it touches at most 3 files;
 - it stays in one layer;
-- it adds no feature, screen or public type, and adds or changes no canvas or design;
+- it adds no feature or screen, adds or changes no public type, and adds or changes no canvas or design;
 - it falls under none of the risky lenses in step 6 of `.claude/agents/planner.md`,
   except a one-value or one-sentence change in `.claude/`.
 
@@ -73,7 +73,7 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    runs `squash-msg` and step 8 once, then gives the user one message.
    From then on, step 8 and the Answer CodeRabbit section of `ship` run on this plan file.
 6. **Escalate.** Read `git diff --stat <branch>..<step-branch>` yourself for the file count and the layers.
-   Stop when the step touches more than 3 files, crosses a layer, adds a feature, screen or public type, or adds or changes a canvas or a design.
+   Stop when the step touches more than 3 files, crosses a layer, adds a feature or screen, adds or changes a public type, or adds or changes a canvas or a design.
    Stop too when it touches a risky area from `planner.md` step 6
    (the one-value or one-sentence `.claude/` change in the criteria is not one),
    when two checks failed, when the review found a High, or when a changed snapshot is not intended and clean.

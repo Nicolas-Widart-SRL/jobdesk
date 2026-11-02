@@ -157,10 +157,10 @@ impl RunLogUsage {
 
     /// The task one log records. None for another workspace's log, or one with no result and no stop:
     /// that task is still running or never ran.
-    /// A line that is not UTF-8 ends the log there, as it does in replay.
+    /// A line that is not UTF-8 ends the log there, as it does in replay. Any other read error fails the whole read.
     fn read(&self, path: &Path) -> io::Result<Option<TaskCost>> {
-        let mut lines = BufReader::new(File::open(path)?).lines().map_while(Result::ok);
-        let Some(first) = lines.next() else { return Ok(None) };
+        let mut lines = BufReader::new(File::open(path)?).lines();
+        let Some(first) = next_line(&mut lines)? else { return Ok(None) };
         let Ok(meta) = serde_json::from_str::<Meta>(&first) else { return Ok(None) };
         if meta.r#type != META || meta.workspace != self.workspace {
             return Ok(None);
@@ -170,7 +170,7 @@ impl RunLogUsage {
         let mut ended: Vec<ProcessTotals> = Vec::new();
         let mut current: Option<ProcessTotals> = None;
         let (mut stopped, mut ever_stopped, mut last_failed) = (false, false, None);
-        for line in lines {
+        while let Some(line) = next_line(&mut lines)? {
             if line == RESUME_LINE {
                 ended.extend(current.take());
                 stopped = false;
@@ -186,7 +186,8 @@ impl RunLogUsage {
                 if current.as_ref().is_some_and(|previous| totals.cost_usd < previous.cost_usd) {
                     ended.extend(current.take());
                 }
-                last_failed = Some(totals.failed);
+                // The error result an interrupt ends with is the stop, not a failure.
+                last_failed = Some(totals.failed && !stopped);
                 current = Some(totals);
             }
         }
@@ -206,6 +207,14 @@ impl RunLogUsage {
             cost_usd: processes.iter().map(|process| process.cost_usd).sum(),
             models: models_by_id(processes.into_iter().flat_map(|process| process.models)),
         }))
+    }
+}
+
+/// The next line of a log. A line that is not UTF-8 ends it, and any other error is returned.
+fn next_line(lines: &mut io::Lines<BufReader<File>>) -> io::Result<Option<String>> {
+    match lines.next().transpose() {
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Ok(None),
+        other => other,
     }
 }
 
@@ -247,7 +256,7 @@ impl UsageLogs for RunLogUsage {
             let task = match self.cache.get(&path) {
                 Some((known_len, known_modified, task)) if *known_len == len && *known_modified == modified => task.clone(),
                 _ => {
-                    // An unreadable file is skipped, and tried again next time.
+                    // A file that fails to open or read is skipped and not cached, so the next call tries it again.
                     let Ok(task) = self.read(&path) else { continue };
                     self.cache.insert(path, (len, modified, task.clone()));
                     task
@@ -372,6 +381,17 @@ mod tests {
 
         assert_eq!(task.outcome, TaskOutcome::Finished);
         assert_eq!(task.cost_usd, 0.5);
+        assert_eq!(RunLogs::new(dir.path().to_owned(), Path::new("/w")).recent(1)[0].status, RunStatus::Closed);
+    }
+
+    /// The process was killed before the reply got a result. Replay shows Closed, so usage says Finished.
+    #[test]
+    fn the_result_of_a_stop_is_no_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.25}"#;
+        write(dir.path(), "/w", "a", &[&["stop", stopped, "reply"]]);
+
+        assert_eq!(tasks(dir.path())[0].outcome, TaskOutcome::Finished);
         assert_eq!(RunLogs::new(dir.path().to_owned(), Path::new("/w")).recent(1)[0].status, RunStatus::Closed);
     }
 

@@ -10,6 +10,7 @@ use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, Even
 use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
+use crate::shared_kernel::process_tree::{kill_tree, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, KeyReader, SignIn};
 
 const STDERR_LINES_KEPT: usize = 12;
@@ -128,9 +129,7 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Its own process group, so one kill reaches the tools it runs too.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    own_group(&mut command);
     if let Some(key) = key {
         command.env("ANTHROPIC_API_KEY", key.expose());
         // The CLI strips the key from the environment of the tools, hooks and MCP servers it starts, so a command cannot print it.
@@ -233,23 +232,6 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
     emit(AgentEvent::ProcessExited { failure });
 }
 
-#[cfg(unix)]
-fn kill_tree(pid: u32) {
-    let Ok(group) = libc::pid_t::try_from(pid) else { return };
-    // SAFETY: kill only sends a signal. A negative id names the process group the child leads.
-    unsafe {
-        libc::kill(-group, libc::SIGKILL);
-    }
-}
-
-#[cfg(windows)]
-fn kill_tree(pid: u32) {
-    let mut command = Command::new("taskkill");
-    command.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
-    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
-    let _ = command.status();
-}
-
 fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
     if let Some(pipe) = stdin
         && writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_err()
@@ -290,40 +272,6 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
                 tail.pop_front();
             }
         }
-    }
-}
-
-#[cfg(test)]
-#[cfg(unix)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::*;
-
-    fn alive(pid: libc::pid_t) -> bool {
-        // SAFETY: signal 0 only checks that the process exists.
-        unsafe { libc::kill(pid, 0) == 0 }
-    }
-
-    /// A tool Claude started, here a background `sleep`, dies with Claude.
-    #[test]
-    fn killing_the_tree_reaches_grandchildren() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        let mut child = command.spawn().unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
-        let grandchild: libc::pid_t = line.trim().parse().unwrap();
-
-        kill_tree(child.id());
-        child.wait().unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(grandchild) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        assert!(!alive(grandchild));
     }
 }
 

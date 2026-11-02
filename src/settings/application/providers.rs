@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use chrono::NaiveDateTime;
 
 use crate::settings::application::settings::Settings;
-use crate::settings::domain::{ConnectionTester, KeyMask, KeyStore, KeyTest, Preferences, Saved, TestReport, redacted, task_sign_in};
+use crate::settings::domain::{ConnectionTester, KeyMask, KeyStore, KeyTest, Outcome, Preferences, Saved, TestReport, redacted, task_sign_in};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 
@@ -48,13 +48,25 @@ pub enum TestTarget {
 /// The last test of the Claude sign-in, kept for this session only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignInCheck {
-    pub passed: bool,
+    pub outcome: Outcome,
     pub at: NaiveDateTime,
     pub cost_usd: f64,
     /// Clean already: what Claude Code said, for a failed test.
     pub said: String,
     /// The CLI's `apiKeySource`, for `sign_in_words`.
     pub source: Option<String>,
+}
+
+/// The last test of the saved key that did not pass, kept for this session only.
+/// Only a `Refused` one is also recorded in the preferences and moves tasks off the key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyFailure {
+    /// `Refused` or `Unreached`.
+    pub outcome: Outcome,
+    pub at: NaiveDateTime,
+    pub cost_usd: f64,
+    /// Clean and masked already: what Claude Code said, or why it could not be asked.
+    pub said: String,
 }
 
 /// The tone of the rail's word for Providers.
@@ -81,13 +93,12 @@ pub struct Providers {
     saved: Saved,
     running: Option<Running>,
     sign_in_check: Option<SignInCheck>,
-    /// What Claude Code said when it last refused the saved key, kept for this session only.
-    refusal: Option<String>,
+    key_failure: Option<KeyFailure>,
 }
 
 impl Providers {
     pub fn new(keys: Arc<dyn KeyStore>, tester: Box<dyn ConnectionTester>) -> Self {
-        Self { keys, tester, saved: Saved::NotRead, running: None, sign_in_check: None, refusal: None }
+        Self { keys, tester, saved: Saved::NotRead, running: None, sign_in_check: None, key_failure: None }
     }
 
     pub fn saved(&self) -> &Saved {
@@ -133,26 +144,24 @@ impl Providers {
         self.running.as_ref().map(|running| running.target)
     }
 
-    /// What Claude Code said when it last refused the key, clean and masked.
-    pub fn refusal(&self) -> Option<&str> {
-        self.refusal.as_deref()
+    /// The last test of the saved key this session, when it did not pass: refused, or never answered.
+    pub fn key_failure(&self) -> Option<&KeyFailure> {
+        self.key_failure.as_ref()
     }
 
     pub fn sign_in_check(&self) -> Option<&SignInCheck> {
         self.sign_in_check.as_ref()
     }
 
-    /// Writes the key to the keychain, then tests it at once when nothing stops a test. Tasks stay on the Claude sign-in
-    /// until that test passes, so a mistyped key never breaks the next task. No `sk-ant-` prefix is required.
+    /// Writes the key to the keychain, then tests it at once when nothing stops a test: otherwise the page gives `test_gate`'s reason.
+    /// Tasks stay on the Claude sign-in until a test passes, so a mistyped key never breaks the next task. No `sk-ant-` prefix is required.
     pub fn save_key(&mut self, typed: &str, settings: &mut Settings, task_running: bool) -> Result<(), String> {
-        if self.running.is_some() {
-            return Err(TESTING.to_owned());
-        }
         let key = ApiKey::parse(typed).ok_or_else(|| NOT_A_KEY.to_owned())?;
         self.keys.write(&key).map_err(|error| error.message)?;
         self.saved = Saved::Present(KeyMask::of(&key));
-        self.refusal = None;
-        // The last test was of the key this one replaces.
+        self.key_failure = None;
+        // A test still running, and the last one, were of the key this one replaces.
+        self.cancel_key_test();
         settings.set_sign_in(SignIn::ClaudeSignIn);
         settings.set_key_test(None);
         if self.test_gate(task_running) == TestGate::Ready {
@@ -161,7 +170,8 @@ impl Providers {
         Ok(())
     }
 
-    /// Tests the saved key, read from the keychain now. A pass puts tasks on the key, and a failure moves them to the Claude sign-in.
+    /// Tests the saved key, read from the keychain now. A pass puts tasks on the key, and a refusal moves them to the Claude sign-in.
+    /// A test that never got an answer changes neither.
     /// It serves Test connection, Test again and Use for tasks on the key alike.
     pub fn test_key(&mut self, task_running: bool) -> Result<(), String> {
         self.gate(task_running)?;
@@ -200,7 +210,7 @@ impl Providers {
         settings.set_sign_in(SignIn::ClaudeSignIn);
         self.keys.delete().map_err(|error| error.message)?;
         self.saved = Saved::Absent;
-        self.refusal = None;
+        self.key_failure = None;
         settings.set_key_test(None);
         Ok(())
     }
@@ -214,7 +224,7 @@ impl Providers {
                 self.running = Some(running);
                 return false;
             }
-            Err(TryRecvError::Disconnected) => TestReport { passed: false, cost_usd: 0.0, said: NO_ANSWER.to_owned(), source: None },
+            Err(TryRecvError::Disconnected) => TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said: NO_ANSWER.to_owned(), source: None },
         };
         if running.cancelled {
             return true;
@@ -222,17 +232,24 @@ impl Providers {
         let said = said_text(&report.said, running.key.as_ref());
         match running.target {
             TestTarget::Key => {
-                settings.set_key_test(Some(KeyTest { passed: report.passed, at: now, cost_usd: report.cost_usd }));
-                if report.passed {
-                    settings.set_sign_in(SignIn::ApiKey);
-                    self.refusal = None;
-                } else {
-                    settings.set_sign_in(SignIn::ClaudeSignIn);
-                    self.refusal = Some(said);
+                let cost_usd = report.cost_usd;
+                match report.outcome {
+                    Outcome::Passed => {
+                        settings.set_key_test(Some(KeyTest { passed: true, at: now, cost_usd }));
+                        settings.set_sign_in(SignIn::ApiKey);
+                        self.key_failure = None;
+                    }
+                    Outcome::Refused => {
+                        settings.set_key_test(Some(KeyTest { passed: false, at: now, cost_usd }));
+                        settings.set_sign_in(SignIn::ClaudeSignIn);
+                        self.key_failure = Some(KeyFailure { outcome: Outcome::Refused, at: now, cost_usd, said });
+                    }
+                    // Nothing was learnt about the key, so the method and the recorded test stay as they were.
+                    Outcome::Unreached => self.key_failure = Some(KeyFailure { outcome: Outcome::Unreached, at: now, cost_usd, said }),
                 }
             }
             TestTarget::ClaudeSignIn => {
-                self.sign_in_check = Some(SignInCheck { passed: report.passed, at: now, cost_usd: report.cost_usd, said, source: report.source });
+                self.sign_in_check = Some(SignInCheck { outcome: report.outcome, at: now, cost_usd: report.cost_usd, said, source: report.source });
             }
         }
         true
@@ -279,7 +296,8 @@ impl Providers {
 /// characters removed, blank lines dropped, and at most 8 lines and 500 characters.
 pub fn said_text(raw: &str, key: Option<&ApiKey>) -> String {
     let lines: Vec<String> = redacted(raw, key)
-        .lines()
+        // Every line break, before the controls among them are removed and would join two lines.
+        .split(['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'])
         // Masked again once clean, because a hidden character inside the key would have kept it from matching before.
         .map(|line| redacted(&visible_chars(line).collect::<String>(), key).trim_end().to_owned())
         .filter(|line| !line.trim().is_empty())
@@ -294,17 +312,18 @@ pub fn said_text(raw: &str, key: Option<&ApiKey>) -> String {
     cut
 }
 
-/// How long ago a test ran, in words.
+/// How long ago a test ran, in words. Within the hour it counts minutes, then hours on the same day, then calendar days.
 pub fn age_words(at: NaiveDateTime, now: NaiveDateTime) -> String {
     let minutes = (now - at).num_minutes();
+    let days = (now.date() - at.date()).num_days();
     match minutes {
         ..=0 => "just now".to_owned(),
         1 => "1 minute ago".to_owned(),
         2..60 => format!("{minutes} minutes ago"),
-        60..120 => "1 hour ago".to_owned(),
-        120..1_440 => format!("{} hours ago", minutes / 60),
-        1_440..2_880 => "yesterday".to_owned(),
-        _ => format!("{} days ago", minutes / 1_440),
+        _ if days == 0 && minutes < 120 => "1 hour ago".to_owned(),
+        _ if days == 0 => format!("{} hours ago", minutes / 60),
+        _ if days == 1 => "yesterday".to_owned(),
+        _ => format!("{days} days ago"),
     }
 }
 
@@ -353,9 +372,9 @@ mod tests {
             self.asked.lock().unwrap().last().unwrap().0.clone()
         }
 
-        fn answer(&self, passed: bool, said: &str) {
+        fn answer(&self, outcome: Outcome, said: &str) {
             let done = self.asked.lock().unwrap().last_mut().unwrap().1.take().unwrap();
-            done(TestReport { passed, cost_usd: 0.004, said: said.to_owned(), source: Some("ANTHROPIC_API_KEY".to_owned()) });
+            done(TestReport { outcome, cost_usd: 0.004, said: said.to_owned(), source: Some("ANTHROPIC_API_KEY".to_owned()) });
         }
     }
 
@@ -377,6 +396,10 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 3, 14).unwrap().and_hms_opt(9, 30, 0).unwrap()
     }
 
+    fn passed_test() -> KeyTest {
+        KeyTest { passed: true, at: now() - chrono::Duration::days(2), cost_usd: 0.003 }
+    }
+
     impl Fixture {
         fn poll(&mut self) -> bool {
             self.providers.poll(&mut self.settings, now())
@@ -388,6 +411,10 @@ mod tests {
 
         fn stored(&self) -> Option<String> {
             self.keys.read().unwrap().map(|key| key.expose().to_owned())
+        }
+
+        fn failure(&self) -> Option<(Outcome, &str)> {
+            self.providers.key_failure().map(|failure| (failure.outcome, failure.said.as_str()))
         }
     }
 
@@ -402,25 +429,38 @@ mod tests {
         assert_eq!(f.method(), SignIn::ClaudeSignIn, "not before the test passes");
         assert!(!f.poll(), "nothing ended yet");
 
-        f.tester.answer(true, "ready");
+        f.tester.answer(Outcome::Passed, "ready");
         assert!(f.poll());
         assert_eq!(f.method(), SignIn::ApiKey);
         assert_eq!(f.settings.preferences().key_test, Some(KeyTest { passed: true, at: now(), cost_usd: 0.004 }));
         assert_eq!(f.providers.testing(), None);
+        assert_eq!(f.failure(), None);
         assert_eq!(f.providers.rail_word(f.settings.preferences()), ("API key".to_owned(), WordTone::Muted));
     }
 
     #[test]
-    fn a_saved_key_that_fails_its_test_leaves_tasks_on_the_claude_sign_in() {
+    fn a_saved_key_that_is_refused_leaves_tasks_on_the_claude_sign_in() {
         let mut f = fixture(None);
         f.providers.save_key(FAKE, &mut f.settings, false).unwrap();
-        f.tester.answer(false, "Invalid API key · Fix external API key");
+        f.tester.answer(Outcome::Refused, "Invalid API key · Fix external API key");
         assert!(f.poll());
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
-        assert_eq!(f.settings.preferences().key_test.map(|test| test.passed), Some(false));
-        assert_eq!(f.providers.refusal(), Some("Invalid API key · Fix external API key"));
+        assert_eq!(f.settings.preferences().key_test, Some(KeyTest { passed: false, at: now(), cost_usd: 0.004 }));
+        assert_eq!(f.failure(), Some((Outcome::Refused, "Invalid API key · Fix external API key")));
         assert_eq!(f.stored().as_deref(), Some(FAKE), "a refused key stays saved");
         assert_eq!(f.providers.rail_word(f.settings.preferences()), ("Key refused".to_owned(), WordTone::Closed));
+    }
+
+    #[test]
+    fn a_saved_key_whose_test_is_unreached_stays_saved_and_unused() {
+        let mut f = fixture(None);
+        f.providers.save_key(FAKE, &mut f.settings, false).unwrap();
+        f.tester.answer(Outcome::Unreached, "Claude Code did not answer within a minute.");
+        assert!(f.poll());
+        assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None));
+        assert_eq!(f.failure(), Some((Outcome::Unreached, "Claude Code did not answer within a minute.")));
+        assert_eq!(f.stored().as_deref(), Some(FAKE));
+        assert_eq!(f.providers.rail_word(f.settings.preferences()), ("Claude sign-in".to_owned(), WordTone::Muted), "not refused");
     }
 
     #[test]
@@ -431,29 +471,46 @@ mod tests {
         assert_eq!(f.tester.last_key().as_deref(), Some(FAKE), "the key is read when clicked");
         assert!(!f.poll());
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
-        f.tester.answer(true, "ready");
+        f.tester.answer(Outcome::Passed, "ready");
         f.poll();
         assert_eq!(f.method(), SignIn::ApiKey);
     }
 
     #[test]
-    fn a_failed_test_of_the_key_in_use_moves_tasks_back() {
+    fn a_refused_test_of_the_key_in_use_moves_tasks_back() {
         let mut f = fixture(Some(FAKE));
         f.settings.set_sign_in(SignIn::ApiKey);
         f.providers.read_once();
         assert_eq!(f.providers.task_sign_in(f.settings.preferences()), SignIn::ApiKey);
         f.providers.test_key(false).unwrap();
-        f.tester.answer(false, "Credit balance is too low");
+        f.tester.answer(Outcome::Refused, "Invalid API key");
         f.poll();
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
         assert_eq!(f.providers.task_sign_in(f.settings.preferences()), SignIn::ClaudeSignIn);
     }
 
     #[test]
+    fn an_unreached_test_of_the_key_in_use_keeps_tasks_on_it() {
+        let mut f = fixture(Some(FAKE));
+        f.settings.set_sign_in(SignIn::ApiKey);
+        f.settings.set_key_test(Some(passed_test()));
+        f.providers.test_key(false).unwrap();
+        f.tester.answer(Outcome::Unreached, "Claude Code is not installed.");
+        assert!(f.poll());
+        assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ApiKey, Some(passed_test())), "nothing was learnt about the key");
+        assert_eq!(f.failure(), Some((Outcome::Unreached, "Claude Code is not installed.")));
+        assert_eq!(f.providers.rail_word(f.settings.preferences()), ("API key".to_owned(), WordTone::Muted));
+        f.providers.test_key(false).unwrap();
+        f.tester.answer(Outcome::Passed, "ready");
+        f.poll();
+        assert_eq!(f.failure(), None, "a pass clears the last failure");
+    }
+
+    #[test]
     fn saving_a_new_key_takes_tasks_off_the_old_one_until_the_new_one_passes() {
         let mut f = fixture(Some(FAKE));
         f.settings.set_sign_in(SignIn::ApiKey);
-        f.settings.set_key_test(Some(KeyTest { passed: true, at: now(), cost_usd: 0.004 }));
+        f.settings.set_key_test(Some(passed_test()));
         f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
         assert_eq!(f.stored().as_deref(), Some(OTHER));
         assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None));
@@ -463,7 +520,7 @@ mod tests {
     fn remove_empties_the_keychain_and_goes_back_to_the_claude_sign_in() {
         let mut f = fixture(Some(FAKE));
         f.settings.set_sign_in(SignIn::ApiKey);
-        f.settings.set_key_test(Some(KeyTest { passed: true, at: now(), cost_usd: 0.004 }));
+        f.settings.set_key_test(Some(passed_test()));
         f.providers.read_once();
         f.providers.remove_key(&mut f.settings).unwrap();
         assert_eq!(f.stored(), None);
@@ -473,21 +530,29 @@ mod tests {
     }
 
     #[test]
-    fn a_key_test_that_ends_after_remove_or_a_switch_changes_nothing() {
+    fn a_key_test_that_ends_after_remove_a_switch_or_a_new_key_changes_nothing() {
         let mut f = fixture(Some(FAKE));
         f.providers.test_key(false).unwrap();
         f.providers.remove_key(&mut f.settings).unwrap();
         assert_eq!(f.providers.test_gate(false), TestGate::Testing, "its process still runs");
-        f.tester.answer(true, "ready");
+        f.tester.answer(Outcome::Passed, "ready");
         assert!(f.poll());
         assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None));
 
         let mut f = fixture(Some(FAKE));
         f.providers.test_key(false).unwrap();
         f.providers.use_claude_sign_in(&mut f.settings);
-        f.tester.answer(true, "ready");
+        f.tester.answer(Outcome::Passed, "ready");
         f.poll();
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
+
+        let mut f = fixture(Some(FAKE));
+        f.providers.test_key(false).unwrap();
+        f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
+        assert_eq!(f.tester.calls(), 1, "the new key waits for the old test to end");
+        f.tester.answer(Outcome::Passed, "ready");
+        f.poll();
+        assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None), "the old key's pass is not the new key's");
     }
 
     #[test]
@@ -503,15 +568,16 @@ mod tests {
     }
 
     #[test]
-    fn a_second_test_is_refused_while_one_runs() {
+    fn a_second_test_is_refused_while_one_runs_but_a_key_is_still_saved() {
         let mut f = fixture(Some(FAKE));
         f.providers.test_sign_in(false).unwrap();
         assert_eq!(f.providers.test_gate(false), TestGate::Testing);
         assert_eq!(f.providers.test_key(false), Err(TESTING.to_owned()));
         assert_eq!(f.providers.test_sign_in(false), Err(TESTING.to_owned()));
-        assert_eq!(f.providers.save_key(OTHER, &mut f.settings, false), Err(TESTING.to_owned()));
-        assert_eq!(f.stored().as_deref(), Some(FAKE));
-        assert_eq!(f.tester.calls(), 1);
+        f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
+        assert_eq!(f.stored().as_deref(), Some(OTHER));
+        assert_eq!(f.tester.calls(), 1, "the saved key is not tested while another test runs");
+        assert_eq!(f.providers.test_gate(false).reason(), Some(TESTING));
     }
 
     #[test]
@@ -521,22 +587,24 @@ mod tests {
         f.providers.test_sign_in(false).unwrap();
         assert_eq!(f.tester.last_key(), None, "no key goes to the Claude sign-in test");
         assert_eq!(f.providers.testing(), Some(TestTarget::ClaudeSignIn));
-        f.tester.answer(false, "Not logged in · Please run /login");
+        f.tester.answer(Outcome::Refused, "Not logged in · Please run /login");
         assert!(f.poll());
         assert_eq!(f.method(), SignIn::ApiKey);
         assert_eq!(f.settings.preferences().key_test, None);
+        assert_eq!(f.failure(), None);
         let check = f.providers.sign_in_check().unwrap();
-        assert_eq!((check.passed, check.at, check.said.as_str()), (false, now(), "Not logged in · Please run /login"));
+        assert_eq!((check.outcome, check.at, check.said.as_str()), (Outcome::Refused, now(), "Not logged in · Please run /login"));
     }
 
     #[test]
-    fn a_tester_that_never_reports_ends_as_a_failure() {
+    fn a_tester_that_never_reports_is_unreached() {
         let mut f = fixture(Some(FAKE));
+        f.settings.set_sign_in(SignIn::ApiKey);
         f.providers.test_key(false).unwrap();
         f.tester.asked.lock().unwrap().clear();
         assert!(f.poll());
-        assert_eq!(f.providers.refusal(), Some(NO_ANSWER));
-        assert_eq!(f.method(), SignIn::ClaudeSignIn);
+        assert_eq!(f.failure(), Some((Outcome::Unreached, NO_ANSWER)));
+        assert_eq!(f.method(), SignIn::ApiKey);
     }
 
     #[test]
@@ -583,6 +651,14 @@ mod tests {
     }
 
     #[test]
+    fn every_line_break_keeps_its_lines_apart() {
+        assert_eq!(said_text("progress\rerror: Invalid API key", None), "progress\nerror: Invalid API key");
+        for brk in ['\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            assert_eq!(said_text(&format!("one{brk}two"), None), "one\ntwo", "{brk:?}");
+        }
+    }
+
+    #[test]
     fn what_claude_code_said_is_cut_to_eight_lines_and_500_characters() {
         let lines: Vec<String> = (1..=12).map(|n| format!("line {n}")).collect();
         let said = said_text(&lines.join("\n"), None);
@@ -607,15 +683,26 @@ mod tests {
             (after(60), "1 hour ago"),
             (after(119), "1 hour ago"),
             (after(120), "2 hours ago"),
-            (after(23 * 60 + 59), "23 hours ago"),
-            (after(24 * 60), "yesterday"),
-            (after(47 * 60), "yesterday"),
-            (after(48 * 60), "2 days ago"),
+            (after(14 * 60 + 29), "14 hours ago"),
+            (after(14 * 60 + 30), "yesterday"),
+            (after(25 * 60 + 30), "yesterday"),
+            (after(38 * 60 + 29), "yesterday"),
+            (after(38 * 60 + 30), "2 days ago"),
+            (after(47 * 60), "2 days ago"),
             (after(30 * 24 * 60), "30 days ago"),
         ];
         for (now, words) in cases {
             assert_eq!(age_words(at, now), words, "{now}");
         }
+    }
+
+    #[test]
+    fn yesterday_is_the_day_before_on_the_calendar() {
+        let day = |d: u32, h: u32, m: u32| NaiveDate::from_ymd_opt(2026, 3, d).unwrap().and_hms_opt(h, m, 0).unwrap();
+        assert_eq!(age_words(day(14, 23, 30), day(15, 0, 10)), "40 minutes ago", "within the hour, across midnight");
+        assert_eq!(age_words(day(14, 23, 0), day(15, 1, 0)), "yesterday");
+        assert_eq!(age_words(day(14, 0, 30), day(15, 23, 30)), "yesterday", "47 hours, one calendar day");
+        assert_eq!(age_words(day(14, 23, 30), day(16, 0, 30)), "2 days ago", "25 hours, two calendar days");
     }
 
     #[test]

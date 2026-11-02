@@ -194,7 +194,7 @@ fn a_run_can_edit_a_profile_file_under_dot_claude() {
 #[ignore = "calls the real Claude CLI"]
 fn test_connection_passes_on_the_claude_sign_in() {
     use jobdesk::settings;
-    use jobdesk::settings::application::{Settings, SignIn};
+    use jobdesk::settings::application::{Outcome, Settings, SignIn};
 
     let mut providers = settings::open_providers(settings::memory_keychain(None), settings::claude_tester(Arc::new(|| {})));
     let mut preferences = Settings::unsaved();
@@ -205,8 +205,8 @@ fn test_connection_passes_on_the_claude_sign_in() {
         sleep(Duration::from_millis(100));
     }
     let check = providers.sign_in_check().expect("a sign-in result");
-    println!("passed {} cost {} source {:?} said {:?}", check.passed, check.cost_usd, check.source, check.said);
-    assert!(check.passed, "{}", check.said);
+    println!("outcome {:?} cost {} source {:?} said {:?}", check.outcome, check.cost_usd, check.source, check.said);
+    assert_eq!(check.outcome, Outcome::Passed, "{}", check.said);
     assert!(check.cost_usd < 0.02, "capped at a cent: {}", check.cost_usd);
     assert_eq!(preferences.preferences().sign_in, SignIn::ClaudeSignIn, "a sign-in test changes no method");
 }

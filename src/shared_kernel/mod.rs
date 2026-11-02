@@ -6,6 +6,7 @@ pub mod load_error;
 pub mod markdown;
 pub mod model_choice;
 pub mod placeholders;
+pub mod process_tree;
 pub mod sign_in;
 pub mod source;
 pub mod visible_text;

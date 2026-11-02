@@ -27,6 +27,21 @@ impl std::fmt::Debug for ApiKey {
     }
 }
 
+/// Variables from the shell that started Jobdesk that make the `claude` CLI sign in some other way than with the saved key:
+/// a bearer token, or the switch of another provider (Bedrock, Vertex, Foundry, Mantle, a gateway, Anthropic on AWS or Google Cloud).
+/// A process that runs under the key removes these. `ANTHROPIC_BASE_URL` is left alone on purpose: it moves where requests go, not how they sign in,
+/// and a user may set it for a proxy they trust.
+pub const ENV_THAT_OUTRANKS_THE_KEY: &[&str] = &[
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_VERTEX",
+];
+
 /// Reads the saved key when a task's process starts. `Ok(None)` is no key saved, and `Err` says why it could not be read.
 pub type KeyReader = Arc<dyn Fn() -> Result<Option<ApiKey>, String> + Send + Sync>;
 

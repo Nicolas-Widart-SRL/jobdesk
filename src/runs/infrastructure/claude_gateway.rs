@@ -10,7 +10,7 @@ use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, Even
 use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
-use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
+use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, KeyReader, SignIn};
 
 const STDERR_LINES_KEPT: usize = 12;
 
@@ -104,9 +104,6 @@ impl AgentSession for ClaudeSession {
     }
 }
 
-/// Variables from the shell that started Jobdesk that would make the CLI sign in some other way than the saved key.
-const OUTRANKING: [&str; 3] = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"];
-
 /// The key a task's process gets, read once as it starts. The Claude sign-in reads none and leaves the inherited environment as it is.
 fn task_key(sign_in: SignIn, keys: &KeyReader) -> Result<Option<ApiKey>, String> {
     match sign_in {
@@ -136,10 +133,11 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     if let Some(key) = key {
         command.env("ANTHROPIC_API_KEY", key.expose());
-        // The CLI strips the key from the environment of the tools, hooks and servers it starts, so a command cannot print it.
+        // The CLI strips the key from the environment of the tools, hooks and MCP servers it starts, so a command cannot print it.
+        // Its own environment still holds the key.
         command.env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1");
         // Another inherited credential or provider switch could outrank the key.
-        for name in OUTRANKING {
+        for name in ENV_THAT_OUTRANKS_THE_KEY {
             command.env_remove(name);
         }
     }
@@ -388,7 +386,12 @@ mod key_tests {
     fn a_key_clears_what_would_outrank_it() {
         let key = ApiKey::parse(FAKE).unwrap();
         let with = command(Some(&key));
-        for name in ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"] {
+        let named = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY"];
+        for name in named {
+            assert!(ENV_THAT_OUTRANKS_THE_KEY.contains(&name), "{name} is on the list");
+        }
+        assert!(!ENV_THAT_OUTRANKS_THE_KEY.contains(&"ANTHROPIC_BASE_URL"), "the base URL stays");
+        for name in ENV_THAT_OUTRANKS_THE_KEY.iter().copied() {
             assert_eq!(env_of(&with, name), Some(None), "{name} is removed");
             assert_eq!(env_of(&command(None), name), None, "{name} is left alone without a key");
         }

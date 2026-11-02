@@ -11,7 +11,7 @@ pub mod source;
 pub mod visible_text;
 pub mod web_url;
 
-pub use api_key::{ApiKey, KeyReader};
+pub use api_key::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, KeyReader};
 pub use check_state::CheckState;
 pub use load_error::LoadError;
 pub use model_choice::ModelChoice;

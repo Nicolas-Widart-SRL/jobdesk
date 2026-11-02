@@ -11,6 +11,7 @@ use crate::shared_kernel::placeholders::Piece;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
     dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
+    reveal_command,
 };
 use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
@@ -468,6 +469,13 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
         })
         .response;
     interactive_row(ui, &response, RADIUS_PANEL);
+    response
+}
+
+/// `pick_row`, heard as `spoken`, so what a mark in the row says on hover reaches focus too.
+pub fn spoken_pick_row(ui: &mut Ui, on: bool, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
+    let response = pick_row(ui, on, add);
+    response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), on, spoken));
     response
 }
 
@@ -1031,15 +1039,31 @@ pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnO
 /// What a screen shows when it has nothing yet: a title, a sentence on what to do, then the actions, all on paper.
 /// The actions only open the launcher: the user starts the run there.
 pub fn empty_state(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui)) {
-    empty_sheet(ui, title, body, Some(actions));
+    empty_sheet(ui, title, body, Some(actions), None::<fn(&mut Ui)>);
+}
+
+/// `empty_state` with "Show the command" under its actions, which shows `line` as `reveal_command` does. The caller holds `open`.
+pub fn empty_state_with_command(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui), line: &str, open: &mut bool) {
+    empty_sheet(
+        ui,
+        title,
+        body,
+        Some(actions),
+        Some(|ui: &mut Ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = ITEM_GAP;
+                reveal_command(ui, line, open);
+            });
+        }),
+    );
 }
 
 /// The same with no actions, such as a lane that is empty with nothing to offer. A blank `body` leaves the sentence out.
 pub fn empty_note(ui: &mut Ui, title: &str, body: &str) {
-    empty_sheet(ui, title, body, None::<fn(&mut Ui)>);
+    empty_sheet(ui, title, body, None::<fn(&mut Ui)>, None::<fn(&mut Ui)>);
 }
 
-fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>) {
+fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>, below: Option<impl FnOnce(&mut Ui)>) {
     paper(ui, false, |ui| {
         Frame::new().inner_margin(Margin::same(EMPTY_PADDING)).show(ui, |ui| {
             ui.set_max_width(EMPTY_WIDTH);
@@ -1050,6 +1074,9 @@ fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce
             }
             if let Some(actions) = actions {
                 ui.horizontal(actions);
+            }
+            if let Some(below) = below {
+                below(ui);
             }
         });
     });

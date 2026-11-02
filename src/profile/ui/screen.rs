@@ -2,14 +2,16 @@ use chrono::NaiveDateTime;
 use egui::{Align, Frame, Label, Layout, Margin, Rect, Ui, UiBuilder, pos2};
 use egui_commonmark::CommonMarkCache;
 
-use crate::profile::application::{Fill, Mark, ProfileView, SectionView, TOPICS, TopicCounts, TopicId, TopicView, UpdatedMarks, topic_counts};
+use std::time::Duration;
+
+use crate::profile::application::{Fill, Mark, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UpdatedMarks, topic_counts};
 use crate::profile::ui::rail::{UPDATED_HOVER, loading_rail, rail};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{BUTTON_GAP, DEAL_PADDING, GUTTER, ITEM_GAP, ROLE_DATES, RUN_SIDE, SCREEN_GAP, SKELETON_GAP, SKELETON_LINE};
 use crate::ui_kit::{
-    Ink, RoleEntry, ScreenState, Subtitle, Title, Tone, Type, button, desk_label, divider, empty_note, empty_state, enabled_when, faded, faint_mono,
-    headed_paper, page_body, page_head, paper, primary_command_action, profile_document, rich, role_entry, skeleton, skeleton_lines, small_button,
-    small_command_action, tag,
+    Ink, RoleEntry, ScreenState, Subtitle, Title, Tone, Type, button, desk_label, divider, empty_note, empty_state, empty_state_with_command, enabled_when,
+    faded, faint_mono, headed_paper, page_body, page_head, paper, primary_command_action, profile_document, rich, role_entry, skeleton, skeleton_lines,
+    small_button, small_command_action, tag,
 };
 
 /// What the head says under the title once the profile is read.
@@ -19,13 +21,16 @@ const CLAUDE: &str = "Update with Claude…";
 const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
 /// Why Update with Claude… waits while a file of the topic cannot be read.
 const UNREADABLE: &str = "Fix the file first, so Claude does not write over it.";
+/// What the paper says of a topic a file hid.
+const HIDDEN: &str = "Jobdesk could not read a file that holds this topic, so it is not shown. Nothing in the file was changed. Jobdesk reads it again as soon as the file changes.";
 /// Why every edit button waits, until editing is built.
 const EDIT_LATER: &str = "Editing comes in the next step.";
 
-/// What stays between frames: the topic on paper, and the rendered Markdown.
+/// What stays between frames: the topic on paper, whether its empty state shows its command, and the rendered Markdown.
 #[derive(Default)]
 pub struct ProfileScreen {
     picked: Option<TopicId>,
+    show_command: bool,
     markdown: CommonMarkCache,
 }
 
@@ -57,13 +62,17 @@ pub fn show(ui: &mut Ui, screen: &mut ProfileScreen, state: &ScreenState, view: 
             ui,
             |ui| chosen = rail(ui, view, counts, picked, marks),
             |ui| {
-                ui.push_id(("profile topic", picked), |ui| topic_paper(ui, &mut screen.markdown, topic, counts, marks.head_line(picked), busy, now));
+                ui.push_id(("profile topic", picked), |ui| {
+                    let open = Open { updated: marks.head_line(picked), busy, now };
+                    topic_paper(ui, &mut screen.markdown, &mut screen.show_command, topic, &open);
+                });
             },
         );
         if let Some(next) = chosen.filter(|&next| next != picked) {
             marks.leave(picked);
             marks.open(next);
             screen.picked = Some(next);
+            screen.show_command = false;
         }
     });
 }
@@ -109,13 +118,20 @@ fn update_with_claude(ui: &mut Ui, topic: &TopicView, busy: bool, primary: bool)
     });
 }
 
-fn topic_paper(ui: &mut Ui, cache: &mut CommonMarkCache, topic: &TopicView, counts: TopicCounts, updated: Option<&Mark>, busy: bool, now: NaiveDateTime) {
+/// What the paper needs beside the topic: its Updated mark, whether a run works, and the time that ages the mark.
+struct Open<'a> {
+    updated: Option<&'a Mark>,
+    busy: bool,
+    now: NaiveDateTime,
+}
+
+fn topic_paper(ui: &mut Ui, cache: &mut CommonMarkCache, show_command: &mut bool, topic: &TopicView, open: &Open) {
     headed_paper(
         ui,
-        |ui| head(ui, topic, updated, busy, now),
+        |ui| head(ui, topic, open.updated, open.busy, open.now),
         |ui| match topic.fill {
-            Fill::Hidden => hidden(ui, topic, counts),
-            Fill::NotStarted => not_started(ui, cache, topic, busy),
+            Fill::Hidden => hidden(ui, topic),
+            Fill::NotStarted => not_started(ui, cache, show_command, topic, open.busy),
             Fill::Filled | Fill::ToFill(_) => sections(ui, cache, topic),
         },
         |ui| foot(ui, topic),
@@ -135,6 +151,8 @@ fn head(ui: &mut Ui, topic: &TopicView, updated: Option<&Mark>, busy: bool, now:
             ui.label(rich(ui, topic.title, Type::DEAL, Ink::Text));
             ui.add(Label::new(rich(ui, lead(topic), Type::BODY, Ink::Muted)).wrap());
             if let Some(mark) = updated {
+                // The age words change on their own, so the window wakes when they would.
+                ui.ctx().request_repaint_after(next_age_change(mark.at, now));
                 ui.add_space(ITEM_GAP);
                 ui.horizontal(|ui| {
                     tag(ui, "Updated", Tone::Active).on_hover_text(UPDATED_HOVER);
@@ -151,10 +169,12 @@ fn lead(topic: &TopicView) -> String {
         TopicId::Identity => "Who you are and the languages you speak. Every CV and letter opens with it.".to_owned(),
         TopicId::Experience => {
             let roles = topic.sections.iter().flat_map(|section| &section.children).filter(|child| child.role.is_some()).count();
+            // The roles stay in the order the file has them, which need not be by date.
             match roles {
-                _ if !topic.readable => "Roles, newest first. Claude picks from these for each CV.".to_owned(),
-                1 => "1 role. Claude picks from it for each CV.".to_owned(),
-                roles => format!("{roles} roles, newest first. Claude picks from these for each CV."),
+                _ if !topic.readable => "Your roles. Claude picks from these for each CV.".to_owned(),
+                0 => "No roles here yet. Claude picks from your roles for each CV.".to_owned(),
+                1 => "1 role. Claude picks from your roles for each CV.".to_owned(),
+                roles => format!("{roles} roles. Claude picks from these for each CV."),
             }
         }
         TopicId::Education => "Your degrees and courses. Claude lists them on each CV.".to_owned(),
@@ -187,6 +207,13 @@ fn age(at: NaiveDateTime, now: NaiveDateTime) -> String {
     }
 }
 
+/// How long until `age` words the time since `at` differently: the next whole minute in the first hour, then the next hour.
+fn next_age_change(at: NaiveDateTime, now: NaiveDateTime) -> Duration {
+    let seconds = (now - at).num_seconds().max(0).unsigned_abs();
+    let step = if seconds < 3600 { 60 } else { 3600 };
+    Duration::from_secs(step - seconds % step)
+}
+
 /// "A", "A and B", "A, B and C".
 fn and_list(items: &[String]) -> String {
     match items {
@@ -196,7 +223,7 @@ fn and_list(items: &[String]) -> String {
     }
 }
 
-/// The topic's blocks, as written. Each section shows under its heading when the topic has more than one.
+/// The topic's blocks, as written. Each section shows under its label when the topic has more than one.
 /// A role reads as a CV line, and the rest goes through `profile_document`, as ARCHITECTURE.md#trust says.
 fn sections(ui: &mut Ui, cache: &mut CommonMarkCache, topic: &TopicView) {
     let headed = topic.sections.len() > 1;
@@ -207,15 +234,41 @@ fn sections(ui: &mut Ui, cache: &mut CommonMarkCache, topic: &TopicView) {
                 divider(ui);
             }
             ui.add_space(SCREEN_GAP / 2.0);
-            section_blocks(ui, cache, section, headed);
+            section_blocks(ui, cache, section, headed.then(|| section_label(topic, section)));
         });
     }
 }
 
-fn section_blocks(ui: &mut Ui, cache: &mut CommonMarkCache, section: &SectionView, headed: bool) {
+/// What a section's sub-heading says. A part from `CLAUDE.md` is named by where it lives, so it reads apart from the
+/// topic's own blocks of the same name. When `CLAUDE.md` adds to a topic held in one other section, that section takes a
+/// short label, such as Roles. Every other section keeps its own heading.
+fn section_label(topic: &TopicView, section: &SectionView) -> String {
+    let in_claude = |section: &SectionView| section.block.key.file == ProfileFile::ClaudeMd;
+    let summaries = topic.sections.iter().filter(|section| in_claude(section)).count();
+    let own = || visible_chars(&section.block.heading).collect::<String>();
+    if in_claude(section) {
+        return if summaries == 1 { "Summary in CLAUDE.md".to_owned() } else { format!("{} in CLAUDE.md", own()) };
+    }
+    match short_label(topic.id) {
+        Some(label) if summaries > 0 && topic.sections.len() - summaries == 1 => label.to_owned(),
+        _ => own(),
+    }
+}
+
+/// The label of a topic's one section outside `CLAUDE.md`, beside the summary there.
+fn short_label(topic: TopicId) -> Option<&'static str> {
+    match topic {
+        TopicId::Identity => Some("Details and languages"),
+        TopicId::Experience => Some("Roles"),
+        TopicId::Education => Some("Degrees"),
+        _ => None,
+    }
+}
+
+fn section_blocks(ui: &mut Ui, cache: &mut CommonMarkCache, section: &SectionView, label: Option<String>) {
     ui.spacing_mut().item_spacing.y = ITEM_GAP;
-    if headed {
-        heading(ui, &section.block.heading, Type::SLIP_TITLE);
+    if let Some(label) = label {
+        heading(ui, &label, Type::SLIP_TITLE);
     }
     let own = !section.block.body.is_empty();
     if own {
@@ -244,17 +297,22 @@ fn heading(ui: &mut Ui, text: &str, style: Type) {
     desk_label(ui, visible_chars(text).collect::<String>(), style, Ink::Text);
 }
 
-/// A topic whose blocks hold nothing yet: what Claude will ask, the ways to fill it, then its outline, faded.
-fn not_started(ui: &mut Ui, cache: &mut CommonMarkCache, topic: &TopicView, busy: bool) {
+/// A topic whose blocks hold nothing yet: what Claude will ask, the ways to fill it and the command it opens, then its
+/// outline, faded.
+fn not_started(ui: &mut Ui, cache: &mut CommonMarkCache, show_command: &mut bool, topic: &TopicView, busy: bool) {
     ui.add_space(SCREEN_GAP / 2.0);
     let body = match asks(topic.id) {
         Some(asks) if topic.setup_line.is_some() => format!("Claude asks {asks}, then writes it here. You can change any of it afterwards."),
         _ => "Write it in your own words. Claude reads it as you leave it.".to_owned(),
     };
-    empty_state(ui, "Not filled in yet", &body, |ui| {
+    let actions = |ui: &mut Ui| {
         update_with_claude(ui, topic, busy, true);
         enabled_when(ui, false, EDIT_LATER, |ui| button(ui, "Write it myself"));
-    });
+    };
+    match topic.setup_line.as_deref() {
+        Some(line) => empty_state_with_command(ui, "Not filled in yet", &body, actions, line, show_command),
+        None => empty_state(ui, "Not filled in yet", &body, actions),
+    }
     if topic.sections.is_empty() {
         return;
     }
@@ -282,17 +340,10 @@ fn asks(topic: TopicId) -> Option<&'static str> {
 }
 
 /// A topic whose file could not be read: hidden, not gone, and back once the file is fixed.
-fn hidden(ui: &mut Ui, topic: &TopicView, counts: TopicCounts) {
+/// The note names no count of other topics: the screen cannot tell which file hid which topic.
+fn hidden(ui: &mut Ui, topic: &TopicView) {
     ui.add_space(SCREEN_GAP / 2.0);
-    let others = counts.hidden.saturating_sub(1);
-    let shown = match others {
-        0 => "so this topic is not shown".to_owned(),
-        1 => "so this topic and 1 other are not shown".to_owned(),
-        others => format!("so this topic and {others} others are not shown"),
-    };
-    let body =
-        format!("Jobdesk could not read a file that holds it, {shown}. Nothing in the file was changed. Jobdesk reads it again as soon as the file changes.");
-    empty_note(ui, hidden_title(topic.id), &body);
+    empty_note(ui, hidden_title(topic.id), HIDDEN);
 }
 
 fn hidden_title(topic: TopicId) -> &'static str {
@@ -392,6 +443,57 @@ mod tests {
         assert_eq!(age(at(9, 30), at(12, 0)), "2 hours ago");
         let hidden = Mark { at: at(9, 30), blocks: vec!["Lead\u{202e} Engineer".to_owned()] };
         assert_eq!(updated_words(&hidden, at(9, 30)), "by the last task, just now. It changed Lead Engineer.");
+    }
+
+    #[test]
+    fn the_window_wakes_when_the_age_words_change() {
+        let after = |minutes: i64, seconds: i64| at(9, 30) + chrono::Duration::minutes(minutes) + chrono::Duration::seconds(seconds);
+        assert_eq!(next_age_change(at(9, 30), at(9, 30)), Duration::from_secs(60));
+        assert_eq!(next_age_change(at(9, 30), after(0, 45)), Duration::from_secs(15));
+        assert_eq!(next_age_change(at(9, 30), after(4, 10)), Duration::from_secs(50));
+        assert_eq!(next_age_change(at(9, 30), after(75, 0)), Duration::from_secs(45 * 60));
+        assert_eq!(age(at(9, 30), after(0, 59)), "just now");
+        assert_eq!(age(at(9, 30), after(1, 0)), "1 minute ago");
+    }
+
+    fn view(candidate: &str, claude: Option<&str>) -> ProfileView {
+        let (candidate, claude) = (candidate.to_owned(), claude.map(str::to_owned));
+        crate::profile::application::profile_view(&|file| {
+            Ok(match file {
+                ProfileFile::Candidate => Some(candidate.clone()),
+                ProfileFile::ClaudeMd => claude.clone(),
+                _ => None,
+            })
+        })
+        .0
+    }
+
+    fn topic(view: &ProfileView, id: TopicId) -> &TopicView {
+        view.topics.iter().find(|topic| topic.id == id).unwrap()
+    }
+
+    /// The lead counts the roles, and claims no order the file may not keep.
+    #[test]
+    fn experience_counts_its_roles() {
+        let two = view("## Professional Experience\n\n### Dev - Acme (2018 – 2021)\nBuilt.\n\n### Lead - Calder (2021 – now)\nShipped.\n", None);
+        assert_eq!(lead(topic(&two, TopicId::Experience)), "2 roles. Claude picks from these for each CV.");
+        let none = view("## Professional Experience\nI freelance.\n", None);
+        assert_eq!(lead(topic(&none, TopicId::Experience)), "No roles here yet. Claude picks from your roles for each CV.");
+        assert!(!lead(topic(&two, TopicId::Experience)).contains("newest"));
+    }
+
+    /// A part from CLAUDE.md says so, and the one part beside it takes a short label, so the two never read alike.
+    #[test]
+    fn sections_from_claude_md_are_named_by_where_they_live() {
+        let candidate = "## Professional Experience\n\n### Lead - Calder (2021 – now)\nShipped.\n\n## Technical Skills\nRust\n";
+        let claude = "## Candidate Profile\n\n### Professional Experience\n- Lead at Calder\n\n### Technical Skills\n- Rust\n\n### Certifications\n- CKA\n";
+        let view = view(candidate, Some(claude));
+        let labels = |id: TopicId| {
+            let topic = topic(&view, id);
+            topic.sections.iter().map(|section| section_label(topic, section)).collect::<Vec<_>>()
+        };
+        assert_eq!(labels(TopicId::Experience), ["Roles", "Summary in CLAUDE.md"]);
+        assert_eq!(labels(TopicId::Skills), ["Technical Skills", "Technical Skills in CLAUDE.md", "Certifications in CLAUDE.md"]);
     }
 
     #[test]

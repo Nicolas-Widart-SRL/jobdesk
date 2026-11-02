@@ -3475,6 +3475,100 @@ fn pick_topic(harness: &mut Harness, title: &str) {
     harness.run_steps(3);
 }
 
+/// The rail's Updated marks, by the row they sit on.
+fn marked_rows(harness: &Harness) -> Vec<String> {
+    let marks: Vec<egui::Rect> = harness.query_all_by_label("Updated").map(|mark| mark.rect()).collect();
+    TOPIC_TITLES
+        .iter()
+        .filter(|title| {
+            let row = harness.get_all_by_label(title).next().unwrap().rect();
+            marks.iter().any(|mark| (mark.center().y - row.center().y).abs() < 4.0 && mark.left() < 320.0)
+        })
+        .map(|title| title.to_string())
+        .collect()
+}
+
+/// A snapshot read before the run ended may already hold some of its writes, yet it may miss the last. It marks
+/// nothing, and the first one read after the end marks what the run changed.
+#[test]
+fn only_a_snapshot_read_after_the_end_marks_the_run() {
+    let (shell, root, sink, feed) = profile_with_run("profile_marks_late");
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Identity and languages");
+    rewrite(&root, CANDIDATE, "Mentored four engineers", "Mentored five engineers");
+    let early = Snapshot::load(&root, day());
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(early).unwrap();
+    harness.run_steps(3);
+    assert!(marked_rows(&harness).is_empty(), "the snapshot was read before the run ended");
+
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert_eq!(marked_rows(&harness), ["Experience"]);
+}
+
+/// `/setup` asks and waits, so a reply can start the next turn before the load that follows the first turn arrives.
+/// The profile kept at the run's start stays, so the end of the second turn marks the changes of both, even though a
+/// snapshot that holds the first turn's change arrived while it worked.
+#[test]
+fn a_reply_before_the_reload_keeps_the_first_turns_changes() {
+    let (shell, root, sink, feed) = profile_with_run("profile_marks_reply");
+    let (mut harness, shell) = shared_harness(shell);
+    pick_topic(&mut harness, "Education");
+    let identity = harness.get_all_by_label("Identity and languages").next().unwrap().rect().width();
+    rewrite(&root, CANDIDATE, "Mentored four engineers", "Mentored five engineers");
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: Some("Anything else?".into()), cost_usd: 0.4, duration_ms: 40_000 }]);
+    harness.run_steps(3);
+
+    let id = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].id.clone();
+    shell.borrow_mut().desk_slot().as_mut().unwrap().reply(&id, "Add Namur to my identity.").unwrap();
+    harness.run_steps(3);
+    rewrite(&root, CANDIDATE, "- **Location:** Namur, Belgium\n", "- **Location:** Namur, Belgium (since 2016)\n");
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+
+    assert_eq!(marked_rows(&harness), ["Identity and languages", "Experience"], "both turns' changes are marked");
+    assert_eq!(harness.get_all_by_label("Identity and languages").next().unwrap().rect().width(), identity, "the longest title fits beside the mark");
+    harness.get_by_label("Identity and languages, Filled. Updated by the last task. Open the topic to see it.");
+    harness.get_by_label("Education, Filled");
+}
+
+/// The empty topic shows the command it opens, on asking, and starts nothing.
+#[test]
+fn an_empty_topic_shows_its_command() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::Profile, "profile_empty_command");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Goals and deal-breakers");
+    assert!(!is_shown(&harness, "/setup --section goals"));
+    harness.get_by_label("Show the command").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "/setup --section goals"));
+    assert!(!is_shown(&harness, LAUNCHER) && started.lock().unwrap().is_none(), "nothing opens or starts");
+    pick_topic(&mut harness, "Experience");
+    pick_topic(&mut harness, "Goals and deal-breakers");
+    assert!(!is_shown(&harness, "/setup --section goals"), "another topic closes the line");
+}
+
+/// A hidden topic says so without counting the others, which another file may have hidden.
+#[test]
+fn a_hidden_topic_names_no_count() {
+    let root = sample_root("profile_hidden_note");
+    fs::write(root.join(CANDIDATE), b"# Candidate Profile\n\nCaf\xe9\n").unwrap();
+    fs::write(root.join(".claude/skills/job-application-assistant/02-behavioral-profile.md"), b"Caf\xe9\n").unwrap();
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Experience");
+    assert!(harness.query_by_label_contains("so it is not shown").is_some());
+    assert!(harness.query_by_label_contains("others").is_none());
+}
+
 /// A run that rewrites one role between its start and its result marks Experience alone. Opening it clears the rail
 /// mark and shows the head line, which names the role.
 #[test]
@@ -3518,7 +3612,7 @@ fn update_with_claude_fills_the_launcher_and_starts_nothing() {
     let mut shell = shell(Screen::Profile, "profile_update_with_claude");
     *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
     let mut harness = tray_harness(shell);
-    assert!(is_shown(&harness, "5 roles, newest first. Claude picks from these for each CV."), "Experience opens first: it has blanks to fill");
+    assert!(is_shown(&harness, "5 roles. Claude picks from these for each CV."), "Experience opens first: it has blanks to fill");
 
     harness.get_by_label(CLAUDE_UPDATE).click();
     harness.run_steps(3);

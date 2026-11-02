@@ -403,11 +403,14 @@ impl Shell {
 
     /// A run's start keeps the profile as it stands. Its end asks for a fresh load, and the first snapshot read after the
     /// end marks the topics the run changed. The snapshot on show at the end may predate the run's last writes.
+    /// A turn or run that starts before that load arrives keeps the kept profile, so the next end marks the changes of both:
+    /// the snapshot on show may already hold the first one's writes.
     fn follow_runs(&mut self) {
         let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         if busy && !self.was_busy {
-            self.marks.begin(&self.snapshot.profile);
-            self.run_ended = None;
+            if self.run_ended.take().is_none() {
+                self.marks.begin(&self.snapshot.profile);
+            }
         } else if !busy && self.was_busy {
             self.run_ended = Some(Instant::now());
             // The run that ended left its cost in its log. A closed worker has nothing to reload.

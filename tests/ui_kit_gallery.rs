@@ -9,16 +9,16 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field, attention_count, bar,
-    blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, confirm_popover, copy_button,
+    KnotState, NodeMarks, Palette, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field, attention_count,
+    bar, blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, confirm_popover, copy_button,
     danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state,
     enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane,
     lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
     pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score,
-    search_field, segmented, select_row, setting_check, setting_check_amount, setting_radio, setting_row, setting_section, settings_page, shell_top_frame,
-    shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
-    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip,
-    toggle_group, turn_band, undo_row,
+    search_field, secret_field, segmented, select_row, setting_check, setting_check_amount, setting_radio, setting_row, setting_section, settings_page,
+    shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag,
+    stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally,
+    tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -923,8 +923,11 @@ fn usage_sheet(theme: Theme, name: &str) {
 }
 
 /// The settings sheet's size: room for every row and the open popover under the last one.
-const SETTINGS_SHEET: [f32; 2] = [1000.0, 1180.0];
+const SETTINGS_SHEET: [f32; 2] = [1000.0, 1405.0];
 const CONFIRM_WIDTH: f32 = 340.0;
+/// An obviously fake key for the secret fields.
+const FAKE_KEY: &str = "sk-ant-fake-gallery-key-0000";
+const SECRET_WIDTH: f32 = 360.0;
 const CLEAR: Confirm = Confirm {
     question: "Clear 214 tray decisions?",
     note: "Today deals every card again, the ones you skipped too. This cannot be undone.",
@@ -960,6 +963,15 @@ fn settings_widgets(ui: &mut Ui, confirm: &mut Option<bool>) {
             amount_field(ui, &mut "5.00".to_owned(), 110.0, "Suggested");
         });
     });
+    setting_section(ui, "Secret fields", None, "");
+    let field = |ui: &mut Ui, secret: &mut Secret| {
+        ui.allocate_ui(egui::vec2(SECRET_WIDTH, ui.available_height()), |ui| secret_field(ui, secret, "Paste a key from the Console"));
+    };
+    setting_row(ui, "Empty", "The hint, and Show off.", "", |ui| field(ui, &mut Secret::new()));
+    setting_row(ui, "Filled", "Masked until Show is on.", "", |ui| field(ui, &mut Secret::from(FAKE_KEY.to_owned())));
+    let mut shown = Secret::from(FAKE_KEY.to_owned());
+    shown.set_shown(true);
+    setting_row(ui, "Shown", "Show is on, so the key reads in full.", "", |ui| field(ui, &mut shown));
     setting_section(ui, "Either way", None, "");
     setting_row(ui, "Questions from Claude", "A question Claude asks you always reaches you, as Your turn on Today and Tasks.", "", |ui| {
         tag(ui, "Always on", Tone::Plain);
@@ -1067,8 +1079,8 @@ fn every_clickable_widget_shows_the_hand() {
         .with_context_setup(install_look)
         .build_ui(move |ui| settings_page_of(ui, &mut confirm));
     harness.run();
-    // Two radios, two cap checkboxes, Clear tray decisions, and the popover's Keep them and Clear decisions.
-    assert_eq!(hands(&mut harness), 7, "the settings sheet's clickable widgets");
+    // Two radios, two cap checkboxes, three Show toggles, Clear tray decisions, and the popover's Keep them and Clear decisions.
+    assert_eq!(hands(&mut harness), 10, "the settings sheet's clickable widgets");
     harness.get_by_label("Ask a second reader").hover();
     harness.step();
     assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default, "a disabled radio keeps the arrow");

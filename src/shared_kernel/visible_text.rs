@@ -19,7 +19,7 @@ pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
-fn hidden(c: char) -> bool {
+pub fn hidden(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'

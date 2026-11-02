@@ -3,6 +3,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use crate::settings::domain::{KeyStore, KeyStoreError};
 use crate::shared_kernel::ApiKey;
 
+const UNREADABLE: &str = "The keychain item could not be read.";
+
 /// A key held in memory only, for tests and for a window that must never touch the system keychain.
 pub struct MemoryKeychain {
     key: Mutex<Option<String>>,
@@ -20,7 +22,11 @@ impl MemoryKeychain {
 
 impl KeyStore for MemoryKeychain {
     fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
-        Ok(self.held().as_deref().and_then(ApiKey::parse))
+        // Like the system keychain, stored text that is no key is an error, and the message never holds it.
+        match self.held().as_deref() {
+            None => Ok(None),
+            Some(text) => ApiKey::parse(text).map(Some).ok_or_else(|| KeyStoreError { message: UNREADABLE.to_owned() }),
+        }
     }
 
     fn write(&self, key: &ApiKey) -> Result<(), KeyStoreError> {
@@ -54,6 +60,14 @@ mod tests {
     #[test]
     fn a_new_keychain_can_start_with_a_key() {
         assert_eq!(MemoryKeychain::new(Some(FAKE)).read().unwrap().unwrap().expose(), FAKE);
+    }
+
+    #[test]
+    fn stored_text_that_is_no_key_is_an_error_without_the_text() {
+        for text in ["has a space", "", "  "] {
+            let error = MemoryKeychain::new(Some(text)).read().unwrap_err();
+            assert_eq!(error.message, UNREADABLE);
+        }
     }
 
     #[test]

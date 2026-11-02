@@ -3,8 +3,13 @@ use crate::shared_kernel::ApiKey;
 
 const SERVICE: &str = "Jobdesk API key";
 const ACCOUNT: &str = "Anthropic Console";
-/// Said for every failure that could carry the stored bytes, so the key never reaches a message.
+/// Said when a stored item is no usable key.
 const UNREADABLE: &str = "The keychain item could not be read.";
+/// Said for every other failure that could carry the stored bytes, whatever the operation, so the key never reaches a message.
+const FAILED: &str = "The keychain item could not be used.";
+/// Only the macOS Keychain and the Windows Credential Manager are backed. Elsewhere the crate keeps a mock that forgets.
+#[cfg(not(any(target_os = "macos", windows)))]
+const NO_KEYCHAIN: &str = "No system keychain on this platform.";
 
 /// The API key in the macOS Keychain or the Windows Credential Manager.
 pub struct SystemKeychain;
@@ -14,6 +19,12 @@ impl SystemKeychain {
         Self
     }
 
+    #[cfg(not(any(target_os = "macos", windows)))]
+    fn entry() -> Result<keyring::Entry, KeyStoreError> {
+        Err(KeyStoreError { message: NO_KEYCHAIN.to_owned() })
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
     fn entry() -> Result<keyring::Entry, KeyStoreError> {
         // Credential Manager lists an item by its target, so the target is the service name too.
         let entry = if cfg!(windows) { keyring::Entry::new_with_target(SERVICE, SERVICE, ACCOUNT) } else { keyring::Entry::new(SERVICE, ACCOUNT) };
@@ -28,11 +39,11 @@ impl Default for SystemKeychain {
 }
 
 /// Only the two platform failures give their own words. `BadEncoding` holds the stored bytes and `Ambiguous` holds
-/// credentials, so those and every other error give the fixed text, and no `keyring::Error` is ever formatted whole.
+/// credentials, so those and every other error give a fixed text, and no `keyring::Error` is ever formatted whole.
 fn failure(error: keyring::Error) -> KeyStoreError {
     let message = match error {
         keyring::Error::PlatformFailure(inner) | keyring::Error::NoStorageAccess(inner) => inner.to_string(),
-        _ => UNREADABLE.to_owned(),
+        _ => FAILED.to_owned(),
     };
     KeyStoreError { message }
 }
@@ -65,8 +76,19 @@ mod tests {
     #[test]
     fn an_error_that_holds_stored_bytes_gives_the_fixed_text() {
         let error = failure(keyring::Error::BadEncoding(b"sk-ant-api03-FAKE-not-a-real-key".to_vec()));
-        assert_eq!(error.message, UNREADABLE);
+        assert_eq!(error.message, FAILED);
         assert!(!error.message.contains("sk-ant"));
+        assert_eq!(failure(keyring::Error::Ambiguous(Vec::new())).message, FAILED);
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn without_a_backed_keychain_every_operation_fails() {
+        let keychain = SystemKeychain::new();
+        let key = ApiKey::parse("sk-ant-FAKE-not-a-real-key").unwrap();
+        assert_eq!(keychain.write(&key).unwrap_err().message, NO_KEYCHAIN);
+        assert_eq!(keychain.read().unwrap_err().message, NO_KEYCHAIN);
+        assert_eq!(keychain.delete().unwrap_err().message, NO_KEYCHAIN);
     }
 
     #[test]

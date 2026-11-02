@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
+use crate::shared_kernel::visible_text::hidden;
+
 /// An Anthropic API key. It has no `Clone` and no `Display`, and its `Debug` shows no text,
 /// so a key cannot reach a log, a panic message or the screen by accident.
 pub struct ApiKey(String);
 
 impl ApiKey {
-    /// The key without the whitespace around it. None for text that is empty or holds whitespace or control characters inside.
+    /// The key without the whitespace around it. None for text that is empty or holds whitespace, control or invisible characters inside
+    /// (zero-width, byte-order mark, bidi marks), which could hide in a pasted key and in the last four shown.
     pub fn parse(text: &str) -> Option<ApiKey> {
         let key = text.trim();
-        if key.is_empty() || key.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        if key.is_empty() || key.chars().any(|c| c.is_whitespace() || c.is_control() || hidden(c)) {
             return None;
         }
         Some(ApiKey(key.to_owned()))
@@ -60,6 +63,15 @@ mod tests {
     fn parse_refuses_whitespace_or_control_characters_inside() {
         for text in ["sk-ant- 1234", "sk-ant-\n1234", "sk-ant-\t1234", "sk-ant-\u{a0}1234", "sk-ant-\u{0}1234", "sk-ant-\u{7f}1234"] {
             assert!(ApiKey::parse(text).is_none(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_invisible_characters_anywhere() {
+        for hidden in ['\u{200B}', '\u{FEFF}', '\u{200E}', '\u{202E}', '\u{2066}', '\u{2060}', '\u{00AD}'] {
+            for text in [format!("{FAKE}{hidden}"), format!("{hidden}{FAKE}"), format!("sk-ant-{hidden}api03-FAKE"), format!("{FAKE}{hidden}  ")] {
+                assert!(ApiKey::parse(&text).is_none(), "{text:?}");
+            }
         }
     }
 }

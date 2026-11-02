@@ -19,7 +19,8 @@ pub struct KeyStoreError {
 
 const MASK: &str = "••••••••";
 const PREFIX: &str = "sk-ant-";
-/// A key shorter than this shows no characters, because its last four would give away too much of it.
+/// The last four show only when the secret part of the key, after the public `sk-ant-` prefix, has this many characters.
+/// So at most a third of the secret is ever on the screen.
 const LONG_ENOUGH: usize = 12;
 
 /// What the screen may show of a saved key: whether it has the usual prefix, and the last four characters of a long key.
@@ -32,9 +33,11 @@ pub struct KeyMask {
 impl KeyMask {
     pub fn of(key: &ApiKey) -> Self {
         let text = key.expose();
+        let prefixed = text.starts_with(PREFIX);
         let count = text.chars().count();
-        let last_four = (count >= LONG_ENOUGH).then(|| text.chars().skip(count - 4).collect());
-        Self { prefixed: text.starts_with(PREFIX), last_four }
+        let secret = if prefixed { count - PREFIX.len() } else { count };
+        let last_four = (secret >= LONG_ENOUGH).then(|| text.chars().skip(count - 4).collect());
+        Self { prefixed, last_four }
     }
 
     /// The dots, after `sk-ant-` when the key has that prefix.
@@ -105,9 +108,16 @@ mod tests {
     }
 
     #[test]
-    fn twelve_characters_is_long_enough() {
-        assert_eq!(mask_of("sk-ant-12345").ending(), Some("2345"));
-        assert_eq!(mask_of("sk-ant-1234").ending(), None);
+    fn twelve_secret_characters_are_long_enough() {
+        assert_eq!(mask_of("FAKE12345678").ending(), Some("5678"));
+        assert_eq!(mask_of("FAKE1234567").ending(), None);
+    }
+
+    #[test]
+    fn the_public_prefix_does_not_count_toward_the_secret() {
+        assert_eq!(mask_of("sk-ant-12345").ending(), None, "five secret characters");
+        assert_eq!(mask_of("sk-ant-12345678901").ending(), None, "eleven secret characters");
+        assert_eq!(mask_of("sk-ant-123456789012").ending(), Some("9012"));
     }
 
     #[test]

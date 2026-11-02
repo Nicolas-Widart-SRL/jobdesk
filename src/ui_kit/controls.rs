@@ -900,12 +900,9 @@ pub fn secret_field(ui: &mut Ui, secret: &mut Secret, hint: &str) -> Response {
         ui.ctx().data_mut(|data| data.remove::<egui::text_edit::TextEditState>(id));
     }
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
-    // Show comes first, so a click on it masks or shows the text in the same frame.
-    let mut side = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    if small_toggle(&mut side, "Show", secret.shown).clicked() {
-        secret.shown = !secret.shown;
-    }
-    let field = Rect::from_min_max(rect.min, egui::pos2((side.min_rect().left() - BUTTON_GAP).max(rect.left()), rect.bottom()));
+    // Show is measured first and added after the edit, so Tab reaches the field before it, though it sits at the right.
+    let show = line(ui, "Show", SMALL.font, p.text, f32::INFINITY).size().x + SMALL.padding * 2.0;
+    let field = Rect::from_min_max(rect.min, egui::pos2((rect.right() - show - BUTTON_GAP).max(rect.left()), rect.bottom()));
     // The field's box is painted last, when its focus is known, under what it holds.
     let under = ui.painter().add(egui::Shape::Noop);
     let room = field.shrink2(vec2(FIELD_PADDING, 0.0));
@@ -935,6 +932,13 @@ pub fn secret_field(ui: &mut Ui, secret: &mut Secret, hint: &str) -> Response {
     if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
         state.clear_undoer();
         state.store(ui.ctx(), id);
+    }
+    let toggle = Rect::from_min_max(egui::pos2(field.right() + BUTTON_GAP, rect.top()), rect.max);
+    let mut side = ui.new_child(egui::UiBuilder::new().max_rect(toggle).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    if small_toggle(&mut side, "Show", secret.shown).clicked() {
+        secret.shown = !secret.shown;
+        // The edit was drawn before the click was known, so the next frame masks or shows the text.
+        ui.ctx().request_repaint();
     }
     let border = match (enabled, response.has_focus()) {
         (false, _) => dimmed(p.line),
@@ -1304,6 +1308,47 @@ mod tests {
             assert_eq!(secret.borrow().text, "", "undo brought the key back");
         }
         assert!(!secret.borrow().shown);
+    }
+
+    #[test]
+    fn clear_forgets_the_fields_cursor() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        type_fake_key(&mut harness);
+        let id = harness.ctx.memory(|memory| memory.focused()).expect("the field has the focus");
+        // Away from the field, the edit leaves its kept state as it is, so only the removal can reset it.
+        harness.ctx.memory_mut(|memory| memory.surrender_focus(id));
+        harness.run();
+        let cursor = |ctx: &egui::Context| egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range());
+        assert!(cursor(&harness.ctx).is_some(), "the field kept no cursor after typing");
+        secret.borrow_mut().clear();
+        harness.run();
+        assert_eq!(cursor(&harness.ctx), None, "the field kept its cursor after clear");
+    }
+
+    #[test]
+    fn tab_reaches_the_field_before_show() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let field = std::rc::Rc::clone(&secret);
+        let mut harness = Harness::builder().with_size([500.0, 120.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            button(ui, "Before");
+            secret_field(ui, &mut field.borrow_mut(), "Paste your key");
+        });
+        harness.run();
+        harness.get_by_label("Before").focus();
+        harness.run();
+        let focused = |harness: &Harness| harness.query_by(|node| node.is_focused()).map(|node| (node.accesskit_node().role(), node.accesskit_node().label()));
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness), Some((egui::accesskit::Role::PasswordInput, None)), "Tab skipped the field");
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness), Some((egui::accesskit::Role::Button, Some("Show".to_owned()))));
+        harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness).map(|(role, _)| role), Some(egui::accesskit::Role::PasswordInput), "Shift+Tab from Show missed the field");
+        assert!(!secret.borrow().shown, "moving the focus showed the key");
     }
 
     #[test]

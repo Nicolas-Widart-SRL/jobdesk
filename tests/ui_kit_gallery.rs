@@ -4,20 +4,20 @@ use egui::{CursorIcon, Grid, Role, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
-use jobdesk::shared_kernel::placeholders::{self, Page};
+use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
     KnotState, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, block_editor,
     brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button, day_heatmap,
-    day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, document_with_blanks, doughnut, empty_state, enabled_when, faint_mono, fat_tally,
-    figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row,
-    markdown_with_blanks, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row,
-    primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score, search_field, segmented, select_row,
-    setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button,
-    small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
-    status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
+    day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band,
+    figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
+    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button,
+    profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score, search_field, segmented, select_row, setting_check,
+    setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button,
+    small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits,
+    step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -631,22 +631,24 @@ const ROLE_BLOCKS: [&str; 2] = [
     "### Senior Backend Engineer - [COMPANY], Ghent (2017 – 2021)\n- Built the appointment service used by 120 clinics, at 99.95% uptime over three years.",
 ];
 
-/// A role as the Profile screen shows one: the page of its block, with its heading split into title, company and dates.
+/// A role as the Profile screen shows one: its heading cut into title, company and dates by source position, each part
+/// with a blank where the block's count found a token, and its body as written.
 struct ShownRole {
-    page: Page,
-    title: String,
-    company: String,
-    dates: String,
+    title: Vec<Piece>,
+    company: Vec<Piece>,
+    dates: Vec<Piece>,
     body: String,
 }
 
 fn shown_role(block: &str) -> ShownRole {
-    let page = placeholders::page(block);
-    let heading = placeholders::heading_text(&page).expect("a role heading");
-    let (name, dates) = heading.rsplit_once(" (").expect("dates");
+    let (line, body) = block.split_once('\n').expect("a body");
+    let (name, dates) = line[4..].rsplit_once(" (").expect("dates");
     let (title, company) = name.split_once(" - ").expect("a company");
-    let body = page.text.split_once('\n').map_or("", |(_, body)| body).to_owned();
-    ShownRole { title: title.to_owned(), company: company.to_owned(), dates: dates.trim_end_matches(')').to_owned(), body, page }
+    let part = |part: &str| {
+        let start = part.as_ptr() as usize - block.as_ptr() as usize;
+        placeholders::shown_pieces(block, start..start + part.len())
+    };
+    ShownRole { title: part(title), company: part(company), dates: part(dates.trim_end_matches(')')), body: body.to_owned() }
 }
 
 const DRAFT: &str = "### Lead Software Engineer - Calder Freight (2021 – present)\n\nAntwerp. Freelance.\n\n- Leads a team of six building the route-planning platform for 40 depots.\n- Budget or headcount you owned: EUR 1.2M a year, eight people at the peak";
@@ -689,12 +691,12 @@ fn profile(ui: &mut Ui) {
     paper(ui, false, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 0)).show(ui, |ui| {
             for (index, role) in ROLE_BLOCKS.map(shown_role).iter().enumerate() {
-                let entry = RoleEntry { dates: &role.dates, title: &role.title, company: &role.company, body: &role.body, blanks: &role.page.blanks, first: index == 0 };
+                let entry = RoleEntry { dates: &role.dates, title: &role.title, company: &role.company, body: &role.body, first: index == 0 };
                 role_entry(ui, &mut cache, &entry, (index > 0).then_some("Save or cancel the open edit first."));
             }
             divider(ui);
             ui.add_space(12.0);
-            markdown_with_blanks(ui, &mut cache, "Career goals: [ROLE_YOU_WANT_NEXT]. Code such as `cargo test` keeps its own look, and [a link](https://tessel.example/jobs/1) its own.");
+            profile_markdown(ui, &mut cache, "Career goals: [ROLE_YOU_WANT_NEXT]. Code such as `cargo test` keeps its own look, and [a link](https://tessel.example/jobs/1) its own.\n\n<!-- A note from the template, kept off the paper. -->");
             ui.add_space(12.0);
             // Busy holds over a change on disk: the box stays, and Save mine over it waits too.
             for (id, busy, changed, unsaved) in [("rest", false, false, true), ("busy", true, false, false), ("changed", false, true, true), ("changed while busy", true, true, true)] {
@@ -706,7 +708,7 @@ fn profile(ui: &mut Ui) {
             }
             ui.push_id("preview", |ui| {
                 let mut draft = DRAFT.replace("EUR 1.2M a year, eight people at the peak", "[PLACEHOLDER]");
-                block_editor(ui, &editor(false, false, false), &mut draft, &mut true, |ui, draft| document_with_blanks(ui, &mut CommonMarkCache::default(), draft));
+                block_editor(ui, &editor(false, false, false), &mut draft, &mut true, |ui, draft| profile_markdown(ui, &mut CommonMarkCache::default(), draft));
             });
             ui.add_space(12.0);
         });

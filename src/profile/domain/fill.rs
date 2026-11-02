@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use crate::profile::domain::document::{BlockKey, find, heading_len, is_atx, lines_with_endings};
-use crate::shared_kernel::placeholders::{placeholder_count, shown_text};
+use crate::profile::domain::document::{BlockKey, find, heading_len};
+use crate::shared_kernel::placeholders::{placeholder_count, shows_content};
 
 /// How much of a topic the user has written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,16 +29,14 @@ pub fn topic_fill(blocks: &[&str], readable: bool) -> Fill {
     }
 }
 
-/// The setup tokens left in a block: the tokens its page draws, from the text the page shows (`shown_text`), where a
-/// comment is gone.
+/// The setup tokens left in a block: the tokens its page shows.
 fn open_placeholders(block: &str) -> usize {
-    placeholder_count(&shown_text(block))
+    placeholder_count(block)
 }
 
-/// Under its heading a block holds nothing but blank lines, comments and the headings of its children.
+/// Under its heading a block shows no text or code: only blank lines, comments, other HTML and the headings of its children.
 fn body_is_empty(block: &str) -> bool {
-    let body = shown_text(&block[heading_len(block).min(block.len())..]);
-    lines_with_endings(&body).iter().all(|line| line.trim().is_empty() || is_atx(line))
+    !shows_content(&block[heading_len(block).min(block.len())..])
 }
 
 /// What a save finds in the file compared with what the user opened.

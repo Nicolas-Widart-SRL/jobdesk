@@ -192,7 +192,7 @@ pub fn lines_with_endings(text: &str) -> Vec<&str> {
 }
 
 /// An ATX heading is one to six `#`, then a space or the end of the line.
-fn is_atx(line: &str) -> bool {
+pub fn is_atx(line: &str) -> bool {
     let line = line.trim_start();
     let rest = line.trim_start_matches('#');
     (1..=6).contains(&(line.len() - rest.len())) && (rest.trim_end_matches(['\r', '\n']).is_empty() || rest.starts_with([' ', '\t']))

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use crate::profile::domain::document::{BlockKey, find, heading_len};
-use crate::shared_kernel::placeholders::placeholder_count;
+use crate::profile::domain::document::{BlockKey, find, heading_len, is_atx, lines_with_endings};
+use crate::shared_kernel::placeholders::{placeholder_count, token_name};
 
 /// How much of a topic the user has written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,9 +34,10 @@ pub fn open_placeholders(block: &str) -> usize {
     placeholder_count(&without_comments(block))
 }
 
+/// Under its heading a block holds nothing but blank lines, comments and the headings of its children.
 fn body_is_empty(block: &str) -> bool {
-    let body = &block[heading_len(block).min(block.len())..];
-    without_comments(body).trim().is_empty()
+    let body = without_comments(&block[heading_len(block).min(block.len())..]);
+    lines_with_endings(&body).iter().all(|line| line.trim().is_empty() || is_atx(line))
 }
 
 fn without_comments(text: &str) -> String {
@@ -54,12 +55,15 @@ fn without_comments(text: &str) -> String {
 }
 
 /// What a placeholder token reads as on screen, such as `to fill: first name` for `FIRST_NAME`.
+/// The name reads in lower case. A hint after it keeps its case: `LEVEL, e.g. "Native"` gives `to fill: level, e.g. "Native"`.
 pub fn blank_words(token: &str) -> String {
-    let token = token.trim_matches(['[', ']']);
+    let token = token.strip_prefix('[').unwrap_or(token);
+    let token = token.strip_suffix(']').unwrap_or(token);
     if token == "PLACEHOLDER" {
         return "to fill".to_owned();
     }
-    format!("to fill: {}", token.replace('_', " ").to_lowercase())
+    let name = token_name(token);
+    format!("to fill: {}{}", name.replace('_', " ").to_lowercase(), &token[name.len()..])
 }
 
 /// What a save finds in the file compared with what the user opened.
@@ -109,7 +113,18 @@ mod tests {
         assert_eq!(topic_fill(&["## Identity\n\n<!-- List your degrees, [DEGREE] first -->\n\n"], true), Fill::NotStarted);
         assert_eq!(topic_fill(&["## Identity\n<!--\nmany\nlines [X_Y]\n-->\n", "### Education\r<!-- hint -->\r"], true), Fill::NotStarted);
         assert_eq!(topic_fill(&["## Identity\n<!-- hint -->\n", "## Other\nSome text\n"], true), Fill::Filled);
-        assert_eq!(topic_fill(&["## Experience\n<!-- hint -->\n### Role\n"], true), Fill::Filled);
+        assert_eq!(topic_fill(&["## Experience\n<!-- hint -->\n### Role\n"], true), Fill::NotStarted);
+        assert_eq!(topic_fill(&["## Experience\n<!-- hint -->\n### Role\nShipped a thing.\n"], true), Fill::Filled);
+    }
+
+    #[test]
+    fn a_section_of_empty_child_headings_is_not_started() {
+        let text = "## Technical Skills\n\n### Programming & ML\n\n### Domain Expertise\n\n### Software & Tools\n";
+        assert_eq!(topic_fill(&[text], true), Fill::NotStarted);
+        let tokens = "## Technical Skills\n\n### [JOB_TITLE] - [COMPANY] ([START] - [END])\n\n### Tools\n";
+        assert_eq!(topic_fill(&[tokens], true), Fill::NotStarted);
+        let written = "## Technical Skills\n\n### Programming & ML\nRust, Python\n\n### Domain Expertise\n";
+        assert_eq!(topic_fill(&[written], true), Fill::Filled);
     }
 
     #[test]
@@ -132,6 +147,9 @@ mod tests {
         assert_eq!(blank_words("FIRST_NAME"), "to fill: first name");
         assert_eq!(blank_words("PLACEHOLDER"), "to fill");
         assert_eq!(blank_words("[LAST_NAME]"), "to fill: last name");
+        assert_eq!(blank_words(r#"LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)""#), r#"to fill: level, e.g. "Native" / "C2" / "B1/B2 (conversational)""#);
+        assert_eq!(blank_words("[CONTEXT - What Was Happening]"), "to fill: context - What Was Happening");
+        assert_eq!(blank_words("1-2 SENTENCE_SUMMARY"), "to fill: 1-2 sentence summary");
     }
 
     #[test]

@@ -42,6 +42,7 @@ pub struct BlockView {
     /// The block without its heading line. For a `##` with children it stops before the first child.
     pub body: String,
     pub role: Option<Role>,
+    /// The open tokens in `body`, so none in the heading line and none counted again from a child. The topic fill counts every token of the topic once.
     pub placeholders: usize,
 }
 
@@ -143,13 +144,14 @@ fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> B
     let full = text[block.range.clone()].trim_end();
     let body_start = (block.range.start + heading_len(full)).min(own_end);
     let role = if block.level == 3 { role_heading(&block.heading).map(|role| Role { title: role.title.to_owned(), company: role.company.to_owned(), dates: role.dates.to_owned() }) } else { None };
+    let body = text[body_start..own_end].trim().to_owned();
     BlockView {
         key: BlockKey { file, level: block.level, heading: block.heading.clone(), parent: block.parent.clone(), nth: block.nth },
         heading: block.heading.clone(),
         text: full.to_owned(),
-        body: text[body_start..own_end].trim().to_owned(),
+        placeholders: open_placeholders(&body),
+        body,
         role,
-        placeholders: open_placeholders(full),
     }
 }
 
@@ -202,7 +204,8 @@ mod tests {
         assert_eq!(section.block.body, "Intro line.");
         assert_eq!(section.children.len(), 2);
         assert_eq!(section.children[0].role.as_ref().map(|role| role.dates.as_str()), Some("2021 – present"));
-        assert_eq!(section.children[1].placeholders, 5);
+        assert_eq!(section.children[1].placeholders, 1);
+        assert_eq!(section.block.placeholders, 0);
         assert_eq!(section.children[0].key.parent.as_deref(), Some("Professional Experience"));
         assert_eq!(topic(&view, TopicId::Education).fill, Fill::ToFill(2));
         assert!(topic(&view, TopicId::Skills).missing_heading);
@@ -244,6 +247,24 @@ mod tests {
         let identity = topic(&view, TopicId::Identity);
         assert_eq!(identity.sections[0].block.placeholders, 0);
         assert_eq!(identity.fill, Fill::Filled);
+    }
+
+    #[test]
+    fn a_blank_counts_once_across_a_section_and_its_children() {
+        let text = "## Professional Experience\nIntro [SUMMARY_X]\n\n### Lead - Calder (2021 – now)\n[ACHIEVEMENT_1] and [ACHIEVEMENT_2]\n\n### Dev - Acme (2018 – 2021)\n[ACHIEVEMENT_3]\n";
+        let view = view_of(&[(ProfileFile::Candidate, text)]);
+        let experience = topic(&view, TopicId::Experience);
+        let section = &experience.sections[0];
+        let counted: usize = section.block.placeholders + section.children.iter().map(|child| child.placeholders).sum::<usize>();
+        assert_eq!((section.block.placeholders, section.children[0].placeholders, section.children[1].placeholders), (1, 2, 1));
+        assert_eq!(experience.fill, Fill::ToFill(counted));
+    }
+
+    #[test]
+    fn a_section_of_empty_child_headings_is_not_started() {
+        let text = "## Technical Skills\n\n### Programming & ML\n\n### Domain Expertise\n";
+        let view = view_of(&[(ProfileFile::Candidate, text)]);
+        assert_eq!(topic(&view, TopicId::Skills).fill, Fill::NotStarted);
     }
 
     #[test]

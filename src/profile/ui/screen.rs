@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::profile::application::{
     BlockKey, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UpdatedMarks, topic_counts,
 };
-use crate::profile::ui::editor::{Answer, Ask, Edit, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
+use crate::profile::ui::editor::{Answer, Ask, Edit, Hold, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
 use crate::profile::ui::rail::{UPDATED_HOVER, loading_rail, rail};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{BUTTON_GAP, DEAL_PADDING, GUTTER, ITEM_GAP, ROLE_DATES, ROLE_PADDING, RUN_SIDE, SCREEN_GAP, SKELETON_GAP, SKELETON_LINE};
@@ -41,6 +41,8 @@ pub struct ProfileScreen {
     edit: Option<Edit>,
     /// What waits on the discard ask, and whether Keep editing still has to take the focus.
     ask: Option<(Ask, bool)>,
+    /// How many edits have opened, so each has a field of its own.
+    opened: u64,
 }
 
 impl ProfileScreen {
@@ -60,6 +62,30 @@ impl ProfileScreen {
     pub fn put_away(&mut self) {
         self.ask = None;
     }
+
+    /// Asks, over any screen, before something outside Profile drops unsaved text: another folder, or quitting.
+    /// Keep editing is the default and takes the focus on the first frame. Returns the answer once given: true to drop.
+    pub fn ask_away(&self, ctx: &egui::Context, away: Away, focus: &mut bool) -> Option<bool> {
+        let ask = match away {
+            Away::Folder => Ask::Folder,
+            Away::Quit => Ask::Quit,
+        };
+        let noun = self.edit.as_ref().map_or(Noun::Part, Edit::noun);
+        discard_ask(ctx, ask, noun, focus).map(|answer| answer == Answer::Discard)
+    }
+
+    /// Drops the open edit, as the answer to `ask_away`.
+    pub fn drop_edit(&mut self, editor: &mut ProfileEditor) {
+        editor.cancel();
+        self.edit = None;
+    }
+}
+
+/// What, outside Profile, would drop unsaved text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Away {
+    Folder,
+    Quit,
 }
 
 /// What the screen asks of the shell.
@@ -71,12 +97,26 @@ pub enum ProfileRequest {
     Leave,
 }
 
-/// The moment the screen draws in: whether a run works, so Save and Update with Claude… wait, and the time, which ages
-/// the head line and the foot's Changed on disk.
+/// The moment the screen draws in: whether a run works, so Save and Update with Claude… wait, whether Jobdesk is still
+/// reading what a run that ended changed, so Save waits for that too, and the time, which ages the head line and the
+/// foot's Changed on disk.
 #[derive(Debug, Clone, Copy)]
 pub struct Moment {
     pub busy: bool,
+    pub reading: bool,
     pub now: NaiveDateTime,
+}
+
+impl Moment {
+    fn hold(self) -> Option<Hold> {
+        if self.busy {
+            Some(Hold::Run)
+        } else if self.reading {
+            Some(Hold::Reading)
+        } else {
+            None
+        }
+    }
 }
 
 /// The rail of topics beside the one picked, on paper. Until a topic is picked, the first with something left to fill opens.
@@ -108,7 +148,8 @@ pub fn show(
                 editor.cancel();
                 screen.edit = None;
                 match ask {
-                    Ask::Cancel => {}
+                    // The shell asks these over every screen, with `ask_away`.
+                    Ask::Cancel | Ask::Folder | Ask::Quit => {}
                     Ask::Topic(next) => screen.switch(next, marks),
                     Ask::Tab => request = Some(ProfileRequest::Leave),
                 }
@@ -143,7 +184,7 @@ pub fn show(
                 ui.push_id(("profile topic", picked), |ui| {
                     let open = Open { updated: marks.head_line(picked), busy: moment.busy, now: moment.now };
                     let edit = screen.edit.as_mut().filter(|edit| edit.topic == picked);
-                    let mut paper = Paper { cache: &mut screen.markdown, editor: &mut *editor, edit, busy: moment.busy, intent: None };
+                    let mut paper = Paper { cache: &mut screen.markdown, editor: &mut *editor, edit, hold: moment.hold(), intent: None };
                     topic_paper(ui, &mut paper, &mut screen.show_command, topic, &open);
                     intent = paper.intent;
                 });
@@ -197,17 +238,19 @@ impl ProfileScreen {
             Intent::Open { .. } | Intent::AddRole { .. } if editor.editing().is_some() => {}
             Intent::Open { key, text, noun } => {
                 editor.open(key, text);
-                self.edit = Some(Edit::new(topic, noun));
+                self.opened += 1;
+                self.edit = Some(Edit::new(topic, noun, self.opened));
             }
             Intent::AddRole { after } => {
                 editor.open_new(after, ROLE_STUB.to_owned());
-                self.edit = Some(Edit::new(topic, Noun::Role));
+                self.opened += 1;
+                self.edit = Some(Edit::new(topic, Noun::Role, self.opened));
             }
             Intent::Editor(action) => {
                 let edit = self.edit.as_mut()?;
                 match action {
                     EditorAction::Save => {
-                        let written = save(editor, edit, moment.busy, moment.now);
+                        let written = save(editor, edit, moment.hold().is_some(), moment.now);
                         if editor.editing().is_none() {
                             self.edit = None;
                         }
@@ -234,7 +277,7 @@ struct Paper<'a> {
     cache: &'a mut CommonMarkCache,
     editor: &'a mut ProfileEditor,
     edit: Option<&'a mut Edit>,
-    busy: bool,
+    hold: Option<Hold>,
     intent: Option<Intent>,
 }
 
@@ -271,7 +314,7 @@ impl Paper<'_> {
     /// The editor's slip, in place of the block.
     fn slip(&mut self, ui: &mut Ui) {
         let Some(edit) = self.edit.as_deref_mut() else { return };
-        if let Some(action) = slip(ui, self.cache, self.editor, edit, self.busy) {
+        if let Some(action) = slip(ui, self.cache, self.editor, edit, self.hold) {
             self.intent = Some(Intent::Editor(action));
         }
     }

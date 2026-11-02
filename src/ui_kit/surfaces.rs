@@ -8,6 +8,7 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::shared_kernel::Source;
 use crate::shared_kernel::placeholders::Piece;
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
     dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
@@ -21,14 +22,14 @@ use crate::ui_kit::text::{
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
-    CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EMPTY_GAP, EMPTY_PADDING,
-    EMPTY_WIDTH, FADED_OPACITY, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING,
-    GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW,
-    NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIUS_BUTTON,
-    RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP,
-    SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT,
-    SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP,
-    STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
+    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES,
+    FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP,
+    LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING,
+    PROMPT_PADDING, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING,
+    SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP,
+    SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING,
+    STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -1610,6 +1611,10 @@ pub struct BlockEditor<'a> {
     pub busy: Option<EditorBusy<'a>>,
     /// The block changed on disk since the editor opened.
     pub changed: Option<&'a ChangedOnDisk<'a>>,
+    /// The field takes the focus this frame, such as on the frame the editor opens.
+    pub focus: bool,
+    /// The footer scrolls into view this frame, such as when the warning box opens and pushes Save down.
+    pub reveal: bool,
 }
 
 /// What the user asked of a `block_editor` this frame.
@@ -1624,7 +1629,9 @@ pub enum EditorAction {
 /// A slip in place of a block, to edit its raw Markdown: a title row with Preview, then the draft in a field in the body
 /// face, then Save (the command key and Enter) and Cancel (Esc). The field renders nothing. With Preview on, `preview`
 /// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save of either kind is
-/// off and the command key and Enter do nothing, and a change on disk still shows.
+/// off and the command key and Enter do nothing, and a change on disk still shows. A held chord saves once: its repeats
+/// do nothing. The caller names the field with an id of its own around the call, one per block opened, so no two blocks
+/// share an undo history.
 pub fn block_editor(
     ui: &mut Ui,
     editor: &BlockEditor,
@@ -1636,7 +1643,7 @@ pub fn block_editor(
     let busy = editor.busy.is_some();
     // Taken before the field sees it, so the chord never types a line break.
     let mut action = None;
-    if !busy && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter)) {
+    if !busy && fresh_chord(ui, Key::Enter) {
         action = Some(EditorAction::Save);
     }
     if crate::ui_kit::back_pressed(ui.ctx()) {
@@ -1675,13 +1682,17 @@ pub fn block_editor(
                 .font(Type::BODY.font())
                 .margin(Margin::same(FIELD_PADDING as i8))
                 .desired_width(f32::INFINITY)
-                .desired_rows(EDITOR_ROWS);
+                // Under the warning box the field takes only the draft's lines, so Save stays near.
+                .desired_rows(if editor.changed.is_some() { EDITOR_ROWS_CHANGED } else { EDITOR_ROWS });
             let field = ui.add(field).labelled_by(title);
+            if editor.focus {
+                field.request_focus();
+            }
             if field.has_focus() {
                 ui.painter().rect_stroke(field.rect.expand(FOCUS_OFFSET), RADIUS_BUTTON, Stroke::new(FOCUS_RING, p.active), StrokeKind::Outside);
             }
         }
-        ui.horizontal(|ui| {
+        let footer = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = BUTTON_GAP;
             let chord = crate::ui_kit::command_chord("Enter");
             let why = editor.busy.map_or("", |busy| busy.why);
@@ -1716,8 +1727,24 @@ pub fn block_editor(
                 });
             });
         });
+        if editor.reveal {
+            // With the slip's own bottom padding, so its edge shows under Save.
+            let rect = footer.response.rect;
+            ui.scroll_to_rect(rect.with_max_y(rect.bottom() + f32::from(bottom)), Some(Align::Max));
+        }
     });
     action
+}
+
+/// Whether the command key and `key` were pressed this frame and not only held: the press is taken either way, so a
+/// held chord neither acts again nor reaches a field.
+fn fresh_chord(ui: &Ui, key: Key) -> bool {
+    ui.input_mut(|input| {
+        let fresh = input.events.iter().any(|event| {
+            matches!(event, egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. } if *pressed == key && modifiers.matches_logically(Modifiers::COMMAND))
+        });
+        input.consume_key(Modifiers::COMMAND, key) && fresh
+    })
 }
 
 /// The warning box over a block that changed on disk: what happened, the block's lines as they are now, plain and
@@ -1736,7 +1763,8 @@ fn changed_box(ui: &mut Ui, changed: &ChangedOnDisk) -> bool {
             let edge = ui.max_rect().left() - f32::from(CODE_PADDING.0);
             add_text(ui, changed.caption, Type::SMALL, Ink::Muted);
             for (text, added) in lines {
-                let shown = add_text(ui, *text, Type::BODY, Ink::Text);
+                // The file's own text: shown, and copied, without hidden characters, as the paper shows it.
+                let shown = add_text(ui, visible_chars(text).collect::<String>(), Type::BODY, Ink::Text);
                 if *added {
                     let rect = Rect::from_min_max(pos2(edge, shown.rect.top()), pos2(edge + PICK_EDGE, shown.rect.bottom()));
                     ui.painter().rect_filled(rect, 0.0, p.interview);
@@ -1907,7 +1935,7 @@ mod tests {
         assert!(harness.get_by_label("After").is_focused(), "the next Tab leaves the row");
     }
 
-    const CHANGED_LINES: [(&str, bool); 2] = [("- Budget you owned: [PLACEHOLDER]", false), ("- Introduced a weekly planning review.", true)];
+    const CHANGED_LINES: [(&str, bool); 2] = [("- Budget you owned: [PLACEHOLDER]", false), ("- Introduced a weekly\u{202e} planning review.", true)];
 
     const CHANGED: ChangedOnDisk = ChangedOnDisk {
         title: "This role changed while you were editing.",
@@ -1938,6 +1966,8 @@ mod tests {
                     unsaved: None,
                     busy: bench.busy.then_some(EditorBusy { why: "A task is running.", line: "Save waits until it ends." }),
                     changed: bench.changed.then_some(&CHANGED),
+                    focus: false,
+                    reveal: false,
                 };
                 if let Some(action) = block_editor(ui, &editor, &mut bench.draft, &mut false, |_, _| {}) {
                     bench.actions.push(action);
@@ -1971,6 +2001,32 @@ mod tests {
             assert_eq!(harness.state().actions, Vec::new(), "changed: {changed}");
             assert!(save_button(&harness).accesskit_node().is_disabled());
         }
+    }
+
+    /// A held chord saves once, and its repeats do nothing.
+    #[test]
+    fn a_held_chord_saves_once() {
+        let mut harness = bench(false, true);
+        harness.run();
+        harness.key_down_modifiers(Modifiers::COMMAND, Key::Enter);
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::Save], "the press");
+        // The key is still down, so egui reads each further press as a repeat.
+        for _ in 0..3 {
+            harness.key_down_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+        }
+        assert_eq!(harness.state().actions, vec![EditorAction::Save], "the repeats");
+    }
+
+    /// A line of the file shows as the paper shows it, with no hidden characters to make it read as another line.
+    #[test]
+    fn the_lines_on_disk_show_without_hidden_characters() {
+        let mut harness = bench(false, true);
+        harness.state_mut().changed = true;
+        harness.run();
+        assert!(harness.query_by_label("- Introduced a weekly planning review.").is_some());
+        assert!(harness.query_by_label_contains("\u{202e}").is_none());
     }
 
     #[test]

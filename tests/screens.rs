@@ -3916,6 +3916,8 @@ fn save_waits_while_a_run_works_and_the_draft_survives_it() {
     end_run(&sink);
     harness.run_steps(3);
     assert!(button(&harness, "Save").accesskit_node().is_disabled(), "the run's changes are not in yet");
+    assert!(is_shown(&harness, "Reading the files the task changed, so Save waits a moment. Your text stays here."), "the task has ended");
+    assert!(!is_shown(&harness, SAVE_WAITS_LINE));
     feed.send(Snapshot::load(&root, day())).unwrap();
     harness.run_steps(3);
     assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
@@ -3969,6 +3971,8 @@ fn a_role_changed_on_disk_is_written_over_only_when_asked() {
     assert!(is_shown(&harness, "- Introduced a weekly planning review with depot managers."), "the new line shows");
     assert!(is_shown(&harness, "Changed on disk just now"));
     assert!(harness.query_by_role_and_label(egui::accesskit::Role::Button, "Save").is_none());
+    let foot = harness.get_by_label("Changed on disk just now").rect();
+    assert!(button(&harness, SAVE_OVER).rect().bottom() <= foot.top(), "Save mine over it scrolled into view");
     press_button(&mut harness, SAVE_OVER);
     assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED), "the draft replaced the role as the file held it");
     assert!(!editing(&harness));
@@ -4179,4 +4183,125 @@ fn profile_conflict_light() {
     rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
     cmd_enter(&mut harness);
     harness.snapshot_options("profile_conflict_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// Save mine over it writes only over the version the box shows. A newer one opens the box again on it.
+#[test]
+fn save_mine_over_it_never_writes_over_an_unseen_version() {
+    let (shell, root) = profile_at("profile_edit_conflict_twice");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
+    cmd_enter(&mut harness);
+    rewrite(&root, CANDIDATE, "with depot managers.\n", "with depot managers.\n- Cut fuel use by a tenth.\n");
+    let newer = candidate(&root);
+    press_button(&mut harness, SAVE_OVER);
+    assert_eq!(candidate(&root), newer, "the version the box did not show stays");
+    assert!(is_shown(&harness, "- Cut fuel use by a tenth."), "the box shows the newer version");
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED), "once shown, Save mine over it writes");
+}
+
+/// Each block opened has a field of its own, so undo never brings back another block's text.
+#[test]
+fn undo_stays_with_the_block_opened() {
+    let (shell, root) = profile_at("profile_edit_undo");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    press(&mut harness, Key::Escape);
+    press(&mut harness, Key::Escape);
+    press_button(&mut harness, "Discard changes");
+    harness.get_all_by_label("Edit").nth(1).expect("the second role's Edit").click();
+    harness.run_steps(3);
+    let second = field(&harness).value().unwrap_or_default();
+    assert!(second.starts_with("### [JOB_TITLE] - Harbour Lane Agency"), "{second}");
+    harness.key_press_modifiers(COMMAND, Key::Z);
+    harness.run_steps(3);
+    assert_eq!(field(&harness).value().unwrap_or_default(), second, "undo has nothing of the first role's");
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before);
+}
+
+/// The editor's field takes the focus as it opens, from a click or from the keyboard.
+#[test]
+fn the_field_takes_the_focus_as_the_editor_opens() {
+    let (shell, _root) = profile_at("profile_edit_focus");
+    let mut harness = tray_harness(shell);
+    edit_first_role(&mut harness);
+    assert!(field(&harness).is_focused(), "after a click");
+    press(&mut harness, Key::Escape);
+    press(&mut harness, Key::Escape);
+    assert!(!editing(&harness));
+    harness.get_all_by_label("Edit").nth(1).unwrap().focus();
+    harness.run_steps(1);
+    press(&mut harness, Key::Enter);
+    assert!(editing(&harness) && field(&harness).is_focused(), "after Enter on Edit");
+}
+
+/// The alert's way to Setup leaves Profile as a tab does: unsaved text asks first.
+#[test]
+fn the_alerts_way_to_setup_asks_first_too() {
+    let mut harness = tray_harness(probed(broken_shell(Screen::Profile, "profile_edit_alert_setup", &[Source::Profile]), FixedTools));
+    settle(&mut harness);
+    fill_the_budget(&mut harness);
+    button(&harness, "Open Setup").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, DISCARD_ASK));
+    button(&harness, "Keep editing").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, PROFILE_SUBTITLE) && editing(&harness), "Profile and the draft stay");
+}
+
+/// Quitting with unsaved text asks first, and Keep editing keeps the window and the draft.
+#[test]
+fn quitting_with_a_draft_asks_first() {
+    let (shell, _root) = profile_at("profile_edit_quit");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, DISCARD_ASK));
+    assert!(harness.query_by_label_contains("Quitting drops them.").is_some());
+    assert!(button(&harness, "Keep editing").is_focused());
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, DISCARD_ASK), "Esc keeps editing");
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED));
+}
+
+/// A write that fails keeps the editor open with the draft, and says why under it.
+#[cfg(unix)]
+#[test]
+fn a_failed_write_keeps_the_editor_open() {
+    let (shell, root) = profile_at("profile_edit_failed");
+    let outside = tempfile::tempdir().unwrap();
+    let file = root.join(CANDIDATE);
+    let elsewhere = outside.path().join("candidate.md");
+    fs::copy(&file, &elsewhere).unwrap();
+    fs::remove_file(&file).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+    let before = fs::read_to_string(&elsewhere).unwrap();
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    cmd_enter(&mut harness);
+    assert_eq!(fs::read_to_string(&elsewhere).unwrap(), before);
+    let reason = harness.get_by_label_contains("Not saved. 01-candidate-profile.md:").accesskit_node().value().unwrap_or_default();
+    assert!(reason.contains("outside"), "{reason}");
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the editor stays open with the draft");
+}
+
+/// An empty topic whose section is not in its file has nothing to open, so Write it myself waits and says why.
+#[test]
+fn write_it_myself_waits_for_a_missing_section() {
+    let root = sample_root("profile_edit_missing");
+    rewrite(&root, "CLAUDE.md", "### Deal-breakers", "### Hard limits");
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Goals and deal-breakers");
+    let write = button(&harness, "Write it myself");
+    assert!(write.accesskit_node().is_disabled());
+    write.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "This topic's section is not in the file. Update with Claude… adds it."));
 }

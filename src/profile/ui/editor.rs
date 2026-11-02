@@ -14,13 +14,28 @@ pub(super) const ONE_AT_A_TIME: &str = "Save or cancel the open edit first.";
 /// The heading a new role opens with.
 pub(super) const ROLE_STUB: &str = "### Title - Company (dates)";
 const HINT: &str = "Markdown. Placeholders read [PLACEHOLDER].";
-/// Why Save waits while a run works, on hover.
-const BUSY_WHY: &str = "A task is running and may change this file. Save once it ends.";
-/// The same beside Cancel, for a user who does not hover.
-const BUSY_LINE: &str = "A task is running, so Save waits until it ends. Your text stays here.";
+/// Why Save waits while a run works, on hover, and the same beside Cancel, for a user who does not hover.
+const RUN: EditorBusy = EditorBusy {
+    why: "A task is running and may change this file. Save once it ends.",
+    line: "A task is running, so Save waits until it ends. Your text stays here.",
+};
+/// Why Save waits, the same two ways, from a run's end until Jobdesk has read what it changed.
+const READING: EditorBusy = EditorBusy {
+    why: "Jobdesk is reading the files the task changed. Save once that is done.",
+    line: "Reading the files the task changed, so Save waits a moment. Your text stays here.",
+};
 const SAVE_OVER: &str = "Save mine over it";
 /// The discard ask's width, as End session's popover has.
 const ASK_WIDTH: f32 = 320.0;
+
+/// Why Save waits, if it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Hold {
+    /// A run works and may write the same file.
+    Run,
+    /// A run has ended, and the folder's load after it, which marks what it changed, has not arrived.
+    Reading,
+}
 
 /// What an edit is of, in the words the editor uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,15 +67,21 @@ enum Trouble {
 pub(super) struct Edit {
     pub topic: TopicId,
     noun: Noun,
+    /// Counts the edits opened, so each block's field has an id, and an undo history, of its own.
+    serial: u64,
     preview: bool,
     trouble: Option<(Trouble, NaiveDateTime)>,
     /// Why the last write failed, as plain text.
     failed: Option<String>,
+    /// The field takes the focus on the next frame, as it does when the editor opens.
+    focus: bool,
+    /// Save scrolls into view on the next frame, as it does when the warning box opens above it.
+    reveal: bool,
 }
 
 impl Edit {
-    pub fn new(topic: TopicId, noun: Noun) -> Self {
-        Self { topic, noun, preview: false, trouble: None, failed: None }
+    pub fn new(topic: TopicId, noun: Noun, serial: u64) -> Self {
+        Self { topic, noun, serial, preview: false, trouble: None, failed: None, focus: true, reveal: false }
     }
 
     /// When the last save found the block changed or gone, which the foot of the paper ages as Changed on disk.
@@ -75,21 +96,22 @@ impl Edit {
 
 /// Saves the draft, over what is on disk when the last save found the block changed or gone, and says whether it
 /// wrote. A draft with nothing changed has nothing to write, so the editor closes. While `busy` nothing is written,
-/// whatever asked, and the draft stays.
-pub(super) fn save(editor: &mut ProfileEditor, edit: &mut Edit, busy: bool, now: NaiveDateTime) -> bool {
-    if !busy && !editor.is_dirty() {
+/// whatever asked, and the draft stays. Over a change on disk it writes only while the file holds what the box shows:
+/// anything newer opens the box again on it.
+pub(super) fn save(editor: &mut ProfileEditor, edit: &mut Edit, held: bool, now: NaiveDateTime) -> bool {
+    if !held && !editor.is_dirty() {
         editor.cancel();
         return false;
     }
-    match editor.save(busy, edit.trouble.is_some()) {
+    match editor.save(held, edit.trouble.is_some()) {
         SaveOutcome::Saved => return true,
         SaveOutcome::Changed { .. } => {
             edit.trouble = Some((Trouble::Changed(editor.theirs_lines().unwrap_or_default()), now));
-            edit.failed = None;
+            (edit.failed, edit.reveal) = (None, true);
         }
         SaveOutcome::Gone => {
             edit.trouble = Some((Trouble::Gone, now));
-            edit.failed = None;
+            (edit.failed, edit.reveal) = (None, true);
         }
         SaveOutcome::Failed(error) => edit.failed = Some(visible_chars(&error.to_string()).collect()),
         // Nothing was read or written, and the draft stays. An edit on show always has a block open.
@@ -108,7 +130,7 @@ pub(super) fn take_theirs(editor: &mut ProfileEditor, edit: &mut Edit) {
 
 /// The slip in place of the block: the draft, Save and Cancel, and what the last save found. A failed write shows its
 /// reason under it, as plain text.
-pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut ProfileEditor, edit: &mut Edit, busy: bool) -> Option<EditorAction> {
+pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut ProfileEditor, edit: &mut Edit, hold: Option<Hold>) -> Option<EditorAction> {
     let noun = edit.noun.word();
     let new = editor.is_new();
     let title = if new { "Add a role".to_owned() } else { format!("Edit this {noun}") };
@@ -141,7 +163,7 @@ pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut Profil
             let (title, note) = if new {
                 ("The section this role goes in is no longer in the file.".to_owned(), "Your role goes at the end of the file.".to_owned())
             } else {
-                let place = if editor.editing().is_some_and(|key| key.level == 3 && key.parent.is_some()) { "its section" } else { "the file" };
+                let place = if editor.gone_into_section() { "its section" } else { "the file" };
                 (format!("This {noun} is no longer in the file."), format!("Your text goes back at the end of {place}."))
             };
             let detail = format!("It was renamed or removed while you were editing. {NOT_SAVED}");
@@ -167,11 +189,18 @@ pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut Profil
         save: if edit.trouble.is_some() { SAVE_OVER } else { "Save" },
         note: &note,
         unsaved,
-        busy: busy.then_some(EditorBusy { why: BUSY_WHY, line: BUSY_LINE }),
+        busy: hold.map(|hold| match hold {
+            Hold::Run => RUN,
+            Hold::Reading => READING,
+        }),
         changed: on_disk.as_ref(),
+        focus: edit.focus,
+        reveal: edit.reveal,
     };
     let draft = editor.draft_mut()?;
-    let action = block_editor(ui, &look, draft, &mut edit.preview, |ui, text| profile_document(ui, cache, text));
+    let preview = &mut edit.preview;
+    let action = ui.push_id(("profile edit", edit.serial), |ui| block_editor(ui, &look, draft, preview, |ui, text| profile_document(ui, cache, text))).inner;
+    (edit.focus, edit.reveal) = (false, false);
     if let Some(reason) = &edit.failed {
         ui.add_space(ITEM_GAP);
         alert(ui, format!("Not saved. {reason}"));
@@ -215,12 +244,14 @@ fn shown_lines(lines: &[(String, bool)]) -> (Vec<(String, bool)>, Part) {
     (lines[from..to].to_vec(), part)
 }
 
-/// What waits on the discard ask: Cancel, another topic, or another tab.
+/// What waits on the discard ask: Cancel, another topic, another tab, another folder, or quitting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ask {
     Cancel,
     Topic(TopicId),
     Tab,
+    Folder,
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +268,8 @@ pub(super) fn discard_ask(ctx: &egui::Context, ask: Ask, noun: Noun, focus: &mut
         Ask::Cancel => "Cancel drops them.",
         Ask::Topic(_) => "Opening another topic drops them.",
         Ask::Tab => "Leaving Profile drops them.",
+        Ask::Folder => "Opening another folder drops them.",
+        Ask::Quit => "Quitting drops them.",
     };
     let shown = Modal::new(Id::NULL.with("profile_discard_ask")).show(ctx, |ui| {
         ui.set_max_width(ASK_WIDTH);
@@ -285,5 +318,38 @@ mod tests {
         assert_eq!(shown(&[false, false, true, false, false]), (vec![1, 2, 3], Part::Middle));
         assert_eq!(shown(&[false, true, false]), (vec![0, 1, 2], Part::Whole));
         assert_eq!(shown(&[false, false]), (vec![0, 1], Part::Whole), "with no new line, all of it");
+    }
+
+    /// A file that reads and refuses every write, with a reason that hides characters.
+    struct Refusing;
+
+    impl crate::profile::application::ProfileStore for Refusing {
+        fn read(&self, _: crate::profile::application::ProfileFile) -> Result<Option<String>, crate::shared_kernel::LoadError> {
+            Ok(Some("## Education\nMSc\n".to_owned()))
+        }
+
+        fn write(&self, _: crate::profile::application::ProfileFile, _: &str) -> Result<(), crate::shared_kernel::LoadError> {
+            Err(crate::shared_kernel::LoadError { source: "01-candidate-profile.md".to_owned(), reason: "disk\u{202e} full\u{200b}".to_owned() })
+        }
+    }
+
+    /// A failed write keeps the editor open and the draft, and gives its reason as plain text, hidden characters removed.
+    #[test]
+    fn a_failed_write_says_why_in_plain_text() {
+        let mut editor = ProfileEditor::new(Box::new(Refusing));
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+        let mut edit = Edit::new(TopicId::Education, Noun::Section, 1);
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 30, 0).unwrap();
+        assert!(!save(&mut editor, &mut edit, false, at));
+        assert_eq!(edit.failed.as_deref(), Some("01-candidate-profile.md: disk full"));
+        assert!(editor.is_dirty() && editor.editing().is_some(), "the editor stays open with the draft");
     }
 }

@@ -17,7 +17,7 @@ use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::profile;
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
-use crate::profile::ui::{Moment, ProfileRequest, ProfileScreen};
+use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
@@ -138,6 +138,17 @@ pub struct Shell {
     leave_to: Option<Screen>,
     /// When the last profile save was read back, so a snapshot read before it cannot show the old text again.
     profile_saved: Option<Instant>,
+    /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
+    /// take the focus.
+    away: Option<(Pending, bool)>,
+}
+
+/// What would drop unsaved profile text from outside Profile, once the user agrees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pending {
+    /// Opening the folder the user picked.
+    Folder(PathBuf),
+    Quit,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -183,6 +194,7 @@ impl Shell {
             profile_editor: None,
             leave_to: None,
             profile_saved: None,
+            away: None,
         }
     }
 
@@ -324,7 +336,7 @@ impl Shell {
                 self.open_dossier = None;
                 // The last folder's marks, picked topic and edit mean nothing here.
                 (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
-                (self.profile_editor, self.leave_to, self.profile_saved) = (Some(profile::open_editor(root.path())), None, None);
+                (self.profile_editor, self.leave_to, self.profile_saved, self.away) = (Some(profile::open_editor(root.path())), None, None, None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
@@ -341,13 +353,48 @@ impl Shell {
         self.choose_folder_with(ctx, || rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder());
     }
 
-    /// The dialog opens only when the folder may change.
+    /// The dialog opens only when the folder may change. Unsaved profile text asks first, once a folder is picked.
     fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
         if self.folder_locked() {
             return;
         }
-        if let Some(path) = pick() {
-            self.open(ctx, &path);
+        match pick() {
+            Some(path) if self.draft_unsaved() => self.away = Some((Pending::Folder(path), true)),
+            Some(path) => self.open(ctx, &path),
+            None => {}
+        }
+    }
+
+    /// Whether a profile edit holds text not saved yet.
+    fn draft_unsaved(&self) -> bool {
+        self.profile_editor.as_ref().is_some_and(ProfileEditor::is_dirty)
+    }
+
+    /// Asks, over whatever is on show, before a folder change or quitting drops unsaved profile text. Discard goes on
+    /// with what waited. A folder that fails to open leaves the draft as it was.
+    fn away_ask(&mut self, ctx: &egui::Context) {
+        let Some((pending, focus)) = self.away.as_mut() else { return };
+        let away = match pending {
+            Pending::Folder(_) => Away::Folder,
+            Pending::Quit => Away::Quit,
+        };
+        let Some(discard) = self.profile_screen.ask_away(ctx, away, focus) else { return };
+        let Some((pending, _)) = self.away.take() else { return };
+        if discard {
+            self.answer_away(ctx, pending);
+        }
+    }
+
+    /// Goes on with what waited on the ask, once the user agreed to drop their draft.
+    fn answer_away(&mut self, ctx: &egui::Context, pending: Pending) {
+        match pending {
+            Pending::Folder(path) => self.open(ctx, &path),
+            Pending::Quit => {
+                if let Some(editor) = self.profile_editor.as_mut() {
+                    self.profile_screen.drop_edit(editor);
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -394,6 +441,8 @@ impl Shell {
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
+        // Drawn before the screens, so it takes Esc before any of them.
+        self.away_ask(&ui.ctx().clone());
         let queue = self.queue();
         // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
         desk(ui, |ui| {
@@ -493,7 +542,14 @@ impl Shell {
             }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
-        if ctx.input(|input| input.viewport().close_requested()) && active {
+        let closing = ctx.input(|input| input.viewport().close_requested());
+        // Unsaved profile text asks first. Once it is dropped, the window asks to close again, and a live session asks next.
+        if closing && self.draft_unsaved() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.away.is_none() {
+                self.away = Some((Pending::Quit, true));
+            }
+        } else if closing && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.quit_focus |= !self.confirm_quit;
             self.confirm_quit = true;
@@ -502,8 +558,8 @@ impl Shell {
         // Cmd , is taken the same way, so Settings opens from a field too.
         let (ask, open_settings) =
             ctx.input_mut(|input| (input.consume_key(egui::Modifiers::COMMAND, egui::Key::K), input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)));
-        // While the quit dialog asks, no shortcut reaches the screens behind it.
-        if self.confirm_quit {
+        // While the quit dialog or the ask over every screen shows, no shortcut reaches the screens behind it.
+        if self.confirm_quit || self.away.is_some() {
             note_dialog(ctx);
             return;
         }
@@ -576,15 +632,19 @@ impl Shell {
             });
         });
         if let Some(screen) = picked {
-            // Unsaved profile text asks first, and the tab changes only once the user drops it.
-            let asks = self.screen == Screen::Profile
-                && screen != Screen::Profile
-                && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
-            if asks {
-                self.leave_to = Some(screen);
-            } else {
-                self.screen = screen;
-            }
+            self.leave_for(screen);
+        }
+    }
+
+    /// Shows `screen`. Leaving Profile with unsaved text asks first, and the screen changes only once the user drops it.
+    fn leave_for(&mut self, screen: Screen) {
+        let asks = self.screen == Screen::Profile
+            && screen != Screen::Profile
+            && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
+        if asks {
+            self.leave_to = Some(screen);
+        } else {
+            self.screen = screen;
         }
     }
 
@@ -781,9 +841,8 @@ impl Shell {
                 // A file that fails hides only the topics it feeds, so the screen as a whole never fails.
                 // A run that just ended may still be writing, and its changes are not marked until the load after its end
                 // arrives. A save in between would be marked as the run's, so Save waits for that load too.
-                let settling = self.run_ended.is_some() && self.updates.is_some();
-                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy) || settling;
-                let moment = Moment { busy, now: Local::now().naive_local() };
+                let reading = self.run_ended.is_some() && self.updates.is_some();
+                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: Local::now().naive_local() };
                 let asked = match self.profile_editor.as_mut() {
                     Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
                     None => None,
@@ -832,7 +891,7 @@ impl Shell {
             }
         }
         if open_setup.get() && setup_tab {
-            self.screen = Screen::Workspace;
+            self.leave_for(Screen::Workspace);
         } else if open_setup.get() {
             self.open_settings(Page::Runtime);
         }
@@ -1211,6 +1270,38 @@ mod tests {
         shell.desk = None;
         shell.open(&ctx, &checkout_named(&folder, "other-search"));
         assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
+    }
+
+    /// A folder change from anywhere, such as Settings, asks before it drops unsaved profile text, and goes on only once
+    /// the user agrees.
+    #[test]
+    fn a_folder_change_asks_before_it_drops_a_draft() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let first = checkout(&folder);
+        let mut shell = launch(&ctx, Some(first.clone()), data.path());
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        let editor = shell.profile_editor.as_mut().unwrap();
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+
+        let other = checkout_named(&folder, "other-search");
+        shell.choose_folder_with(&ctx, || Some(other.clone()));
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(first.as_path()), "the folder waits for the answer");
+        assert_eq!(shell.away, Some((Pending::Folder(other.clone()), true)));
+        assert!(shell.draft_unsaved(), "the draft stays");
+
+        let (pending, _) = shell.away.take().unwrap();
+        shell.answer_away(&ctx, pending);
+        assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "Discard opens it");
+        assert!(!shell.draft_unsaved());
     }
 
     /// While a session is open, Change folder opens no dialog at all.

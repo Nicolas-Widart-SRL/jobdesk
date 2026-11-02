@@ -679,6 +679,8 @@ fn editor(busy: bool, changed: bool, unsaved: bool) -> BlockEditor<'static> {
         unsaved: unsaved.then_some("Unsaved changes"),
         busy: busy.then_some(BUSY),
         changed: changed.then_some(&CHANGED),
+        focus: false,
+        reveal: false,
     }
 }
 

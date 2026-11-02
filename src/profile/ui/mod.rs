@@ -4,4 +4,4 @@ mod editor;
 mod rail;
 mod screen;
 
-pub use screen::{Moment, ProfileRequest, ProfileScreen, show};
+pub use screen::{Away, Moment, ProfileRequest, ProfileScreen, show};

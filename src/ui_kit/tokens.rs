@@ -258,6 +258,8 @@ pub const ROLE_DATES: f32 = COMMAND_NAME_WIDTH;
 pub const EDITOR_PADDING: (i8, i8, i8) = (14, 12, 14);
 pub const EDITOR_GAP: f32 = 10.0;
 pub const EDITOR_ROWS: usize = 7;
+/// Under the warning box of a change on disk, the field takes only the lines of its draft.
+pub const EDITOR_ROWS_CHANGED: usize = 1;
 
 pub const RADIUS_TAB: u8 = 6;
 pub const RADIUS_PANEL: u8 = 4;

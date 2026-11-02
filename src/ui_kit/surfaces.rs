@@ -7,13 +7,13 @@ use egui::{
 
 use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{dialog_open, hand, interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
+use crate::ui_kit::controls::{dialog_open, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head, wrapped};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, table_head, wrapped};
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
-    HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
+    HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
     ROW_PADDING, SCREEN_PADDING, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
@@ -344,6 +344,15 @@ pub fn group_title(ui: &mut Ui, title: &str) {
     });
 }
 
+/// The title of a group of pick rows in a rail, such as Settings' Personal: small `Type::TABLE_HEAD` in `muted`,
+/// so the rows under it lead. It sits in as the rail's other words do.
+pub fn rail_title(ui: &mut Ui, title: &str) {
+    let (top, bottom) = RAIL_TITLE_PADDING;
+    Frame::new().inner_margin(Margin { left: inset(ui), right: inset(ui), top, bottom }).show(ui, |ui| {
+        add_text(ui, title, Type::TABLE_HEAD, Ink::Muted);
+    });
+}
+
 pub fn panel_header(ui: &mut Ui, title: &str, note: Option<&str>) {
     header(ui, title, note, Ink::Text);
 }
@@ -578,8 +587,10 @@ pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: i
     .inner
 }
 
-/// A setting that is on or off: egui's checkbox at `CHECK_BOX` first, then `label` over its `help`, either of which
-/// also flips it. A hairline sits above. A screen reader hears one checkbox named `label`.
+/// A setting that is on or off: a checkbox at `CHECK_BOX` first, painted as egui paints its own, then `label` over its
+/// `help`. The box and its words are one control: a click on either flips it, Tab stops on it once with the focus ring
+/// round the box, and a screen reader hears one checkbox named `label`, with `help` as its description.
+/// A hairline sits above. Hits of the search `query` are highlighted.
 pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query: &str) -> Response {
     let enabled = ui.is_enabled();
     let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
@@ -595,31 +606,39 @@ pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query:
         let label_lines = wrapped(ui, label, Type::STRONG, text, room);
         let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
         let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        let wide = help_lines.as_ref().map_or(label_lines.size().x, |help| label_lines.size().x.max(help.size().x));
         // The box sits on the label's first line.
         let first_line = label_lines.rows.first().map_or(CHECK_BOX, |row| row.rect().height());
         let boxed = Rect::from_min_size(pos2(origin.x, top + ((first_line - CHECK_BOX) / 2.0).max(0.0)), vec2(CHECK_BOX, CHECK_BOX));
-        let mut tick = ui.new_child(UiBuilder::new().id_salt("setting_check_box").max_rect(boxed).layout(Layout::left_to_right(Align::Center)));
-        tick.spacing_mut().icon_width = CHECK_BOX;
-        tick.spacing_mut().icon_width_inner = CHECK_BOX * 2.0 / 3.0;
-        tick.spacing_mut().interact_size.y = CHECK_BOX;
-        if !enabled {
-            tick.multiply_opacity(DISABLED_OPACITY);
-        }
-        let mut response = hand(tick.add(egui::Checkbox::without_text(on)));
-        let place = Rect::from_min_size(pos2(origin.x + lead, top), vec2(room, words));
-        let mut column = ui.new_child(UiBuilder::new().id_salt("setting_check_words").max_rect(place).layout(Layout::top_down(Align::Min)));
-        column.spacing_mut().item_spacing.y = SETTING_HELP_GAP;
-        add_marked(&mut column, label_lines, label, query);
-        if let Some(help_lines) = help_lines {
-            add_marked(&mut column, help_lines, help, query);
-        }
-        let words_hit = hand(ui.interact(column.min_rect(), id.with("setting_check_words"), Sense::click()));
-        if words_hit.clicked() {
+        let place = Rect::from_min_size(pos2(origin.x + lead, top), vec2(wide, words));
+        let mut response = ui.interact(boxed.union(place), id.with("setting_check"), Sense::click());
+        if response.clicked() {
             *on = !*on;
             response.mark_changed();
         }
         let checked = *on;
         response.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, checked, label));
+        if !help.is_empty() {
+            ui.ctx().accesskit_node_builder(response.id, |node| node.set_description(help));
+        }
+        // egui's own checkbox look, lit by the whole control's hover, press and focus.
+        let visuals = *ui.style().interact(&response);
+        let mut painter = ui.painter().clone();
+        if !enabled {
+            painter.multiply_opacity(DISABLED_OPACITY);
+        }
+        let radius = visuals.corner_radius.at_most((0.3 * CHECK_BOX).round() as u8);
+        painter.rect(boxed, radius, visuals.bg_fill, visuals.bg_stroke, StrokeKind::Inside);
+        if checked {
+            let tick = Rect::from_center_size(boxed.center(), Vec2::splat(CHECK_BOX * 2.0 / 3.0));
+            painter.line(vec![pos2(tick.left(), tick.center().y), pos2(tick.center().x, tick.bottom()), pos2(tick.right(), tick.top())], visuals.fg_stroke);
+        }
+        interactive_part(ui, &response, boxed, radius);
+        let label_height = label_lines.size().y;
+        paint_marked(ui, place.min, label_lines, label, query);
+        if let Some(help_lines) = help_lines {
+            paint_marked(ui, pos2(place.left(), place.top() + label_height + SETTING_HELP_GAP), help_lines, help, query);
+        }
         let height = words.max(CHECK_BOX).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
         ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover());
         response
@@ -1428,5 +1447,40 @@ mod tests {
         let (title, action) = first_frame(380.0);
         assert!(action.top() >= title.bottom(), "{title:?} shares a row with {action:?}");
         assert!(title.width() >= HEAD_TITLE_MIN);
+    }
+
+    /// The box and its words are one control: Tab stops on it once, and it is one checkbox named by its label.
+    #[test]
+    fn a_setting_check_is_one_tab_stop_named_by_its_label() {
+        use egui_kittest::kittest::NodeT;
+
+        let on = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&on);
+        let mut harness = Harness::builder().with_size([700.0, 300.0]).with_context_setup(setup).build_ui(move |ui| {
+            let _ = ui.button("Before");
+            let mut value = seen.get();
+            if setting_check(ui, &mut value, "Reduce motion", "Cards change at once, with no slide.", "").changed() {
+                seen.set(value);
+            }
+            let _ = ui.button("After");
+        });
+        harness.run();
+        let named: Vec<_> = harness.query_all_by(|node| node.label().as_deref() == Some("Reduce motion") || node.value().as_deref() == Some("Reduce motion")).collect();
+        assert_eq!(named.len(), 1, "one node is named by the label");
+        assert_eq!(named[0].accesskit_node().role(), egui::accesskit::Role::CheckBox);
+        assert_eq!(named[0].accesskit_node().description().as_deref(), Some("Cards change at once, with no slide."));
+        assert!(harness.query_by_label("Cards change at once, with no slide.").is_none(), "the help is no node of its own");
+
+        harness.get_by_label("Before").focus();
+        harness.run();
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert!(harness.get_by_role(egui::accesskit::Role::CheckBox).is_focused(), "Tab reaches the checkbox");
+        harness.key_press(egui::Key::Space);
+        harness.run();
+        assert!(on.get(), "Space flips it");
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert!(harness.get_by_label("After").is_focused(), "the next Tab leaves the row");
     }
 }

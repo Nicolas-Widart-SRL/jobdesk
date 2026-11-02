@@ -1,19 +1,30 @@
-use crate::settings::domain::{Page, Preferences, PreferencesStore, StartScreen, TextSize, ThemeChoice, index};
+use crate::settings::domain::{Page, Preferences, PreferencesStore, StartScreen, TextSize, ThemeChoice, drawn_index};
 use crate::shared_kernel::LoadError;
+
+/// What went wrong with the settings file, which the rail says in its own words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueKind {
+    /// It could not be read at launch, so the defaults are in use until the next change replaces it.
+    Read,
+    /// The last change could not be saved, so it lasts until Jobdesk closes.
+    Save,
+}
 
 /// The user's preferences. Each change is saved at once, and a failure to read or save is kept to show.
 pub struct Settings {
     store: Option<Box<dyn PreferencesStore>>,
     preferences: Preferences,
-    issue: Option<LoadError>,
+    issue: Option<(IssueKind, LoadError)>,
 }
 
 impl Settings {
     /// A file that cannot be read gives the defaults, and the next change replaces it.
-    pub fn open(store: Box<dyn PreferencesStore>) -> Self {
+    /// With no file yet, `first` is used and saved at once: what the window already restored, such as its theme and zoom.
+    pub fn open(store: Box<dyn PreferencesStore>, first: Preferences) -> Self {
         let (preferences, issue) = match store.load() {
-            Ok(found) => (found.unwrap_or_default(), None),
-            Err(error) => (Preferences::default(), Some(error)),
+            Ok(Some(found)) => (found, None),
+            Ok(None) => (first, store.save(&first).err().map(|error| (IssueKind::Save, error))),
+            Err(error) => (Preferences::default(), Some((IssueKind::Read, error))),
         };
         Self { store: Some(store), preferences, issue }
     }
@@ -27,8 +38,8 @@ impl Settings {
         &self.preferences
     }
 
-    pub fn issue(&self) -> Option<&LoadError> {
-        self.issue.as_ref()
+    pub fn issue(&self) -> Option<(IssueKind, &LoadError)> {
+        self.issue.as_ref().map(|(kind, error)| (*kind, error))
     }
 
     pub fn set_theme(&mut self, theme: ThemeChoice) {
@@ -55,7 +66,7 @@ impl Settings {
         }
         *slot = value;
         let Some(store) = &self.store else { return };
-        self.issue = store.save(&self.preferences).err();
+        self.issue = store.save(&self.preferences).err().map(|error| (IssueKind::Save, error));
     }
 }
 
@@ -66,15 +77,16 @@ pub struct SearchHits {
     pub total: usize,
 }
 
-/// `None` for a blank query. Case does not matter, and every index line counts once.
-pub fn search(query: &str) -> Option<SearchHits> {
+/// `None` for a blank query. Case does not matter, and every line the page draws counts once.
+/// `folder_read` says whether the folder is open and read, which decides what Runtime status draws.
+pub fn search(query: &str, folder_read: bool) -> Option<SearchHits> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return None;
     }
     let pages: Vec<(Page, usize)> = Page::ALL
         .iter()
-        .map(|&page| (page, index(page).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
+        .map(|&page| (page, drawn_index(page, folder_read).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
         .filter(|&(_, count)| count > 0)
         .collect();
     let total = pages.iter().map(|&(_, count)| count).sum();
@@ -119,17 +131,30 @@ mod tests {
         }
     }
 
+    /// Opened over a file that holds the defaults, so the first save is a change's.
     fn settings(shared: &Rc<Shared>) -> Settings {
-        Settings::open(Box::new(Fake(shared.clone())))
+        if shared.load.borrow().is_none() {
+            *shared.load.borrow_mut() = Some(Ok(Some(Preferences::default())));
+        }
+        Settings::open(Box::new(Fake(shared.clone())), Preferences::default())
     }
 
     #[test]
-    fn nothing_saved_gives_the_defaults() {
+    fn nothing_saved_takes_and_saves_what_the_window_restored() {
         let shared = Rc::new(Shared::default());
-        let settings = settings(&shared);
-        assert_eq!(*settings.preferences(), Preferences::default());
+        let restored = Preferences { theme: ThemeChoice::Dark, text_size: TextSize::from_percent(125), ..Preferences::default() };
+        let settings = Settings::open(Box::new(Fake(shared.clone())), restored);
+        assert_eq!(*settings.preferences(), restored);
         assert!(settings.issue().is_none());
-        assert!(shared.saved.borrow().is_empty());
+        assert_eq!(*shared.saved.borrow(), vec![restored]);
+    }
+
+    #[test]
+    fn a_seed_that_cannot_be_saved_is_a_save_issue() {
+        let shared = Rc::new(Shared::default());
+        shared.fail_save.set(true);
+        let settings = Settings::open(Box::new(Fake(shared.clone())), Preferences::default());
+        assert_eq!(settings.issue().map(|(kind, _)| kind), Some(IssueKind::Save));
     }
 
     #[test]
@@ -165,22 +190,26 @@ mod tests {
     }
 
     #[test]
-    fn a_load_error_gives_the_defaults_and_an_issue() {
+    fn a_read_error_gives_the_defaults_and_a_read_issue_until_a_change_saves() {
         let shared = Rc::new(Shared::default());
         *shared.load.borrow_mut() = Some(Err(LoadError::new("settings.json", "bad")));
-        let settings = settings(&shared);
-        assert_eq!(*settings.preferences(), Preferences::default());
-        assert_eq!(settings.issue().map(|issue| issue.source.as_str()), Some("settings.json"));
+        let restored = Preferences { theme: ThemeChoice::Dark, ..Preferences::default() };
+        let mut settings = Settings::open(Box::new(Fake(shared.clone())), restored);
+        assert_eq!(*settings.preferences(), Preferences::default(), "an unreadable file is not a missing one");
+        assert!(shared.saved.borrow().is_empty(), "the file is left as it is until a change");
+        assert_eq!(settings.issue().map(|(kind, issue)| (kind, issue.source.as_str())), Some((IssueKind::Read, "settings.json")));
+        settings.set_theme(ThemeChoice::Light);
+        assert!(settings.issue().is_none(), "the change replaced the file");
     }
 
     #[test]
-    fn a_save_error_keeps_the_value_and_records_an_issue() {
+    fn a_save_error_keeps_the_value_and_records_a_save_issue() {
         let shared = Rc::new(Shared::default());
-        shared.fail_save.set(true);
         let mut settings = settings(&shared);
+        shared.fail_save.set(true);
         settings.set_reduce_motion(true);
         assert!(settings.preferences().reduce_motion);
-        assert!(settings.issue().is_some());
+        assert_eq!(settings.issue().map(|(kind, _)| kind), Some(IssueKind::Save));
         shared.fail_save.set(false);
         settings.set_open_on(StartScreen::Insights);
         assert!(settings.issue().is_none());
@@ -196,22 +225,29 @@ mod tests {
 
     #[test]
     fn a_search_counts_lines_per_page() {
-        let hits = search("FOLDER").unwrap();
+        let hits = search("FOLDER", true).unwrap();
         assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Runtime, 1)]);
         assert_eq!(hits.total, 4);
     }
 
     #[test]
+    fn without_a_folder_runtime_status_matches_only_what_it_draws() {
+        assert_eq!(search("sync", true).unwrap().pages, vec![(Page::Runtime, 1)]);
+        assert!(search("sync", false).unwrap().pages.is_empty());
+        assert_eq!(search("environment", false).unwrap().pages, vec![(Page::Runtime, 1)]);
+    }
+
+    #[test]
     fn a_blank_search_is_none_and_a_miss_has_no_pages() {
-        assert_eq!(search("  "), None);
-        assert_eq!(search(""), None);
-        let miss = search("zzz").unwrap();
+        assert_eq!(search("  ", true), None);
+        assert_eq!(search("", true), None);
+        let miss = search("zzz", true).unwrap();
         assert!(miss.pages.is_empty());
         assert_eq!(miss.total, 0);
     }
 
     #[test]
     fn a_search_trims_the_query() {
-        assert_eq!(search("  motion ").unwrap().pages, vec![(Page::Appearance, 2)]);
+        assert_eq!(search("  motion ", true).unwrap().pages, vec![(Page::Appearance, 2)]);
     }
 }

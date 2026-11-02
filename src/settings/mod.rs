@@ -7,12 +7,13 @@ pub mod ui;
 
 use std::path::Path;
 
-use crate::settings::application::Settings;
+use crate::settings::application::{Preferences, Settings};
 use crate::settings::infrastructure::PreferencesFile;
 
 /// `data` is the app's own data folder. The preferences never reach the workspace.
-pub fn open_settings(data: &Path) -> Settings {
-    Settings::open(Box::new(PreferencesFile::new(data.join("settings.json"))))
+/// With no file there yet, `first` is kept and saved, so what the window restored carries over.
+pub fn open_settings(data: &Path, first: Preferences) -> Settings {
+    Settings::open(Box::new(PreferencesFile::new(data.join("settings.json"))), first)
 }
 
 /// Shows a folder in the file manager.

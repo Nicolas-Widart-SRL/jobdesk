@@ -154,20 +154,24 @@ pub fn runtime_status(ui: &mut Ui, state: &ScreenState, view: &WorkspaceView, en
             hit_mark(ui, PROMISE, Type::BODY, Ink::Muted, query);
             (state.alerts)(ui);
             claude_code(ui, checks, sign_in, query);
-            setting_section(ui, "Environment", checks.results().map(ready_note).as_deref(), query);
+            // Until the folder is open and read, only Claude Code and the tools show, and a line says why.
+            let waiting = match (folder_open, read) {
+                (false, _) => Some("Choose your job search folder to see your profile, portals, templates and sync."),
+                (true, false) => Some("Reading your profile, portals, templates and sync…"),
+                (true, true) => None,
+            };
+            if waiting.is_none() {
+                setting_section(ui, "Profile", Some(".claude/skills/job-application-assistant"), query);
+                profile_rows(ui, view, Rows::Flush);
+            }
+            // Claude Code has its own section above, so the count leaves it out as the rows do.
+            setting_section(ui, "Environment", checks.results().map(|results| ready_note(results, false)).as_deref(), query);
             tool_rows(ui, checks, Rows::Flush, false, read.then_some(view.has_salary_data));
-            if !folder_open {
+            if let Some(waiting) = waiting {
                 ui.add_space(SPLIT_GAP);
-                muted(ui, "Choose your job search folder to see your profile, portals, templates and sync.");
+                muted(ui, waiting);
                 return;
             }
-            if state.reading() {
-                ui.add_space(SPLIT_GAP);
-                muted(ui, "Reading your profile, portals, templates and sync…");
-                return;
-            }
-            setting_section(ui, "Profile", Some(".claude/skills/job-application-assistant"), query);
-            profile_rows(ui, view, Rows::Flush);
             setting_section(ui, "Portals", Some(".agents/skills"), query);
             portal_rows(ui, view, state.cannot_read(Source::Jobs));
             setting_section(ui, "Templates", None, query);
@@ -420,8 +424,9 @@ fn tool_mark(ui: &mut Ui, check: &ToolCheck) {
 }
 
 /// "2 of 3 ready": only required tools count, so a missing optional one never reads as a shortfall.
-fn ready_note(results: &[ToolCheck]) -> String {
-    let required = results.iter().filter(|check| check.spec.required);
+/// Without `with_claude`, Claude Code is left out, as `tool_rows` leaves out its row.
+fn ready_note(results: &[ToolCheck], with_claude: bool) -> String {
+    let required = results.iter().filter(|check| check.spec.required && (with_claude || check.spec.name != "claude"));
     let ready = required.clone().filter(|check| check.version.is_some()).count();
     format!("{ready} of {} ready", required.count())
 }
@@ -430,7 +435,7 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
     let running = environment.is_running();
     let mut recheck = false;
     let checks: &EnvironmentChecks = environment;
-    let note = checks.results().map(ready_note);
+    let note = checks.results().map(|results| ready_note(results, true));
     slip(ui, |ui| {
         panel_header(ui, "Environment", note.as_deref());
         tool_rows(ui, checks, Rows::Listed, true, Some(has_salary_data));
@@ -554,15 +559,61 @@ mod tests {
     #[test]
     fn only_required_tools_count_towards_ready() {
         let checks: Vec<ToolCheck> = TOOLS.iter().map(|spec| ToolCheck { spec: *spec, version: (spec.name != "bun" && spec.required).then(|| "1.0".to_owned()) }).collect();
-        assert_eq!(ready_note(&checks), "4 of 5 ready", "pdftotext is optional and missing");
+        assert_eq!(ready_note(&checks, true), "4 of 5 ready", "pdftotext is optional and missing");
+        assert_eq!(ready_note(&checks, false), "3 of 4 ready", "Claude Code's row is left out, so its count is too");
     }
 
-    struct NoBun;
+    #[test]
+    fn without_claude_the_note_counts_only_the_rows_shown() {
+        let checks: Vec<ToolCheck> = TOOLS.iter().map(|spec| ToolCheck { spec: *spec, version: (spec.name != "claude").then(|| "1.0".to_owned()) }).collect();
+        assert_eq!(ready_note(&checks, false), "4 of 4 ready", "every row Runtime status shows under Environment is ready");
+        assert_eq!(ready_note(&checks, true), "4 of 5 ready");
+    }
 
-    impl crate::workspace::application::ToolProber for NoBun {
+    /// Every tool answers except `missing`.
+    struct Without(&'static str);
+
+    impl crate::workspace::application::ToolProber for Without {
         fn probe(&self, tool: &crate::workspace::application::ToolSpec) -> Option<String> {
-            (tool.name != "bun").then(|| "2.1.4 (Claude Code)".to_owned())
+            (tool.name != self.0).then(|| "2.1.4 (Claude Code)".to_owned())
         }
+    }
+
+    fn setup(ctx: &egui::Context) {
+        crate::ui_kit::install_fonts(ctx);
+        crate::ui_kit::install_theme(ctx);
+    }
+
+    /// Steps until `label` shows, as the check runs on a worker.
+    fn wait_for(harness: &mut egui_kittest::Harness, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        for _ in 0..50 {
+            harness.run_steps(1);
+            if harness.query_by_label(label).is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn runtime_status_with_claude_code_missing_counts_only_the_other_tools() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut checks = EnvironmentChecks::new(std::sync::Arc::new(Without("claude")), std::sync::Arc::new(|| {}));
+        let view = WorkspaceView::default();
+        let mut harness = Harness::builder().with_size([1000.0, 1400.0]).with_context_setup(setup).build_ui(move |ui| {
+            let state = ScreenState { load: crate::ui_kit::Load::Ready, unread: &[], alerts: &|_| {} };
+            checks.poll();
+            runtime_status(ui, &state, &view, &mut checks, AuthMode::NoRunYet, false, "");
+        });
+        wait_for(&mut harness, "4 of 4 ready");
+        harness.get_by_label("4 of 4 ready");
+        harness.get_by_label("Missing");
+        // With no folder, only Claude Code and the tools show.
+        assert!(harness.query_by_label("Profile").is_none());
+        assert!(harness.query_by_label("Sync").is_none());
     }
 
     #[test]
@@ -570,28 +621,20 @@ mod tests {
         use egui_kittest::Harness;
         use egui_kittest::kittest::Queryable;
 
-        let mut checks = EnvironmentChecks::new(std::sync::Arc::new(NoBun), std::sync::Arc::new(|| {}));
+        let mut checks = EnvironmentChecks::new(std::sync::Arc::new(Without("bun")), std::sync::Arc::new(|| {}));
         let profile = vec![crate::workspace::application::ProfileFile { name: "01-candidate-profile.md".into(), state: ProfileState::Filled }];
         let view = WorkspaceView { profile, ..WorkspaceView::default() };
-        let setup = |ctx: &egui::Context| {
-            crate::ui_kit::install_fonts(ctx);
-            crate::ui_kit::install_theme(ctx);
-        };
         let mut harness = Harness::builder().with_size([1000.0, 1400.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = ScreenState { load: crate::ui_kit::Load::Ready, unread: &[], alerts: &|_| {} };
             checks.poll();
             runtime_status(ui, &state, &view, &mut checks, AuthMode::ClaudeLogin, true, "");
         });
-        // The check runs on a worker, so a few frames pass before it is back.
-        for _ in 0..50 {
-            harness.run_steps(1);
-            if harness.query_by_label("4 of 5 ready").is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        for label in ["On this computer", "Signed in with", "Claude sign-in", "Job site search: missing bun", "4 of 5 ready", "Check again", "Look for more in your documents…"] {
+        wait_for(&mut harness, "3 of 4 ready");
+        for label in ["On this computer", "Signed in with", "Claude sign-in", "Job site search: missing bun", "3 of 4 ready", "Check again", "Look for more in your documents…"] {
             assert!(harness.query_by_label(label).is_some(), "{label} is missing");
         }
+        // Profile comes before Environment, as on the canvas.
+        let top = |label: &str| harness.get_by_label(label).rect().min.y;
+        assert!(top("Profile") < top("Environment"));
     }
 }

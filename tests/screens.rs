@@ -13,7 +13,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
-use jobdesk::settings::application::{Page, index};
+use jobdesk::settings::application::{Page, drawn_index, index};
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
@@ -1507,9 +1507,69 @@ fn every_runtime_index_line_is_on_its_page() {
     shell.open_settings(Page::Runtime);
     let mut harness = tray_harness(shell);
     settle(&mut harness);
-    for line in index(Page::Runtime) {
+    for line in drawn_index(Page::Runtime, true) {
         assert!(harness.query_all_by_label(line).next().is_some(), "{line}");
     }
+    assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime), "with the folder read, every line is drawn");
+
+    // With no folder, the lines a search can match are the ones drawn, and nothing more.
+    let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    for &line in index(Page::Runtime) {
+        let drawn = harness.query_all_by_label(line).next().is_some();
+        assert_eq!(drawn, drawn_index(Page::Runtime, false).contains(&line), "{line}");
+    }
+}
+
+/// With no folder, Sync is not drawn on Runtime status, so a search for it finds nothing there.
+#[test]
+fn with_no_folder_a_search_for_sync_has_no_runtime_hit() {
+    let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    search(&harness).focus();
+    search(&harness).type_text("sync");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "No setting matches"));
+    assert!(harness.query_by_label("1 match").is_none());
+}
+
+/// Cmd K in Settings closes it and opens the launcher, which keeps Settings' page for next time.
+#[test]
+fn cmd_k_in_settings_opens_the_launcher() {
+    let calls = SharedCalls::default();
+    let (mut harness, shell) = shared_harness(recording_shell(Screen::Insights, "settings_cmd_k", &calls));
+    cmd_comma(&mut harness);
+    assert!(shell.borrow().settings_open());
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER));
+    assert_eq!(calls.lock().unwrap().starts, 0, "the launcher starts nothing by itself");
+}
+
+/// The welcome's second step names a place that stays once the folder is chosen and every tool answers,
+/// when the Setup tab has left the menu.
+#[test]
+fn the_welcome_points_at_a_place_that_stays() {
+    let harness = tray_harness(probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), AllTools));
+    let step = harness.get_by_label_contains("shows which parts are filled in and what is missing.");
+    let words = step.accesskit_node().value().unwrap_or_default();
+    assert!(words.starts_with("Settings › Runtime status"), "{words}");
+    assert!(!words.contains("Setup"), "{words}");
+
+    let mut harness = tray_harness(probed(shell(Screen::InTray, "welcome_step_reachable"), AllTools));
+    settle(&mut harness);
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Tab, "Setup").is_none(), "the Setup tab has gone");
+    settings_button(&harness).click();
+    harness.run_steps(3);
+    harness.get_by_label("Runtime status").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Whether Claude Code, your profile, tools, portals, templates and sync are ready."));
+    assert!(harness.query_all_by_label("Profile").next().is_some(), "and the profile shows there");
 }
 
 /// A square marks each job with a card in Today, and the legend under the table says what it means.

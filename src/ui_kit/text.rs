@@ -122,6 +122,17 @@ pub(in crate::ui_kit) fn add_marked(ui: &mut Ui, galley: Arc<Galley>, text: &str
     response
 }
 
+/// `galley` painted at `at` with each hit of `query` highlighted, as `add_marked` shows it but with no label of its own,
+/// for a control that names itself, such as a checkbox whose words are part of it.
+pub(in crate::ui_kit) fn paint_marked(ui: &Ui, at: Pos2, galley: Arc<Galley>, text: &str, query: &str) {
+    let hits = hit_ranges(text, query);
+    if !hits.is_empty() {
+        let fill = Palette::of(ui).mark;
+        ui.painter().extend(hit_swipes(&galley, at, &hits, fill));
+    }
+    paint_text(ui, at, galley, Color32::PLACEHOLDER, Color32::TRANSPARENT);
+}
+
 /// Where `query` shows in `text`, as char ranges, matched without regard to case. Hits never overlap.
 /// A query of only spaces matches nothing.
 pub(in crate::ui_kit) fn hit_ranges(text: &str, query: &str) -> Vec<Range<usize>> {

@@ -9,8 +9,8 @@ use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab,
     check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, group_title, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
-    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
+    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
+    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich,
     score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
     stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
@@ -362,7 +362,7 @@ fn settings(ui: &mut Ui) {
             panel_body(ui, |ui| {
                 search_field(ui, &mut String::new(), "Search settings");
                 search_field(ui, &mut "spend".to_owned(), "Search settings");
-                group_title(ui, "Personal");
+                rail_title(ui, "Personal");
                 pick_row(ui, true, |ui| {
                     strong(ui, "Settings row, picked");
                 });

@@ -19,6 +19,8 @@ pub const NOTE_PADDING: (i8, i8) = (14, 10);
 pub const CODE_PADDING: (i8, i8) = (11, 9);
 pub const PROMPT_PADDING: (i8, i8) = (16, 14);
 pub const PICK_PADDING: (i8, i8) = (10, 7);
+/// The room above and below a group's title in a rail of pick rows.
+pub const RAIL_TITLE_PADDING: (i8, i8) = (10, 3);
 
 pub const BUTTON_HEIGHT: f32 = 34.0;
 pub const BUTTON_PADDING: f32 = 12.0;

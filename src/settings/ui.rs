@@ -1,9 +1,9 @@
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
-use crate::settings::application::{Group, Page, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, index, search};
+use crate::settings::application::{Group, IssueKind, Page, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, index, search};
 use crate::ui_kit::tokens::{BODY_PADDING, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING};
 use crate::ui_kit::{
-    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, group_title, hand, pick_row, rich, set_reduced_motion, setting_check, setting_row, setting_section, settings_page, search_field, shortcut_button, slip,
+    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, pick_row, rail_title, rich, set_reduced_motion, setting_check, setting_row, setting_section, settings_page, search_field, shortcut_button, slip,
     small_button, toggle_group,
 };
 
@@ -37,6 +37,8 @@ pub struct SettingsView<'a> {
     pub settings: &'a mut Settings,
     /// The job search folder as the user reads it, if one is chosen.
     pub folder: Option<&'a str>,
+    /// Whether the folder is open and read, so Runtime status draws its sections and a search can match them.
+    pub folder_read: bool,
     pub runtime: RuntimeWord,
 }
 
@@ -87,6 +89,17 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     request
 }
 
+/// The preferences the window holds before any settings file: the theme and zoom eframe restored from the last session,
+/// with the zoom snapped to a whole percent as `follow_zoom` does. The rest are the defaults.
+pub fn restored(ctx: &egui::Context) -> Preferences {
+    let theme = match ctx.options(|options| options.theme_preference) {
+        ThemePreference::System => ThemeChoice::System,
+        ThemePreference::Light => ThemeChoice::Light,
+        ThemePreference::Dark => ThemeChoice::Dark,
+    };
+    Preferences { theme, text_size: TextSize::from_factor(ctx.zoom_factor()), ..Preferences::default() }
+}
+
 /// Applies the preferences to the window. Called when one changes, and once at start, never every frame.
 pub fn apply(ctx: &egui::Context, preferences: &Preferences) {
     ctx.set_theme(match preferences.theme {
@@ -125,7 +138,7 @@ fn rail(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView) {
             ui.label(rich(ui, "Settings", Type::SLIP_TITLE, Ink::Text));
             search_field(ui, &mut screen.query, "Search settings");
         });
-        let hits = search(&screen.query);
+        let hits = search(&screen.query, view.folder_read);
         if let Some(found) = &hits
             && let Some(&(first, _)) = found.pages.first()
             && !found.pages.iter().any(|&(page, _)| page == screen.page)
@@ -148,7 +161,7 @@ fn rail(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView) {
 /// The pages under their group titles. A search keeps only the pages it matched, each with its count.
 fn rail_rows(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView, hits: Option<&SearchHits>) {
     if hits.is_some_and(|found| found.pages.is_empty()) {
-        group_title(ui, "No setting matches");
+        rail_title(ui, "No setting matches");
         return;
     }
     // Rows sit in so their words line up with the group titles.
@@ -161,7 +174,7 @@ fn rail_rows(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView, hits
         if pages.is_empty() {
             continue;
         }
-        group_title(ui, group.title());
+        rail_title(ui, group.title());
         Frame::new().inner_margin(Margin::symmetric(side, 0)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -211,10 +224,17 @@ fn rail_row(ui: &mut Ui, title: &str, word: &str, ink: Ink) {
     });
 }
 
-/// The foot of the rail, laid out from the bottom up: what a search matched, a save that failed, or how changes are kept.
+/// What the rail's foot says when the settings file could not be read at launch.
+const UNREAD_FOOT: &str = "Settings could not be read, so the defaults are in use. Your next change replaces the file.";
+/// What the rail's foot says when a change could not be saved.
+const UNSAVED_FOOT: &str = "Settings could not be saved. Changes last until Jobdesk closes.";
+
+/// The foot of the rail, laid out from the bottom up: a file that failed, what a search matched, or how changes are kept.
 fn rail_foot(ui: &mut Ui, settings: &Settings, hits: Option<&SearchHits>) {
+    let issue = settings.issue().map(|(kind, _)| kind);
     let (text, ink): (String, Ink) = match hits {
-        _ if settings.issue().is_some() => ("Settings could not be saved. Changes last until Jobdesk closes.".to_owned(), Tone::Closed.into()),
+        _ if issue == Some(IssueKind::Read) => (UNREAD_FOOT.to_owned(), Tone::Closed.into()),
+        _ if issue == Some(IssueKind::Save) => (UNSAVED_FOOT.to_owned(), Tone::Closed.into()),
         Some(found) if found.total == 1 => ("1 setting matches. Esc clears the search.".to_owned(), Ink::Muted),
         Some(found) if found.total > 1 => (format!("{} settings match. Esc clears the search.", found.total), Ink::Muted),
         Some(_) => ("Esc clears the search.".to_owned(), Ink::Muted),
@@ -328,7 +348,7 @@ mod tests {
     fn harness(state: Rc<RefCell<State>>) -> Harness<'static> {
         Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = &mut *state.borrow_mut();
-            let view = SettingsView { settings: &mut state.settings, folder: Some("~/Documents/ai-job-search"), runtime: RuntimeWord::Missing(1) };
+            let view = SettingsView { settings: &mut state.settings, folder: Some("~/Documents/ai-job-search"), folder_read: true, runtime: RuntimeWord::Missing(1) };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
             });
@@ -340,6 +360,70 @@ mod tests {
 
     fn state() -> Rc<RefCell<State>> {
         Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings: Settings::unsaved(), asked: None }))
+    }
+
+    /// A settings file that cannot be read, or one that reads but cannot be saved.
+    struct Broken {
+        read: bool,
+    }
+
+    impl crate::settings::application::PreferencesStore for Broken {
+        fn load(&self) -> Result<Option<Preferences>, crate::shared_kernel::LoadError> {
+            if self.read { Err(crate::shared_kernel::LoadError::new("settings.json", "bad")) } else { Ok(Some(Preferences::default())) }
+        }
+
+        fn save(&self, _: &Preferences) -> Result<(), crate::shared_kernel::LoadError> {
+            Err(crate::shared_kernel::LoadError::new("settings.json", "disk full"))
+        }
+    }
+
+    fn state_with(settings: Settings) -> Rc<RefCell<State>> {
+        Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings, asked: None }))
+    }
+
+    #[test]
+    fn a_file_that_could_not_be_read_says_the_defaults_are_in_use() {
+        let mut harness = harness(state_with(Settings::open(Box::new(Broken { read: true }), Preferences::default())));
+        harness.run();
+        harness.get_by_label(UNREAD_FOOT);
+        assert!(harness.query_by_label(UNSAVED_FOOT).is_none());
+    }
+
+    #[test]
+    fn a_change_that_could_not_be_saved_says_it_lasts_until_jobdesk_closes() {
+        let state = state_with(Settings::open(Box::new(Broken { read: false }), Preferences::default()));
+        state.borrow_mut().settings.set_reduce_motion(true);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label(UNSAVED_FOOT);
+        assert!(harness.query_by_label(UNREAD_FOOT).is_none());
+    }
+
+    #[test]
+    fn choosing_in_open_on_saves_the_choice() {
+        let folder = tempfile::tempdir().unwrap();
+        let state = state_with(crate::settings::open_settings(folder.path(), Preferences::default()));
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by(|node| node.role() == egui::accesskit::Role::ComboBox && node.label().as_deref() == Some("Open on")).click();
+        harness.run();
+        harness.get_by_label("Jobs").click();
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().open_on, StartScreen::Jobs);
+        let reopened = crate::settings::open_settings(folder.path(), Preferences::default());
+        assert_eq!(reopened.preferences().open_on, StartScreen::Jobs, "the choice is in the file");
+    }
+
+    #[test]
+    fn restored_takes_the_theme_and_snaps_the_zoom() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.theme_preference = ThemePreference::Dark;
+            options.zoom_factor = 1.2549;
+        });
+        let preferences = restored(&ctx);
+        assert_eq!((preferences.theme, preferences.text_size.percent()), (ThemeChoice::Dark, 125));
+        assert_eq!((preferences.reduce_motion, preferences.open_on), (false, StartScreen::Today));
     }
 
     #[test]
@@ -445,7 +529,7 @@ mod tests {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
-            let view = SettingsView { settings: &mut settings, folder: None, runtime: RuntimeWord::None };
+            let view = SettingsView { settings: &mut settings, folder: None, folder_read: false, runtime: RuntimeWord::None };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
         harness.run();
@@ -461,8 +545,10 @@ mod tests {
             state.borrow_mut().screen.open_on(page);
             let mut harness = harness(state);
             harness.run();
-            for line in index(page) {
-                assert!(harness.query_all_by_label(line).next().is_some(), "{}: {line}", page.title());
+            // A checkbox's help is its description, as its words are part of it.
+            for &line in index(page) {
+                let described = harness.query_all_by(|node| node.description().as_deref() == Some(line)).next().is_some();
+                assert!(described || harness.query_all_by_label(line).next().is_some(), "{}: {line}", page.title());
             }
         }
     }

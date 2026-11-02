@@ -59,6 +59,12 @@ pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl 
     hand_and_ring(ui, response, radius, response.rect.expand(FOCUS_OFFSET), StrokeKind::Outside);
 }
 
+/// The same for a control whose hit area is wider than the part that shows it, such as a checkbox with its words:
+/// the ring goes round `shown`.
+pub(in crate::ui_kit) fn interactive_part(ui: &Ui, response: &Response, shown: Rect, radius: impl Into<CornerRadius>) {
+    hand_and_ring(ui, response, radius, shown.expand(FOCUS_OFFSET), StrokeKind::Outside);
+}
+
 /// The same for a row or a card that touches its neighbours or the edge of its column: the focus ring sits inside it,
 /// so nothing beside it covers or clips the ring.
 pub(in crate::ui_kit) fn interactive_row(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
@@ -727,6 +733,9 @@ pub fn link(ui: &mut Ui, text: &str) -> Response {
 pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let p = Palette::of(ui);
     let enabled = ui.is_enabled();
+    // The field's id is its place in `ui`, taken before anything is added, so Clear coming and going never moves it
+    // and the field keeps the focus, and two fields in one `ui` never share it.
+    let id = ui.next_auto_id().with("search_field");
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
     // The field's box is painted last, when its focus is known, under what it holds.
     let under = ui.painter().add(egui::Shape::Noop);
@@ -742,9 +751,8 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
         room.max.x = side.min_rect().left() - ROW_ITEM_GAP;
     }
     let ink = if enabled { p.text } else { dimmed(p.text) };
-    // Its id is fixed, because Clear comes first once there is text, and the field must keep the focus then.
     let edit = egui::TextEdit::singleline(text)
-        .id_salt(hint)
+        .id(id)
         .frame(egui::Frame::NONE)
         .margin(egui::Margin::ZERO)
         .font(Type::BODY.font())
@@ -973,6 +981,35 @@ mod tests {
         assert_eq!(text.borrow().as_str(), "");
         harness.run();
         assert!(harness.query_by_label("Clear").is_none());
+    }
+
+    #[test]
+    fn two_fields_with_one_hint_keep_their_own_text_and_the_focus() {
+        use egui_kittest::kittest::NodeT;
+
+        let texts = std::rc::Rc::new(std::cell::RefCell::new([String::new(), String::new()]));
+        let fields = std::rc::Rc::clone(&texts);
+        let mut harness = Harness::builder().with_size([300.0, 120.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            let [first, second] = &mut *fields.borrow_mut();
+            search_field(ui, first, "Search settings");
+            search_field(ui, second, "Search settings");
+        });
+        harness.run();
+        let field = |harness: &Harness, at: usize| harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(at).unwrap().accesskit_node().id();
+        let first = field(&harness, 0);
+        harness.get_by(|node| node.id() == first).focus();
+        harness.run();
+        harness.get_by(|node| node.id() == first).type_text("spend");
+        harness.run();
+        // Clear now shows in the first field, and the next keys still reach it.
+        harness.get_by(|node| node.id() == first).type_text("ing");
+        harness.run();
+        let second = field(&harness, 1);
+        harness.get_by(|node| node.id() == second).focus();
+        harness.run();
+        harness.get_by(|node| node.id() == second).type_text("motion");
+        harness.run();
+        assert_eq!(*texts.borrow(), ["spending".to_owned(), "motion".to_owned()]);
     }
 
     #[test]

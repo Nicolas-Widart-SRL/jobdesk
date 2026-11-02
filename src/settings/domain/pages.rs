@@ -134,6 +134,7 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
     "Cards and the day stamp change at once, with no slide.",
 ];
 
+/// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
     "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.",
     "Claude Code",
@@ -141,8 +142,8 @@ const RUNTIME: [&str; 12] = [
     "Jobdesk runs this program for every task.",
     "Signed in with",
     "As the last task reported.",
-    "Profile",
     "Environment",
+    "Profile",
     "Portals",
     "Templates",
     "Sync",
@@ -158,6 +159,17 @@ pub fn index(page: Page) -> &'static [&'static str] {
         Page::Appearance => &APPEARANCE_WINDOWS,
         Page::Runtime => &RUNTIME,
         _ => &[],
+    }
+}
+
+/// How many of Runtime status's lines show before a folder is open and read.
+const RUNTIME_WITHOUT_FOLDER: usize = 7;
+
+/// The lines the page draws as things stand: without `folder_read`, Runtime status leaves out the folder's sections.
+pub fn drawn_index(page: Page, folder_read: bool) -> &'static [&'static str] {
+    match page {
+        Page::Runtime if !folder_read => &RUNTIME[..RUNTIME_WITHOUT_FOLDER],
+        page => index(page),
     }
 }
 
@@ -181,6 +193,17 @@ mod tests {
             assert!(!Page::ALL[..at].contains(page));
             assert!(!page.lead().is_empty());
         }
+    }
+
+    #[test]
+    fn without_a_folder_runtime_status_keeps_only_what_it_draws() {
+        let drawn = drawn_index(Page::Runtime, false);
+        assert!(drawn.contains(&"Environment") && drawn.contains(&"Claude Code"));
+        for heading in ["Profile", "Portals", "Templates", "Sync", "Reset"] {
+            assert!(!drawn.contains(&heading), "{heading}");
+        }
+        assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime));
+        assert_eq!(drawn_index(Page::General, false), index(Page::General));
     }
 
     #[test]

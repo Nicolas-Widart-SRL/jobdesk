@@ -234,9 +234,16 @@ impl Shell {
     /// The preferences reach the window here, before the first frame, and after that only when one changes.
     fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
         let repaint = ctx.clone();
-        let mut environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+        let environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+        Self::launch(ctx, path, data, environment)
+    }
+
+    /// `start` with the tool check given, so tests can launch without asking real tools.
+    /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
+    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, mut environment: EnvironmentChecks) -> Self {
         environment.ensure_started();
-        let settings = data.as_deref().map_or_else(Settings::unsaved, settings::open_settings);
+        let restored = settings::ui::restored(ctx);
+        let settings = data.as_deref().map_or_else(Settings::unsaved, |data| settings::open_settings(data, restored));
         settings::ui::apply(ctx, settings.preferences());
         let first = start_screen(settings.preferences().open_on);
         let mut shell = Self { data, environment: Some(environment), settings, ..Self::empty(first, Local::now().date_naive()) };
@@ -706,6 +713,8 @@ impl Shell {
             _ => RuntimeWord::None,
         };
         let folder_open = self.workspace.is_some();
+        // Runtime status draws the folder's sections only once it is read, and a search matches only what it draws.
+        let folder_read = folder_open && self.loaded;
         let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
         let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
@@ -715,7 +724,7 @@ impl Shell {
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), runtime };
+                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
                         change_folder |= workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query) == Some(WorkspaceAction::ChangeFolder);
@@ -773,7 +782,9 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
     });
     ui.add_space(WELCOME_STEP_PADDING);
     let choose = welcome_step(ui, 1, "Choose your job search folder", "The ai-job-search folder you set up with Claude Code.", true);
-    welcome_step(ui, 2, "Check your profile", "Setup shows which parts are filled in and what is missing.", false);
+    // Setup can leave the menu once the folder is chosen, so the step names the place that always stays.
+    let profile = format!("Settings › Runtime status shows which parts are filled in and what is missing. {} opens Settings.", SETTINGS_KEYS.join(" "));
+    welcome_step(ui, 2, "Check your profile", &profile, false);
     welcome_step(ui, 3, "Find your first jobs", "Opens the search task. You start it, and Today fills in as it works.", false);
     ui.add_space(WELCOME_STEP_PADDING / 2.0);
     if let Some(error) = error {
@@ -899,4 +910,84 @@ pub fn run() -> eframe::Result {
             Ok(Box::new(Shell::start(&creation.egui_ctx, requested_workspace().or(saved), data)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::*;
+    use crate::settings::application::{Preferences, ThemeChoice};
+    use crate::workspace::application::{ToolProber, ToolSpec};
+
+    /// Every tool answers, so launching asks no real program.
+    struct AllTools;
+
+    impl ToolProber for AllTools {
+        fn probe(&self, _: &ToolSpec) -> Option<String> {
+            Some("1.0".to_owned())
+        }
+    }
+
+    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: &Path) -> Shell {
+        Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})))
+    }
+
+    /// An empty folder that opens as a checkout.
+    fn checkout(folder: &tempfile::TempDir) -> PathBuf {
+        let root = folder.path().join("ai-job-search");
+        fs::create_dir_all(root.join(".claude/commands")).unwrap();
+        fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
+        root
+    }
+
+    /// The first launch after the upgrade has no settings file: the theme and zoom eframe restored stay, and are saved.
+    #[test]
+    fn a_first_launch_keeps_the_restored_theme_and_zoom() {
+        let data = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.theme_preference = egui::ThemePreference::Dark;
+            options.zoom_factor = 1.25;
+        });
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!((shell.settings.preferences().theme, shell.settings.preferences().text_size.percent()), (ThemeChoice::Dark, 125));
+        assert_eq!(ctx.options(|options| options.theme_preference), egui::ThemePreference::Dark);
+        assert_eq!(ctx.zoom_factor(), 1.25);
+        let saved = settings::open_settings(data.path(), Preferences::default());
+        assert_eq!((saved.preferences().theme, saved.preferences().text_size.percent()), (ThemeChoice::Dark, 125), "the file holds them");
+    }
+
+    /// A file that cannot be read is not a missing one: the defaults apply, and the file is left for the next change.
+    #[test]
+    fn an_unreadable_file_takes_nothing_from_the_window() {
+        let data = tempfile::tempdir().unwrap();
+        fs::write(data.path().join("settings.json"), "{not json").unwrap();
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Dark);
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!(shell.settings.preferences().theme, ThemeChoice::System);
+        assert_eq!(fs::read_to_string(data.path().join("settings.json")).unwrap(), "{not json");
+    }
+
+    #[test]
+    fn open_on_chooses_the_launch_screen() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_open_on(StartScreen::Jobs);
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        assert_eq!(shell.screen, Screen::Jobs);
+    }
+
+    /// Without a folder only Today answers, so the welcome shows there whatever Open on says.
+    #[test]
+    fn with_no_folder_the_launch_screen_is_today() {
+        let data = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_open_on(StartScreen::Insights);
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!((shell.screen, shell.launcher_from), (Screen::InTray, Screen::InTray));
+    }
 }

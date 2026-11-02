@@ -26,6 +26,11 @@ impl SettingsScreen {
             self.page = page;
         }
     }
+
+    /// The page open, which Settings reopens on.
+    pub fn page(&self) -> Page {
+        self.page
+    }
 }
 
 pub struct SettingsView<'a> {

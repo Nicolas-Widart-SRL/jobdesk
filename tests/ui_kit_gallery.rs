@@ -12,7 +12,7 @@ use jobdesk::ui_kit::{
     flow_band, folder_tab, group_title, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
     score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
-    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_segmented, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
+    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -205,10 +205,6 @@ fn tabs(ui: &mut Ui) {
     });
     ui.add_space(10.0);
     segmented(ui, 1, &[(0, "Documents".to_owned()), (1, "Evaluation".to_owned()), (2, "Posting".to_owned())]);
-    ui.add_space(8.0);
-    status_frame(ui).show(ui, |ui| {
-        status_segmented(ui, 1, &[(0, "System".to_owned()), (1, "Light".to_owned()), (2, "Dark".to_owned())]);
-    });
 }
 
 fn sections(ui: &mut Ui) {

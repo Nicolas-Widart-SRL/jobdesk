@@ -618,23 +618,6 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
     picked
 }
 
-/// The small switch that lives in the status strip.
-pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, String)]) -> Option<T> {
-    let p = Palette::of(ui);
-    let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::TAG };
-    let inks = SegmentInks { on: (p.raised, p.text), off: p.muted, hover: p.panel, pressed: p.raised };
-    let mut picked = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = SEGMENT_GAP;
-        for (value, label) in options {
-            if segment(ui, label, *value == current, look, inks).clicked() {
-                picked = Some(*value);
-            }
-        }
-    });
-    picked
-}
-
 /// A button in the status strip that opens a screen, such as Settings, and names its chord after the text.
 /// Clear at rest, `raised` with `text` ink while `on`. It is as wide as its text in the heavier face, so it never moves.
 /// A screen reader hears the text alone, selected while `on`.
@@ -759,7 +742,9 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
         room.max.x = side.min_rect().left() - ROW_ITEM_GAP;
     }
     let ink = if enabled { p.text } else { dimmed(p.text) };
+    // Its id is fixed, because Clear comes first once there is text, and the field must keep the focus then.
     let edit = egui::TextEdit::singleline(text)
+        .id_salt(hint)
         .frame(egui::Frame::NONE)
         .margin(egui::Margin::ZERO)
         .font(Type::BODY.font())

@@ -3,9 +3,11 @@ mod catalog;
 mod ports;
 mod run;
 mod steps;
+mod usage;
 
 pub use agent_event::{AgentEvent, Prompt, PromptKind, Question, QuestionOption, Usage};
 pub use catalog::{CATALOG, CommandGroup, CommandSpec, FieldSpec, QuickReply, StopPoint, compose_line, phrases_for, spec_for_line, stop_points};
-pub use ports::{AgentGateway, AgentSession, Decision, EventSink, RunHistory, RunRequest};
+pub use ports::{AgentGateway, AgentSession, Decision, EventSink, RunHistory, RunRequest, UsageLogs};
 pub use run::{Activity, ActivityKind, Run, RunStatus, ToolState};
 pub use steps::{Match, StepRail};
+pub use usage::{ModelCost, Period, TaskCost, TaskOutcome, heat_step, model_family};

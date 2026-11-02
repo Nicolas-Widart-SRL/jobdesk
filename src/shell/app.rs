@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 
 use chrono::{Local, NaiveDate};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
@@ -18,7 +18,7 @@ use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
 use crate::settings;
-use crate::settings::application::{Page, RuntimeWord, Settings, StartScreen};
+use crate::settings::application::{Page, RuntimeWord, Settings, StartScreen, UsageState};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
@@ -93,6 +93,10 @@ pub struct Shell {
     /// False from opening a folder until its first snapshot arrives. Today shows that it is reading.
     loaded: bool,
     updates: Option<Receiver<Snapshot>>,
+    /// Asks the snapshot worker to read again, because run logs change outside the checkout.
+    reload: Option<Sender<()>>,
+    /// Whether a run was working on the last frame. A run that stops asks for a reload.
+    was_busy: bool,
     jobs: JobsScreen,
     tracker: TrackerScreen,
     folder_error: Option<String>,
@@ -134,6 +138,8 @@ impl Shell {
             snapshot: Snapshot { today, ..Snapshot::default() },
             loaded: false,
             updates: None,
+            reload: None,
+            was_busy: false,
             jobs: JobsScreen::default(),
             tracker: TrackerScreen::default(),
             folder_error: None,
@@ -207,6 +213,13 @@ impl Shell {
         sender
     }
 
+    /// Takes the reload requests the shell would send to the snapshot worker, for tests.
+    pub fn reload_feed(&mut self) -> Receiver<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.reload = Some(sender);
+        receiver
+    }
+
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
         self.pages = Some(pages);
         self.show_dossier(folder.to_owned());
@@ -273,7 +286,10 @@ impl Shell {
         match workspace::open(path) {
             Some(root) => {
                 let repaint = ctx.clone();
-                self.updates = Some(live_snapshot::spawn(root.clone(), move || repaint.request_repaint()));
+                let usage = self.data.as_ref().map(|data| runs::usage_logs(data.join("runs"), root.path()));
+                let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
+                self.updates = Some(updates);
+                self.reload = Some(reload);
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
                     self.desk = Some(runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint())));
@@ -324,6 +340,15 @@ impl Shell {
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
+        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        if self.was_busy
+            && !busy
+            && let Some(reload) = &self.reload
+        {
+            // The run that ended left its cost in its log. A closed worker has nothing to reload.
+            let _ = reload.send(());
+        }
+        self.was_busy = busy;
         if let Some(pages) = &mut self.pages {
             pages.poll();
         }
@@ -752,13 +777,21 @@ impl Shell {
         let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
         let folder_wait = self.folder_wait();
-        let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
+        let snapshot = &self.snapshot;
+        // The checkout can show before the run logs are read, so Usage statistics waits for its own read.
+        let usage = match (&self.workspace, self.loaded && snapshot.usage_read) {
+            (None, _) => UsageState::NoFolder,
+            (Some(_), false) => UsageState::Reading,
+            (Some(_), true) => UsageState::Read { report: &snapshot.usage, pipeline: &snapshot.pipeline, today: snapshot.today },
+        };
+        let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait };
+                let page_view =
+                    SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait, usage, today: snapshot.today };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
                     // Only previews lack the tool check. They draw no tools, but still the alert.
@@ -779,6 +812,12 @@ impl Shell {
                     settings::reveal_folder(workspace.path());
                 }
             }
+            Some(SettingsRequest::OpenApplications) => {
+                self.settings_open = false;
+                self.screen = Screen::Tracker;
+                ctx.request_repaint();
+            }
+            Some(SettingsRequest::NewTask) => self.open_launcher(),
             None => {}
         }
     }

@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, Question, QuestionOption, Usage};
+use crate::runs::domain::{AgentEvent, Decision, ModelCost, Prompt, PromptKind, Question, QuestionOption, Usage};
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// Longest tool input shown on a permission card. Longer input is cut with a clear marker.
@@ -202,9 +202,13 @@ fn questions(input: &Value) -> Vec<Question> {
         .collect()
 }
 
+fn has_failed(event: &Value) -> bool {
+    event.get("is_error").and_then(Value::as_bool).unwrap_or(false) || text_of(event, "subtype").starts_with("error")
+}
+
 fn turn_ended(event: &Value) -> AgentEvent {
     let subtype = text_of(event, "subtype");
-    let failed = event.get("is_error").and_then(Value::as_bool).unwrap_or(false) || subtype.starts_with("error");
+    let failed = has_failed(event);
     let message = match subtype {
         "error_max_budget_usd" => Some("Budget cap reached.".to_owned()),
         _ if failed => Some(event.get("result").and_then(Value::as_str).map_or_else(|| format!("Run ended: {subtype}"), str::to_owned)),
@@ -216,6 +220,40 @@ fn turn_ended(event: &Value) -> AgentEvent {
         cost_usd: event.get("total_cost_usd").and_then(Value::as_f64).unwrap_or(0.0),
         duration_ms: event.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
     }
+}
+
+/// What one `claude` process has cost so far, from a `result` line.
+/// Every figure is a running total for the process, so its last result holds the whole of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessTotals {
+    pub cost_usd: f64,
+    pub failed: bool,
+    pub models: Vec<ModelCost>,
+}
+
+/// The totals a `result` line carries. Any other line has none.
+pub fn process_totals(line: &str) -> Option<ProcessTotals> {
+    let event = serde_json::from_str::<Value>(line).ok()?;
+    if text_of(&event, "type") != "result" {
+        return None;
+    }
+    let count = |usage: &Value, key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let models = event.get("modelUsage").and_then(Value::as_object).map_or_else(Vec::new, |models| {
+        models
+            .iter()
+            .map(|(model, usage)| {
+                let cache_read = count(usage, "cacheReadInputTokens");
+                ModelCost {
+                    model: model.clone(),
+                    tokens_in: count(usage, "inputTokens") + count(usage, "cacheCreationInputTokens") + cache_read,
+                    tokens_out: count(usage, "outputTokens"),
+                    cache_read,
+                    cost_usd: usage.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0),
+                }
+            })
+            .collect()
+    });
+    Some(ProcessTotals { cost_usd: event.get("total_cost_usd").and_then(Value::as_f64).unwrap_or(0.0), failed: has_failed(&event), models })
 }
 
 pub fn user_message(text: &str) -> String {
@@ -322,6 +360,15 @@ mod tests {
         let [AgentEvent::TurnEnded { failed: true, message: Some(message), cost_usd, .. }] = &events[..] else { panic!() };
         assert!(message.contains("Budget"));
         assert_eq!(*cost_usd, 1.5);
+    }
+
+    #[test]
+    fn result_gives_the_process_totals() {
+        let line = r#"{"type":"result","subtype":"success","total_cost_usd":0.3,"modelUsage":{"claude-haiku-4-5":{"inputTokens":10,"outputTokens":20,"cacheReadInputTokens":300,"cacheCreationInputTokens":4000,"costUSD":0.3}}}"#;
+        let model = ModelCost { model: "claude-haiku-4-5".into(), tokens_in: 4310, tokens_out: 20, cache_read: 300, cost_usd: 0.3 };
+        assert_eq!(process_totals(line), Some(ProcessTotals { cost_usd: 0.3, failed: false, models: vec![model] }));
+        assert!(process_totals(r#"{"type":"result","subtype":"error_during_execution","total_cost_usd":0.1}"#).unwrap().failed);
+        assert_eq!(process_totals(r#"{"type":"assistant","total_cost_usd":0.1}"#), None);
     }
 
     #[test]

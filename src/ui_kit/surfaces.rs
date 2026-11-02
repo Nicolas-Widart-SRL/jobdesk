@@ -15,12 +15,13 @@ use crate::ui_kit::text::{
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
-    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP,
-    HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING,
-    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
-    ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING,
-    SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP,
-    STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
+    FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP,
+    KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW,
+    PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
+    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
+    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
+    TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -1180,6 +1181,76 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
         ui.painter().rect_filled(patch, 0.0, p.panel);
         let arrow = line(ui, "\u{2192}", Type::BODY, p.faint, f32::INFINITY);
         paint_centred(ui, patch, arrow, p.faint, p.panel);
+    }
+}
+
+/// One cell of a figure band: a label, a figure, then a note. `bar` puts a `slip_bar` under the figure, filled to its share
+/// in its ink, such as spend against a cap.
+pub struct Figure<'a> {
+    pub label: &'a str,
+    pub figure: String,
+    pub note: String,
+    pub bar: Option<(f32, Ink)>,
+}
+
+/// Figures read side by side, such as what a period cost: `flow_band` without arrows or tallies. The cells are equal,
+/// on the folder plane, with a hairline around and between them, because on paper in dark the plane alone would not show.
+pub fn figure_band(ui: &mut Ui, figures: &[Figure]) {
+    figure_cells(ui, figures.len(), |ui, index| {
+        let figure = &figures[index];
+        add_text(ui, figure.label, Type::TAB, Ink::Muted);
+        add_text(ui, figure.figure.as_str(), Type::FIGURE, Ink::Text);
+        if let Some((fraction, ink)) = figure.bar {
+            ui.add_space(FIGURE_BAR_MARGIN.0);
+            crate::ui_kit::slip_bar(ui, fraction, ink);
+            ui.add_space(FIGURE_BAR_MARGIN.1);
+        }
+        add_text(ui, figure.note.as_str(), Type::NOTE, Ink::Muted);
+    });
+}
+
+/// The same band of `cells` while its figures load: grey blocks for the label, the figure and the note.
+pub fn figure_band_loading(ui: &mut Ui, cells: usize) {
+    let fill = Palette::of(ui).raised;
+    let (label, figure, height) = FIGURE_SKELETON;
+    figure_cells(ui, cells, |ui, index| {
+        block(ui, label, SKELETON_LINE, fill);
+        ui.add_space(FIGURE_SKELETON_MARGIN.0);
+        block(ui, figure, height, fill);
+        ui.add_space(FIGURE_SKELETON_MARGIN.1);
+        block(ui, FIGURE_SKELETON_NOTES[index % FIGURE_SKELETON_NOTES.len()], SKELETON_LINE, fill);
+    });
+}
+
+/// A figure band's frame around `count` equal cells, each laid out by `cell` with its index.
+fn figure_cells(ui: &mut Ui, count: usize, mut cell: impl FnMut(&mut Ui, usize)) {
+    if count == 0 {
+        return;
+    }
+    let p = Palette::of(ui);
+    let (x, top, bottom) = NODE_PADDING;
+    let padding = Margin { left: x as i8, right: x as i8, top: top as i8, bottom: bottom as i8 };
+    let band = Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.columns(count, |columns| {
+            for (index, column) in columns.iter_mut().enumerate() {
+                Frame::new().inner_margin(padding).show(column, |ui| {
+                    ui.set_width(ui.available_width());
+                    // A column is justified, which would spread a wrapped note's words across the cell.
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = NODE_GAP;
+                        cell(ui, index);
+                    });
+                });
+            }
+        });
+    });
+    let rect = band.response.rect.shrink(HAIRLINE);
+    let pitch = rect.width() / count as f32;
+    for index in 1..count {
+        let at = rect.left() + pitch * index as f32;
+        ui.painter().rect_filled(Rect::from_min_max(pos2(at, rect.top()), pos2(at + HAIRLINE, rect.bottom())), 0.0, p.line);
     }
 }
 

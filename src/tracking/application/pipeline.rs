@@ -18,6 +18,8 @@ pub struct ApplicationCard {
     pub status_label: String,
     pub bucket: StatusBucket,
     pub applied_on: String,
+    /// The date the application went out. None for a draft or a date that is not exact.
+    pub sent_on: Option<NaiveDate>,
     pub deadline: Option<NaiveDate>,
     pub deadline_state: Option<DeadlineState>,
     pub contact_person: String,
@@ -74,6 +76,11 @@ impl Pipeline {
         self.cards().filter(|card| card.stale).count()
     }
 
+    /// Applications sent on a day from `first` (or ever, when `None`) to `last`, both included.
+    pub fn sent_between(&self, first: Option<NaiveDate>, last: NaiveDate) -> usize {
+        self.cards().filter_map(|card| card.sent_on).filter(|&day| day <= last && first.is_none_or(|first| day >= first)).count()
+    }
+
     pub fn card_in_folder(&self, folder: &str) -> Option<&ApplicationCard> {
         self.cards().find(|card| card.archive_folder.as_deref() == Some(folder))
     }
@@ -115,6 +122,7 @@ fn card_of(application: &TrackedApplication, today: NaiveDate) -> ApplicationCar
         status_label: application.status.label().to_owned(),
         bucket: application.status.bucket(),
         applied_on: application.applied_on.label(),
+        sent_on: application.sent_on(),
         deadline: application.deadline,
         deadline_state: application.deadline_state(today),
         contact_person: application.contact_person.clone(),
@@ -168,5 +176,25 @@ mod tests {
         assert_eq!(pipeline.follow_ups_due(), 2);
         assert_eq!(pipeline.stale_count(), 1);
         assert_eq!(pipeline.lanes[1].cards[0].days_quiet, Some(91));
+    }
+
+    #[test]
+    fn sent_between_counts_only_sent_applications_in_range() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let pipeline = PipelineService::new(InMemory(vec![
+            application(ApplicationStatus::Applied, "2026-10-05", ""),
+            application(ApplicationStatus::Interview, "2026-10-31", ""),
+            application(ApplicationStatus::Drafted, "2026-10-20", ""),
+            application(ApplicationStatus::Rejected, "2026-09-30", ""),
+            application(ApplicationStatus::Applied, "2019", ""),
+        ]))
+        .pipeline(today)
+        .unwrap();
+        let october = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+
+        assert_eq!(pipeline.sent_between(Some(october), today), 2);
+        assert_eq!(pipeline.sent_between(Some(october), october.pred_opt().unwrap()), 0);
+        assert_eq!(pipeline.sent_between(None, today), 3);
+        assert_eq!(pipeline.sent_between(Some(october), NaiveDate::from_ymd_opt(2026, 10, 30).unwrap()), 1);
     }
 }

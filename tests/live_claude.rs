@@ -7,7 +7,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use jobdesk::runs;
-use jobdesk::runs::application::{ActivityKind, Decision, PromptKind, RunDesk, RunStatus, StartOptions, ToolState};
+use jobdesk::runs::application::{ActivityKind, Decision, PromptKind, RunDesk, RunStatus, StartOptions, TaskOutcome, ToolState};
 
 const LIMIT: Duration = Duration::from_secs(120);
 
@@ -95,14 +95,36 @@ fn a_full_session_works() {
         _ => None,
     });
     assert!(last.unwrap().contains("THIRD"));
+    let cost_usd = desk.run(&id).unwrap().cost_usd;
     desk.close(&id);
 
     // History rebuilds from the log.
-    let restored = runs::open_desk(&workspace, logs, Arc::new(|| {}));
+    let restored = runs::open_desk(&workspace, logs.clone(), Arc::new(|| {}));
     let run = &restored.runs()[0];
     assert_eq!(run.status, RunStatus::Closed);
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);
     assert!(run.activity.iter().any(|item| matches!(&item.kind, ActivityKind::You(text) if text.contains("THIRD"))));
+
+    // Each process's total starts again from zero, so usage must add the processes, not take the last total.
+    let log = std::fs::read_to_string(logs.join(format!("{id}.jsonl"))).unwrap();
+    let resume_at = log.lines().position(|line| line == r#"{"type":"jobdesk_resume"}"#).expect("a resume marker");
+    let result_cost = |line: &str| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        (value["type"] == "result").then(|| value["total_cost_usd"].as_f64()).flatten()
+    };
+    let before = log.lines().take(resume_at).filter_map(result_cost).last().expect("a result before the resume");
+    let after = log.lines().skip(resume_at).find_map(result_cost).expect("a result after the resume");
+    assert!(after < before, "the resumed process reports its own total: {after} after {before}");
+
+    // Usage adds up both processes from the log.
+    let tasks = runs::usage_logs(logs, &workspace).tasks();
+    println!("usage {tasks:?}");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].outcome, TaskOutcome::Finished);
+    assert!((tasks[0].cost_usd - cost_usd).abs() < 1e-9, "{} against {cost_usd}", tasks[0].cost_usd);
+    assert!(tasks[0].models.iter().map(|model| model.tokens_in).sum::<u64>() > 0);
+    let by_model: f64 = tasks[0].models.iter().map(|model| model.cost_usd).sum();
+    assert!((by_model - tasks[0].cost_usd).abs() < 1e-6, "{by_model} against {}", tasks[0].cost_usd);
 }
 
 #[test]

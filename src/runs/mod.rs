@@ -8,8 +8,8 @@ pub mod ui;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::runs::application::RunDesk;
-use crate::runs::infrastructure::{ClaudeGateway, RunLogs};
+use crate::runs::application::{RunDesk, UsageLogs};
+use crate::runs::infrastructure::{ClaudeGateway, RunLogUsage, RunLogs};
 
 /// `logs` is the app's own data folder. Nothing here writes to the workspace itself.
 pub fn open_desk(workspace: &Path, logs: PathBuf, repaint: Arc<dyn Fn() + Send + Sync>) -> RunDesk {
@@ -17,4 +17,9 @@ pub fn open_desk(workspace: &Path, logs: PathBuf, repaint: Arc<dyn Fn() + Send +
     let mut desk = RunDesk::new(Box::new(ClaudeGateway::new(workspace.to_owned(), logs)), repaint);
     desk.restore(&history);
     desk
+}
+
+/// What the tasks of one workspace cost, read from the run logs in `logs`.
+pub fn usage_logs(logs: PathBuf, workspace: &Path) -> Box<dyn UsageLogs> {
+    Box::new(RunLogUsage::new(logs, workspace))
 }

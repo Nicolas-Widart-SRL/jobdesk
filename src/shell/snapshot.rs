@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::JobBoard;
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
+use crate::runs::application::UsageReport;
 use crate::shared_kernel::{LoadError, Source};
 use crate::tracking::application::Pipeline;
 use crate::workspace::application::{WorkspaceView, workspace_view};
@@ -21,6 +22,9 @@ pub struct Snapshot {
     pub skill_gaps: Option<SkillGapView>,
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
+    pub usage: UsageReport,
+    /// Whether the run logs were read into `usage`. False until then, so Usage statistics says it is reading.
+    pub usage_read: bool,
     pub issues: Vec<Issue>,
     pub today: NaiveDate,
 }
@@ -33,7 +37,8 @@ pub struct Issue {
 }
 
 impl Snapshot {
-    /// A feature that fails to load reports an issue and the others keep working.
+    /// A feature that fails to load reports an issue and the others keep working. The run logs are not read here:
+    /// `usage` stays empty and unread.
     pub fn load(root: &Path, today: NaiveDate) -> Self {
         let mut issues = Vec::new();
         let board = discovery::load_board(root, today).unwrap_or_else(|error| {
@@ -64,6 +69,6 @@ impl Snapshot {
         let workspace = workspace_view(&workspace::inspect(root), &board);
         let insights = search_insights(&pipeline);
         let band = workflow_band(&insights, &board, workspace.profile_counts());
-        Self { archives, workspace, insights, band, board, pipeline, skill_gaps, issues, today }
+        Self { archives, workspace, insights, band, board, pipeline, skill_gaps, usage: UsageReport::default(), usage_read: false, issues, today }
     }
 }

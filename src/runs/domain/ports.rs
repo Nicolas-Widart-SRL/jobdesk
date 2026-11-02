@@ -1,4 +1,4 @@
-use crate::runs::domain::{AgentEvent, Prompt, Run};
+use crate::runs::domain::{AgentEvent, Prompt, Run, TaskCost};
 
 pub type EventSink = Box<dyn Fn(AgentEvent) + Send>;
 
@@ -32,4 +32,9 @@ pub trait AgentGateway {
 
 pub trait RunHistory {
     fn recent(&self, limit: usize) -> Vec<Run>;
+}
+
+/// Reads what past tasks cost, from the logs they left.
+pub trait UsageLogs: Send {
+    fn tasks(&mut self) -> Vec<TaskCost>;
 }

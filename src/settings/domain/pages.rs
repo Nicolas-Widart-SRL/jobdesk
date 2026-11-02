@@ -99,7 +99,7 @@ impl Page {
 
     /// Whether the page has its content yet. The others show a placeholder until their step lands.
     pub fn built(self) -> bool {
-        matches!(self, Page::General | Page::Appearance | Page::Runtime)
+        matches!(self, Page::General | Page::Appearance | Page::Usage | Page::Runtime)
     }
 }
 
@@ -134,6 +134,9 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
     "Cards and the day stamp change at once, with no slide.",
 ];
 
+/// The figures' labels, then the sections under them.
+const USAGE: [&str; 8] = ["Spent", "Tokens", "Cache hits", "Tasks", "Per application sent", "Every day", "By command", "By model"];
+
 /// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
     "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.",
@@ -157,6 +160,7 @@ pub fn index(page: Page) -> &'static [&'static str] {
         Page::General => &GENERAL,
         Page::Appearance if cfg!(target_os = "macos") => &APPEARANCE_MAC,
         Page::Appearance => &APPEARANCE_WINDOWS,
+        Page::Usage => &USAGE,
         Page::Runtime => &RUNTIME,
         _ => &[],
     }

@@ -58,7 +58,7 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
 }
 
 /// A link that opens `url` in the browser on click, with the address on hover.
-fn open(ui: &mut Ui, text: &str, url: &'static str) {
+pub(super) fn open(ui: &mut Ui, text: &str, url: &'static str) {
     let response: Response = link(ui, text).on_hover_text(url);
     if response.clicked() {
         ui.ctx().open_url(OpenUrl::new_tab(url));

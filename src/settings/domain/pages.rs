@@ -107,7 +107,10 @@ impl Page {
 
     /// Whether the page has its content yet. The others show a placeholder until their step lands.
     pub fn built(self) -> bool {
-        matches!(self, Page::General | Page::Appearance | Page::Usage | Page::Defaults | Page::Permissions | Page::Runtime | Page::Data | Page::About)
+        matches!(
+            self,
+            Page::General | Page::Appearance | Page::Usage | Page::Providers | Page::Defaults | Page::Permissions | Page::Runtime | Page::Data | Page::About
+        )
     }
 }
 
@@ -144,6 +147,40 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
 
 /// The figures' labels, then the sections under them.
 const USAGE: [&str; 8] = ["Spent", "Tokens", "Cache hits", "Tasks", "Per application sent", "Every day", "By command", "By model"];
+
+/// What Test connection costs and leaves out, on the Claude sign-in's detail.
+const TEST_HELP: &str =
+    "Sends one short message through Claude Code, with no tools, capped at $0.01. It costs about a cent, which Usage statistics do not count.";
+
+/// The three ways in, each a title over a line, then the Claude sign-in's detail: its sentence, its rows' labels and
+/// Test connection's help. Only what the page draws as it opens, on the Claude sign-in.
+const PROVIDERS_MAC: [&str; 11] = [
+    "Claude sign-in",
+    "Your login in Claude Code",
+    "API key",
+    "A Console key, in your keychain",
+    "Cloud providers",
+    "Amazon Bedrock, Google Vertex AI",
+    "Tasks use the account you signed in to in Claude Code on this computer. Jobdesk never sees it and stores nothing for it. Usage counts against that account's plan.",
+    "Claude Code",
+    "Switch account",
+    "Check it",
+    TEST_HELP,
+];
+
+const PROVIDERS_WINDOWS: [&str; 11] = [
+    "Claude sign-in",
+    "Your login in Claude Code",
+    "API key",
+    "A Console key, in Credential Manager",
+    "Cloud providers",
+    "Amazon Bedrock, Google Vertex AI",
+    "Tasks use the account you signed in to in Claude Code on this computer. Jobdesk never sees it and stores nothing for it. Usage counts against that account's plan.",
+    "Claude Code",
+    "Switch account",
+    "Check it",
+    TEST_HELP,
+];
 
 /// Every task's two rows, the table's section, then the cap's section and the words of its row.
 const DEFAULTS: [&str; 12] = [
@@ -233,6 +270,8 @@ pub fn index(page: Page) -> &'static [&'static str] {
         Page::Appearance if cfg!(target_os = "macos") => &APPEARANCE_MAC,
         Page::Appearance => &APPEARANCE_WINDOWS,
         Page::Usage => &USAGE,
+        Page::Providers if cfg!(windows) => &PROVIDERS_WINDOWS,
+        Page::Providers => &PROVIDERS_MAC,
         Page::Defaults => &DEFAULTS,
         Page::Permissions => &PERMISSIONS,
         Page::Runtime => &RUNTIME,

@@ -23,9 +23,10 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
 use crate::settings::application::{
-    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check,
+    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Providers, Retention, RuntimeWord, Saved, Settings, SignIn, StartScreen, TestGate, UsageState,
+    cap_check,
 };
-use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
+use crate::settings::ui::{LastTask, SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::live_snapshot::{self, Reload};
 use crate::shell::{Issue, Snapshot, Source};
@@ -40,7 +41,7 @@ use crate::ui_kit::{
     sheet_frame, shell_top_frame, shortcut_button, status_button, status_frame, status_line, status_note, status_waits, strong, take_command_request,
 };
 use crate::workspace;
-use crate::workspace::application::{AuthMode, EnvironmentChecks, Readiness, WorkspaceRoot, auth_mode, readiness};
+use crate::workspace::application::{EnvironmentChecks, Readiness, WorkspaceRoot, auth_mode, readiness};
 use crate::workspace::ui::WorkspaceAction;
 
 const WORKSPACE_KEY: &str = "workspace";
@@ -133,6 +134,12 @@ pub struct Shell {
     settings: Settings,
     /// The Permissions setting the desk last took. A change reaches the desk once, on the frame after it is made.
     permissions: PermissionMode,
+    /// How tasks sign in, the saved key and Test connection. The keychain is read once, when Providers first shows.
+    providers: Providers,
+    /// The sign-in the desk last took. A change reaches the desk once, as Permissions does.
+    sign_in: SignIn,
+    /// A fixed clock for the ages Providers shows, for snapshots. None reads the wall clock.
+    now: Option<NaiveDateTime>,
     settings_screen: SettingsScreen,
     /// Settings covers the menu and the screen, which stays as it was underneath.
     settings_open: bool,
@@ -209,6 +216,10 @@ impl Shell {
             environment: None,
             settings: Settings::unsaved(),
             permissions: PermissionMode::default(),
+            // A key kept in memory and a test that never answers, so a preview or a test never reaches the system keychain or Claude.
+            providers: settings::open_providers(settings::memory_keychain(None), settings::idle_tester()),
+            sign_in: SignIn::ClaudeSignIn,
+            now: None,
             settings_screen: SettingsScreen::default(),
             settings_open: false,
             folder_label: None,
@@ -287,6 +298,21 @@ impl Shell {
         Self { version: label.to_owned(), ..self }
     }
 
+    /// Signs tasks in through `providers`, such as a key kept in memory and a scripted Test connection, for tests.
+    pub fn with_providers(self, providers: Providers) -> Self {
+        Self { providers, ..self }
+    }
+
+    /// Reads `now` as the time for every age Providers shows, so snapshots never move with the wall clock.
+    pub fn with_now(self, now: NaiveDateTime) -> Self {
+        Self { now: Some(now), ..self }
+    }
+
+    /// The time ages are counted to.
+    fn now(&self) -> NaiveDateTime {
+        self.now.unwrap_or_else(|| Local::now().naive_local())
+    }
+
     /// Measures what the data folder holds, if there is one. A shell without one keeps what it was given.
     fn measure_data(&mut self) {
         if let Some(data) = &self.data {
@@ -336,15 +362,18 @@ impl Shell {
     /// The tool check starts at launch, so the first run can say whether Claude Code is installed.
     /// It only asks each tool for its version, on a worker thread.
     /// The preferences reach the window here, before the first frame, and after that only when one changes.
+    /// The system keychain is reached from here alone, and nothing reads it until Providers shows or a task starts.
     fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
         let repaint = ctx.clone();
         let environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
-        Self::launch(ctx, path, data, environment)
+        let repaint = ctx.clone();
+        let providers = settings::open_providers(settings::system_keychain(), settings::claude_tester(Arc::new(move || repaint.request_repaint())));
+        Self::launch(ctx, path, data, environment, providers)
     }
 
-    /// `start` with the tool check given, so tests can launch without asking real tools.
+    /// `start` with the tool check and the providers given, so tests can launch without asking real tools or the keychain.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
-    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, mut environment: EnvironmentChecks) -> Self {
+    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, mut environment: EnvironmentChecks, providers: Providers) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
         let settings = data.as_deref().map_or_else(Settings::unsaved, |data| settings::open_settings(data, restored));
@@ -355,7 +384,7 @@ impl Shell {
         }
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
-        let mut shell = Self { data, environment: Some(environment), settings, permissions, ..Self::empty(first, Local::now().date_naive()) };
+        let mut shell = Self { data, environment: Some(environment), settings, permissions, providers, ..Self::empty(first, Local::now().date_naive()) };
         // After the pruning, so the size is what stays.
         shell.measure_data();
         if let Some(path) = path {
@@ -388,9 +417,13 @@ impl Shell {
                 self.usage_due = 0;
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
-                    let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()), Arc::new(|| Ok(None)));
+                    // Each task's process reads the key through this, from the keychain, as it starts.
+                    let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()), self.providers.key_reader());
                     self.permissions = self.settings.preferences().permissions;
                     desk.set_asks_permission(self.permissions.asks());
+                    // A new desk starts on the Claude sign-in, so it takes the method in use, whatever the last desk had.
+                    self.sign_in = self.providers.task_sign_in(self.settings.preferences());
+                    desk.set_sign_in(self.sign_in);
                     self.desk = Some(desk);
                 }
                 self.tray = Some(self.data.as_ref().map_or_else(InTray::unsaved, |data| intray::open_tray(data.join("intray"), root.path())));
@@ -480,6 +513,12 @@ impl Shell {
     pub fn show(&mut self, ui: &mut Ui) {
         self.take_snapshot();
         self.follow_permissions();
+        // A test that ended may move tasks onto the key or off it, so the desk follows on the same frame.
+        let now = self.now();
+        if self.providers.poll(&mut self.settings, now) {
+            ui.ctx().request_repaint();
+        }
+        self.follow_sign_in();
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
@@ -539,6 +578,19 @@ impl Shell {
         self.permissions = permissions;
         if let Some(desk) = &mut self.desk {
             desk.set_asks_permission(permissions.asks());
+        }
+    }
+
+    /// Hands a changed sign-in to the desk, for the next process it starts. An unchanged one is left alone, as
+    /// `follow_permissions` leaves it, so a desk set up some other way keeps its own.
+    fn follow_sign_in(&mut self) {
+        let sign_in = self.providers.task_sign_in(self.settings.preferences());
+        if sign_in == self.sign_in {
+            return;
+        }
+        self.sign_in = sign_in;
+        if let Some(desk) = &mut self.desk {
+            desk.set_sign_in(sign_in);
         }
     }
 
@@ -784,19 +836,11 @@ impl Shell {
         self.workspace.is_none() || !self.readiness().ready() || self.screen == Screen::Workspace
     }
 
-    /// What the status bar says about the screen on show. In Settings only Runtime status has a note.
+    /// What the status bar says about the screen on show. Settings › Providers and Runtime status say how tasks sign in,
+    /// so the bar no longer does.
     fn screen_note(&self) -> Option<String> {
-        let sign_in = || match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
-            AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),
-            AuthMode::ApiKey => "Tasks use an API key or provider. Jobdesk stores no credentials.".to_owned(),
-            AuthMode::NoRunYet => "You will see which account Claude uses after the first task. Jobdesk stores no credentials.".to_owned(),
-        };
-        if self.settings_open {
-            return (self.settings_screen.page() == Page::Runtime).then(sign_in);
-        }
         match self.screen {
-            Screen::Dossier => Some("Source: tracker row and application archive".to_owned()),
-            Screen::Workspace => Some(sign_in()),
+            Screen::Dossier if !self.settings_open => Some("Source: tracker row and application archive".to_owned()),
             _ => None,
         }
     }
@@ -812,15 +856,14 @@ impl Shell {
                 status_waits(ui, "A task waits for you");
             } else if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let ready = environment.version_of("claude").is_some();
-                // Before a folder is open, the line also says how Jobdesk signs in: through Claude Code alone.
+                // Before a folder is open, the line also says how tasks sign in: Claude Code's own sign-in, or a key saved in Settings.
                 let text = match (ready, self.workspace.is_some()) {
                     (true, true) => "Claude is ready",
-                    (true, false) => "Claude is installed. Jobdesk uses its sign-in and stores no passwords.",
+                    (true, false) => "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.",
                     (false, _) => "Claude Code is not installed",
                 };
                 status_line(ui, ready, text);
             }
-            // Setup and Runtime status always say how tasks sign in, as docs/auth-review.md promises.
             if let Some(note) = self.screen_note() {
                 status_note(ui, &note, false);
             }
@@ -1012,7 +1055,9 @@ impl Shell {
                     ui.ctx().request_repaint();
                 } else if let Some(desk) = &mut self.desk {
                     let preferences = self.settings.preferences();
-                    let rules = LaunchRules { defaults: &preferences.run_defaults, cap: &cap };
+                    // Test connection is a Claude process too, so Run waits for it to end.
+                    let testing = self.providers.test_gate(false) == TestGate::Testing;
+                    let rules = LaunchRules { defaults: &preferences.run_defaults, cap: &cap, testing };
                     match self.launcher.show(ui, desk, &rules) {
                         Some(LauncherRequest::Started(id)) => {
                             self.run_screen.select(id);
@@ -1053,6 +1098,15 @@ impl Shell {
         let snapshot = &self.snapshot;
         let usage = (snapshot.usage_read && snapshot.usage_asked >= self.usage_due).then_some(&snapshot.usage);
         cap_check(&self.settings.preferences().cap, usage, snapshot.today)
+    }
+
+    /// The newest task that said how it signed in. A run does not keep the method it started with, so the desk's method
+    /// stands in for it: it changes only between tasks, when Settings switches it.
+    fn last_task(&self) -> Option<LastTask> {
+        let desk = self.desk.as_ref()?;
+        let run = desk.latest_signed_in()?;
+        let at = NaiveDateTime::parse_from_str(&run.started_at, "%Y-%m-%d %H:%M").ok();
+        Some(LastTask { source: run.api_key_source.clone().unwrap_or_default(), method: desk.sign_in(), at })
     }
 
     /// Every source that could not be read. The tray reports its own file.
@@ -1105,6 +1159,13 @@ impl Shell {
             None if checking => ClaudeVersion::Checking,
             None => ClaudeVersion::NotFound,
         };
+        // The keychain is read once, on the first frame Providers shows, never at launch and never again after.
+        if self.settings_screen.page() == Page::Providers {
+            self.providers.read_once();
+        }
+        let last_task = self.last_task();
+        let task_running = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        let now = self.now();
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1126,6 +1187,10 @@ impl Shell {
                     decisions,
                     version: &self.version,
                     claude,
+                    providers: &mut self.providers,
+                    last_task,
+                    task_running,
+                    now,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
@@ -1143,10 +1208,23 @@ impl Shell {
             self.screen = Screen::Profile;
         }
         let ctx = ui.ctx().clone();
+        // Providers picked this frame drew before the read, so it reads now and draws again.
+        if self.settings_screen.page() == Page::Providers && self.providers.saved() == &Saved::NotRead {
+            self.providers.read_once();
+            ctx.request_repaint();
+        }
         match asked {
             Some(SettingsRequest::Back) => {
                 self.settings_open = false;
                 ctx.request_repaint();
+            }
+            Some(SettingsRequest::OpenLastTask) => {
+                if let Some(id) = self.desk.as_ref().and_then(RunDesk::latest_signed_in).map(|run| run.id.clone()) {
+                    self.run_screen.select(id);
+                    self.settings_open = false;
+                    self.screen = Screen::Runs;
+                    ctx.request_repaint();
+                }
             }
             Some(SettingsRequest::ChangeFolder) => self.choose_folder(&ctx),
             Some(SettingsRequest::ShowFolder) => {
@@ -1366,7 +1444,55 @@ mod tests {
     }
 
     fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: &Path) -> Shell {
-        Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})))
+        launch_with(ctx, path, data, None)
+    }
+
+    /// A launch whose keychain, kept in memory, holds `key`, and whose Test connection never answers.
+    fn launch_with(ctx: &egui::Context, path: Option<PathBuf>, data: &Path, key: Option<&str>) -> Shell {
+        let providers = settings::open_providers(settings::memory_keychain(key), settings::idle_tester());
+        Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})), providers)
+    }
+
+    const FAKE_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
+
+    /// Every desk takes the method in use as it opens, a folder change included, since a new desk starts on the Claude
+    /// sign-in. A change of method reaches the open desk once.
+    #[test]
+    fn every_desk_opened_takes_the_sign_in_in_use() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_sign_in(SignIn::ApiKey);
+        let ctx = egui::Context::default();
+        let mut shell = launch_with(&ctx, Some(checkout(&folder)), data.path(), Some(FAKE_KEY));
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ApiKey, "the desk opened at launch");
+
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::name), Some("other-search".to_owned()));
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ApiKey, "the desk of the new folder");
+
+        shell.settings.set_sign_in(SignIn::ClaudeSignIn);
+        shell.follow_sign_in();
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ClaudeSignIn, "the change reaches the open desk");
+        shell.desk.as_mut().unwrap().set_sign_in(SignIn::ApiKey);
+        shell.follow_sign_in();
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ApiKey, "an unchanged method leaves the desk alone");
+
+        shell.open(&ctx, &checkout_named(&folder, "third-search"));
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ClaudeSignIn, "a new desk takes the method in use, not the last desk's");
+    }
+
+    /// A key known to be gone signs tasks in with the Claude sign-in, whatever the setting says.
+    #[test]
+    fn a_missing_key_opens_the_desk_on_the_claude_sign_in() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_sign_in(SignIn::ApiKey);
+        let ctx = egui::Context::default();
+        let mut shell = launch_with(&ctx, Some(checkout(&folder)), data.path(), None);
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ApiKey, "not read yet, so the task's own read decides");
+        shell.providers.read_once();
+        shell.follow_sign_in();
+        assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ClaudeSignIn);
     }
 
     /// A session that stays up until the test ends.

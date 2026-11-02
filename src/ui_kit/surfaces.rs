@@ -1040,6 +1040,24 @@ pub fn note<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// A panel inside paper, such as a note at the top of a Settings page or the detail beside a list: the panel fill in a
+/// `line` hairline, which keeps it apart in dark, where panel and paper are one colour. `padding` is the left and right,
+/// the top and the bottom room inside it.
+pub fn ruled_panel<R>(ui: &mut Ui, padding: (i8, i8, i8), add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = Palette::of(ui);
+    let (x, top, bottom) = padding;
+    Frame::new()
+        .fill(p.panel)
+        .stroke(Stroke::new(HAIRLINE, p.line))
+        .corner_radius(RADIUS_PANEL)
+        .inner_margin(Margin { left: x, right: x, top, bottom })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
 /// The height of a part laid out after what must leave room for it, such as a footer under a scroll area,
 /// as it measured on the frame before.
 #[derive(Debug, Clone, Copy)]

@@ -2,19 +2,22 @@ mod about;
 mod data;
 mod defaults;
 mod permissions;
+mod providers;
 mod usage;
 
 use std::cell::Cell;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice,
-    UsageState, cap_word, index, rail_word, search, size_short,
+    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen, TextSize,
+    ThemeChoice, UsageState, WordTone, cap_word, index, rail_word, search, size_short,
 };
 use crate::settings::ui::about::AboutView;
 use crate::settings::ui::data::DataView;
+pub use crate::settings::ui::providers::LastTask;
+use crate::settings::ui::providers::{ProvidersScreen, ProvidersView};
 use crate::ui_kit::tokens::{
     BODY_PADDING, DOC_MEASURE, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING, SETTING_SECTION_GAP,
 };
@@ -29,7 +32,7 @@ const OPEN_ON_WIDTH: f32 = 180.0;
 const SHOW_FOLDER: &str = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
 
 /// What stays between frames: the page open, the search, the period Usage statistics counts, Run defaults' amounts
-/// as typed, and whether Clear tray decisions is asking.
+/// as typed, whether Clear tray decisions is asking, and Providers' way picked and key as typed.
 #[derive(Default)]
 pub struct SettingsScreen {
     page: Page,
@@ -38,6 +41,7 @@ pub struct SettingsScreen {
     edits: defaults::Edits,
     /// Clear tray decisions' popover: open, and whether Keep them still takes the focus.
     clearing: Option<bool>,
+    providers: ProvidersScreen,
 }
 
 impl SettingsScreen {
@@ -54,8 +58,10 @@ impl SettingsScreen {
     }
 
     /// Settings is closed, by whatever way: a popover that was asking closes with it, so reopening never finds it open.
+    /// A key typed and not saved is forgotten.
     pub fn closed(&mut self) {
         self.clearing = None;
+        self.providers.reset();
     }
 }
 
@@ -82,6 +88,14 @@ pub struct SettingsView<'a> {
     /// This copy's version, and Claude Code's as the tool check knows it.
     pub version: &'a str,
     pub claude: ClaudeVersion<'a>,
+    /// How tasks sign in, the saved key and Test connection.
+    pub providers: &'a mut Providers,
+    /// The newest task that said how it signed in, if any.
+    pub last_task: Option<LastTask>,
+    /// A task is working, so Test connection waits.
+    pub task_running: bool,
+    /// The app's clock, for the ages Providers shows.
+    pub now: NaiveDateTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +111,8 @@ pub enum SettingsRequest {
     OpenApplications,
     /// Open the launcher, as New task… does on Tasks.
     NewTask,
+    /// Close Settings and show the newest task that said how it signed in.
+    OpenLastTask,
 }
 
 /// The Settings screen: Back to app and the rail at the left, the open page on paper beside them.
@@ -106,7 +122,7 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     // Esc clears a search before anything else takes it, the field included. While Clear tray decisions asks, Esc
     // belongs to its popover, which egui's memory of open popups does not hold, and keeps the decisions.
     let ctx = ui.ctx().clone();
-    let asking = screen.clearing.is_some();
+    let asking = screen.clearing.is_some() || screen.providers.asking();
     let clears = !asking && !screen.query.is_empty() && !Popup::is_any_open(&ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if clears {
         screen.query.clear();
@@ -128,6 +144,14 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     let query = screen.query.trim().to_owned();
     let page = screen.page;
     match page {
+        Page::Providers => {
+            let last_task = view.last_task.as_ref();
+            let providers_view = ProvidersView { last_task, claude: view.claude, task_running: view.task_running, now: view.now };
+            let (state, settings, providers) = (&mut screen.providers, view.settings, view.providers);
+            let (_, asked) =
+                settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| providers::body(ui, state, settings, providers, providers_view, &query));
+            request = asked.or(request);
+        }
         Page::General => {
             let (_, asked) =
                 settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| general(ui, view.settings, view.folder, view.folder_wait, &query));
@@ -173,6 +197,10 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     // The popover asks about the page it sits on, so another page or leaving Settings closes it.
     if screen.page != Page::Data || request == Some(SettingsRequest::Back) {
         screen.clearing = None;
+    }
+    // Leaving Providers forgets a key typed and not saved, and picks the way in use when it opens again.
+    if page == Page::Providers && (screen.page != Page::Providers || request == Some(SettingsRequest::Back)) {
+        screen.providers.reset();
     }
     ui.advance_cursor_after_rect(area);
     request
@@ -303,6 +331,10 @@ fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
             (_, Some(amount)) => (cap_word(amount), Ink::Muted),
             (_, None) => (String::new(), Ink::Muted),
         },
+        Page::Providers => {
+            let (word, tone) = view.providers.rail_word(view.settings.preferences());
+            (word, if tone == WordTone::Closed { Tone::Closed.into() } else { Ink::Muted })
+        }
         Page::Permissions => (view.settings.preferences().permissions.label().to_owned(), Ink::Muted),
         Page::Data => (view.sizes.map(|sizes| size_short(sizes.total())).unwrap_or_default(), Ink::Muted),
         Page::About => (view.version.to_owned(), Ink::Muted),
@@ -461,6 +493,18 @@ mod tests {
         decisions: Option<usize>,
         cap: CapCheck,
         no_folder: bool,
+        providers: Providers,
+        last_task: Option<LastTask>,
+        task_running: bool,
+    }
+
+    /// A key kept in memory, and a Test connection that never answers.
+    fn memory_providers(key: Option<&str>) -> Providers {
+        crate::settings::open_providers(crate::settings::memory_keychain(key), crate::settings::idle_tester())
+    }
+
+    fn now() -> NaiveDateTime {
+        today().and_hms_opt(11, 30, 0).unwrap()
     }
 
     /// The fictional data folder's sizes: 212 MB in all.
@@ -515,6 +559,10 @@ mod tests {
                 decisions: state.decisions,
                 version: "0.1.0",
                 claude: ClaudeVersion::Found("2.1.4"),
+                providers: &mut state.providers,
+                last_task: state.last_task.clone(),
+                task_running: state.task_running,
+                now: now(),
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -556,6 +604,9 @@ mod tests {
             decisions: Some(214),
             cap: CapCheck::Open,
             no_folder: false,
+            providers: memory_providers(None),
+            last_task: None,
+            task_running: false,
         }))
     }
 
@@ -618,7 +669,7 @@ mod tests {
             assert!(!rows.is_empty(), "{}", page.title());
             assert_eq!(rows[0].accesskit_node().is_disabled(), !page.built(), "{}", page.title());
         }
-        assert_eq!(harness.query_all_by_label("Later").count(), 4);
+        assert_eq!(harness.query_all_by_label("Later").count(), 3, "the three job search pages wait");
         harness.get_by_label("1 missing");
     }
 
@@ -709,6 +760,7 @@ mod tests {
     fn with_no_folder_show_waits_for_one() {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
+        let mut providers = memory_providers(None);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let view = SettingsView {
                 settings: &mut settings,
@@ -724,6 +776,10 @@ mod tests {
                 decisions: None,
                 version: "0.1.0",
                 claude: ClaudeVersion::NotFound,
+                providers: &mut providers,
+                last_task: None,
+                task_running: false,
+                now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -735,7 +791,7 @@ mod tests {
 
     #[test]
     fn every_indexed_line_shows_on_its_page() {
-        for page in [Page::General, Page::Appearance, Page::Usage, Page::Defaults, Page::Permissions, Page::Data, Page::About] {
+        for page in [Page::General, Page::Appearance, Page::Usage, Page::Providers, Page::Defaults, Page::Permissions, Page::Data, Page::About] {
             let state = state();
             state.borrow_mut().screen.open_on(page);
             let mut harness = harness(state);
@@ -761,7 +817,8 @@ mod tests {
         let state = state();
         let mut harness = harness(state.clone());
         harness.run();
-        assert!(harness.query_all_by_label("Later").next().is_some(), "Providers and the job search pages wait");
+        assert!(harness.query_all_by_label("Later").next().is_some(), "the job search pages wait");
+        harness.get_by_label("Claude sign-in");
         harness.get_by_label("Allow and note");
         harness.get_by_label("212 MB");
         harness.get_by_label("0.1.0");
@@ -896,6 +953,7 @@ mod tests {
     fn about_says_checking_while_the_tool_check_runs() {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
+        let mut providers = memory_providers(None);
         screen.open_on(Page::About);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let view = SettingsView {
@@ -912,6 +970,10 @@ mod tests {
                 decisions: None,
                 version: "0.1.0",
                 claude: ClaudeVersion::Checking,
+                providers: &mut providers,
+                last_task: None,
+                task_running: false,
+                now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1109,6 +1171,7 @@ mod tests {
     fn with_no_folder_usage_waits_for_one() {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
+        let mut providers = memory_providers(None);
         screen.open_on(Page::Usage);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let view = SettingsView {
@@ -1125,6 +1188,10 @@ mod tests {
                 decisions: None,
                 version: "0.1.0",
                 claude: ClaudeVersion::NotFound,
+                providers: &mut providers,
+                last_task: None,
+                task_running: false,
+                now: now(),
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

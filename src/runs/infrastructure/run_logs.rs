@@ -594,6 +594,7 @@ mod tests {
         assert!(dir.path().join("sub").join("20261001-101010-3.jsonl").exists());
     }
 
+    /// The cutoff lies ahead, so the links themselves count as old and only the file-type guard keeps them.
     #[cfg(unix)]
     #[test]
     fn prune_never_follows_a_symlink() {
@@ -603,8 +604,9 @@ mod tests {
         written(&target, before());
         std::os::unix::fs::symlink(&target, dir.path().join(LOG)).unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("20261001-101010-4.jsonl")).unwrap();
+        let ahead = SystemTime::now() + std::time::Duration::from_secs(3600);
 
-        assert_eq!(prune(dir.path(), cutoff()), 0);
+        assert_eq!(prune(dir.path(), ahead), 0);
 
         assert!(target.exists());
         assert!(fs::symlink_metadata(dir.path().join(LOG)).is_ok());

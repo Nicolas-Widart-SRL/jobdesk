@@ -742,20 +742,36 @@ mod tests {
         assert!(tray.returned.is_empty() && tray.returned_on.is_none() && tray.reading.is_none());
     }
 
-    #[test]
-    fn clearing_decisions_after_an_undoable_follow_leaves_no_undo() {
-        let mut tray = InTray::unsaved();
-        let jobs = board(vec![job("Acme", 90)]);
-        let card = top(&tray, &jobs);
-        tray.follow(&card, card.primary.as_ref().unwrap(), today());
-        tray.clear_decisions();
-        tray.undo(today());
-        assert_eq!(tray.decision_count(), 0);
-        assert_eq!(dealt(&tray, &jobs), ["Acme"]);
+    /// Loads fine, then fails to save: the tray has a store and an issue at once.
+    struct FailsToSave(Rc<RefCell<usize>>);
+
+    impl DecisionStore for FailsToSave {
+        fn load(&self) -> Result<Vec<Decision>, LoadError> {
+            Ok(Vec::new())
+        }
+        fn save(&self, _: &[Decision]) -> Result<(), LoadError> {
+            *self.0.borrow_mut() += 1;
+            Err(LoadError::new("decisions.json", "disk full"))
+        }
     }
 
     #[test]
-    fn clearing_an_unreadable_store_clears_and_saves_nothing() {
+    fn clearing_with_an_unsaved_issue_changes_and_saves_nothing() {
+        let saves = Rc::new(RefCell::new(0));
+        let mut tray = InTray::new(Box::new(FailsToSave(saves.clone())));
+        let jobs = board(vec![job("Acme", 90)]);
+        tray.skip(&top(&tray, &jobs), today());
+        assert!(tray.issue().is_some());
+        assert_eq!((tray.decision_count(), *saves.borrow()), (1, 1));
+
+        tray.clear_decisions();
+
+        assert_eq!((tray.decision_count(), *saves.borrow()), (1, 1));
+        assert!(tray.undo_offer(today()).is_some());
+    }
+
+    #[test]
+    fn clearing_a_store_that_never_loaded_saves_nothing() {
         let mut tray = InTray::new(Box::new(Corrupt));
         tray.clear_decisions();
         assert!(tray.issue().is_some_and(|issue| issue.to_string().contains("not JSON")));

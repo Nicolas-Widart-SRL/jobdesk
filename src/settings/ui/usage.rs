@@ -4,8 +4,8 @@ use chrono::NaiveDate;
 use egui::{Align, Label, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    Page, Period, UsagePage, UsageReport, UsageState, YearOfDays, active_days_note, command_name, day_tip, heat_step, index, money, month_marks, percent,
-    period_label, period_words, sent_note, tasks_note, tokens, usage_page,
+    Page, Period, UsagePage, UsageReport, UsageState, YearOfDays, active_days_note, command_name, day_tip, heat_step, index, model_name, money, month_marks,
+    percent, period_label, period_words, sent_note, tasks_note, tokens, usage_page,
 };
 use crate::settings::ui::SettingsRequest;
 use crate::ui_kit::tokens::{BAR_HEIGHT, EMPTY_GAP, EMPTY_WIDTH, FADED_OPACITY, SKELETON_LINE, TABLE_HEAD_HEIGHT};
@@ -121,7 +121,7 @@ fn full(ui: &mut Ui, page: &UsagePage, period: Period, today: NaiveDate, query: 
         table(ui, &columns, page.models.len(), |ui, row, column| {
             let row = &page.models[row];
             match column {
-                0 => cell_text(ui, row.model.as_str(), Type::BODY),
+                0 => cell_text(ui, model_name(row), Type::BODY),
                 1 => cell_text(ui, row.tasks.to_string(), Type::BODY),
                 2 => cell_text(ui, tokens(row.tokens_in), Type::BODY),
                 3 => cell_text(ui, tokens(row.tokens_out), Type::BODY),

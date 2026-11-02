@@ -778,7 +778,8 @@ impl Shell {
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
         let folder_wait = self.folder_wait();
         let snapshot = &self.snapshot;
-        let usage = match (&self.workspace, self.loaded) {
+        // The checkout can show before the run logs are read, so Usage statistics waits for its own read.
+        let usage = match (&self.workspace, self.loaded && snapshot.usage_read) {
             (None, _) => UsageState::NoFolder,
             (Some(_), false) => UsageState::Reading,
             (Some(_), true) => UsageState::Read { report: &snapshot.usage, pipeline: &snapshot.pipeline, today: snapshot.today },

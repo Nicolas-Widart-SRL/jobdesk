@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use egui::emath::TSTransform;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, Vec2, WidgetInfo, pos2, vec2};
+use egui::{
+    Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Shape, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
+};
 
 use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
@@ -488,7 +490,7 @@ pub struct ShownHeatmap {
     pub cells: Vec<[Rect; 7]>,
 }
 
-/// What a screen reader hears for the whole heatmap.
+/// What a screen reader hears for the whole heatmap. Each day with a task is a node inside it, named by its tip.
 const HEATMAP_LABEL: &str = "Tasks per day over the last 12 months";
 const HEAT_WEEKDAYS: [(usize, &str); 3] = [(0, "Mon"), (2, "Wed"), (4, "Fri")];
 
@@ -508,7 +510,8 @@ fn heat_width(weeks: usize) -> f32 {
 }
 
 /// A year of days as `STATUS_DOT` squares, `TALLY_GAP_Y` apart, in four neutral steps, with a `text` ring around today.
-/// Hovering a day shows its tip. It takes no click. Its notes and legend sit at its right.
+/// Hovering a day shows its tip, and a screen reader reads the tip of each day with a task. It takes no click.
+/// Its notes and legend sit at its right.
 pub fn day_heatmap(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
     ui.scope(|ui| {
         if map.faded {
@@ -530,7 +533,8 @@ fn heat_grid(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
     let pitch = STATUS_DOT + TALLY_GAP_Y;
     let size = vec2(heat_width(map.weeks.len()), HEAT_LABELS.1 + 7.0 * pitch);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, HEATMAP_LABEL));
+    // A group, not an image, so a screen reader goes on into the days inside it.
+    response.widget_info(|| WidgetInfo::labeled(Role::Group, true, HEATMAP_LABEL));
     let origin = rect.min + vec2(HEAT_LABELS.0 + TALLY_GAP_Y, HEAT_LABELS.1 + TALLY_GAP_Y);
     let cells: Vec<[Rect; 7]> = (0..map.weeks.len())
         .map(|week| std::array::from_fn(|day| Rect::from_min_size(origin + vec2(week as f32, day as f32) * pitch, Vec2::splat(STATUS_DOT))))
@@ -556,6 +560,16 @@ fn heat_grid(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
                 ui.painter().rect_filled(cell.expand(HAIRLINE), 0.0, p.card);
             }
             ui.painter().rect_filled(cell, 0.0, heat_fill(&p, heat.step));
+        }
+    }
+    // Pointer-only tips leave the days out of a screen reader's reach, so each day with a task gets a node under the map.
+    // They sense hover only, so they take nothing from the map's own hover.
+    let spoken = ui.new_child(UiBuilder::new().max_rect(rect).accessibility_parent(response.id));
+    for (week, days) in map.weeks.iter().enumerate() {
+        for (day, heat) in days.iter().enumerate() {
+            let Some(heat) = heat.as_ref().filter(|heat| heat.step > 0) else { continue };
+            let node = spoken.interact(cells[week][day], response.id.with((week, day)), Sense::hover());
+            node.widget_info(|| WidgetInfo::labeled(Role::Label, true, heat.tip.as_str()));
         }
     }
     let hovered = response.hover_pos().and_then(|at| {
@@ -669,14 +683,30 @@ mod tests {
         (harness, cells)
     }
 
+    /// The days of `three_weeks` with a task, each read out by its tip.
+    fn spoken_days() -> usize {
+        three_weeks().iter().flatten().flatten().filter(|heat| heat.step > 0).count()
+    }
+
     #[test]
     fn hovering_a_day_shows_its_tip() {
         let (mut harness, cells) = heatmap(false);
         harness.run();
         harness.hover_at(cells.borrow()[1][2].center());
         harness.run_steps(4);
-        harness.get_by_label("Tip 1 2");
-        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), 1, "one tip at a time");
+        assert_eq!(harness.query_all_by_label("Tip 1 2").count(), 2, "its node and its tip");
+        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), spoken_days() + 1, "one tip at a time");
+    }
+
+    #[test]
+    fn a_screen_reader_reads_each_day_with_a_task() {
+        let (mut harness, cells) = heatmap(false);
+        harness.run();
+        assert_eq!(spoken_days(), 13);
+        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), spoken_days(), "no tip shows, yet each day is read");
+        assert_eq!(harness.get_by_label("Tip 1 2").rect(), cells.borrow()[1][2], "the node sits on its square");
+        assert!(harness.query_by_label("Tip 1 0").is_none(), "a day with no task adds none");
+        assert!(harness.query_by_label("Tip 2 5").is_none(), "nor does a day after today");
     }
 
     #[test]
@@ -686,7 +716,7 @@ mod tests {
         let (outside, inside) = (cells.borrow()[2][6], cells.borrow()[2][3]);
         harness.hover_at(outside.center());
         harness.run_steps(4);
-        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), 0, "no tip");
+        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), spoken_days(), "no tip, only the days' nodes");
         let painted = |rect: Rect| harness.output().shapes.iter().any(|clipped| matches!(&clipped.shape, Shape::Rect(shape) if shape.rect == rect));
         assert!(painted(inside), "a day in the range is painted");
         assert!(!painted(outside), "a day outside it is not");

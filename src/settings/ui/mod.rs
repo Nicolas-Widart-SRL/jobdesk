@@ -402,8 +402,8 @@ mod tests {
     /// Fictional tasks: $41.20 in October, and $9.00 in September.
     fn report() -> UsageReport {
         UsageReport::new(vec![
-            task(day(2026, 10, 3), Some("apply"), "claude-opus-4-5", 30.0),
-            task(day(2026, 10, 13), Some("rank"), "claude-sonnet-4-5", 11.2),
+            task(day(2026, 10, 3), Some("/apply"), "claude-opus-4-5", 30.0),
+            task(day(2026, 10, 13), Some("/rank"), "claude-sonnet-4-5", 11.2),
             task(day(2026, 9, 4), None, "claude-haiku-4-5", 9.0),
         ])
     }

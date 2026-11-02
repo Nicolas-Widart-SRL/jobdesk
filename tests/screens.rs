@@ -47,7 +47,7 @@ fn shell_on(screen: Screen, name: &str, today: NaiveDate) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    let snapshot = Snapshot::load(&root, today);
+    let snapshot = Snapshot { usage_read: true, ..Snapshot::load(&root, today) };
     assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
     Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), snapshot)
 }
@@ -2936,7 +2936,7 @@ const OCTOBER: [usize; 31] = [2, 1, 0, 0, 3, 1, 2, 0, 1, 0, 1, 2, 4, 1, 0, 1, 0,
 const MODEL_TOKENS: [(&str, u64, u64, u64); 3] =
     [("claude-opus-4-5", 14, 2_200_000, 310_000), ("claude-sonnet-4-5", 15, 1_500_000, 240_000), ("claude-haiku-4-5", 8, 400_000, 50_000)];
 
-/// One fictional task: its command word, model, cost and how it ended. Each model's tokens split evenly, 82% of them cached.
+/// One fictional task: its slash command, model, cost and how it ended. Each model's tokens split evenly, 82% of them cached.
 fn usage_task(on: NaiveDate, (command, model, cost_usd, outcome): (&str, &str, f64, TaskOutcome)) -> TaskCost {
     let &(_, tasks, tokens_in, tokens_out) = MODEL_TOKENS.iter().find(|(id, ..)| *id == model).unwrap();
     let tokens_in = tokens_in / tasks;
@@ -2952,41 +2952,41 @@ fn usage_tasks() -> Vec<TaskCost> {
     const SONNET: &str = "claude-sonnet-4-5";
     const HAIKU: &str = "claude-haiku-4-5";
     let the_13th =
-        [("apply", OPUS, 3.30, Finished), ("interview", OPUS, 1.45, Finished), ("rank", OPUS, 1.20, Finished), ("gmail-sync", HAIKU, 0.15, Finished)];
+        [("/apply", OPUS, 3.30, Finished), ("/interview", OPUS, 1.45, Finished), ("/rank", OPUS, 1.20, Finished), ("/gmail-sync", HAIKU, 0.15, Finished)];
     let mut rest = vec![
-        ("scrape", SONNET, 0.40, Finished),
-        ("rank", SONNET, 0.75, Finished),
-        ("apply", OPUS, 3.30, Finished),
-        ("outcome", HAIKU, 0.05, Finished),
-        ("setup", OPUS, 1.80, Finished),
-        ("scrape", SONNET, 0.40, Stopped),
-        ("rank", SONNET, 0.75, Finished),
-        ("outcome", HAIKU, 0.10, Finished),
-        ("apply", OPUS, 3.30, Finished),
-        ("scrape", SONNET, 0.40, Finished),
-        ("setup", OPUS, 1.80, Finished),
-        ("rank", OPUS, 1.20, Finished),
-        ("outcome", SONNET, 1.20, Finished),
-        ("scrape", SONNET, 0.40, Finished),
-        ("apply", OPUS, 3.30, Failed),
-        ("rank", SONNET, 0.75, Finished),
-        ("outcome", HAIKU, 0.05, Finished),
-        ("scrape", SONNET, 0.40, Stopped),
-        ("interview", OPUS, 1.45, Finished),
-        ("rank", SONNET, 0.75, Finished),
-        ("gmail-sync", HAIKU, 0.15, Finished),
-        ("apply", OPUS, 3.30, Finished),
-        ("scrape", SONNET, 0.40, Finished),
-        ("outcome", HAIKU, 0.10, Finished),
-        ("setup", OPUS, 1.70, Stopped),
-        ("rank", SONNET, 0.75, Finished),
-        ("scrape", SONNET, 0.40, Finished),
-        ("rank", OPUS, 1.20, Finished),
-        ("outcome", HAIKU, 0.05, Finished),
-        ("apply", OPUS, 3.30, Finished),
-        ("rank", SONNET, 0.75, Finished),
-        ("scrape", SONNET, 0.40, Finished),
-        ("outcome", HAIKU, 0.05, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/apply", OPUS, 3.30, Finished),
+        ("/outcome", HAIKU, 0.05, Finished),
+        ("/setup", OPUS, 1.80, Finished),
+        ("/scrape", SONNET, 0.40, Stopped),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/outcome", HAIKU, 0.10, Finished),
+        ("/apply", OPUS, 3.30, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/setup", OPUS, 1.80, Finished),
+        ("/rank", OPUS, 1.20, Finished),
+        ("/outcome", SONNET, 1.20, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/apply", OPUS, 3.30, Failed),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/outcome", HAIKU, 0.05, Finished),
+        ("/scrape", SONNET, 0.40, Stopped),
+        ("/interview", OPUS, 1.45, Finished),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/gmail-sync", HAIKU, 0.15, Finished),
+        ("/apply", OPUS, 3.30, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/outcome", HAIKU, 0.10, Finished),
+        ("/setup", OPUS, 1.70, Stopped),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/rank", OPUS, 1.20, Finished),
+        ("/outcome", HAIKU, 0.05, Finished),
+        ("/apply", OPUS, 3.30, Finished),
+        ("/rank", SONNET, 0.75, Finished),
+        ("/scrape", SONNET, 0.40, Finished),
+        ("/outcome", HAIKU, 0.05, Finished),
     ]
     .into_iter();
     let mut tasks = Vec::new();
@@ -2999,7 +2999,7 @@ fn usage_tasks() -> Vec<TaskCost> {
         }
     }
     assert!(rest.next().is_none(), "every October task has a day");
-    let earlier = [("scrape", SONNET, 0.45), ("rank", SONNET, 0.70), ("apply", OPUS, 2.90), ("outcome", HAIKU, 0.10), ("setup", OPUS, 1.60)];
+    let earlier = [("/scrape", SONNET, 0.45), ("/rank", SONNET, 0.70), ("/apply", OPUS, 2.90), ("/outcome", HAIKU, 0.10), ("/setup", OPUS, 1.60)];
     let mut at = 0;
     let mut on = NaiveDate::from_ymd_opt(2026, 7, 13).unwrap();
     while on.month() < 10 {
@@ -3027,9 +3027,61 @@ fn shell_with_usage(name: &str, tasks: Vec<TaskCost>) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    let mut snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), usage_snapshot(&root, tasks)).with_folder_label("~/Documents/ai-job-search")
+}
+
+/// The sample folder at `root` as read on 31 October, with `tasks` as the run logs read.
+fn usage_snapshot(root: &Path, tasks: Vec<TaskCost>) -> Snapshot {
+    let mut snapshot = Snapshot::load(root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap());
     snapshot.usage = UsageReport::new(tasks);
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot).with_folder_label("~/Documents/ai-job-search")
+    snapshot.usage_read = true;
+    snapshot
+}
+
+/// The checkout can show before the run logs are read. Until they are, Usage statistics says it is reading them.
+#[test]
+fn usage_reads_until_the_logs_are_read() {
+    let name = "settings_usage_unread";
+    let mut shell = shell_with_usage(name, usage_tasks());
+    let feed = shell.snapshot_feed();
+    shell.open_settings(Page::Usage);
+    let mut harness = tray_harness(shell);
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let unread = Snapshot { usage_read: false, usage: UsageReport::default(), ..usage_snapshot(&root, Vec::new()) };
+    feed.send(unread).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Reading your run logs…"));
+    assert!(!is_shown(&harness, "No tasks yet"), "an unread log is not an empty one");
+
+    feed.send(usage_snapshot(&root, usage_tasks())).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Reading your run logs…"));
+    assert!(is_shown(&harness, "$41.20 in Oct"));
+}
+
+/// A command read from a run log keeps its one slash in By command.
+#[test]
+fn a_logged_command_shows_with_one_slash() {
+    let logs = tempfile::tempdir().unwrap();
+    let name = "settings_usage_logged";
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    let workspace = jobdesk::workspace::open(&root).unwrap();
+    let meta = serde_json::json!({
+        "type": "jobdesk_meta", "workspace": workspace.path().display().to_string(), "id": "a", "line": "/rank",
+        "model": null, "budget_usd": 2.0, "started_at": "2026-10-30 10:00",
+    });
+    let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
+    fs::write(logs.path().join("a.jsonl"), format!("{meta}\n{result}\n")).unwrap();
+    let tasks = jobdesk::runs::usage_logs(logs.path().to_owned(), workspace.path()).tasks();
+    assert_eq!(tasks.len(), 1, "the log is read");
+
+    let mut shell = Shell::with_snapshot(Screen::InTray, workspace, usage_snapshot(&root, tasks));
+    shell.open_settings(Page::Usage);
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "/rank"));
+    assert!(!is_shown(&harness, "//rank"));
 }
 
 /// Usage statistics on `shell`, with bun missing so Runtime status says "1 missing". `hover` rests the pointer on one
@@ -3322,8 +3374,8 @@ screens! {
 }
 
 /// The run logs sit outside the checkout, so the shell asks for a reload when a run stops working.
-fn reload_harness() -> (Harness<'static>, SharedSink, std::sync::mpsc::Receiver<()>) {
-    let mut shell = shell(Screen::Runs, "reload_nudge");
+fn reload_harness(name: &str) -> (Harness<'static>, SharedSink, std::sync::mpsc::Receiver<()>) {
+    let mut shell = shell(Screen::Runs, name);
     let reloads = shell.reload_feed();
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
@@ -3335,7 +3387,7 @@ fn reload_harness() -> (Harness<'static>, SharedSink, std::sync::mpsc::Receiver<
 
 #[test]
 fn a_run_that_ends_its_turn_sends_one_reload() {
-    let (mut harness, sink, reloads) = reload_harness();
+    let (mut harness, sink, reloads) = reload_harness("reload_nudge_ended");
     assert!(reloads.try_recv().is_err(), "a working run sends none");
 
     emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.4, duration_ms: 9_000 }]);
@@ -3347,7 +3399,7 @@ fn a_run_that_ends_its_turn_sends_one_reload() {
 
 #[test]
 fn a_run_that_keeps_working_sends_no_reload() {
-    let (mut harness, sink, reloads) = reload_harness();
+    let (mut harness, sink, reloads) = reload_harness("reload_nudge_working");
 
     emit_all(&sink, [tool("1", "Read", "cv/main.tex", false), done("1")]);
     harness.run_steps(4);

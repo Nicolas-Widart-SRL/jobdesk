@@ -22,7 +22,7 @@ pub struct ModelCost {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskCost {
     pub started_on: NaiveDate,
-    /// The slash command word. None for a typed task with no leading `/`.
+    /// The slash command, leading `/` included, such as `/rank`. None for a typed task with no leading `/`.
     pub command: Option<String>,
     pub outcome: TaskOutcome,
     pub cost_usd: f64,
@@ -51,8 +51,9 @@ impl Period {
         }
     }
 
+    /// Whether the period holds `day`. It ends today, so a day after it is in none.
     pub fn contains(self, day: NaiveDate, today: NaiveDate) -> bool {
-        self.first_day(today).is_none_or(|first| day >= first)
+        day <= today && self.first_day(today).is_none_or(|first| day >= first)
     }
 }
 
@@ -108,6 +109,14 @@ mod tests {
     fn all_reaches_back_without_limit() {
         assert_eq!(Period::All.first_day(today()), None);
         assert!(Period::All.contains(day(2019, 3, 4), today()));
+    }
+
+    #[test]
+    fn a_day_after_today_is_in_no_period() {
+        for period in Period::ALL {
+            assert!(period.contains(today(), today()), "{period:?} holds today");
+            assert!(!period.contains(day(2026, 11, 1), today()), "{period:?}");
+        }
     }
 
     #[test]

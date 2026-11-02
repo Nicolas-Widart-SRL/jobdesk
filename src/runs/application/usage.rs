@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{Datelike, Days, NaiveDate};
 
@@ -62,9 +62,9 @@ pub struct YearOfDays {
     pub weeks: Vec<[Option<DayCount>; 7]>,
     /// The column and row of today.
     pub today_at: (usize, usize),
-    /// The earliest task on record, inside the grid or not.
+    /// The earliest task on record up to today, inside the grid or not.
     pub first_task: Option<NaiveDate>,
-    /// Days in the grid that ran at least one task.
+    /// Days from `first_task` to today that ran at least one task, inside the grid or not.
     pub active_days: usize,
 }
 
@@ -155,11 +155,12 @@ impl UsageReport {
                 })
             })
             .collect();
+        let on_record: HashSet<NaiveDate> = self.tasks.iter().map(|task| task.started_on).filter(|&day| day <= today).collect();
         YearOfDays {
             weeks,
             today_at: (WEEKS_SHOWN - 1, today.weekday().num_days_from_monday() as usize),
-            first_task: self.tasks.iter().map(|task| task.started_on).min(),
-            active_days: per_day.len(),
+            first_task: on_record.iter().min().copied(),
+            active_days: on_record.len(),
         }
     }
 }
@@ -192,10 +193,10 @@ mod tests {
     #[test]
     fn totals_add_only_what_falls_inside_the_period() {
         let report = UsageReport::new(vec![
-            task(day(2026, 10, 3), Some("find-jobs"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 1_000, 200, 800, 1.5)]),
-            task(day(2026, 10, 20), Some("apply"), TaskOutcome::Stopped, vec![model("claude-opus-4-5", 500, 50, 100, 0.25)]),
+            task(day(2026, 10, 3), Some("/find-jobs"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 1_000, 200, 800, 1.5)]),
+            task(day(2026, 10, 20), Some("/apply"), TaskOutcome::Stopped, vec![model("claude-opus-4-5", 500, 50, 100, 0.25)]),
             task(day(2026, 10, 21), None, TaskOutcome::Failed, vec![model("claude-haiku-4-5", 40, 5, 0, 0.05)]),
-            task(day(2026, 9, 30), Some("apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 9_000, 900, 0, 9.0)]),
+            task(day(2026, 9, 30), Some("/apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 9_000, 900, 0, 9.0)]),
         ]);
 
         let totals = report.totals(Period::Month, today());
@@ -216,25 +217,25 @@ mod tests {
     #[test]
     fn commands_sort_by_spend_and_typed_tasks_group_under_none() {
         let report = UsageReport::new(vec![
-            finished(day(2026, 10, 3), Some("apply"), 0.5),
+            finished(day(2026, 10, 3), Some("/apply"), 0.5),
             finished(day(2026, 10, 4), None, 2.0),
-            finished(day(2026, 10, 5), Some("find-jobs"), 0.5),
+            finished(day(2026, 10, 5), Some("/find-jobs"), 0.5),
             finished(day(2026, 10, 6), None, 1.0),
-            finished(day(2026, 10, 7), Some("apply"), 0.25),
+            finished(day(2026, 10, 7), Some("/apply"), 0.25),
         ]);
 
         let rows = report.by_command(Period::Month, today());
 
         let seen: Vec<_> = rows.iter().map(|row| (row.command.as_deref(), row.tasks)).collect();
-        assert_eq!(seen, vec![(None, 2), (Some("apply"), 2), (Some("find-jobs"), 1)]);
+        assert_eq!(seen, vec![(None, 2), (Some("/apply"), 2), (Some("/find-jobs"), 1)]);
         assert!((rows[0].spent_usd - 3.0).abs() < 1e-9);
     }
 
     #[test]
     fn equal_spend_sorts_by_command_name() {
-        let report = UsageReport::new(vec![finished(day(2026, 10, 3), Some("outcome"), 1.0), finished(day(2026, 10, 3), Some("apply"), 1.0)]);
+        let report = UsageReport::new(vec![finished(day(2026, 10, 3), Some("/outcome"), 1.0), finished(day(2026, 10, 3), Some("/apply"), 1.0)]);
         let names: Vec<_> = report.by_command(Period::Month, today()).into_iter().map(|row| row.command).collect();
-        assert_eq!(names, vec![Some("apply".to_owned()), Some("outcome".to_owned())]);
+        assert_eq!(names, vec![Some("/apply".to_owned()), Some("/outcome".to_owned())]);
     }
 
     #[test]
@@ -242,12 +243,12 @@ mod tests {
         let report = UsageReport::new(vec![
             task(
                 day(2026, 10, 3),
-                Some("apply"),
+                Some("/apply"),
                 TaskOutcome::Finished,
                 vec![model("claude-opus-4-5", 100, 10, 0, 1.0), model("claude-opus-4-1", 50, 5, 0, 0.5), model("claude-haiku-4-5", 20, 2, 0, 0.1)],
             ),
-            task(day(2026, 10, 4), Some("apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 10, 1, 0, 0.2)]),
-            task(day(2026, 8, 4), Some("apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 7, 7, 0, 7.0)]),
+            task(day(2026, 10, 4), Some("/apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 10, 1, 0, 0.2)]),
+            task(day(2026, 8, 4), Some("/apply"), TaskOutcome::Finished, vec![model("claude-opus-4-5", 7, 7, 0, 7.0)]),
         ]);
 
         let rows = report.by_model(Period::Month, today());
@@ -277,8 +278,8 @@ mod tests {
     #[test]
     fn the_year_counts_tasks_by_day() {
         let report = UsageReport::new(vec![
-            finished(day(2026, 10, 31), Some("apply"), 0.5),
-            finished(day(2026, 10, 31), Some("apply"), 0.25),
+            finished(day(2026, 10, 31), Some("/apply"), 0.5),
+            finished(day(2026, 10, 31), Some("/apply"), 0.25),
             finished(day(2026, 10, 12), None, 1.0),
             finished(day(2025, 10, 27), None, 1.0),
             finished(day(2025, 10, 26), None, 1.0),
@@ -292,9 +293,17 @@ mod tests {
         assert_eq!((cell.tasks, cell.spent_usd), (2, 0.75));
         assert_eq!(year.weeks[0][0].unwrap().tasks, 1);
         assert_eq!(year.weeks[51][0].unwrap().tasks, 0);
-        assert_eq!(year.active_days, 3);
+        assert_eq!(year.active_days, 5, "every day on record up to today, inside the grid or not");
         assert_eq!(year.first_task, Some(day(2019, 3, 4)));
         assert_eq!(UsageReport::default().year(today()).first_task, None);
+    }
+
+    #[test]
+    fn a_task_after_today_is_not_on_record_yet() {
+        let report = UsageReport::new(vec![finished(day(2026, 11, 1), Some("/apply"), 1.0)]);
+        let year = report.year(today());
+        assert_eq!((year.first_task, year.active_days), (None, 0));
+        assert_eq!(report.totals(Period::All, today()).tasks, 0);
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub struct Snapshot {
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
     pub usage: UsageReport,
+    /// Whether the run logs were read into `usage`. False until then, so Usage statistics says it is reading.
+    pub usage_read: bool,
     pub issues: Vec<Issue>,
     pub today: NaiveDate,
 }
@@ -35,7 +37,8 @@ pub struct Issue {
 }
 
 impl Snapshot {
-    /// A feature that fails to load reports an issue and the others keep working.
+    /// A feature that fails to load reports an issue and the others keep working. The run logs are not read here:
+    /// `usage` stays empty and unread.
     pub fn load(root: &Path, today: NaiveDate) -> Self {
         let mut issues = Vec::new();
         let board = discovery::load_board(root, today).unwrap_or_else(|error| {
@@ -66,6 +69,6 @@ impl Snapshot {
         let workspace = workspace_view(&workspace::inspect(root), &board);
         let insights = search_insights(&pipeline);
         let band = workflow_band(&insights, &board, workspace.profile_counts());
-        Self { archives, workspace, insights, band, board, pipeline, skill_gaps, usage: UsageReport::default(), issues, today }
+        Self { archives, workspace, insights, band, board, pipeline, skill_gaps, usage: UsageReport::default(), usage_read: false, issues, today }
     }
 }

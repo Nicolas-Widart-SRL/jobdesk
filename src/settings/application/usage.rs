@@ -1,6 +1,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::runs::application::{CommandRow, DayCount, ModelRow, Period, UsageReport, UsageTotals, YearOfDays};
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::tracking::application::Pipeline;
 
 /// What Usage statistics has to show: no folder to read, logs still being read, or the report as read.
@@ -131,9 +132,14 @@ pub fn month_marks(year: &YearOfDays) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// A By command row's name: the slash command, or "Other tasks" for the ones typed in full.
+/// A By command row's name: the slash command as typed, its `/` included, or "Other tasks" for the ones typed in full.
 pub fn command_name(row: &CommandRow) -> String {
-    row.command.as_deref().map_or_else(|| "Other tasks".to_owned(), |command| format!("/{command}"))
+    row.command.clone().unwrap_or_else(|| "Other tasks".to_owned())
+}
+
+/// A By model row's name. A model outside the known families shows its id from the log, so only its visible characters show.
+pub fn model_name(row: &ModelRow) -> String {
+    visible_chars(&row.model).collect()
 }
 
 /// The word beside Usage statistics in the rail: "$41.20 in Oct", or "No tasks yet" before the first task.
@@ -261,14 +267,14 @@ mod tests {
     #[test]
     fn the_rail_word_is_this_months_spend_or_no_tasks_yet() {
         assert_eq!(rail_word(&UsageReport::default(), today()), "No tasks yet");
-        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("apply"), 40.0), task(day(2026, 10, 4), None, 1.2), task(day(2026, 9, 4), None, 9.0)]);
+        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("/apply"), 40.0), task(day(2026, 10, 4), None, 1.2), task(day(2026, 9, 4), None, 9.0)]);
         assert_eq!(rail_word(&report, today()), "$41.20 in Oct");
         assert_eq!(rail_word(&report, day(2026, 11, 2)), "$0.00 in Nov", "a new month starts at nothing");
     }
 
     #[test]
     fn the_page_divides_spend_by_the_applications_sent_in_the_period() {
-        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("apply"), 30.0), task(day(2026, 8, 3), Some("rank"), 10.0)]);
+        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("/apply"), 30.0), task(day(2026, 8, 3), Some("/rank"), 10.0)]);
         let pipeline = sent_on(&[day(2026, 10, 5), day(2026, 10, 20), day(2026, 9, 1)]);
         let page = usage_page(&report, &pipeline, Period::Month, today());
         assert_eq!(page.per_application, Some((15.0, 2)));
@@ -282,7 +288,7 @@ mod tests {
 
     #[test]
     fn with_nothing_sent_there_is_no_cost_per_application() {
-        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("apply"), 30.0)]);
+        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("/apply"), 30.0)]);
         assert_eq!(usage_page(&report, &Pipeline::default(), Period::Month, today()).per_application, None);
         let summer = sent_on(&[day(2026, 7, 1)]);
         assert_eq!(usage_page(&report, &summer, Period::Days90, today()).per_application, None, "sent before the 90 days");
@@ -293,7 +299,9 @@ mod tests {
         let report = UsageReport::new(vec![task(day(2026, 7, 13), None, 1.0), task(day(2026, 10, 3), None, 1.0), task(day(2026, 10, 3), None, 1.0)]);
         assert_eq!(active_days_note(&report.year(today()), today()), "2 days with a task, since 13 July");
         let older = UsageReport::new(vec![task(day(2024, 3, 4), None, 1.0)]);
-        assert_eq!(active_days_note(&older.year(today()), today()), "0 days with a task, since 4 March 2024");
+        assert_eq!(active_days_note(&older.year(today()), today()), "1 day with a task, since 4 March 2024", "a day before the grid still counts");
+        let both = UsageReport::new(vec![task(day(2024, 3, 4), None, 1.0), task(day(2026, 10, 3), None, 1.0)]);
+        assert_eq!(active_days_note(&both.year(today()), today()), "2 days with a task, since 4 March 2024");
         assert_eq!(active_days_note(&UsageReport::default().year(today()), today()), "No task yet");
     }
 
@@ -307,7 +315,21 @@ mod tests {
 
     #[test]
     fn typed_tasks_are_other_tasks() {
-        assert_eq!(command_name(&CommandRow { command: Some("apply".into()), tasks: 1, spent_usd: 0.0 }), "/apply");
+        assert_eq!(command_name(&CommandRow { command: Some("/apply".into()), tasks: 1, spent_usd: 0.0 }), "/apply");
         assert_eq!(command_name(&CommandRow { command: None, tasks: 1, spent_usd: 0.0 }), "Other tasks");
+    }
+
+    #[test]
+    fn a_command_from_the_report_keeps_one_slash() {
+        let report = UsageReport::new(vec![task(day(2026, 10, 3), Some("/rank"), 1.0)]);
+        let names: Vec<String> = report.by_command(Period::Month, today()).iter().map(command_name).collect();
+        assert_eq!(names, ["/rank"]);
+    }
+
+    #[test]
+    fn an_unknown_model_shows_only_its_visible_characters() {
+        let row = |model: &str| ModelRow { model: model.into(), tasks: 1, tokens_in: 0, tokens_out: 0, spent_usd: 0.0 };
+        assert_eq!(model_name(&row("acme\u{200b}-model\u{1b}[31m-9\u{7}")), "acme-model-9");
+        assert_eq!(model_name(&row("Opus")), "Opus");
     }
 }

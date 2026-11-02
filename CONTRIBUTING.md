@@ -48,6 +48,10 @@ A real Claude session runs only on request and costs a few cents:
 cargo test --test live_claude -- --ignored --nocapture
 ```
 
+Among them, `test_connection_passes_on_the_claude_sign_in` runs Test connection on your Claude sign-in, for about a cent.
+
+No test touches the real keychain: the API key tests use an in-memory fake store. On macOS, a debug build from `cargo run` asks for Keychain access again after each rebuild, because the Keychain ties the item's access to the binary.
+
 Screen tests render every screen in both themes from `tests/sample_workspace`, which holds fictional data. After an intended visual change, refresh them:
 
 ```bash

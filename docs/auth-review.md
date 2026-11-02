@@ -4,7 +4,7 @@ Reviewed 31 October 2026 against Anthropic's published documentation. This is an
 
 ## How Jobdesk authenticates
 
-Jobdesk starts the user's installed, unmodified `claude` binary as a child process with `-p`. The CLI uses whatever authentication the user already set up. Jobdesk offers no login and never reads, stores or passes a credential. The Setup screen's status bar, or Settings › Runtime status, shows whether the last run used a Claude login or an API key, using the CLI's own `apiKeySource` field.
+Jobdesk starts the user's installed, unmodified `claude` binary as a child process with `-p`. By default the CLI uses whatever authentication the user already set up, and Jobdesk offers no login and never reads, stores or passes that credential. The one exception is optional: an Anthropic Console API key the user pastes in Settings › Providers. Jobdesk keeps it only in the system keychain, the macOS Keychain or the Windows Credential Manager, and passes it only as `ANTHROPIC_API_KEY` in the environment of each task's `claude` process, never on its command line. Save key tests the key first, with Test connection, and tasks switch to it only after that test passes. A refused key leaves them on the Claude sign-in. Settings › Providers and Settings › Runtime status show whether the last task used a Claude login or an API key, using the CLI's own `apiKeySource` field. The status bar no longer shows it.
 
 ## What the documentation says
 
@@ -26,7 +26,7 @@ No page says whether a third-party app that launches a subscription-authenticate
 
 ## Assessment
 
-**Use on your own machine.** Jobdesk fits the signing-in carve-out and collects no credentials, and the docs describe `-p` scripting. The consumer terms' automation clause still pulls the other way, and a person starts each run but the app drives it. This is unresolved. An API key avoids the question entirely.
+**Use on your own machine.** Jobdesk fits the signing-in carve-out and collects no Claude.ai credentials, and the docs describe `-p` scripting. The consumer terms' automation clause still pulls the other way, and a person starts each run but the app drives it. This is unresolved. An API key avoids the question entirely.
 
 **Public release with Claude login.** Do not ship this without written approval. A distributed app that runs on each user's plan comes close to the routing restriction, and the guidance for builders is API keys. Anthropic also reserves the right to enforce without notice.
 
@@ -35,7 +35,7 @@ No page says whether a third-party app that launches a subscription-authenticate
 ## Before a public release
 
 1. Choose one route: ask Anthropic for approval, or make API keys the only supported route.
-2. For the API key route, decide how the key reaches the CLI. Apps opened from the Finder do not inherit shell variables, so Jobdesk would need its own key entry stored in the system keychain. That work is not built.
+2. Done: for the API key route, the key reaches the CLI from Jobdesk's own key entry in Settings › Providers, stored in the system keychain, because apps opened from the Finder do not inherit shell variables.
 3. State in the README how the app authenticates, as the maintainer asked in [discussion 673](https://github.com/ai-job-search-dev/ai-job-search/discussions/673).
 4. Keep the name Jobdesk and use no Anthropic or Claude Code logos. Plain text saying it runs Claude Code is allowed.
 5. Sign and notarize the macOS build, and sign the Windows installer.

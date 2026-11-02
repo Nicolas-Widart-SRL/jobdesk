@@ -7,15 +7,16 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DayHeatmap, DealLook, Figure, FlowNode, HeatDay, Ink, KnotState, Palette, Subtitle, TabMark, Title,
-    Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab, check_tag, code_box,
-    command_button, command_row, copy_button, danger_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut,
-    empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot,
-    lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper,
-    path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, score, search_field, segmented,
-    select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar,
-    small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame,
-    status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
+    AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorMode, Figure, FlowNode, HeatDay, Ink,
+    KnotState, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, block_editor,
+    brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button, day_heatmap,
+    day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, document_with_blanks, doughnut, empty_state, enabled_when, faint_mono, fat_tally,
+    figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row,
+    markdown_with_blanks, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row,
+    primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score, search_field, segmented, select_row,
+    setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button,
+    small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
+    status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -623,6 +624,77 @@ fn postmark(ui: &mut Ui) {
     });
 }
 
+const ROLES: [RoleEntry; 2] = [
+    RoleEntry {
+        dates: "2021 – present",
+        title: "Lead Software Engineer",
+        company: "Calder Freight, Antwerp. Freelance.",
+        body: "- Leads a team of six building the route-planning platform for 40 depots.\n- Moved nightly batch planning to event streams, so plans now update within a minute.\n- Budget or headcount you owned: [PLACEHOLDER]",
+        first: true,
+    },
+    RoleEntry { dates: "2017 – 2021", title: "Senior Backend Engineer", company: "[COMPANY], Ghent", body: "- Built the appointment service used by 120 clinics, at 99.95% uptime over three years.", first: false },
+];
+
+const DRAFT: &str = "### Lead Software Engineer - Calder Freight (2021 – present)\n\nAntwerp. Freelance.\n\n- Leads a team of six building the route-planning platform for 40 depots.\n- Budget or headcount you owned: EUR 1.2M a year, eight people at the peak";
+
+const NOW_IN_FILE: [(&str, bool); 2] = [("- Budget or headcount you owned: [PLACEHOLDER]", false), ("- Introduced a weekly planning review with depot managers.", true)];
+
+const CHANGED: ChangedOnDisk = ChangedOnDisk {
+    title: "This role changed while you were editing.",
+    detail: "A task added a line to it. Your text below is not saved yet.",
+    caption: "Now in the file, the end of this role",
+    lines: Some(&NOW_IN_FILE),
+    take: "Use the new version",
+    take_note: "Replaces your text with the file's. To keep both, copy the new line into your text, then save.",
+};
+
+fn editor(mode: EditorMode, unsaved: bool) -> BlockEditor {
+    let changed = matches!(mode, EditorMode::Changed(_));
+    BlockEditor {
+        title: "Edit this role",
+        hint: "Markdown. Placeholders read [PLACEHOLDER].",
+        save: if changed { "Save mine over it" } else { "Save" },
+        note: if changed { "Your text replaces the role as it is now in the file." } else { "Only this role changes. The rest of the file stays as it is." },
+        unsaved: unsaved.then_some("Unsaved changes"),
+        mode,
+    }
+}
+
+fn profile(ui: &mut Ui) {
+    let mut cache = CommonMarkCache::default();
+    let topics = [(1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (3, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Closed))), (1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (1, Some(Ink::Text))];
+    tally_strip(ui, &topics, true);
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        danger_shortcut_button(ui, "Save mine over it", &["Cmd", "Enter"]);
+        ui.add_enabled_ui(false, |ui| danger_shortcut_button(ui, "Save mine over it", &["Cmd", "Enter"]));
+    });
+    ui.add_space(10.0);
+    paper(ui, false, |ui| {
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 0)).show(ui, |ui| {
+            role_entry(ui, &mut cache, &ROLES[0], None);
+            role_entry(ui, &mut cache, &ROLES[1], Some("Save or cancel the open edit first."));
+            divider(ui);
+            ui.add_space(12.0);
+            markdown_with_blanks(ui, &mut cache, "Career goals: [ROLE_YOU_WANT_NEXT]. Code such as `cargo test` keeps its own look, and [a link](https://tessel.example/jobs/1) its own.");
+            ui.add_space(12.0);
+            let busy = EditorMode::Busy { why: "A task is running and may change this file. Save once it ends.", line: "A task is running, so Save waits until it ends. Your text stays here." };
+            for (id, mode, unsaved) in [("rest", EditorMode::Rest, true), ("busy", busy, false), ("changed", EditorMode::Changed(&CHANGED), true)] {
+                ui.push_id(id, |ui| {
+                    let mut draft = DRAFT.to_owned();
+                    block_editor(ui, &editor(mode, unsaved), &mut draft, &mut false, |_, _| {});
+                });
+                ui.add_space(12.0);
+            }
+            ui.push_id("preview", |ui| {
+                let mut draft = DRAFT.replace("EUR 1.2M a year, eight people at the peak", "[PLACEHOLDER]");
+                block_editor(ui, &editor(EditorMode::Rest, false), &mut draft, &mut true, |ui, draft| document_with_blanks(ui, &mut CommonMarkCache::default(), draft));
+            });
+            ui.add_space(12.0);
+        });
+    });
+}
+
 type Section = (&'static str, fn(&mut Ui));
 
 fn gallery(ui: &mut Ui) {
@@ -651,6 +723,40 @@ fn gallery(ui: &mut Ui) {
             ui.add_space(24.0);
         }
     });
+}
+
+fn profile_gallery(ui: &mut Ui) {
+    ui.set_width(ui.available_width());
+    ui.heading("Profile");
+    ui.add_space(6.0);
+    profile(ui);
+}
+
+/// The height of the Profile sheet. The main sheet is near the 8192px a texture holds, so these parts take a sheet of their own.
+const PROFILE_HEIGHT: f32 = 1700.0;
+
+fn render_profile(theme: Theme, name: &str) {
+    let mut harness = Harness::builder()
+        .with_size([1000.0, PROFILE_HEIGHT])
+        .with_pixels_per_point(1.0)
+        .with_theme(theme)
+        .with_context_setup(install_look)
+        .wgpu()
+        .build_ui(|ui| {
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, profile_gallery));
+        });
+    harness.run_steps(3);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn ui_kit_gallery_profile_dark() {
+    render_profile(Theme::Dark, "ui_kit_gallery_profile_dark");
+}
+
+#[test]
+fn ui_kit_gallery_profile_light() {
+    render_profile(Theme::Light, "ui_kit_gallery_profile_light");
 }
 
 fn render(theme: Theme, name: &str) {
@@ -802,33 +908,35 @@ fn ui_kit_gallery_light() {
     render(Theme::Light, "ui_kit_gallery_light");
 }
 
-/// Every clickable kit widget in the gallery shows the pointing hand under the pointer, and a disabled one keeps the arrow.
+/// Every clickable kit widget in the galleries shows the pointing hand under the pointer, and a disabled one keeps the arrow.
 #[test]
 fn every_clickable_widget_shows_the_hand() {
-    let mut harness = Harness::builder().with_size(SHEET).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(|ui| {
-        jobdesk::ui_kit::desk(ui, |ui| {
-            jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
-                ui.add_enabled_ui(false, |ui| button(ui, "Switched off"));
-                gallery(ui);
+    for (sheet, height) in [(gallery as fn(&mut Ui), SHEET[1]), (profile_gallery, PROFILE_HEIGHT)] {
+        let mut harness = Harness::builder().with_size([1000.0, height]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(move |ui| {
+            jobdesk::ui_kit::desk(ui, |ui| {
+                jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
+                    ui.add_enabled_ui(false, |ui| button(ui, "Switched off"));
+                    sheet(ui);
+                });
             });
         });
-    });
-    harness.run();
-    let mut clickable = Vec::new();
-    for role in [Role::Button, Role::Tab, Role::RadioButton, Role::Link] {
-        for node in harness.query_all_by_role(role) {
-            if !node.accesskit_node().is_disabled() {
-                clickable.push(node.rect().center());
+        harness.run();
+        let mut clickable = Vec::new();
+        for role in [Role::Button, Role::Tab, Role::RadioButton, Role::Link] {
+            for node in harness.query_all_by_role(role) {
+                if !node.accesskit_node().is_disabled() {
+                    clickable.push(node.rect().center());
+                }
             }
         }
-    }
-    assert!(clickable.len() > 20, "the gallery shows {} clickable widgets", clickable.len());
-    for at in clickable {
-        harness.hover_at(at);
+        assert!(clickable.len() > 5, "the sheet shows {} clickable widgets", clickable.len());
+        for at in clickable {
+            harness.hover_at(at);
+            harness.step();
+            assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
+        }
+        harness.get_by_label("Switched off").hover();
         harness.step();
-        assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
+        assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default);
     }
-    harness.get_by_label("Switched off").hover();
-    harness.step();
-    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default);
 }

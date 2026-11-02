@@ -248,6 +248,13 @@ pub const SETTING_CHECK_GAP: f32 = 12.0;
 /// The room between a setting's label and its help, and between a section's heading and its note.
 pub const SETTING_HELP_GAP: f32 = 2.0;
 pub const SETTING_NOTE_GAP: f32 = 1.0;
+/// A role on a profile's paper: the room above and below it, and its dates column, which fits "2021 – present".
+pub const ROLE_PADDING: (f32, f32) = (14.0, 12.0);
+pub const ROLE_DATES: f32 = COMMAND_NAME_WIDTH;
+/// The block editor: its padding, the gap between its parts, and how many lines its field shows before it grows.
+pub const EDITOR_PADDING: (i8, i8, i8) = (14, 12, 14);
+pub const EDITOR_GAP: f32 = 10.0;
+pub const EDITOR_ROWS: usize = 7;
 
 pub const RADIUS_TAB: u8 = 6;
 pub const RADIUS_PANEL: u8 = 4;

@@ -2,15 +2,16 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, TextStyle, TextWrapMode, Ui, WidgetText};
+use egui::layers::ShapeIdx;
+use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{CLICKABLE, backed, on_desk};
-use crate::ui_kit::tokens::{DOC_MEASURE, HIT_OVERHANG, HIT_TOP, Type};
+use crate::ui_kit::tokens::{DOC_MEASURE, HAIRLINE, HIT_OVERHANG, HIT_TOP, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
 pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> RichText {
@@ -402,6 +403,173 @@ fn without_images(text: &str) -> String {
     escaped(&text)
 }
 
+/// What a blank always says first. A token with words of its own adds them, as in "to fill: first name".
+const BLANK: &str = "to fill";
+
+/// The token that names nothing but a gap, so its blank says only "to fill".
+const BARE_TOKEN: &str = "PLACEHOLDER";
+
+/// The look of a placeholder to fill, as a text format so it flows in a sentence: `interview` ink in the tag's
+/// semibold face, underlined in a hairline of the same ink.
+pub fn blank_mark(ui: &Ui) -> TextFormat {
+    let ink = Palette::of(ui).interview;
+    TextFormat { underline: Stroke::new(HAIRLINE, ink), ..TextFormat::simple(Type::TAG.font(), ink) }
+}
+
+/// Profile text as `markdown` renders it, with each `[TOKEN]` placeholder read as a blank (`blank_mark`).
+pub fn markdown_with_blanks(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
+    blank_scope(ui, |ui| markdown(ui, cache, &text));
+}
+
+/// Profile text as `document` renders it, with each `[TOKEN]` placeholder read as a blank.
+pub fn document_with_blanks(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
+    blank_scope(ui, |ui| document(ui, cache, &text));
+}
+
+#[derive(Default)]
+struct Blanks;
+
+impl egui::cache::ComputerMut<&str, Arc<str>> for Blanks {
+    fn compute(&mut self, text: &str) -> Arc<str> {
+        with_blanks(text).into()
+    }
+}
+
+type BlanksCache = egui::cache::FrameCache<Arc<str>, Blanks>;
+
+/// A placeholder as `/reset` writes it: three or more capitals and underscores, such as `FIRST_NAME`.
+fn is_token(token: &str) -> bool {
+    token.len() >= 3 && token.chars().all(|c| c.is_ascii_uppercase() || c == '_') && token.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// What the blank for `token` says.
+fn blank_words(token: &str) -> String {
+    if token == BARE_TOKEN { BLANK.to_owned() } else { format!("{BLANK}: {}", token.to_lowercase().replace('_', " ").trim()) }
+}
+
+/// One plain line in `style` and `ink`, with each placeholder in it laid out as a blank, for text that is never Markdown,
+/// such as a role's title.
+pub(in crate::ui_kit) fn blank_line(ui: &Ui, text: &str, style: Type, ink: impl Into<Ink>) -> LayoutJob {
+    let plain = TextFormat::simple(style.font(), ink.into().color(&Palette::of(ui)));
+    let mark = blank_mark(ui);
+    let mut job = LayoutJob::default();
+    let mut copied = 0;
+    for (open, _) in text.match_indices('[') {
+        let Some(close) = text[open + 1..].find(']').map(|at| open + 1 + at) else { break };
+        if open < copied || !is_token(&text[open + 1..close]) {
+            continue;
+        }
+        job.append(&text[copied..open], 0.0, plain.clone());
+        job.append(&blank_words(&text[open + 1..close]), 0.0, mark.clone());
+        copied = close + 1;
+    }
+    job.append(&text[copied..], 0.0, plain);
+    job
+}
+
+/// Markdown with each placeholder that reads as text swapped for a code span of its blank's words. egui_commonmark has
+/// no hook for an inline format, so `blank_scope` restyles those spans. A token in code, HTML, a link's own brackets, a
+/// link destination, an autolink or a reference definition is not text, so it stays as written.
+fn with_blanks(text: &str) -> String {
+    if !text.contains('[') {
+        return text.to_owned();
+    }
+    let (mut prose, mut autolinks): (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) = (Vec::new(), Vec::new());
+    let mut in_code = false;
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(_) if !in_code => prose.push(range),
+            Event::Start(Tag::Link { link_type: LinkType::Autolink | LinkType::Email, .. }) => autolinks.push(range),
+            _ => {}
+        }
+    }
+    // Brackets that form no link reach the viewer as text events of their own, so neighbours merge into one run.
+    prose.sort_by_key(|range| range.start);
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in prose {
+        match runs.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => runs.push(range),
+        }
+    }
+    let in_text = |span: &std::ops::Range<usize>| {
+        runs.iter().any(|run| run.start <= span.start && span.end <= run.end) && !autolinks.iter().any(|link| link.start < span.end && span.start < link.end)
+    };
+    let (mut out, mut copied) = (String::new(), 0);
+    for (open, _) in text.match_indices('[') {
+        let Some(close) = text[open + 1..].find(']').map(|at| open + 1 + at) else { break };
+        let token = &text[open + 1..close];
+        let escaped = text[..open].ends_with('\\');
+        if open < copied || escaped || !is_token(token) || !in_text(&(open..close + 1)) {
+            continue;
+        }
+        out.push_str(&text[copied..open]);
+        out.push_str(&format!("`{}`", blank_words(token)));
+        copied = close + 1;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// Runs `add` with code spans in the blank's face, then gives each blank it painted the blank's ink and underline.
+/// A blank keeps its face and size, so restyling moves nothing. A real code span keeps its own ink and fill.
+fn blank_scope(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let layer = ui.layer_id();
+    let from = ui.ctx().graphics(|layers| layers.get(layer).map_or(0, |list| list.next_idx().0));
+    ui.scope(|ui| {
+        ui.style_mut().text_styles.insert(TextStyle::Monospace, Type::TAG.font());
+        add(ui);
+    });
+    let mark = blank_mark(ui);
+    let jobs: Vec<(usize, LayoutJob)> = ui.ctx().graphics(|layers| {
+        let Some(list) = layers.get(layer) else { return Vec::new() };
+        list.all_entries()
+            .enumerate()
+            .skip(from)
+            .filter_map(|(index, clipped)| match &clipped.shape {
+                Shape::Text(shape) if is_blank(&shape.galley.job) => Some((index, marked(&shape.galley.job, &mark))),
+                _ => None,
+            })
+            .collect()
+    });
+    if jobs.is_empty() {
+        return;
+    }
+    let galleys: Vec<_> = jobs.into_iter().map(|(index, job)| (index, ui.fonts_mut(|fonts| fonts.layout_job(job)))).collect();
+    ui.ctx().graphics_mut(|layers| {
+        let list = layers.entry(layer);
+        for (index, galley) in galleys {
+            list.mutate_shape(ShapeIdx(index), |clipped| {
+                if let Shape::Text(shape) = &mut clipped.shape {
+                    shape.galley = galley;
+                    shape.override_text_color = None;
+                }
+            });
+        }
+    });
+}
+
+/// Whether a laid-out text is one blank: its words, all in the blank's face. In `blank_scope` only code spans take it.
+fn is_blank(job: &LayoutJob) -> bool {
+    let face = Type::TAG.face.family();
+    job.text.starts_with(BLANK) && !job.sections.is_empty() && job.sections.iter().all(|section| section.format.font_id.family == face)
+}
+
+/// `job` in the blank's ink and underline, at the size it was laid out in, with no code fill under it.
+fn marked(job: &LayoutJob, mark: &TextFormat) -> LayoutJob {
+    let mut job = job.clone();
+    for section in &mut job.sections {
+        section.format.color = mark.color;
+        section.format.underline = mark.underline;
+        section.format.background = Color32::TRANSPARENT;
+    }
+    job
+}
+
 /// The height `text` takes wrapped at `width`, for rows sized before they are drawn.
 pub fn wrapped_height(ui: &Ui, text: &str, style: Type, width: f32) -> f32 {
     WidgetText::from(RichText::new(text).font(style.font())).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font()).size().y
@@ -455,7 +623,11 @@ mod tests {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&opened);
         let mut cache = CommonMarkCache::default();
-        let mut harness = Harness::builder().with_size([400.0, 200.0]).build_ui(move |ui| {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
             render(ui, &mut cache, source);
             let urls: Vec<String> = ui.ctx().output(|output| {
                 output.commands.iter().filter_map(|command| if let OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
@@ -721,5 +893,106 @@ mod tests {
         }
         // A footnote kept inside one part leaves the table free to widen.
         assert_eq!(parts("Intro.\n\n| A |\n|---|\n| x |\n\nAfter[^1].\n\n[^1]: A note.").len(), 3);
+    }
+
+    #[test]
+    fn placeholders_read_as_blanks() {
+        assert_eq!(with_blanks("Name: [FIRST_NAME] [LAST_NAME]"), "Name: `to fill: first name` `to fill: last name`");
+        assert_eq!(with_blanks("- Budget you owned: [PLACEHOLDER]"), "- Budget you owned: `to fill`");
+        assert_eq!(with_blanks("### Role - [COMPANY] ([DATES])"), "### Role - `to fill: company` (`to fill: dates`)");
+        assert_eq!(with_blanks("Bracketed [[NAME]] and a[0], [x], [AB], [Note], - [ ] task"), "Bracketed [`to fill: name`] and a[0], [x], [AB], [Note], - [ ] task");
+        assert_eq!(with_blanks("A [[NAME]](https://x.example) link"), "A [`to fill: name`](https://x.example) link");
+    }
+
+    #[test]
+    fn placeholders_outside_text_stay_as_written() {
+        for source in [
+            "Use `[FIRST_NAME]` here.",
+            "```\n[FIRST_NAME]\n```",
+            "[LINK](https://x.example/a) and [REF][r]\n\n[r]: https://x.example/b",
+            "[s](https://x.example/[PATH])",
+            "<https://x.example/[PATH]>",
+            "[NAME]: https://x.example/c\n\nSee [the page][NAME].",
+            "\\[NAME] is escaped",
+            "<div>\n[NAME]\n</div>",
+        ] {
+            assert_eq!(with_blanks(source), source);
+        }
+    }
+
+    fn blanked(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+        markdown_with_blanks(ui, cache, text);
+    }
+
+    fn blanked_document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+        document_with_blanks(ui, cache, text);
+    }
+
+    #[test]
+    fn a_blank_bearing_document_keeps_only_web_links() {
+        let source = "Name: [FIRST_NAME]. [terminal](file:///Applications/Utilities/Terminal.app) and [posting](https://tessel.example/jobs/1)\n\n[script](javascript:alert(1)) and [[COMPANY]](https://tessel.example/jobs/2)";
+        for render in [blanked as Render, blanked_document] {
+            assert_eq!(opened_through(render, source, "terminal"), Vec::<String>::new());
+            assert_eq!(opened_through(render, source, "script"), Vec::<String>::new());
+            assert_eq!(opened_through(render, source, "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+            assert_eq!(opened_through(render, source, "to fill: company"), vec!["https://tessel.example/jobs/2".to_owned()]);
+        }
+    }
+
+    #[test]
+    fn a_blank_bearing_document_shows_images_as_alt_text() {
+        let source: &'static str = "Logo ![company logo](https://x.example/l.png) for [COMPANY].\n\n![badge [BADGE_NAME]](file:///etc/badge.png) now.";
+        for render in [blanked as Render, blanked_document] {
+            let mut cache = CommonMarkCache::default();
+            let setup = |ctx: &egui::Context| {
+                crate::ui_kit::install_fonts(ctx);
+                crate::ui_kit::install_theme(ctx);
+            };
+            let mut harness = Harness::builder().with_size([600.0, 200.0]).with_context_setup(setup).build_ui(move |ui| render(ui, &mut cache, source));
+            harness.run();
+            assert!(harness.query_by_label_contains("company logo").is_some());
+            assert!(harness.query_by_label_contains("to fill: company").is_some());
+            assert!(harness.query_by_label_contains("badge to fill").is_some());
+            assert!(harness.query_by_label_contains("x.example").is_none());
+            assert!(harness.query_by_label_contains("badge.png").is_none());
+        }
+    }
+
+    /// The colour and underline of every painted text that reads `words`.
+    fn painted(source: &'static str, words: &'static str) -> Vec<(Color32, Stroke)> {
+        let found = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&found);
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([600.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
+            markdown_with_blanks(ui, &mut cache, source);
+            let layer = ui.layer_id();
+            let shapes: Vec<_> = ui.ctx().graphics(|layers| {
+                layers.get(layer).map_or(Vec::new(), |list| {
+                    list.all_entries()
+                        .filter_map(|clipped| match &clipped.shape {
+                            Shape::Text(shape) if shape.galley.job.text == words => Some((shape.galley.job.sections[0].format.color, shape.galley.job.sections[0].format.underline)),
+                            _ => None,
+                        })
+                        .collect()
+                })
+            });
+            *seen.borrow_mut() = shapes;
+        });
+        harness.run();
+        found.take()
+    }
+
+    #[test]
+    fn a_blank_takes_the_interview_ink_and_a_real_code_span_does_not() {
+        let ink = Palette::for_theme(egui::Theme::Dark).interview;
+        assert_eq!(painted("Name: [FIRST_NAME].", "to fill: first name"), vec![(ink, Stroke::new(HAIRLINE, ink))]);
+        let code = painted("Run `cargo test` first.", "cargo test");
+        assert_eq!(code.len(), 1);
+        assert_ne!(code[0].0, ink);
+        assert_eq!(code[0].1, Stroke::NONE);
     }
 }

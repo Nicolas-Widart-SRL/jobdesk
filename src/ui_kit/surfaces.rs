@@ -2,26 +2,31 @@ use std::sync::Arc;
 
 use egui::{
     Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow,
-    Stroke, StrokeKind, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
+    Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
 };
+use egui_commonmark::CommonMarkCache;
 
 use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{dialog_open, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
+use crate::ui_kit::controls::{
+    dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
+};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
-    add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, table_head, wrapped,
+    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, markdown_with_blanks, paint_centred, paint_marked,
+    paint_text, table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
-    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
-    FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP,
-    KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW,
-    PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
-    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
-    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
-    TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY,
+    FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE,
+    HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING,
+    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
+    RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP,
+    SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING,
+    SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
+    TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -1420,6 +1425,223 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
     ui.painter().set(fill, egui::epaint::RectShape::filled(rect, RADIUS_CARD, look.fill));
     interactive(ui, &line, RADIUS_CARD);
     Some(line.union(toggled))
+}
+
+/// One role from a profile, as a CV line. Every part is the profile's own text, so it is untrusted.
+#[derive(Debug, Clone, Copy)]
+pub struct RoleEntry<'a> {
+    /// As written, such as "2021 – present".
+    pub dates: &'a str,
+    pub title: &'a str,
+    pub company: &'a str,
+    /// Markdown under the role's heading, such as its bullets.
+    pub body: &'a str,
+    /// The first role on the paper takes no rule above it.
+    pub first: bool,
+}
+
+/// A role as a CV line: the dates in a fixed column, then the title over the company and the body, held to the measure,
+/// and a small Edit button at the right edge, outside the copyable text. Placeholders read as blanks. `blocked` says why
+/// Edit is off, such as another open edit. Returns the Edit button's response.
+pub fn role_entry(ui: &mut Ui, cache: &mut CommonMarkCache, role: &RoleEntry, blocked: Option<&str>) -> Response {
+    if !role.first {
+        divider(ui);
+    }
+    ui.add_space(ROLE_PADDING.0);
+    let edit = ui
+        .with_layout(Layout::right_to_left(Align::Min), |ui| {
+            let edit = enabled_when(ui, blocked.is_none(), blocked.unwrap_or_default(), |ui| crate::ui_kit::small_button(ui, "Edit"));
+            ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui_with_layout(vec2(ROLE_DATES, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(ROLE_DATES);
+                    let dates = blank_line(ui, role.dates, Type::NOTE, Ink::Muted);
+                    copyable(ui, |ui| add_job(ui, dates, TextWrapMode::Wrap));
+                });
+                let width = (ui.available_width() - ITEM_GAP).clamp(0.0, DOC_MEASURE);
+                ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let (title, company) = (blank_line(ui, role.title, Type::SECTION, Ink::Text), blank_line(ui, role.company, Type::BODY, Ink::Muted));
+                    copyable(ui, |ui| {
+                        add_job(ui, title, TextWrapMode::Wrap);
+                        add_job(ui, company, TextWrapMode::Wrap);
+                    });
+                    ui.add_space(ITEM_GAP);
+                    ui.spacing_mut().item_spacing.y = ITEM_GAP;
+                    ui.style_mut().text_styles.insert(egui::TextStyle::Body, Type::TAKE.font());
+                    markdown_with_blanks(ui, cache, role.body);
+                });
+            });
+            edit
+        })
+        .inner;
+    ui.add_space(ROLE_PADDING.1);
+    edit
+}
+
+/// What a `block_editor` shows besides the draft.
+#[derive(Debug, Clone, Copy)]
+pub enum EditorMode<'a> {
+    Rest,
+    /// A run works: Save is off and says `why` on hover, and `line` says the same beside Cancel.
+    Busy { why: &'a str, line: &'a str },
+    /// The block changed on disk since the editor opened.
+    Changed(&'a ChangedOnDisk<'a>),
+}
+
+/// The warning box at the top of a block editor whose block changed on disk.
+#[derive(Debug, Clone, Copy)]
+pub struct ChangedOnDisk<'a> {
+    /// In `interview` ink, then `detail` after it.
+    pub title: &'a str,
+    pub detail: &'a str,
+    /// What the lines are, such as "Now in the file, the end of this role".
+    pub caption: &'a str,
+    /// The block's lines in the file now, each with whether it is new. `None` when the block is gone from the file.
+    pub lines: Option<&'a [(&'a str, bool)]>,
+    /// The button that takes the file's text, and the note beside it.
+    pub take: &'a str,
+    pub take_note: &'a str,
+}
+
+/// What a `block_editor` holds besides its draft. The words are the screen's.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockEditor<'a> {
+    /// Such as "Edit this role", with `hint` beside it.
+    pub title: &'a str,
+    pub hint: &'a str,
+    /// Save's label: "Save", or what saving does over a change on disk.
+    pub save: &'a str,
+    /// The note beside Cancel.
+    pub note: &'a str,
+    /// Shown at the right of the footer, such as "Unsaved changes".
+    pub unsaved: Option<&'a str>,
+    pub mode: EditorMode<'a>,
+}
+
+/// What the user asked of a `block_editor` this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorAction {
+    Save,
+    Cancel,
+    /// Replace the draft with the block as it is in the file now.
+    TakeTheirs,
+}
+
+/// A slip in place of a block, to edit its raw Markdown: a title row with Preview, then the draft in a field in the body
+/// face, then Save (the command key and Enter) and Cancel (Esc). The field renders nothing. With Preview on, `preview`
+/// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save is off.
+pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, preview: &mut bool, show_preview: impl FnOnce(&mut Ui, &str)) -> Option<EditorAction> {
+    let p = Palette::of(ui);
+    let busy = matches!(editor.mode, EditorMode::Busy { .. });
+    // Taken before the field sees it, so the chord never types a line break.
+    let mut action = None;
+    if !busy && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter)) {
+        action = Some(EditorAction::Save);
+    }
+    if crate::ui_kit::back_pressed(ui.ctx()) {
+        action = Some(EditorAction::Cancel);
+    }
+    let (left, top, bottom) = EDITOR_PADDING;
+    let frame = Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(Margin { left, right: left, top, bottom });
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = EDITOR_GAP;
+        let title = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                let title = add_text(ui, editor.title, Type::STRONG, Ink::Text);
+                add_text(ui, editor.hint, Type::NOTE, Ink::Muted);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if crate::ui_kit::small_toggle(ui, "Preview", *preview).clicked() {
+                        *preview = !*preview;
+                    }
+                });
+                title.id
+            })
+            .inner;
+        if let EditorMode::Changed(changed) = editor.mode
+            && changed_box(ui, changed)
+        {
+            action = Some(EditorAction::TakeTheirs);
+        }
+        if *preview {
+            show_preview(ui, draft);
+        } else {
+            let field = egui::TextEdit::multiline(draft).font(Type::BODY.font()).margin(Margin::same(FIELD_PADDING as i8)).desired_width(f32::INFINITY).desired_rows(EDITOR_ROWS);
+            let field = ui.add(field).labelled_by(title);
+            if field.has_focus() {
+                ui.painter().rect_stroke(field.rect.expand(FOCUS_OFFSET), RADIUS_BUTTON, Stroke::new(FOCUS_RING, p.active), StrokeKind::Outside);
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = BUTTON_GAP;
+            let chord = crate::ui_kit::command_chord("Enter");
+            let save = match editor.mode {
+                EditorMode::Rest => crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord),
+                EditorMode::Busy { why, .. } => enabled_when(ui, false, why, |ui| crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord)),
+                EditorMode::Changed(_) => crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord),
+            };
+            if save.clicked() {
+                action = Some(EditorAction::Save);
+            }
+            if plain_shortcut_button(ui, "Cancel", &["Esc"]).clicked() {
+                action = Some(EditorAction::Cancel);
+            }
+            ui.add_space(ROW_ITEM_GAP);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(unsaved) = editor.unsaved {
+                    add_text(ui, unsaved, Type::NOTE, Ink::Muted);
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| match editor.mode {
+                    EditorMode::Busy { line, .. } => {
+                        ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                        let (square, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
+                        ui.painter().rect_filled(square, 0.0, p.active);
+                        add_text(ui, line, Type::NOTE, Ink::Text);
+                    }
+                    _ => {
+                        add_text(ui, editor.note, Type::NOTE, Ink::Muted);
+                    }
+                });
+            });
+        });
+    });
+    action
+}
+
+/// The warning box over a block that changed on disk: what happened, the block's lines as they are now, plain and
+/// copyable with an `interview` edge on each new line, and the button that takes them. Returns whether it was clicked.
+fn changed_box(ui: &mut Ui, changed: &ChangedOnDisk) -> bool {
+    let p = Palette::of(ui);
+    prompt_box_tone(ui, Tone::Interview, |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        let mut job = egui::text::LayoutJob::default();
+        job.append(changed.title, 0.0, egui::TextFormat::simple(Type::STRONG.font(), p.interview));
+        job.append(&format!(" {}", changed.detail), 0.0, egui::TextFormat::simple(Type::BODY.font(), p.text));
+        copyable(ui, |ui| add_job(ui, job, TextWrapMode::Wrap));
+        let Some(lines) = changed.lines else { return false };
+        code_box(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let edge = ui.max_rect().left() - f32::from(CODE_PADDING.0);
+            add_text(ui, changed.caption, Type::SMALL, Ink::Muted);
+            for (text, added) in lines {
+                let shown = add_text(ui, *text, Type::BODY, Ink::Text);
+                if *added {
+                    let rect = Rect::from_min_max(pos2(edge, shown.rect.top()), pos2(edge + PICK_EDGE, shown.rect.bottom()));
+                    ui.painter().rect_filled(rect, 0.0, p.interview);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+            let take = crate::ui_kit::small_button(ui, changed.take).clicked();
+            add_text(ui, changed.take_note, Type::NOTE, Ink::Muted);
+            take
+        })
+        .inner
+    })
 }
 
 #[cfg(test)]

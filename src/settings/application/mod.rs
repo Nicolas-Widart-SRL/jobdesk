@@ -12,9 +12,10 @@ pub use usage::{
 
 pub use crate::runs::application::{Period, UsageReport, YearOfDays, heat_step};
 pub use crate::settings::domain::{
-    CapReached, CommandDefault, DataSizes, Dollars, Group, Page, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen,
-    StartValues, TextSize, ThemeChoice, drawn_index, index,
+    CapReached, CommandDefault, DataSizes, Dollars, Group, KeyMask, KeyStore, KeyStoreError, KeyTest, Page, PermissionMode, Preferences, PreferencesStore,
+    Retention, RunDefaults, Saved, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index, index, task_sign_in,
 };
+pub use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 pub use crate::tracking::application::Pipeline;
 
 #[cfg(test)]

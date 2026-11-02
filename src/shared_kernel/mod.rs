@@ -1,3 +1,4 @@
+pub mod api_key;
 pub mod check_state;
 pub mod dates;
 pub mod host_path;
@@ -5,12 +6,15 @@ pub mod load_error;
 pub mod markdown;
 pub mod model_choice;
 pub mod placeholders;
+pub mod sign_in;
 pub mod source;
 pub mod visible_text;
 pub mod web_url;
 
+pub use api_key::{ApiKey, KeyReader};
 pub use check_state::CheckState;
 pub use load_error::LoadError;
 pub use model_choice::ModelChoice;
+pub use sign_in::SignIn;
 pub use source::Source;
 pub use web_url::WebUrl;

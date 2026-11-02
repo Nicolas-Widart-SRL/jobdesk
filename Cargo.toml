@@ -32,6 +32,7 @@ egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui_commonmark = { version = "0.26", default-features = false }
 egui_extras = "0.37"
 hayro = "0.8"
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native"] }
 notify = "8"
 pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.15"

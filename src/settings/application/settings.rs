@@ -3,10 +3,10 @@ use chrono::NaiveDate;
 use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
-    CapReached, CommandDefault, Dollars, Page, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen, StartValues,
-    TextSize, ThemeChoice, drawn_index,
+    CapReached, CommandDefault, Dollars, KeyTest, Page, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen,
+    StartValues, TextSize, ThemeChoice, drawn_index,
 };
-use crate::shared_kernel::{LoadError, ModelChoice};
+use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
 /// What went wrong with the settings file, which the rail says in its own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +120,14 @@ impl Settings {
 
     pub fn set_retention(&mut self, retention: Retention) {
         self.change(|preferences| &mut preferences.retention, retention);
+    }
+
+    pub fn set_sign_in(&mut self, sign_in: SignIn) {
+        self.change(|preferences| &mut preferences.sign_in, sign_in);
+    }
+
+    pub fn set_key_test(&mut self, key_test: Option<KeyTest>) {
+        self.change(|preferences| &mut preferences.key_test, key_test);
     }
 
     /// Saves only a changed value. The new value stays in use when the save fails.
@@ -374,6 +382,28 @@ mod tests {
         settings.set_text_size(TextSize::default());
         assert_eq!(shared.saved.borrow().len(), 1);
         assert_eq!(shared.saved.borrow()[0].theme, ThemeChoice::Dark);
+    }
+
+    #[test]
+    fn the_sign_in_and_key_test_save_once_and_only_on_a_change() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        settings.set_sign_in(SignIn::ClaudeSignIn);
+        settings.set_key_test(None);
+        assert!(shared.saved.borrow().is_empty(), "the defaults again change nothing");
+        settings.set_sign_in(SignIn::ApiKey);
+        settings.set_sign_in(SignIn::ApiKey);
+        assert_eq!(shared.saved.borrow().len(), 1);
+        let test = KeyTest { passed: true, at: NaiveDate::from_ymd_opt(2026, 3, 9).unwrap().and_hms_opt(14, 3, 0).unwrap(), cost_usd: 0.04 };
+        settings.set_key_test(Some(test));
+        settings.set_key_test(Some(test));
+        assert_eq!(shared.saved.borrow().len(), 2);
+        settings.set_key_test(Some(KeyTest { passed: false, ..test }));
+        settings.set_key_test(None);
+        let saved = shared.saved.borrow();
+        assert_eq!(saved.len(), 4);
+        assert_eq!((saved[1].sign_in, saved[1].key_test), (SignIn::ApiKey, Some(test)));
+        assert_eq!((saved[3].sign_in, saved[3].key_test), (SignIn::ApiKey, None));
     }
 
     #[test]

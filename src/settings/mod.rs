@@ -6,9 +6,10 @@ mod infrastructure;
 pub mod ui;
 
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::settings::application::{DataSizes, Preferences, Settings};
-use crate::settings::infrastructure::PreferencesFile;
+use crate::settings::application::{DataSizes, KeyStore, Preferences, Settings};
+use crate::settings::infrastructure::{MemoryKeychain, PreferencesFile, SystemKeychain};
 
 /// `data` is the app's own data folder. The preferences never reach the workspace.
 /// With no file there yet, `first` is kept and saved, so what the window restored carries over.
@@ -24,4 +25,14 @@ pub fn measure_data(data: &Path) -> DataSizes {
 /// Shows a folder in the file manager.
 pub fn reveal_folder(path: &Path) {
     infrastructure::reveal_folder(path);
+}
+
+/// The API key in the system keychain: the macOS Keychain or the Windows Credential Manager.
+pub fn system_keychain() -> Arc<dyn KeyStore> {
+    Arc::new(SystemKeychain::new())
+}
+
+/// A key kept in memory only, for tests and for a window that must not touch the system keychain.
+pub fn memory_keychain(key: Option<&str>) -> Arc<dyn KeyStore> {
+    Arc::new(MemoryKeychain::new(key))
 }

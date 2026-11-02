@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const FEATURES: [&str; 9] = ["discovery", "dossier", "insights", "intray", "profile", "runs", "settings", "tracking", "workspace"];
-const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
+const IMPURE: [&str; 10] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit", "keyring"];
 const APPEARANCE: [&str; 15] = [
     "Color32",
     "Palette",
@@ -156,4 +156,43 @@ fn domain_and_infrastructure_stay_private() {
             assert!(!declarations.contains(&format!("pub mod {layer}")), "{feature}::{layer} must be private");
         }
     }
+}
+
+/// Every place `needle` shows in the files, as `(path, byte offset)`.
+fn occurrences(files: &[PathBuf], needle: &str) -> Vec<(PathBuf, usize)> {
+    let mut found = Vec::new();
+    for file in files {
+        let text = fs::read_to_string(file).unwrap();
+        found.extend(text.match_indices(needle).map(|(at, _)| (file.clone(), at)));
+    }
+    found
+}
+
+/// The keychain crate is named in one adapter, and the system keychain is built in one place only.
+/// The words are put together here, so this file does not match its own search.
+#[test]
+fn the_system_keychain_is_reached_from_one_place() {
+    let mut source = Vec::new();
+    rust_files(Path::new("src"), &mut source);
+    let crate_path = ["key", "ring::"].concat();
+    for (file, _) in occurrences(&source, &crate_path) {
+        assert_eq!(file, Path::new("src/settings/infrastructure/system_keychain.rs"), "{crate_path} belongs in the system keychain adapter");
+    }
+
+    let call = ["system", "_keychain("].concat();
+    let app = Path::new("src/shell/app.rs");
+    let app_text = fs::read_to_string(app).unwrap();
+    // The one allowed call site is the body of `fn start(`, which ends at the first closing brace indented four spaces.
+    let start = app_text.find("fn start(");
+    let body = start.map(|at| at..at + app_text[at..].find("\n    }\n").unwrap_or(app_text.len() - at));
+    for (file, at) in occurrences(&source, &call) {
+        if file == Path::new("src/settings/mod.rs") {
+            continue;
+        }
+        assert!(file == app && body.as_ref().is_some_and(|body| body.contains(&at)), "{} may not call the system keychain", file.display());
+    }
+
+    let mut tests = Vec::new();
+    rust_files(Path::new("tests"), &mut tests);
+    assert!(occurrences(&tests, &call).is_empty(), "tests must never touch the real keychain");
 }

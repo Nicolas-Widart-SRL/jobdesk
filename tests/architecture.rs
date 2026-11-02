@@ -40,6 +40,18 @@ fn production_code(path: &Path) -> String {
     text.split("#[cfg(test)]").next().unwrap_or_default().to_owned()
 }
 
+/// Drops the whitespace before each `.`, so a method chain that rustfmt broke after its receiver matches like one line.
+fn joined_chains(code: &str) -> String {
+    let mut joined = String::with_capacity(code.len());
+    for c in code.chars() {
+        if c == '.' {
+            joined.truncate(joined.trim_end().len());
+        }
+        joined.push(c);
+    }
+    joined
+}
+
 /// `crate::feature::layer` references, with `use crate::feature::{...}` groups kept coarse.
 fn crate_paths(code: &str) -> Vec<(String, String)> {
     code.match_indices("crate::")
@@ -112,7 +124,7 @@ fn appearance_lives_in_ui_kit() {
     }
     let mut violations = Vec::new();
     for file in files {
-        let code = production_code(&file);
+        let code = joined_chains(&production_code(&file));
         for word in APPEARANCE {
             if code.contains(word) {
                 violations.push(format!("{}: {word} belongs in ui_kit", file.display()));

@@ -12,7 +12,7 @@ Y opens the suggested task, L sets the card aside until tomorrow (Coming up show
 
 The card's actions stay pinned under it, and Show the command reveals the command line a task would run. Y opens the slash command in the launcher, and nothing runs until you start it. Permission, question, guard and Your turn cards have no Y action. Skip reasons stay in the app's data folder.
 
-When nothing is left to decide, Today offers Find new jobs…. It shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Settings › Runtime status, which shows your profile even once the Setup tab has left the menu.
+When nothing is left to decide, Today offers Find new jobs…. It shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Profile, which shows each topic, what is filled in and what is missing.
 
 ## Jobs, Applications and Insights
 

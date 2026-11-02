@@ -189,10 +189,11 @@ pub fn cap_line(reached: &CapReached) -> String {
 }
 
 /// Why Run is off, which says how much was spent and when the month turns.
+/// A no-break space holds the day to its month, so a wrapped tooltip never leaves "1" alone at a line's end.
 pub fn cap_reason(reached: &CapReached) -> String {
     let cap = money(reached.cap.usd());
     let spent = money(reached.spent_usd);
-    let opens = reached.reopens_on.format("%-d %B");
+    let opens = reached.reopens_on.format("%-d\u{a0}%B");
     if reached.over() {
         format!("This month's tasks cost {spent}, over your {cap} cap. Run opens again on {opens}.")
     } else {
@@ -623,9 +624,9 @@ mod tests {
     fn the_cap_words_say_over_or_exactly_at() {
         let over = SpendCap { on: true, amount: Some(dollars("60")) }.reached(60.4, day(2026, 10, 31)).unwrap();
         assert_eq!(cap_line(&over), "This month's tasks reached your $60.00 cap.");
-        assert_eq!(cap_reason(&over), "This month's tasks cost $60.40, over your $60.00 cap. Run opens again on 1 November.");
+        assert_eq!(cap_reason(&over), "This month's tasks cost $60.40, over your $60.00 cap. Run opens again on 1\u{a0}November.");
         let at = SpendCap { on: true, amount: Some(dollars("60")) }.reached(60.0, day(2026, 12, 9)).unwrap();
-        assert_eq!(cap_reason(&at), "This month's tasks cost $60.00, your whole $60.00 cap. Run opens again on 1 January.");
+        assert_eq!(cap_reason(&at), "This month's tasks cost $60.00, your whole $60.00 cap. Run opens again on 1\u{a0}January.");
         assert_eq!(CAP_READING, "Run waits while this month's spend is read.");
     }
 

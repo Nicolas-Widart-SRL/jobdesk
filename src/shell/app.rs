@@ -877,7 +877,7 @@ fn start_screen(open_on: StartScreen) -> Screen {
 /// Deletes the run logs `retention` no longer keeps, judged by when each was last written. Forever deletes nothing.
 /// It reads only `runs/` in the data folder, so the settings file and the tray's decisions beside it stay.
 fn prune_run_logs(data: &std::path::Path, retention: Retention, now: NaiveDateTime) -> usize {
-    // A moment the clock skips or repeats takes its earlier reading, which deletes the fewer logs.
+    // A moment the clock repeats takes its earlier reading, which deletes the fewer logs. One it skips has none, so nothing is deleted.
     let Some(keep_after) = retention.keep_after(now).and_then(|cutoff| Local.from_local_datetime(&cutoff).earliest()) else { return 0 };
     runs::prune_logs(&data.join("runs"), SystemTime::from(keep_after))
 }

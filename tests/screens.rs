@@ -3176,7 +3176,7 @@ fn usage_links_leave_settings() {
 }
 
 const CAP_LINE: &str = "This month's tasks reached your $60.00 cap.";
-const CAP_REASON: &str = "This month's tasks cost $60.40, over your $60.00 cap. Run opens again on 1 November.";
+const CAP_REASON: &str = "This month's tasks cost $60.40, over your $60.00 cap. Run opens again on 1\u{a0}November.";
 const CAP_LINK: &str = "Change the cap in Settings";
 
 /// October's fixture with one more fictional /apply on the 30th, so the month comes to $60.40.

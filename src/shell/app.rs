@@ -40,7 +40,7 @@ const WORKSPACE_KEY: &str = "workspace";
 /// What the tabs and New task say while they wait for a folder.
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
 /// Why Change folder waits: a session stays open after its turn ends, until its process exits or the user ends it.
-const FOLDER_BUSY: &str = "A Claude session is open. End it with End session in Tasks to change the folder.";
+const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Tasks to change the folder.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.

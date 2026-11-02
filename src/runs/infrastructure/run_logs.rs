@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runs::domain::{AgentEvent, ModelCost, Run, RunHistory, RunRequest, RunStatus, TaskCost, TaskOutcome, UsageLogs};
 use crate::runs::infrastructure::stream_json::{ProcessTotals, parse_line, process_totals};
+use crate::shared_kernel::SignIn;
 use crate::shared_kernel::visible_text::visible_chars;
 
 const META: &str = "jobdesk_meta";
@@ -109,6 +110,7 @@ impl RunLogs {
             budget_usd: meta.budget_usd,
             started_at: meta.started_at,
             resume_session: None,
+            sign_in: SignIn::ClaudeSignIn,
         });
         for line in lines {
             if line == STOP_LINE {
@@ -302,7 +304,27 @@ mod tests {
     use super::*;
 
     fn request(id: &str, line: &str) -> RunRequest {
-        RunRequest { run_id: id.into(), line: line.into(), model: None, budget_usd: 2.0, started_at: "2026-10-31 10:00".into(), resume_session: None }
+        RunRequest {
+            run_id: id.into(),
+            line: line.into(),
+            model: None,
+            budget_usd: 2.0,
+            started_at: "2026-10-31 10:00".into(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        }
+    }
+
+    #[test]
+    fn the_meta_line_holds_no_key_and_no_sign_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = RunRequest { sign_in: SignIn::ApiKey, ..request("a", "/rank") };
+        drop(RunLog::open(dir.path(), Path::new("/w"), &request).unwrap());
+        drop(RunLog::open(dir.path(), Path::new("/w"), &request).unwrap());
+
+        let text = fs::read_to_string(dir.path().join("a.jsonl")).unwrap();
+
+        assert!(!text.contains("sk-ant") && !text.contains("ANTHROPIC_API_KEY") && !text.contains("sign_in"), "{text}");
     }
 
     #[test]

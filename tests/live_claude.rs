@@ -33,7 +33,7 @@ fn dump(desk: &RunDesk, id: &str) {
 }
 
 fn desk(workspace: &Path, logs: &Path) -> RunDesk {
-    runs::open_desk(workspace, logs.to_owned(), Arc::new(|| {}))
+    runs::open_desk(workspace, logs.to_owned(), Arc::new(|| {}), Arc::new(|| Ok(None)))
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn a_full_session_works() {
     desk.close(&id);
 
     // History rebuilds from the log.
-    let restored = runs::open_desk(&workspace, logs.clone(), Arc::new(|| {}));
+    let restored = runs::open_desk(&workspace, logs.clone(), Arc::new(|| {}), Arc::new(|| Ok(None)));
     let run = &restored.runs()[0];
     assert_eq!(run.status, RunStatus::Closed);
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);

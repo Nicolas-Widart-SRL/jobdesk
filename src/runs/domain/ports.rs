@@ -1,4 +1,5 @@
 use crate::runs::domain::{AgentEvent, Prompt, Run, TaskCost};
+use crate::shared_kernel::SignIn;
 
 pub type EventSink = Box<dyn Fn(AgentEvent) + Send>;
 
@@ -11,6 +12,8 @@ pub struct RunRequest {
     pub started_at: String,
     /// Continues an earlier session whose process has ended.
     pub resume_session: Option<String>,
+    /// How the process signs in. The method only: the key itself never travels in a request.
+    pub sign_in: SignIn,
 }
 
 #[derive(Debug, Clone, PartialEq)]

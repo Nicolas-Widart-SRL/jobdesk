@@ -10,28 +10,46 @@ use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, Even
 use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
+use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 
 const STDERR_LINES_KEPT: usize = 12;
 
-pub struct ClaudeGateway {
+#[cfg(windows)]
+const STORE: &str = "Credential Manager";
+#[cfg(not(windows))]
+const STORE: &str = "Keychain";
+
+/// The saved key is gone from the system store, so a task under an API key cannot start.
+#[cfg(windows)]
+const KEY_GONE: &str = "Your API key is no longer in the Credential Manager. Save it again in Settings › Providers, or pick Claude sign-in there.";
+#[cfg(not(windows))]
+const KEY_GONE: &str = "Your API key is no longer in the Keychain. Save it again in Settings › Providers, or pick Claude sign-in there.";
+
+/// What every process of the gateway shares.
+struct Setup {
     workspace: PathBuf,
     logs: PathBuf,
+    keys: KeyReader,
+}
+
+pub struct ClaudeGateway {
+    setup: Arc<Setup>,
 }
 
 impl ClaudeGateway {
-    pub fn new(workspace: PathBuf, logs: PathBuf) -> Self {
-        Self { workspace, logs }
+    pub fn new(workspace: PathBuf, logs: PathBuf, keys: KeyReader) -> Self {
+        Self { setup: Arc::new(Setup { workspace, logs, keys }) }
     }
 }
 
 impl AgentGateway for ClaudeGateway {
     fn start(&self, request: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
         let (outbox, inbox) = mpsc::channel();
-        let (workspace, logs, request) = (self.workspace.clone(), self.logs.clone(), request.clone());
+        let (setup, request) = (Arc::clone(&self.setup), request.clone());
         let to_self = outbox.clone();
         let process = Arc::new(Mutex::new(Process::default()));
         let supervised = Arc::clone(&process);
-        thread::spawn(move || supervise(&workspace, &logs, &request, sink, &inbox, to_self, &supervised));
+        thread::spawn(move || supervise(&setup, &request, sink, &inbox, to_self, &supervised));
         Box::new(ClaudeSession { outbox, interrupts: 0, process })
     }
 }
@@ -86,7 +104,20 @@ impl AgentSession for ClaudeSession {
     }
 }
 
-fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest) -> Command {
+/// The key a task's process gets, read once as it starts. The Claude sign-in reads none and leaves the inherited environment as it is.
+fn task_key(sign_in: SignIn, keys: &KeyReader) -> Result<Option<ApiKey>, String> {
+    match sign_in {
+        SignIn::ClaudeSignIn => Ok(None),
+        SignIn::ApiKey => match keys() {
+            Ok(Some(key)) => Ok(Some(key)),
+            Ok(None) => Err(KEY_GONE.to_owned()),
+            Err(why) => Err(format!("Jobdesk could not read your API key from the {STORE}: {why}")),
+        },
+    }
+}
+
+/// A key goes in the environment only, never on the command line.
+fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, key: Option<&ApiKey>) -> Command {
     let mut command = Command::new(claude);
     command
         .current_dir(workspace)
@@ -100,6 +131,9 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     // Its own process group, so one kill reaches the tools it runs too.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    if let Some(key) = key {
+        command.env("ANTHROPIC_API_KEY", key.expose());
+    }
     if let Some(model) = &request.model {
         command.args(["--model", model]);
     }
@@ -111,15 +145,8 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     command
 }
 
-fn supervise(
-    workspace: &Path,
-    logs: &Path,
-    request: &RunRequest,
-    sink: EventSink,
-    inbox: &Receiver<Outgoing>,
-    to_self: Sender<Outgoing>,
-    process: &Mutex<Process>,
-) {
+fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>, process: &Mutex<Process>) {
+    let Setup { workspace, logs, keys } = setup;
     let sink = Arc::new(Mutex::new(sink));
     let emit = {
         let sink = Arc::clone(&sink);
@@ -134,7 +161,17 @@ fn supervise(
         emit(AgentEvent::ProcessExited { failure: Some("Claude CLI not found. Install Claude Code, then run this again.".to_owned()) });
         return;
     };
-    let mut child = match command_for(&claude, workspace, path, request).spawn() {
+    let key = match task_key(request.sign_in, keys) {
+        Ok(key) => key,
+        Err(failure) => {
+            emit(AgentEvent::ProcessExited { failure: Some(failure) });
+            return;
+        }
+    };
+    // The command holds the key only until it is spawned, and the key goes with it.
+    let spawned = command_for(&claude, workspace, path, request, key.as_ref()).spawn();
+    drop(key);
+    let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
             emit(AgentEvent::ProcessExited { failure: Some(format!("Could not start Claude: {error}")) });
@@ -281,5 +318,75 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(!alive(grandchild));
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
+
+    fn request() -> RunRequest {
+        RunRequest {
+            run_id: "r".into(),
+            line: "/rank".into(),
+            model: Some("opus".into()),
+            budget_usd: 2.0,
+            started_at: String::new(),
+            resume_session: Some("s1".into()),
+            sign_in: SignIn::ApiKey,
+        }
+    }
+
+    fn command(key: Option<&ApiKey>) -> Command {
+        command_for(Path::new("/bin/claude"), Path::new("/w"), "/bin", &request(), key)
+    }
+
+    fn api_key_in(command: &Command) -> Option<Option<String>> {
+        command.get_envs().find(|(name, _)| *name == "ANTHROPIC_API_KEY").map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn a_key_goes_in_the_environment_and_never_on_the_command_line() {
+        let key = ApiKey::parse(FAKE).unwrap();
+        let command = command(Some(&key));
+        for arg in command.get_args() {
+            let arg = arg.to_string_lossy();
+            assert!(!arg.contains("FAKE") && !arg.contains("sk-ant"), "{arg}");
+        }
+        assert_eq!(api_key_in(&command), Some(Some(FAKE.to_owned())));
+    }
+
+    #[test]
+    fn no_key_leaves_the_environment_alone() {
+        assert_eq!(api_key_in(&command(None)), None);
+    }
+
+    #[test]
+    fn the_claude_sign_in_never_reads_the_key() {
+        let keys: KeyReader = Arc::new(|| panic!("the reader must not be called"));
+        assert!(matches!(task_key(SignIn::ClaudeSignIn, &keys), Ok(None)));
+    }
+
+    #[test]
+    fn an_api_key_run_gets_the_saved_key() {
+        let keys: KeyReader = Arc::new(|| Ok(ApiKey::parse(FAKE)));
+        assert_eq!(task_key(SignIn::ApiKey, &keys).unwrap().unwrap().expose(), FAKE);
+    }
+
+    #[test]
+    fn a_key_gone_from_the_store_stops_the_task() {
+        let keys: KeyReader = Arc::new(|| Ok(None));
+        assert_eq!(task_key(SignIn::ApiKey, &keys).unwrap_err(), KEY_GONE);
+        assert!(KEY_GONE.contains("Settings › Providers"));
+    }
+
+    #[test]
+    fn an_unreadable_store_says_why_without_a_key() {
+        let keys: KeyReader = Arc::new(|| Err("access denied".to_owned()));
+        let text = task_key(SignIn::ApiKey, &keys).unwrap_err();
+        assert!(text.contains("access denied") && text.starts_with("Jobdesk could not read your API key from the "));
+        assert!(!text.contains("sk-ant"));
     }
 }

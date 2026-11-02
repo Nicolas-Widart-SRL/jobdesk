@@ -296,7 +296,15 @@ mod tests {
     use crate::runs::domain::{AgentEvent, Question, RunRequest};
 
     fn run(line: &str) -> Run {
-        Run::new(&RunRequest { run_id: "1".into(), line: line.into(), model: None, budget_usd: 1.0, started_at: String::new(), resume_session: None })
+        Run::new(&RunRequest {
+            run_id: "1".into(),
+            line: line.into(),
+            model: None,
+            budget_usd: 1.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        })
     }
 
     fn started(line: &str) -> Run {

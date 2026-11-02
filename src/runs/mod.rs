@@ -11,11 +11,13 @@ use std::time::SystemTime;
 
 use crate::runs::application::{RunDesk, UsageLogs};
 use crate::runs::infrastructure::{ClaudeGateway, RunLogUsage, RunLogs, prune};
+use crate::shared_kernel::KeyReader;
 
 /// `logs` is the app's own data folder. Nothing here writes to the workspace itself.
-pub fn open_desk(workspace: &Path, logs: PathBuf, repaint: Arc<dyn Fn() + Send + Sync>) -> RunDesk {
+/// `keys` reads the saved API key, and is called only when a process starts under an API key.
+pub fn open_desk(workspace: &Path, logs: PathBuf, repaint: Arc<dyn Fn() + Send + Sync>, keys: KeyReader) -> RunDesk {
     let history = RunLogs::new(logs.clone(), workspace);
-    let mut desk = RunDesk::new(Box::new(ClaudeGateway::new(workspace.to_owned(), logs)), repaint);
+    let mut desk = RunDesk::new(Box::new(ClaudeGateway::new(workspace.to_owned(), logs, keys)), repaint);
     desk.restore(&history);
     desk
 }

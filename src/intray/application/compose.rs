@@ -538,8 +538,15 @@ mod tests {
     }
 
     fn paused(prompt_kind: PromptKind) -> Run {
-        let request =
-            RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request = RunRequest {
+            run_id: "r1".into(),
+            line: "/apply x".into(),
+            model: None,
+            budget_usd: 3.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        };
         let mut run = Run::new(&request);
         run.apply(AgentEvent::PromptRaised(Prompt { request_id: "p1".into(), kind: prompt_kind, input_json: "{}".into(), suggestions_json: None }));
         run
@@ -704,8 +711,15 @@ mod tests {
 
     /// An `/apply` run that read the evaluation guide, said `message` and ended its turn.
     fn waiting(message: &str) -> Run {
-        let request =
-            RunRequest { run_id: "r1".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request = RunRequest {
+            run_id: "r1".into(),
+            line: "/apply x".into(),
+            model: None,
+            budget_usd: 3.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        };
         let mut run = Run::new(&request);
         run.apply(AgentEvent::ToolStarted { id: "1".into(), name: "Read".into(), summary: "skills/04-job-evaluation.md".into(), nested: false });
         run.apply(AgentEvent::ToolFinished { id: "1".into(), outcome: Ok(()) });
@@ -737,7 +751,15 @@ mod tests {
     }
 
     fn run_of(id: &str, line: &str) -> Run {
-        Run::new(&RunRequest { run_id: id.into(), line: line.into(), model: None, budget_usd: 2.0, started_at: String::new(), resume_session: None })
+        Run::new(&RunRequest {
+            run_id: id.into(),
+            line: line.into(),
+            model: None,
+            budget_usd: 2.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        })
     }
 
     fn says(run: &mut Run, text: &str) {

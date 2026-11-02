@@ -388,7 +388,7 @@ impl Shell {
                 self.usage_due = 0;
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
-                    let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()));
+                    let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()), Arc::new(|| Ok(None)));
                     self.permissions = self.settings.preferences().permissions;
                     desk.set_asks_permission(self.permissions.asks());
                     self.desk = Some(desk);

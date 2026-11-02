@@ -52,9 +52,10 @@ impl PreferencesFile {
         file.sync_all()?;
         fs::rename(temporary, &self.path)?;
         // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
+        // Best effort: some mounts refuse to sync a folder, and the file is already in place.
         #[cfg(unix)]
         if let Some(folder) = self.path.parent().filter(|folder| !folder.as_os_str().is_empty()) {
-            fs::File::open(folder)?.sync_all()?;
+            let _ = fs::File::open(folder).and_then(|folder| folder.sync_all());
         }
         Ok(())
     }

@@ -39,6 +39,8 @@ const WORKSPACE_KEY: &str = "workspace";
 
 /// What the tabs and New task say while they wait for a folder.
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
+/// Why Change folder waits: a session stays open after its turn ends, until its process exits or the user ends it.
+const FOLDER_BUSY: &str = "A Claude session is open. End it with End session in Tasks to change the folder.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
@@ -292,12 +294,22 @@ impl Shell {
     }
 
     fn choose_folder(&mut self, ctx: &egui::Context) {
+        self.choose_folder_with(ctx, || rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder());
+    }
+
+    /// The dialog opens only when the folder may change.
+    fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
         if self.folder_locked() {
             return;
         }
-        if let Some(path) = rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder() {
+        if let Some(path) = pick() {
             self.open(ctx, &path);
         }
+    }
+
+    /// Why Change folder waits, if it does.
+    fn folder_wait(&self) -> Option<&'static str> {
+        self.folder_locked().then_some(FOLDER_BUSY)
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
@@ -670,9 +682,9 @@ impl Shell {
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
-                let task_live = self.folder_locked();
+                let folder_wait = self.folder_wait();
                 let action = match self.environment.as_mut() {
-                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment, task_live),
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment, folder_wait),
                     None => {
                         page_body(ui, alerts);
                         None
@@ -729,14 +741,14 @@ impl Shell {
         let folder_read = folder_open && self.loaded;
         let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
-        let task_live = self.folder_locked();
+        let folder_wait = self.folder_wait();
         let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, task_live };
+                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
                     // Only previews lack the tool check. They draw no tools, but still the alert.
@@ -1038,5 +1050,33 @@ mod tests {
         shell.desk = None;
         shell.open(&ctx, &checkout_named(&folder, "other-search"));
         assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
+    }
+
+    /// While a session is open, Change folder opens no dialog at all.
+    #[test]
+    fn a_running_task_opens_no_folder_dialog() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let mut desk = RunDesk::new(Box::new(Idle), Arc::new(|| {}));
+        desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+        let asked = Cell::new(false);
+
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(!asked.get(), "no dialog while the session is open");
+        assert_eq!(shell.folder_wait(), Some(FOLDER_BUSY));
+
+        shell.desk = None;
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(asked.get(), "with no session, the dialog opens");
+        assert_eq!(shell.folder_wait(), None);
     }
 }

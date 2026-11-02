@@ -12,9 +12,6 @@ const OPEN_ON_WIDTH: f32 = 180.0;
 
 const SHOW_FOLDER: &str = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
 
-/// Why Change folder waits: a new folder would leave the running task behind.
-const FOLDER_BUSY: &str = "A task is running. Change the folder once it ends.";
-
 /// What stays between frames: the page open and the search.
 #[derive(Default)]
 pub struct SettingsScreen {
@@ -43,8 +40,8 @@ pub struct SettingsView<'a> {
     /// Whether the folder is open and read, so Runtime status draws its sections and a search can match them.
     pub folder_read: bool,
     pub runtime: RuntimeWord,
-    /// Whether a task is running, so the folder cannot change under it.
-    pub task_live: bool,
+    /// Why Change folder waits, if it does, as the shell words it.
+    pub folder_wait: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +79,7 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     let page = screen.page;
     match page {
         Page::General => {
-            let (_, asked) = settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| general(ui, view.settings, view.folder, view.task_live, &query));
+            let (_, asked) = settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| general(ui, view.settings, view.folder, view.folder_wait, &query));
             request = asked.or(request);
         }
         Page::Appearance => {
@@ -253,13 +250,13 @@ fn rail_foot(ui: &mut Ui, settings: &Settings, hits: Option<&SearchHits>) {
 }
 
 /// The folder and the screen Jobdesk opens on. Returns what the user asked of the folder.
-fn general(ui: &mut Ui, settings: &mut Settings, folder: Option<&str>, task_live: bool, query: &str) -> Option<SettingsRequest> {
+fn general(ui: &mut Ui, settings: &mut Settings, folder: Option<&str>, folder_wait: Option<&str>, query: &str) -> Option<SettingsRequest> {
     let &[section, label, help, opens, open_on, open_help] = index(Page::General) else { return None };
     let mut request = None;
     setting_section(ui, section, None, query);
     setting_row(ui, label, help, query, |ui| match folder {
         Some(_) => {
-            if enabled_when(ui, !task_live, FOLDER_BUSY, |ui| small_button(ui, "Change folder")).clicked() {
+            if enabled_when(ui, folder_wait.is_none(), folder_wait.unwrap_or_default(), |ui| small_button(ui, "Change folder")).clicked() {
                 request = Some(SettingsRequest::ChangeFolder);
             }
             if small_button(ui, SHOW_FOLDER).clicked() {
@@ -353,7 +350,7 @@ mod tests {
     fn harness(state: Rc<RefCell<State>>) -> Harness<'static> {
         Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = &mut *state.borrow_mut();
-            let view = SettingsView { settings: &mut state.settings, folder: Some("~/Documents/ai-job-search"), folder_read: true, runtime: RuntimeWord::Missing(1), task_live: false };
+            let view = SettingsView { settings: &mut state.settings, folder: Some("~/Documents/ai-job-search"), folder_read: true, runtime: RuntimeWord::Missing(1), folder_wait: None };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
             });
@@ -534,7 +531,7 @@ mod tests {
         let mut settings = Settings::unsaved();
         let mut screen = SettingsScreen::default();
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
-            let view = SettingsView { settings: &mut settings, folder: None, folder_read: false, runtime: RuntimeWord::None, task_live: false };
+            let view = SettingsView { settings: &mut settings, folder: None, folder_read: false, runtime: RuntimeWord::None, folder_wait: None };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
         harness.run();

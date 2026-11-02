@@ -1,18 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::workspace::domain::{PortalInfo, ProfileFile, ProfileState, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus, placeholder_count};
+use crate::workspace::domain::{PortalInfo, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
 
 const ASSISTANT: &str = ".claude/skills/job-application-assistant";
-const PROFILE_FILES: [&str; 7] = [
-    "01-candidate-profile.md",
-    "02-behavioral-profile.md",
-    "03-writing-style.md",
-    "04-job-evaluation.md",
-    "05-cv-templates.md",
-    "06-cover-letter-templates.md",
-    "07-interview-prep.md",
-];
 const ACTIVE_TEMPLATE: &str = "BEGIN ACTIVE-TEMPLATE";
 
 pub struct CheckoutInspector {
@@ -26,17 +17,6 @@ impl CheckoutInspector {
 
     fn read(&self, relative: &str) -> Option<String> {
         fs::read_to_string(self.root.join(relative)).ok()
-    }
-
-    fn profile_file(&self, name: &str) -> ProfileFile {
-        let state = match self.read(&format!("{ASSISTANT}/{name}")) {
-            None => ProfileState::Missing,
-            Some(text) => match placeholder_count(&text) {
-                0 => ProfileState::Filled,
-                placeholders => ProfileState::NeedsSetup { placeholders },
-            },
-        };
-        ProfileFile { name: name.to_owned(), state }
     }
 
     fn portals(&self) -> Vec<PortalInfo> {
@@ -78,7 +58,6 @@ impl CheckoutInspector {
 impl WorkspaceInspector for CheckoutInspector {
     fn status(&self) -> WorkspaceStatus {
         WorkspaceStatus {
-            profile: PROFILE_FILES.iter().map(|name| self.profile_file(name)).collect(),
             portals: self.portals(),
             templates: self.templates(),
             sync: self.sync(),
@@ -112,8 +91,6 @@ mod tests {
     fn reads_a_checkout() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        write(root, ".claude/skills/job-application-assistant/01-candidate-profile.md", "Name: Sam");
-        write(root, ".claude/skills/job-application-assistant/02-behavioral-profile.md", "[FIRST_NAME] [LAST_NAME]");
         write(root, ".claude/skills/job-application-assistant/05-cv-templates.md", "<!-- BEGIN ACTIVE-TEMPLATE (managed) -->");
         write(root, ".agents/skills/on-search/SKILL.md", "---\nname: on\n---\nenabled: false in prose\n");
         write(root, ".agents/skills/off-search/SKILL.md", "---\nname: off\nenabled: false\n---\n");
@@ -122,9 +99,6 @@ mod tests {
 
         let status = CheckoutInspector::in_workspace(root).status();
 
-        assert_eq!(status.profile[0].state, ProfileState::Filled);
-        assert_eq!(status.profile[1].state, ProfileState::NeedsSetup { placeholders: 2 });
-        assert_eq!(status.profile[2].state, ProfileState::Missing);
         assert_eq!(status.portals, [PortalInfo { name: "off-search".into(), enabled: false }, PortalInfo { name: "on-search".into(), enabled: true }]);
         assert!(status.templates.custom_cv && !status.templates.custom_letter);
         assert_eq!(status.templates.registered, ["modern"]);

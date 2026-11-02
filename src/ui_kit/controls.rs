@@ -274,6 +274,17 @@ pub fn primary_shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Respon
     press_as(ui, text, Look::Primary, NORMAL, Hint::Keys(keys), None)
 }
 
+/// A danger button that names the chord it also answers to, such as Save mine over it with Cmd Enter.
+pub fn danger_shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
+    press_as(ui, text, Look::Danger, NORMAL, Hint::Keys(keys), None)
+}
+
+/// A plain button that names the chord it also answers to, such as Cancel with Esc. Unlike `shortcut_button` it is
+/// clear on a surface, as every plain button is.
+pub(in crate::ui_kit) fn plain_shortcut_button(ui: &mut Ui, text: &str, keys: &[&str]) -> Response {
+    press_as(ui, text, Look::Plain, NORMAL, Hint::Keys(keys), None)
+}
+
 /// The command key and `key`, as a shortcut button names them. The bundled fonts have no command key glyph, so macOS spells it out.
 pub const fn command_chord(key: &'static str) -> [&'static str; 2] {
     if cfg!(target_os = "macos") { ["Cmd", key] } else { ["Ctrl", key] }

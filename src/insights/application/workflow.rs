@@ -6,6 +6,8 @@ use crate::insights::application::SearchInsights;
 pub struct WorkflowBand {
     pub profile_filled: usize,
     pub profile_total: usize,
+    /// Profile topics that could not be read, counted in `profile_total`.
+    pub profile_hidden: usize,
     pub new_postings: usize,
     pub seen: usize,
     pub shortlisted: usize,
@@ -17,12 +19,13 @@ pub struct WorkflowBand {
     pub closed: usize,
 }
 
-/// `profile` is `(filled, total)` skill files.
-pub fn workflow_band(report: &SearchInsights, board: &JobBoard, profile: (usize, usize)) -> WorkflowBand {
+/// `profile` is `(filled, total, hidden)` profile topics: `total` counts every topic, and `hidden` those that could not be read.
+pub fn workflow_band(report: &SearchInsights, board: &JobBoard, profile: (usize, usize, usize)) -> WorkflowBand {
     let tally = &report.tally;
     WorkflowBand {
         profile_filled: profile.0,
         profile_total: profile.1,
+        profile_hidden: profile.2,
         new_postings: board.count(Lane::New),
         seen: board.total_seen,
         shortlisted: board.count(Lane::Shortlist),
@@ -94,9 +97,9 @@ mod tests {
             fact(Progress::Closed),
         ]);
 
-        let band = workflow_band(&report, &board, (7, 9));
+        let band = workflow_band(&report, &board, (7, 11, 1));
 
-        assert_eq!((band.profile_filled, band.profile_total), (7, 9));
+        assert_eq!((band.profile_filled, band.profile_total, band.profile_hidden), (7, 11, 1));
         assert_eq!((band.new_postings, band.seen, band.shortlisted), (2, 4, 1));
         assert_eq!((band.drafted, band.active, band.interview, band.offer, band.hired, band.closed), (1, 2, 0, 1, 1, 1));
     }

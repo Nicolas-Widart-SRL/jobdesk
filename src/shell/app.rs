@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
@@ -15,6 +15,9 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
+use crate::profile;
+use crate::profile::application::{ProfileEditor, UpdatedMarks};
+use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
@@ -25,7 +28,7 @@ use crate::settings::application::{
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::live_snapshot::{self, Reload};
-use crate::shell::{Snapshot, Source};
+use crate::shell::{Issue, Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING,
@@ -50,6 +53,9 @@ const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Ta
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
 const SETTINGS_KEYS: [&str; 2] = command_chord(",");
+/// How long Save waits after a run for the snapshot worker's next load. Past it, Jobdesk reads the profile itself, so a
+/// worker that died cannot hold Save off.
+const RUN_READ_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -58,13 +64,14 @@ pub enum Screen {
     Tracker,
     Insights,
     Runs,
+    Profile,
     Workspace,
     Launcher,
     Dossier,
 }
 
 impl Screen {
-    const NAV: [Self; 6] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Workspace];
+    const NAV: [Self; 7] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Workspace];
 
     fn title(self) -> &'static str {
         match self {
@@ -73,6 +80,7 @@ impl Screen {
             Self::Tracker => "Applications",
             Self::Insights => "Insights",
             Self::Runs => "Tasks",
+            Self::Profile => "Profile",
             Self::Workspace => "Setup",
             Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
@@ -89,7 +97,8 @@ impl Screen {
     }
 }
 
-/// Window state. It only reads snapshots.
+/// Window state. It reads the checkout through snapshots, except the profile: it writes one block at a time through
+/// `ProfileEditor`, and reads the profile back after a Save, or after a run that no snapshot follows in time.
 pub struct Shell {
     screen: Screen,
     workspace: Option<WorkspaceRoot>,
@@ -101,7 +110,7 @@ pub struct Shell {
     reload: Option<Reload>,
     /// The reload the last task's end asked for. Until a snapshot carries it, the month's spend misses that task's cost.
     usage_due: u64,
-    /// Whether a run was working on the last frame. A run that stops asks for a reload.
+    /// Whether a run was working on the last frame, so its start and end can be seen. A run that stops asks for a reload.
     was_busy: bool,
     jobs: JobsScreen,
     tracker: TrackerScreen,
@@ -135,6 +144,33 @@ pub struct Shell {
     data_sizes: Option<DataSizes>,
     /// This copy's version as About shows it. Snapshots set their own, so a release moves none.
     version: String,
+    profile_screen: ProfileScreen,
+    /// The topics the last run changed, kept in memory only.
+    marks: UpdatedMarks,
+    /// When the last run ended, until a snapshot read after it shows what the run changed.
+    run_ended: Option<Instant>,
+    /// Saves one profile block at a time into the open folder.
+    profile_editor: Option<ProfileEditor>,
+    /// The tab the user picked while Profile asks whether to drop their draft.
+    leave_to: Option<Screen>,
+    /// When the profile was last read back, after a save or a run, so a snapshot read before it cannot show the old text again.
+    profile_saved: Option<Instant>,
+    /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
+    /// take the focus.
+    away: Option<(Pending, bool)>,
+    /// The window was asked to close while the folder ask showed, so the close comes back once that ask is answered.
+    quit_after: bool,
+    /// The user agreed to drop their profile draft to quit. The draft stays until the window really closes, so a quit
+    /// cancelled later, at the session ask, keeps it.
+    quit_agreed: bool,
+}
+
+/// What would drop unsaved profile text from outside Profile, once the user agrees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pending {
+    /// Opening the folder the user picked.
+    Folder(PathBuf),
+    Quit,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -179,18 +215,29 @@ impl Shell {
             data_label: None,
             data_sizes: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            profile_screen: ProfileScreen::default(),
+            marks: UpdatedMarks::default(),
+            run_ended: None,
+            profile_editor: None,
+            leave_to: None,
+            profile_saved: None,
+            away: None,
+            quit_after: false,
+            quit_agreed: false,
         }
     }
 
     /// A shell with fixed data, for tests and previews.
     pub fn with_snapshot(screen: Screen, workspace: WorkspaceRoot, snapshot: Snapshot) -> Self {
         let today = snapshot.today;
-        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+        let profile_editor = Some(profile::open_editor(workspace.path()));
+        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
     }
 
     /// A shell whose folder is open but not read yet, for tests and previews.
     pub fn loading(screen: Screen, workspace: WorkspaceRoot, today: NaiveDate) -> Self {
-        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+        let profile_editor = Some(profile::open_editor(workspace.path()));
+        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
     }
 
     /// The first run: no folder is open yet.
@@ -336,8 +383,7 @@ impl Shell {
                 let repaint = ctx.clone();
                 let usage = self.data.as_ref().map(|data| runs::usage_logs(data.join("runs"), root.path()));
                 let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
-                self.updates = Some(updates);
-                self.reload = Some(reload);
+                (self.updates, self.reload) = (Some(updates), Some(reload));
                 // The new worker numbers its own asks, and reads every log first.
                 self.usage_due = 0;
                 if let Some(data) = &self.data {
@@ -351,6 +397,9 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
+                // The last folder's marks, picked topic and edit mean nothing here.
+                (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
+                (self.profile_editor, self.leave_to, self.profile_saved, self.away) = (Some(profile::open_editor(root.path())), None, None, None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
@@ -367,13 +416,59 @@ impl Shell {
         self.choose_folder_with(ctx, || rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder());
     }
 
-    /// The dialog opens only when the folder may change.
+    /// The dialog opens only when the folder may change. Unsaved profile text asks first, once a folder is picked.
     fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
         if self.folder_locked() {
             return;
         }
-        if let Some(path) = pick() {
-            self.open(ctx, &path);
+        match pick() {
+            Some(path) if self.draft_unsaved() => {
+                self.profile_screen.put_away();
+                self.away = Some((Pending::Folder(path), true));
+            }
+            Some(path) => self.open(ctx, &path),
+            None => {}
+        }
+    }
+
+    /// Whether a profile edit holds text not saved yet.
+    fn draft_unsaved(&self) -> bool {
+        self.profile_editor.as_ref().is_some_and(ProfileEditor::is_dirty)
+    }
+
+    /// Asks, over whatever is on show, before a folder change or quitting drops unsaved profile text. Discard goes on
+    /// with what waited. A folder that fails to open leaves the draft as it was.
+    fn away_ask(&mut self, ctx: &egui::Context) {
+        let Some((pending, focus)) = self.away.as_mut() else { return };
+        let away = match pending {
+            Pending::Folder(_) => Away::Folder,
+            Pending::Quit => Away::Quit,
+        };
+        if let Some(discard) = self.profile_screen.ask_away(ctx, away, focus) {
+            self.settle_away(ctx, discard);
+        }
+    }
+
+    /// Closes the ask over every screen with the user's answer. A close asked for while it showed comes back after it.
+    fn settle_away(&mut self, ctx: &egui::Context, discard: bool) {
+        let Some((pending, _)) = self.away.take() else { return };
+        if discard {
+            self.answer_away(ctx, pending);
+        }
+        if std::mem::take(&mut self.quit_after) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Goes on with what waited on the ask, once the user agreed to drop their draft. Quitting keeps the draft until the
+    /// window closes: a live session may still ask, and Keep working there keeps everything.
+    fn answer_away(&mut self, ctx: &egui::Context, pending: Pending) {
+        match pending {
+            Pending::Folder(path) => self.open(ctx, &path),
+            Pending::Quit => {
+                self.quit_agreed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -383,27 +478,13 @@ impl Shell {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        if let Some(latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
-            self.snapshot = latest;
-            self.loaded = true;
-            if let Some(open) = &mut self.open_dossier {
-                open.view = None;
-            }
-        }
+        self.take_snapshot();
         self.follow_permissions();
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
-        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
-        if self.was_busy && !busy {
-            // The run that ended left its cost in its log. A closed worker has nothing to reload.
-            if let Some(reload) = &self.reload {
-                self.usage_due = reload.ask();
-            }
-            // And its log grew, so Data and privacy measures again.
-            self.measure_data();
-        }
-        self.was_busy = busy;
+        self.follow_runs();
+        self.settle_run_end(ui.ctx());
         if let Some(pages) = &mut self.pages {
             pages.poll();
         }
@@ -417,6 +498,8 @@ impl Shell {
         if !self.settings_open {
             self.settings_screen.closed();
         }
+        // Drawn before the screens, so it takes Esc before any of them.
+        self.away_ask(&ui.ctx().clone());
         let queue = self.queue();
         // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
         desk(ui, |ui| {
@@ -457,6 +540,76 @@ impl Shell {
         if let Some(desk) = &mut self.desk {
             desk.set_asks_permission(permissions.asks());
         }
+    }
+
+    /// Takes the newest snapshot the worker sent, if any.
+    fn take_snapshot(&mut self) {
+        let Some(mut latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) else { return };
+        // A snapshot read before the last read back would show the saved block as it was, so the profile read back stays.
+        match self.profile_saved {
+            Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
+            _ => self.profile_saved = None,
+        }
+        // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
+        if let Some(ended) = self.run_ended
+            && latest.read_at.is_some_and(|read| read >= ended)
+        {
+            self.marks.finish(&latest.profile, Local::now().naive_local());
+            self.run_ended = None;
+        }
+        // A run that started before the folder was first read keeps the first snapshot as its start.
+        let first = !self.loaded;
+        self.snapshot = latest;
+        self.loaded = true;
+        if first && self.was_busy && self.run_ended.is_none() {
+            self.marks.begin(&self.snapshot.profile);
+        }
+        if let Some(open) = &mut self.open_dossier {
+            open.view = None;
+        }
+    }
+
+    /// Whether Save waits for the first load after a run ended, so a Save is never marked as the run's.
+    fn save_waits_for_load(&self) -> bool {
+        self.run_ended.is_some() && self.updates.is_some()
+    }
+
+    /// Stops the wait for a load after a run once it has lasted `RUN_READ_WAIT`. Jobdesk then reads the profile itself
+    /// and marks the run's changes from that read, so a Save made after it, which a late snapshot would hold, is not marked.
+    fn settle_run_end(&mut self, ctx: &egui::Context) {
+        let Some(ended) = self.run_ended else { return };
+        let waited = ended.elapsed();
+        if waited < RUN_READ_WAIT {
+            // No input may come, so a frame is asked for when the wait runs out.
+            ctx.request_repaint_after(RUN_READ_WAIT - waited);
+            return;
+        }
+        self.read_back_profile();
+        self.marks.finish(&self.snapshot.profile, Local::now().naive_local());
+        self.run_ended = None;
+    }
+
+    /// A run's start keeps the profile as it stands. Its end asks for a fresh load, and the first snapshot read after the
+    /// end marks the topics the run changed. The snapshot on show at the end may predate the run's last writes.
+    /// A turn or run that starts before that load arrives keeps the kept profile, so the next end marks the changes of both:
+    /// the snapshot on show may already hold the first one's writes.
+    fn follow_runs(&mut self) {
+        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        if busy && !self.was_busy {
+            // Before the first read the snapshot is empty, so the start waits for it.
+            if self.run_ended.take().is_none() && self.loaded {
+                self.marks.begin(&self.snapshot.profile);
+            }
+        } else if !busy && self.was_busy {
+            self.run_ended = Some(Instant::now());
+            // The run that ended left its cost in its log. A closed worker has nothing to reload.
+            if let Some(reload) = &self.reload {
+                self.usage_due = reload.ask();
+            }
+            // And its log grew, so Data and privacy measures again.
+            self.measure_data();
+        }
+        self.was_busy = busy;
     }
 
     /// Runs change between snapshots, so the queue is dealt again each frame.
@@ -504,11 +657,24 @@ impl Shell {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
             });
             if keep {
-                self.confirm_quit = false;
+                (self.confirm_quit, self.quit_agreed) = (false, false);
             }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
-        if ctx.input(|input| input.viewport().close_requested()) && active {
+        let closing = ctx.input(|input| input.viewport().close_requested());
+        // Unsaved profile text asks first, one ask at a time. Once the user agrees, the window asks to close again, and a
+        // live session asks next. A close while the folder ask shows waits for its answer.
+        if closing && self.draft_unsaved() && !self.quit_agreed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            match self.away {
+                None => {
+                    self.profile_screen.put_away();
+                    self.away = Some((Pending::Quit, true));
+                }
+                Some((Pending::Folder(_), _)) => self.quit_after = true,
+                Some((Pending::Quit, _)) => {}
+            }
+        } else if closing && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.quit_focus |= !self.confirm_quit;
             self.confirm_quit = true;
@@ -517,8 +683,8 @@ impl Shell {
         // Cmd , is taken the same way, so Settings opens from a field too.
         let (ask, open_settings) =
             ctx.input_mut(|input| (input.consume_key(egui::Modifiers::COMMAND, egui::Key::K), input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)));
-        // While the quit dialog asks, no shortcut reaches the screens behind it.
-        if self.confirm_quit {
+        // While the quit dialog or the ask over every screen shows, no shortcut reaches the screens behind it.
+        if self.confirm_quit || self.away.is_some() {
             note_dialog(ctx);
             return;
         }
@@ -542,7 +708,7 @@ impl Shell {
                     self.quit_focus = false;
                 }
                 if keep.clicked() {
-                    self.confirm_quit = false;
+                    (self.confirm_quit, self.quit_agreed) = (false, false);
                 }
                 if button(ui, "End session and quit").clicked() {
                     self.desk = None;
@@ -591,6 +757,18 @@ impl Shell {
             });
         });
         if let Some(screen) = picked {
+            self.leave_for(screen);
+        }
+    }
+
+    /// Shows `screen`. Leaving Profile with unsaved text asks first, and the screen changes only once the user drops it.
+    fn leave_for(&mut self, screen: Screen) {
+        let asks = self.screen == Screen::Profile
+            && screen != Screen::Profile
+            && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
+        if asks {
+            self.leave_to = Some(screen);
+        } else {
             self.screen = screen;
         }
     }
@@ -708,7 +886,7 @@ impl Shell {
         let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
         // Each screen says where its alert goes, so a new one must choose.
         let alert_over_head = match self.screen {
-            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Workspace => false,
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Workspace => false,
             // These keep it over their head until they take a `ScreenState` too.
             Screen::Runs | Screen::Launcher | Screen::Dossier => true,
         };
@@ -784,6 +962,28 @@ impl Shell {
                     self.open_launcher();
                 }
             }
+            Screen::Profile => {
+                // A file that fails hides only the topics it feeds, so the screen as a whole never fails.
+                // A run that just ended may still be writing, and its changes are not marked until the load after its end
+                // arrives. A save in between would be marked as the run's, so Save waits for that load too, for
+                // `RUN_READ_WAIT` at most.
+                let reading = self.save_waits_for_load();
+                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: Local::now().naive_local() };
+                let asked = match self.profile_editor.as_mut() {
+                    Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
+                    None => None,
+                };
+                match asked {
+                    Some(ProfileRequest::Saved) => self.read_back_profile(),
+                    Some(ProfileRequest::Leave) => {
+                        if let Some(screen) = self.leave_to.take() {
+                            self.screen = screen;
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    None => {}
+                }
+            }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
@@ -795,9 +995,13 @@ impl Shell {
                         None
                     }
                 };
-                if action == Some(WorkspaceAction::ChangeFolder) {
-                    let ctx = ui.ctx().clone();
-                    self.choose_folder(&ctx);
+                match action {
+                    Some(WorkspaceAction::ChangeFolder) => {
+                        let ctx = ui.ctx().clone();
+                        self.choose_folder(&ctx);
+                    }
+                    Some(WorkspaceAction::OpenProfile) => self.screen = Screen::Profile,
+                    None => {}
                 }
             }
             Screen::Launcher => {
@@ -822,10 +1026,25 @@ impl Shell {
             }
         }
         if open_setup.get() && setup_tab {
-            self.screen = Screen::Workspace;
+            self.leave_for(Screen::Workspace);
         } else if open_setup.get() {
             self.open_settings(Page::Runtime);
         }
+        if self.screen != Screen::Profile {
+            self.profile_screen.put_away();
+        }
+    }
+
+    /// Reads the profile back after a save, so the saved block shows at once instead of after the folder watcher's next
+    /// load. It also stands in for a load that did not follow a run in time. Only the profile files are read, as a
+    /// snapshot reads them, and the next snapshot replaces the result.
+    fn read_back_profile(&mut self) {
+        let Some(root) = self.workspace.as_ref() else { return };
+        let (view, errors) = profile::load(root.path());
+        self.snapshot.profile = view;
+        self.snapshot.issues.retain(|issue| issue.source != Source::Profile);
+        self.snapshot.issues.extend(errors.into_iter().map(|error| Issue { source: Source::Profile, error }));
+        self.profile_saved = Some(Instant::now());
     }
 
     /// The monthly cap against this month's spend. The spend is unknown until the run logs are read, and again from a task's
@@ -889,6 +1108,7 @@ impl Shell {
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
+        let mut runtime_asked = None;
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
@@ -908,13 +1128,20 @@ impl Shell {
                     claude,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
-                    (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
+                    (Page::Runtime, Some(environment)) => {
+                        runtime_asked = workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query);
+                    }
                     // Only previews lack the tool check. They draw no tools, but still the alert.
                     (Page::Runtime, None) => alerts(ui),
                     _ => {}
                 })
             })
             .inner;
+        // Open Profile leaves Settings for the Profile screen, as Back to app would leave it for the screen underneath.
+        if runtime_asked == Some(WorkspaceAction::OpenProfile) {
+            self.settings_open = false;
+            self.screen = Screen::Profile;
+        }
         let ctx = ui.ctx().clone();
         match asked {
             Some(SettingsRequest::Back) => {
@@ -988,16 +1215,15 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
     });
     ui.add_space(WELCOME_STEP_PADDING);
     let choose = welcome_step(ui, 1, "Choose your job search folder", "The ai-job-search folder you set up with Claude Code.", true);
-    // Setup can leave the menu once the folder is chosen, so the step names the place that always stays.
-    let profile = format!("Settings › Runtime status shows which parts are filled in and what is missing. {} opens Settings.", SETTINGS_KEYS.join(" "));
-    welcome_step(ui, 2, "Check your profile", &profile, false);
+    // Setup can leave the menu once the folder is chosen, so the step names Profile, whose tab always stays.
+    welcome_step(ui, 2, "Check your profile", "Profile shows each topic, what is filled in and what is missing.", false);
     welcome_step(ui, 3, "Find your first jobs", "Opens the search task. You start it, and Today fills in as it works.", false);
     ui.add_space(WELCOME_STEP_PADDING / 2.0);
     if let Some(error) = error {
         alert(ui, error);
         ui.add_space(WELCOME_STEP_PADDING / 2.0);
     }
-    let promise = "Jobdesk reads this folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
+    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
     ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
     choose
 }
@@ -1029,6 +1255,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Jobs => (Some(Screen::Jobs), true),
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
+        Source::Profile => (Some(Screen::Profile), false),
         Source::Decisions => (None, false),
     }
 }
@@ -1043,6 +1270,7 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
             ("Your saved jobs could not be read.", "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.")
         }
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
+        Source::Profile => ("Part of your profile could not be read.", "Everything else still works."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }
@@ -1118,8 +1346,10 @@ pub fn run() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs;
     use std::path::Path;
+    use std::rc::Rc;
 
     use super::*;
     use crate::runs::application::{AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest, StartOptions};
@@ -1237,6 +1467,38 @@ mod tests {
         assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
     }
 
+    /// A folder change from anywhere, such as Settings, asks before it drops unsaved profile text, and goes on only once
+    /// the user agrees.
+    #[test]
+    fn a_folder_change_asks_before_it_drops_a_draft() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let first = checkout(&folder);
+        let mut shell = launch(&ctx, Some(first.clone()), data.path());
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        let editor = shell.profile_editor.as_mut().unwrap();
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+
+        let other = checkout_named(&folder, "other-search");
+        shell.choose_folder_with(&ctx, || Some(other.clone()));
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(first.as_path()), "the folder waits for the answer");
+        assert_eq!(shell.away, Some((Pending::Folder(other.clone()), true)));
+        assert!(shell.draft_unsaved(), "the draft stays");
+
+        let (pending, _) = shell.away.take().unwrap();
+        shell.answer_away(&ctx, pending);
+        assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "Discard opens it");
+        assert!(!shell.draft_unsaved());
+    }
+
     /// While a session is open, Change folder opens no dialog at all.
     #[test]
     fn a_running_task_opens_no_folder_dialog() {
@@ -1323,5 +1585,146 @@ mod tests {
         shell.desk.as_mut().unwrap().set_asks_permission(false);
         shell.follow_permissions();
         assert!(!shell.desk.as_ref().unwrap().asks_permission(), "an unchanged setting leaves the desk alone");
+    }
+
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(entry.file_name());
+            if entry.path().is_dir() { copy_tree(&entry.path(), &target) } else { fs::copy(entry.path(), target).map(|_| ()).unwrap() }
+        }
+    }
+
+    /// The sample workspace as a checkout named `name`.
+    fn sample_checkout(folder: &tempfile::TempDir, name: &str) -> PathBuf {
+        let root = checkout_named(folder, name);
+        copy_tree(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace"), &root);
+        fs::rename(root.join("CLAUDE.profile.md"), root.join("CLAUDE.md")).unwrap();
+        root
+    }
+
+    const CANDIDATE: &str = ".claude/skills/job-application-assistant/01-candidate-profile.md";
+
+    /// egui keeps a field's undo history for the life of the window, and a folder change starts a new Profile screen.
+    /// An edit in the new folder still has a field of its own, so undo never brings back the last folder's text.
+    #[test]
+    fn undo_never_crosses_folders() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let folder = tempfile::tempdir().unwrap();
+        let (first, second) = (sample_checkout(&folder, "search-a"), sample_checkout(&folder, "search-b"));
+        let text = fs::read_to_string(second.join(CANDIDATE)).unwrap().replace("Antwerp. Freelance.", "Ghent. Employed.");
+        fs::write(second.join(CANDIDATE), &text).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let shell = Rc::new(RefCell::new(Shell::with_snapshot(Screen::Profile, workspace::open(&first).unwrap(), Snapshot::load(&first, today))));
+        let inner = Rc::clone(&shell);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+        harness.run_steps(3);
+        let field = |harness: &Harness| harness.get_by_role(egui::accesskit::Role::MultilineTextInput).value().unwrap_or_default();
+
+        harness.get_all_by_label("Edit").next().unwrap().click();
+        harness.run_steps(3);
+        harness.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text(" Remote since 2023.");
+        harness.run_steps(3);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert!(fs::read_to_string(first.join(CANDIDATE)).unwrap().contains("Remote since 2023."), "saved in the first folder");
+
+        {
+            let ctx = harness.ctx.clone();
+            let mut shell = shell.borrow_mut();
+            shell.open(&ctx, &second);
+            (shell.snapshot, shell.loaded) = (Snapshot::load(&second, today), true);
+        }
+        harness.run_steps(3);
+        harness.get_all_by_label("Edit").next().unwrap().click();
+        harness.run_steps(3);
+        let opened = field(&harness);
+        assert!(opened.contains("Ghent. Employed."), "{opened}");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        harness.run_steps(3);
+        assert_eq!(field(&harness), opened, "undo has nothing of the first folder's");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert_eq!(fs::read_to_string(second.join(CANDIDATE)).unwrap(), text, "nothing of the first folder was written");
+    }
+
+    /// A snapshot worker that sends nothing after a run ends holds Save for `RUN_READ_WAIT` at most. Jobdesk then reads the
+    /// profile itself and marks what the run changed, so a Save after that is not marked when a late snapshot comes.
+    #[test]
+    fn a_silent_snapshot_worker_holds_save_only_briefly() {
+        use crate::profile::application::TopicId;
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = sample_checkout(&folder, "search");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let mut shell = Shell::with_snapshot(Screen::Profile, workspace::open(&root).unwrap(), Snapshot::load(&root, today));
+        let feed = shell.snapshot_feed();
+        let rewrite = |from: &str, to: &str| {
+            let text = fs::read_to_string(root.join(CANDIDATE)).unwrap();
+            assert!(text.contains(from), "{from}");
+            fs::write(root.join(CANDIDATE), text.replace(from, to)).unwrap();
+        };
+        shell.marks.begin(&shell.snapshot.profile);
+        rewrite("Antwerp. Freelance.", "Ghent. Employed.");
+        shell.run_ended = Some(Instant::now());
+        let ctx = egui::Context::default();
+        shell.settle_run_end(&ctx);
+        assert!(shell.save_waits_for_load(), "Save waits for the load after the run");
+
+        shell.run_ended = Instant::now().checked_sub(RUN_READ_WAIT);
+        shell.settle_run_end(&ctx);
+        assert!(!shell.save_waits_for_load(), "the wait ends without a snapshot");
+        assert!(shell.marks.rail_mark(TopicId::Experience), "the run's change is marked from Jobdesk's own read");
+
+        // The user saves, then the worker's late snapshot holds the save.
+        rewrite("Meuse Valley University", "Scheldt Valley University");
+        feed.send(Snapshot::load(&root, today)).unwrap();
+        shell.take_snapshot();
+        assert!(!shell.marks.rail_mark(TopicId::Education), "the save is not marked as the run's");
+    }
+
+    /// A frame of `shell`'s keys with the window asked to close, and the commands it sent to the window.
+    fn close_frame(ctx: &egui::Context, shell: &mut Shell) -> Vec<egui::ViewportCommand> {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        commands(ctx.run_ui(input, |ui| shell.handle_shortcuts_and_quit(ui.ctx())))
+    }
+
+    /// The commands a frame sent to the window. Its textures are dropped, as no renderer takes them.
+    fn commands(mut output: egui::FullOutput) -> Vec<egui::ViewportCommand> {
+        output.textures_delta.clear();
+        output.viewport_output.get(&egui::ViewportId::ROOT).map(|viewport| viewport.commands.clone()).unwrap_or_default()
+    }
+
+    /// A close asked for while the folder ask shows is not forgotten: once that ask is answered, the close comes back.
+    #[test]
+    fn a_close_during_the_folder_ask_comes_back_after_it() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        let editor = shell.profile_editor.as_mut().unwrap();
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+        let other = checkout_named(&folder, "other-search");
+        shell.away = Some((Pending::Folder(other.clone()), true));
+
+        let sent = close_frame(&ctx, &mut shell);
+        assert!(sent.contains(&egui::ViewportCommand::CancelClose));
+        assert_eq!(shell.away, Some((Pending::Folder(other), true)), "the folder ask stays, one ask at a time");
+
+        let sent = commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.settle_away(ui.ctx(), false)));
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Keep editing, then the close comes back");
+        close_frame(&ctx, &mut shell);
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "and asks about the draft");
     }
 }

@@ -51,7 +51,8 @@ impl Reload {
 /// Rebuilds the snapshot on a worker when the workspace changes. Stops when the receiver drops.
 /// `usage` is read on each load. The first read parses every log, so the checkout's snapshot goes out before it, with
 /// its usage unread, then again with it. Later reads parse only the logs that changed.
-/// Run logs sit outside the checkout, so an ask on the returned `Reload` reloads after a run ends.
+/// An ask on the returned `Reload` asks for a load as a change would, such as once a run ends, so the next snapshot
+/// begins after the ask. Run logs sit outside the checkout, so a finished run's cost comes in only with that ask.
 pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint: impl Fn() + Send + 'static) -> (Receiver<Snapshot>, Reload) {
     let (snapshots, received) = mpsc::channel();
     let (changed, changes) = mpsc::channel();
@@ -174,5 +175,21 @@ mod tests {
         fs::write(dir.path().join(".claude/commands/apply.md"), "").unwrap();
         let (updates, _) = spawn(workspace::open(dir.path()).unwrap(), None, || {});
         assert!(updates.recv_timeout(Duration::from_secs(10)).unwrap().usage_read);
+    }
+
+    /// A run's end asks for a load with no file event, and the snapshot that answers began after the ask.
+    #[test]
+    fn a_reload_ask_loads_again_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        fs::write(dir.path().join(".claude/commands/apply.md"), "").unwrap();
+        let (updates, reload) = spawn(workspace::open(dir.path()).unwrap(), None, || {});
+        let timeout = Duration::from_secs(10);
+        let first = updates.recv_timeout(timeout).unwrap();
+        let asked = std::time::Instant::now();
+        reload.ask();
+        let next = updates.recv_timeout(timeout).unwrap();
+        assert!(first.read_at.unwrap() < asked);
+        assert!(next.read_at.unwrap() >= asked, "the answer was read after the ask");
     }
 }

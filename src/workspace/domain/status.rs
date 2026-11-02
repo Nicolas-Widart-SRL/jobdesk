@@ -1,16 +1,3 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProfileState {
-    Filled,
-    NeedsSetup { placeholders: usize },
-    Missing,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileFile {
-    pub name: String,
-    pub state: ProfileState,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortalInfo {
     pub name: String,
@@ -34,7 +21,6 @@ pub struct SyncState {
 /// What the checkout holds right now.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkspaceStatus {
-    pub profile: Vec<ProfileFile>,
     pub portals: Vec<PortalInfo>,
     pub templates: TemplateState,
     pub sync: SyncState,
@@ -43,18 +29,6 @@ pub struct WorkspaceStatus {
 
 pub trait WorkspaceInspector {
     fn status(&self) -> WorkspaceStatus;
-}
-
-/// `/reset` restores tokens such as `[FIRST_NAME]`, and `/setup` replaces them.
-pub fn placeholder_count(text: &str) -> usize {
-    text.split('[')
-        .skip(1)
-        .filter(|rest| {
-            rest.split_once(']').is_some_and(|(token, _)| {
-                token.len() >= 3 && token.chars().all(|c| c.is_ascii_uppercase() || c == '_') && token.chars().any(|c| c.is_ascii_uppercase())
-            })
-        })
-        .count()
 }
 
 /// A program the workflow calls.
@@ -88,14 +62,4 @@ pub struct ToolCheck {
 pub trait ToolProber: Send + Sync {
     /// The first line a tool prints about itself, or `None` when it cannot run.
     fn probe(&self, tool: &ToolSpec) -> Option<String>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::placeholder_count;
-
-    #[test]
-    fn counts_only_setup_tokens() {
-        assert_eq!(placeholder_count(r"\name{[FIRST_NAME]}{[LAST_NAME]} [x] [AB] [Note] - [ ] a[0] [YOUR_ADDRESS]"), 3);
-    }
 }

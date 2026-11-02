@@ -14,7 +14,8 @@ pub enum Fill {
 }
 
 /// `blocks` are the texts of the topic's top-level blocks, each starting with its heading.
-/// A topic is not started when it has no blocks, or when each block holds only blank lines and comments under its heading.
+/// A topic is not started when it has no blocks, or when no block shows anything under its headings: no text, code or
+/// HTML, only blank lines and HTML that holds only comments (`shows_content`).
 /// Otherwise it has as much left to fill as it has setup tokens.
 pub fn topic_fill(blocks: &[&str], readable: bool) -> Fill {
     if !readable {

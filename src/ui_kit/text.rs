@@ -8,6 +8,7 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::placeholders::Piece;
 use crate::shared_kernel::visible_text::visible_chars;
+use crate::shared_kernel::markdown::only_comments;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
@@ -226,21 +227,6 @@ fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, html: Option<&Re
 fn comments_hidden(ui: &mut Ui, html: &str) {
     if !only_comments(html) {
         ui.label(html.trim_end());
-    }
-}
-
-/// Whether `html` holds nothing but comments and white space. An unclosed comment runs to the end.
-fn only_comments(html: &str) -> bool {
-    let mut rest = html;
-    loop {
-        let Some(start) = rest.find("<!--") else { return rest.trim().is_empty() };
-        if !rest[..start].trim().is_empty() {
-            return false;
-        }
-        match rest[start + 4..].find("-->") {
-            Some(end) => rest = &rest[start + 4 + end + 3..],
-            None => return true,
-        }
     }
 }
 
@@ -889,7 +875,9 @@ mod tests {
             markdown(ui, cache, text);
         }
         assert!(painted_text(plain, source).0.contains("a note on"));
-        assert!(only_comments(" <!-- a -->\n<!-- b\n") && !only_comments("<!-- a --> b") && only_comments("  \n"));
+        // `<!-->` is an empty comment, so the text after it shows, and so does text after `--!>`.
+        let (text, _) = painted_text(profiled, "Before.\n\n<!-->Open to relocation: no [CITY_NAME]\n\n<!-- a --!> Visible\n-->\n\nAfter.");
+        assert!(text.contains("Open to relocation: no [CITY_NAME]") && text.contains("Visible"), "{text:?}");
     }
 
     #[test]

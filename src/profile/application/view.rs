@@ -1,6 +1,6 @@
 use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::placeholders::{Piece, placeholder_count, shown_pieces};
+use crate::shared_kernel::placeholders::{Piece, heading_content, placeholder_count, shown_pieces};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileView {
@@ -162,9 +162,7 @@ fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> B
 /// The role a `###` block's heading line names, its parts cut from the line by source position, so each blank in them
 /// is one the block's count found.
 fn role_of(own: &str) -> Option<Role> {
-    let line = own.split(['\n', '\r']).next().unwrap_or_default();
-    let heading = line.trim_start_matches('#').trim();
-    let role = role_heading(heading)?;
+    let role = role_heading(own[heading_content(own)?].trim())?;
     let pieces = |part: &str| {
         let start = part.as_ptr() as usize - own.as_ptr() as usize;
         shown_pieces(own, start..start + part.len())
@@ -319,5 +317,24 @@ mod tests {
         assert_eq!(topic(&view, TopicId::Identity).fill, Fill::ToFill(1));
         let comments = view_of(&[(ProfileFile::Candidate, "## Identity\n<!-- Your name and city -->\n\n## Education\nBSc\n")]);
         assert_eq!(topic(&comments, TopicId::Identity).fill, Fill::NotStarted);
+        // `<!-->` is an empty comment, so the words after it show, and the topic is started.
+        let empty = view_of(&[(ProfileFile::Candidate, "## Identity\n<!-->Open to relocation: no [CITY_NAME]\n\n## Education\nBSc\n")]);
+        assert_eq!(topic(&empty, TopicId::Identity).fill, Fill::Filled);
+    }
+
+    /// A closed heading or a comment after it still names a role, cut from the heading's own content.
+    #[test]
+    fn a_closed_or_annotated_heading_is_still_a_role() {
+        for heading in ["### Lead Engineer - Calder Freight (2021 – present) ###", "### Lead Engineer - Calder Freight (2021 – present) <!-- check dates -->", "### [JOB_TITLE] - Calder Freight (2021 – present) ##"] {
+            let text = format!("## Professional Experience\n\n{heading}\nShipped.\n");
+            let view = view_of(&[(ProfileFile::Candidate, &text)]);
+            let role = topic(&view, TopicId::Experience).sections[0].children[0].role.clone().unwrap_or_else(|| panic!("{heading} is no role"));
+            assert_eq!(role.company, [Piece::Text("Calder Freight".to_owned())], "{heading}");
+            assert_eq!(role.dates, [Piece::Text("2021 – present".to_owned())], "{heading}");
+        }
+        let view = view_of(&[(ProfileFile::Candidate, "## Professional Experience\n\n### [JOB_TITLE] - Calder Freight (2021 – present) ##\nShipped.\n")]);
+        let child = &topic(&view, TopicId::Experience).sections[0].children[0];
+        assert_eq!(child.role.as_ref().unwrap().title, [Piece::Blank("to fill: job title".to_owned())]);
+        assert_eq!(child.placeholders, 1);
     }
 }

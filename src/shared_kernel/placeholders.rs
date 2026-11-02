@@ -3,6 +3,7 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown;
+use crate::shared_kernel::markdown::only_comments;
 
 /// The setup tokens a page of profile Markdown shows, as `placeholder_spans` finds them.
 pub fn placeholder_count(text: &str) -> usize {
@@ -68,9 +69,12 @@ pub enum Piece {
 
 /// The pieces `text` shows in `part`, a byte range inside one heading line, such as a role's title. A blank stands
 /// exactly where `placeholder_spans` counted a prose token, by source position, and nowhere else: no text of any kind
-/// can make one. A token in code shows as written.
+/// can make one. A token in a code span is counted, as in any code, but shows as written, with the code's text.
+/// The cost is linear in the length of `text`.
 pub fn shown_pieces(text: &str, part: Range<usize>) -> Vec<Piece> {
     let spans = placeholder_spans(text);
+    // The spans that reach past `start`, in order: they are sorted and never overlap.
+    let from = |start: usize| spans[spans.partition_point(|span| span.end <= start)..].iter();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut push = |piece: Piece| match (pieces.last_mut(), piece) {
         (Some(Piece::Text(last)), Piece::Text(more)) => last.push_str(&more),
@@ -85,7 +89,7 @@ pub fn shown_pieces(text: &str, part: Range<usize>) -> Vec<Piece> {
             Event::Text(shown) if *shown == text[range.clone()] => {
                 let (start, end) = (range.start.max(part.start), range.end.min(part.end));
                 let mut at = start;
-                for span in spans.iter().filter(|span| span.start < end && span.end > start) {
+                for span in from(start).take_while(|span| span.start < end) {
                     if span.start > at {
                         push(Piece::Text(text[at..span.start].to_owned()));
                     }
@@ -99,7 +103,7 @@ pub fn shown_pieces(text: &str, part: Range<usize>) -> Vec<Piece> {
                 }
             }
             // An escape or an entity inside a token belongs to its blank.
-            Event::Text(shown) if range.start >= part.start && !spans.iter().any(|span| span.start < range.end && span.end > range.start) => push(Piece::Text(shown.to_string())),
+            Event::Text(shown) if range.start >= part.start && from(range.start).next().is_none_or(|span| span.start >= range.end) => push(Piece::Text(shown.to_string())),
             Event::Code(shown) | Event::InlineHtml(shown) | Event::Html(shown) if range.start >= part.start => push(Piece::Text(shown.to_string())),
             Event::SoftBreak | Event::HardBreak if range.start >= part.start => push(Piece::Text(" ".to_owned())),
             _ => {}
@@ -108,15 +112,41 @@ pub fn shown_pieces(text: &str, part: Range<usize>) -> Vec<Piece> {
     pieces
 }
 
-/// Whether a block shows anything under its headings: any text or code. HTML, comments included, and blank lines show
-/// nothing.
+/// Where the first heading's own content sits in `text`, from the parse: without its `#` markers, a closing sequence
+/// of `#`, or comments after the last of its words.
+pub fn heading_content(text: &str) -> Option<Range<usize>> {
+    let mut parts: Vec<(Range<usize>, bool)> = Vec::new();
+    let mut inside = false;
+    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { .. }) if !inside => inside = true,
+            Event::End(TagEnd::Heading(_)) => break,
+            Event::InlineHtml(html) if inside => parts.push((range, only_comments(&html))),
+            _ if inside => parts.push((range, false)),
+            _ => {}
+        }
+    }
+    while parts.last().is_some_and(|(range, comment)| *comment || text[range.clone()].trim().is_empty()) {
+        parts.pop();
+    }
+    let (start, end) = (parts.first()?.0.start, parts.last()?.0.end);
+    let content = &text[start..end];
+    let start = start + (content.len() - content.trim_start().len());
+    Some(start..start + content.trim().len())
+}
+
+/// Whether a block shows anything under its headings: any text, code or HTML. Blank lines and HTML that holds only
+/// comments, which the Profile paper leaves out, show nothing.
 pub fn shows_content(text: &str) -> bool {
-    let mut in_heading = false;
+    let (mut in_heading, mut html) = (false, String::new());
     for event in Parser::new_ext(text, markdown::options()) {
         match event {
             Event::Start(Tag::Heading { .. }) => in_heading = true,
             Event::End(TagEnd::Heading(_)) => in_heading = false,
             Event::Text(_) | Event::Code(_) if !in_heading => return true,
+            Event::Html(part) => html.push_str(&part),
+            Event::End(TagEnd::HtmlBlock) if !only_comments(&std::mem::take(&mut html)) => return true,
+            Event::InlineHtml(part) if !in_heading && !only_comments(&part) => return true,
             _ => {}
         }
     }
@@ -135,11 +165,6 @@ fn tokens_in(text: &str, range: Range<usize>) -> impl Iterator<Item = Range<usiz
         taken = end;
         Some(start..end)
     })
-}
-
-/// The setup tokens in plain text, by the name rule alone, with no Markdown, such as for text a screen paints itself.
-pub fn line_placeholders(line: &str) -> Vec<Range<usize>> {
-    tokens_in(line, 0..line.len()).collect()
 }
 
 /// Whether the character at `at` is escaped by the backslashes before it.
@@ -242,7 +267,7 @@ fn matching_close(text: &str, from: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Piece, blank_words, line_placeholders, placeholder_count, placeholder_spans, shown_pieces, shows_content, token_name};
+    use super::{Piece, blank_words, heading_content, placeholder_count, placeholder_spans, shown_pieces, shows_content, token_name};
 
     /// The tokens the page shows, as written.
     fn found(text: &str) -> Vec<&str> {
@@ -387,8 +412,8 @@ mod tests {
     #[test]
     fn a_block_of_comments_shows_nothing() {
         assert!(!shows_content("## Goals\n<!-- What you want next -->\n\n<!--\n[GOAL_NAME]\n-->\n\n### Sub\n"));
-        // A line that opens with a comment is a block of HTML to its end, so it shows no text and counts nothing.
-        assert!(!shows_content("## Goals\n<!-- e.g. Ada --> [FIRST_NAME]\n"));
+        // A line that opens with a comment is a block of HTML to its end: the words after the comment show, but count nothing.
+        assert!(shows_content("## Goals\n<!-- e.g. Ada --> [FIRST_NAME]\n"));
         assert_eq!(placeholder_count("## Goals\n<!-- e.g. Ada --> [FIRST_NAME]\n"), 0);
         assert!(shows_content("## Goals\nRun `x`\n"));
         assert!(shows_content("## Goals\n- [GOAL_NAME]\n"));
@@ -405,10 +430,43 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_line_is_not_markdown() {
-        let line = "Lead - [COMPANY] (`[DATES]`)";
-        let found: Vec<&str> = line_placeholders(line).into_iter().map(|span| &line[span]).collect();
-        assert_eq!(found, ["[COMPANY]", "[DATES]"]);
+    fn a_code_token_in_a_role_heading_counts_and_shows_as_written() {
+        let text = "### Run `[YOUR_CITY]` - Acme (2020)";
+        assert_eq!(placeholder_count(text), 1);
+        let title = text.find("Run").unwrap()..text.find(" - ").unwrap();
+        assert_eq!(shown_pieces(text, title), [Piece::Text("Run [YOUR_CITY]".to_owned())]);
+    }
+
+    #[test]
+    fn a_heading_ends_before_its_closing_hashes_and_trailing_comments() {
+        for text in [
+            "### Lead Engineer - Calder Freight (2021 – present) ###\nShipped.",
+            "### Lead Engineer - Calder Freight (2021 – present) <!-- check dates -->\nShipped.",
+            "### Lead Engineer - Calder Freight (2021 – present)   <!-- a --> <!-- b --> ##",
+        ] {
+            assert_eq!(heading_content(text).map(|range| &text[range]), Some("Lead Engineer - Calder Freight (2021 – present)"), "{text}");
+        }
+        let text = "### Lead <!-- note --> Engineer - Acme (2020)";
+        assert_eq!(heading_content(text).map(|range| &text[range]), Some("Lead <!-- note --> Engineer - Acme (2020)"));
+        assert_eq!(heading_content("No heading here."), None);
+    }
+
+    /// Cutting a heading part costs time linear in the block's length, however many tokens it holds.
+    #[test]
+    fn a_heading_with_many_tokens_cuts_quickly() {
+        let text = format!("### {} - Acme (2020)", "[ROLE_NAME] ".repeat(20_000));
+        let started = std::time::Instant::now();
+        let pieces = shown_pieces(&text, 4..text.find(" - ").unwrap());
+        assert_eq!(pieces.iter().filter(|piece| matches!(piece, Piece::Blank(_))).count(), 20_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "cutting took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn html_that_shows_text_is_content() {
+        assert!(shows_content("## Identity\n<!-->Open to relocation: no [CITY_NAME]\n"));
+        assert!(shows_content("## Identity\n<!-- a --!> Visible\n-->\n"));
+        assert!(shows_content("## Identity\n<div>Lisbon</div>\n"));
+        assert!(!shows_content("## Identity\n<!---->\n<!-- Your name and city -->\n"));
     }
 
     #[test]

@@ -188,3 +188,25 @@ fn a_run_can_edit_a_profile_file_under_dot_claude() {
     assert_eq!(std::fs::read_to_string(&profile).unwrap().trim_end(), "Name: Alex");
     desk.close(&id);
 }
+
+/// Test connection on the Claude sign-in: one `claude -p` with no tools, capped at a cent, in an empty temporary folder.
+#[test]
+#[ignore = "calls the real Claude CLI"]
+fn test_connection_passes_on_the_claude_sign_in() {
+    use jobdesk::settings;
+    use jobdesk::settings::application::{Settings, SignIn};
+
+    let mut providers = settings::open_providers(settings::memory_keychain(None), settings::claude_tester(Arc::new(|| {})));
+    let mut preferences = Settings::unsaved();
+    providers.test_sign_in(false).unwrap();
+    let start = Instant::now();
+    while !providers.poll(&mut preferences, chrono::Local::now().naive_local()) {
+        assert!(start.elapsed() < LIMIT, "the test never ended");
+        sleep(Duration::from_millis(100));
+    }
+    let check = providers.sign_in_check().expect("a sign-in result");
+    println!("passed {} cost {} source {:?} said {:?}", check.passed, check.cost_usd, check.source, check.said);
+    assert!(check.passed, "{}", check.said);
+    assert!(check.cost_usd < 0.02, "capped at a cent: {}", check.cost_usd);
+    assert_eq!(preferences.preferences().sign_in, SignIn::ClaudeSignIn, "a sign-in test changes no method");
+}

@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::workspace::domain::{PortalInfo, ProfileFile, ProfileState, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus, placeholder_count};
+use crate::workspace::domain::{PortalInfo, ProfileFile, ProfileState, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
+use crate::shared_kernel::placeholders::placeholder_count;
 
 const ASSISTANT: &str = ".claude/skills/job-application-assistant";
 const PROFILE_FILES: [&str; 7] = [

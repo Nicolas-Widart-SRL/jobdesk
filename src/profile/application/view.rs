@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(section.children[0].role.as_ref().map(|role| role.dates.as_str()), Some("2021 – present"));
         assert_eq!(section.children[1].placeholders, 5);
         assert_eq!(section.children[0].key.parent.as_deref(), Some("Professional Experience"));
-        assert_eq!(topic(&view, TopicId::Education).fill, Fill::NotStarted);
+        assert_eq!(topic(&view, TopicId::Education).fill, Fill::ToFill(2));
         assert!(topic(&view, TopicId::Skills).missing_heading);
         assert!(topic(&view, TopicId::Statements).setup_line.is_none());
     }
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn front_matter_never_reaches_a_topic() {
-        let template = "---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## Working Style\n<!-- Describe how you work -->\n- **Pace:**\n";
+        let template = "---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## Working Style\n<!-- Describe how you work [PACE] -->\n";
         let view = view_of(&[(ProfileFile::Behavioral, template)]);
         let how = topic(&view, TopicId::HowIWork);
         assert_eq!(how.sections.len(), 1);

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use crate::profile::domain::document::{BlockKey, find, lines_with_endings};
-use crate::shared_kernel::placeholders::{placeholder_count, placeholder_spans};
+use crate::profile::domain::document::{BlockKey, find, heading_len};
+use crate::shared_kernel::placeholders::placeholder_count;
 
 /// How much of a topic the user has written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,13 +13,14 @@ pub enum Fill {
     Hidden,
 }
 
-/// `blocks` are the texts of the topic's top-level blocks.
-/// A topic is not started when it has no blocks or no line of its own that is not a placeholder.
+/// `blocks` are the texts of the topic's top-level blocks, each starting with its heading.
+/// A topic is not started when it has no blocks, or when each block holds only blank lines and comments under its heading.
+/// Otherwise it has as much left to fill as it has setup tokens.
 pub fn topic_fill(blocks: &[&str], readable: bool) -> Fill {
     if !readable {
         return Fill::Hidden;
     }
-    if !blocks.iter().any(|block| has_writing(block)) {
+    if blocks.iter().all(|block| body_is_empty(block)) {
         return Fill::NotStarted;
     }
     match blocks.iter().map(|block| open_placeholders(block)).sum() {
@@ -33,35 +34,9 @@ pub fn open_placeholders(block: &str) -> usize {
     placeholder_count(&without_comments(block))
 }
 
-/// Words a template puts between its tokens, as in `[DEGREE_LEVEL] in [FIELD]`.
-const GLUE: [&str; 12] = ["in", "at", "of", "and", "or", "to", "from", "for", "the", "a", "an", "with"];
-
-/// Whether a block holds a line the user wrote: one with words that are not a label, a token or the glue between tokens.
-/// A heading, a comment, a label with nothing after it, and a table's header, rule and border carry no writing.
-fn has_writing(block: &str) -> bool {
-    let text = without_comments(block);
-    let lines = lines_with_endings(&text);
-    lines.iter().enumerate().any(|(at, line)| {
-        let header = line.contains('|') && lines.get(at + 1).is_some_and(|next| is_table_rule(next));
-        !header && is_writing(line)
-    })
-}
-
-/// A line with a token counts when words of the user's own stand beside it, such as `Ada [LAST_NAME]`.
-fn is_writing(line: &str) -> bool {
-    if !is_content(line) || is_label_only(line) {
-        return false;
-    }
-    let spans = placeholder_spans(line);
-    if spans.is_empty() {
-        return true;
-    }
-    let mut rest = line.to_owned();
-    for span in spans.into_iter().rev() {
-        rest.replace_range(span, " ");
-    }
-    let words = rest.split_once(':').map_or(rest.as_str(), |(_, after)| after);
-    words.split(|c: char| !c.is_alphanumeric()).any(|word| !word.is_empty() && !GLUE.contains(&word.to_lowercase().as_str()))
+fn body_is_empty(block: &str) -> bool {
+    let body = &block[heading_len(block).min(block.len())..];
+    without_comments(body).trim().is_empty()
 }
 
 fn without_comments(text: &str) -> String {
@@ -76,23 +51,6 @@ fn without_comments(text: &str) -> String {
     }
     kept.push_str(rest);
     kept
-}
-
-fn is_content(line: &str) -> bool {
-    !line.trim_start().starts_with('#') && line.chars().any(char::is_alphanumeric)
-}
-
-/// `- **Languages:**` and `Skills:` name a field and say nothing yet.
-fn is_label_only(line: &str) -> bool {
-    let line = line.trim();
-    let line = ["- ", "* ", "+ "].iter().find_map(|marker| line.strip_prefix(marker)).unwrap_or(line);
-    line.trim_matches(['*', '_', ' ', '\t']).ends_with(':')
-}
-
-/// The line under a table's header row, such as `| --- | :-: |`.
-fn is_table_rule(line: &str) -> bool {
-    let line = line.trim();
-    line.contains('-') && line.contains('|') && line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
 }
 
 /// What a placeholder token reads as on screen, such as `to fill: first name` for `FIRST_NAME`.
@@ -134,39 +92,24 @@ mod tests {
     }
 
     #[test]
-    fn fill_follows_the_placeholders() {
-        assert_eq!(topic_fill(&["## Identity\n\n[FIRST_NAME] [LAST_NAME]\n| --- | --- |\n[EMAIL]\n"], true), Fill::NotStarted);
+    fn fill_follows_the_tokens_left() {
         assert_eq!(topic_fill(&[], true), Fill::NotStarted);
         assert_eq!(topic_fill(&["## Identity\nCity: Lisbon\nName: [FIRST_NAME] [LAST_NAME]\n"], true), Fill::ToFill(2));
+        assert_eq!(topic_fill(&["## Identity\n\n[FIRST_NAME] [LAST_NAME]\n"], true), Fill::ToFill(2));
         assert_eq!(topic_fill(&["## Identity\nName: Ada Quill\n"], true), Fill::Filled);
         assert_eq!(topic_fill(&["## Identity\nName: Ada Quill\n"], false), Fill::Hidden);
+        assert_eq!(topic_fill(&[], false), Fill::Hidden);
         assert_eq!(topic_fill(&["## A\n[PLACEHOLDER]\n", "## B\nwritten [X_Y]\nmore\n"], true), Fill::ToFill(2));
     }
 
     #[test]
-    fn comments_labels_and_table_headers_are_not_writing() {
-        let comment = "### Education\n<!-- List your degrees, most recent first -->\n- **[DEGREE_LEVEL] in [FIELD]** at [SCHOOL]\n";
-        assert_eq!(topic_fill(&[comment], true), Fill::NotStarted);
-        let many = "### Education\n<!--\nList your degrees,\nmost recent first\n-->\n- **[DEGREE_LEVEL] in [FIELD]**\n";
-        assert_eq!(topic_fill(&[many], true), Fill::NotStarted);
-        let labels = "### Identity\n- **Languages:**\n| Language | Level |\n| --- | :-: |\n";
-        assert_eq!(topic_fill(&[labels], true), Fill::NotStarted);
-        let loose = "### Identity\nSkills:\nLanguage | Level\n--- | ---\n";
-        assert_eq!(topic_fill(&[loose], true), Fill::NotStarted);
-        let written = "### Identity\n<!-- hint -->\n- **Languages:** English, French\n| Language | Level |\n| --- | --- |\n| English | Native |\n";
-        assert_eq!(topic_fill(&[written], true), Fill::Filled);
-        let lone = "### Identity\r<!-- hint -->\r- **Languages:**\r- [LANGUAGE]\r";
-        assert_eq!(topic_fill(&[lone], true), Fill::NotStarted);
-        let lone_written = "### Identity\r- **Languages:** English\r";
-        assert_eq!(topic_fill(&[lone_written], true), Fill::Filled);
-    }
-
-    #[test]
-    fn a_line_with_the_users_words_and_a_token_is_writing() {
-        let typed = "### Identity\n<!-- hint -->\n- **Name:** Ada [LAST_NAME]\n- **Languages:**\n";
-        assert_eq!(topic_fill(&[typed], true), Fill::ToFill(1));
-        let pristine = "### Identity\n<!-- hint -->\n- **Name:** [YOUR_NAME]\n- **[DEGREE_LEVEL] in [FIELD]** at [SCHOOL]\n- [ACHIEVEMENT]\n";
-        assert_eq!(topic_fill(&[pristine], true), Fill::NotStarted);
+    fn a_topic_with_only_comments_under_its_headings_is_not_started() {
+        assert_eq!(topic_fill(&["## Identity\n"], true), Fill::NotStarted);
+        assert_eq!(topic_fill(&["## Identity"], true), Fill::NotStarted);
+        assert_eq!(topic_fill(&["## Identity\n\n<!-- List your degrees, [DEGREE] first -->\n\n"], true), Fill::NotStarted);
+        assert_eq!(topic_fill(&["## Identity\n<!--\nmany\nlines [X_Y]\n-->\n", "### Education\r<!-- hint -->\r"], true), Fill::NotStarted);
+        assert_eq!(topic_fill(&["## Identity\n<!-- hint -->\n", "## Other\nSome text\n"], true), Fill::Filled);
+        assert_eq!(topic_fill(&["## Experience\n<!-- hint -->\n### Role\n"], true), Fill::Filled);
     }
 
     #[test]
@@ -175,6 +118,13 @@ mod tests {
         assert_eq!(topic_fill(&[text], true), Fill::Filled);
         assert_eq!(open_placeholders(text), 0);
         assert_eq!(open_placeholders("a [CITY]\n<!--\n[X_Y]\n-->\n"), 1);
+    }
+
+    #[test]
+    fn the_wider_token_shapes_count() {
+        let text = "## Experience\n- [RESPONSIBILITY_OR_ACHIEVEMENT_1]\n- [CONTEXT - what was happening]\n| [LEVEL, e.g. \"Native\" / \"C2\"] |\n[Jobdesk](https://x.example) [x][ref]\n- [ ] task\n";
+        assert_eq!(topic_fill(&[text], true), Fill::ToFill(3));
+        assert_eq!(open_placeholders(text), 3);
     }
 
     #[test]

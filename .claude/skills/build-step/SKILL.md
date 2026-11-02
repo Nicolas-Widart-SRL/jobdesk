@@ -35,11 +35,10 @@ You build one step in your own git worktree. Other builders work beside you in t
 2. Read the brief and the files it names. Find the other code the step touches with trail.
    Read several files in one turn when you can.
 3. Write the test first when the step has a testable rule.
-4. Make the change. Match the surrounding code: its names, idioms, comment density and hand formatting.
-   Never run `cargo fmt`.
+4. Make the change. Match the surrounding code: its names, idioms and comment density.
 5. Update `docs/guide.md` when the user sees a change, and `README.md` too when its pitch ("What it does"), install steps or privacy and trust statement change.
    Update `CONTRIBUTING.md` when the build, packaging, release or test commands change, and `ARCHITECTURE.md` when the features, layers, runtime or trust handling change.
-6. Run `scripts/check.sh`. It runs `cargo test` and prints one line. Fix every failure.
+6. Run `cargo fmt`, then `scripts/check.sh`. It checks formatting, runs the tests and clippy, and prints one line per check. Fix every failure.
    When a snapshot differs, read `tests/snapshots/<name>.diff.png` and `<name>.new.png`.
    If the change is meant, run `UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery`.
    Read each changed `<name>.png` beside its `<name>.old.png` (`git status tests/snapshots` lists them).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the CI checks in a checkout and prints one line per check.
 # On a failure it prints the shortest useful part of the output, not all of it.
-# Code is hand-formatted, so rustfmt does not run here.
+# fmt runs in check mode: run cargo fmt to fix a failure.
 #
 #   scripts/check.sh            check this checkout
 #   scripts/check.sh DIR        check the checkout at DIR, such as a builder's worktree
@@ -11,6 +11,14 @@ cd "${1:-.}" && cd "$(git rev-parse --show-toplevel)" || exit 1
 failed=0
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
+
+if cargo fmt --check >"$log" 2>&1; then
+  echo "fmt: ok"
+else
+  echo "fmt: FAIL, run cargo fmt"
+  grep -E '^Diff in' "$log" | head -10
+  failed=1
+fi
 
 if cargo test --quiet >"$log" 2>&1; then
   passed=$(grep -Eo '[0-9]+ passed' "$log" | awk '{s += $1} END {print s + 0}')

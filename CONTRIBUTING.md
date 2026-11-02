@@ -54,12 +54,26 @@ Screen tests render every screen in both themes from `tests/sample_workspace`, w
 UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery
 ```
 
+Miri runs in CI over the domain and application tests. To run it locally:
+
+```bash
+rustup +nightly component add miri rust-src
+cargo +nightly miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path
+```
+
+cargo-audit checks `Cargo.lock` in CI. To run it locally:
+
+```bash
+cargo install cargo-audit --locked
+cargo audit
+```
+
 Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 
 ## Before you commit
 
 - CI fails on any clippy warning: run `scripts/check.sh` before you commit.
-- Code is hand-formatted with no rustfmt config, so match the surrounding lines and skip `cargo fmt`.
+- `rustfmt.toml` sets the style: run `cargo fmt` before you commit. CI and `scripts/check.sh` fail on unformatted code.
 - Commit subjects follow Conventional Commits, because CI rejects others and git-cliff writes `CHANGELOG.md` from them.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the structure and the rules `tests/architecture.rs` enforces.

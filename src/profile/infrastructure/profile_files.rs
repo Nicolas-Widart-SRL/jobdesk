@@ -101,7 +101,7 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
         Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
         _ => {}
     }
-    let result = write_copy(&copy, target, text).and_then(|()| fs::rename(&copy, target));
+    let result = write_copy(&copy, target, |file| file.write_all(text.as_bytes())).and_then(|()| fs::rename(&copy, target));
     if result.is_err() {
         let _ = fs::remove_file(&copy);
     }
@@ -114,12 +114,12 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
 }
 
 /// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permission bits of `target`,
-/// set only once the text is in. Anything else tied to the old file is lost with it: its other hard links keep the old
-/// text, and its ACLs and extended attributes are not copied.
-fn write_copy(copy: &Path, target: &Path, text: &str) -> io::Result<()> {
+/// set only once `write` has put the text in. Anything else tied to the old file is lost with it: its other hard links
+/// keep the old text, and its ACLs and extended attributes are not copied.
+fn write_copy(copy: &Path, target: &Path, write: impl FnOnce(&mut fs::File) -> io::Result<()>) -> io::Result<()> {
     let kept = fs::metadata(target).ok().map(|metadata| metadata.permissions());
     let mut file = create_copy(copy, kept.is_some())?;
-    file.write_all(text.as_bytes())?;
+    write(&mut file)?;
     if let Some(permissions) = kept {
         file.set_permissions(permissions)?;
     }
@@ -261,26 +261,45 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
-    /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then.
+    /// Puts the process umask back when dropped, even when the test fails.
+    #[cfg(unix)]
+    struct Umask(libc::mode_t);
+
+    #[cfg(unix)]
+    impl Drop for Umask {
+        fn drop(&mut self) {
+            // SAFETY: umask takes a mask and always succeeds.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+
+    /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then. The
+    /// umask is `022` for the write, so a copy opened with the default mode would read `644`, not `600`, whatever the
+    /// umask of the shell. Files other tests make meanwhile may get `022` too, and none of them checks a default mode.
     #[cfg(unix)]
     #[test]
     fn the_copy_is_private_until_its_text_is_in() {
         use std::os::unix::fs::PermissionsExt;
         let (dir, _) = files();
-        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        let copy = dir.path().join("01-candidate-profile.md.jobdesk-save");
-        let mut file = create_copy(&copy, true).unwrap();
-        assert_eq!(mode(&copy), 0o600);
-        file.write_all(b"new").unwrap();
-        assert_eq!(mode(&copy), 0o600);
-        drop(file);
-        fs::remove_file(&copy).unwrap();
-        // The target's own bits come back once the text is in.
         let target = dir.path().join("01-candidate-profile.md");
         fs::write(&target, "old").unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
-        write_copy(&copy, &target, "new").unwrap();
-        assert_eq!(mode(&copy), 0o640);
+        let copy = dir.path().join("01-candidate-profile.md.jobdesk-save");
+        let mut while_written = Vec::new();
+        {
+            // SAFETY: umask takes a mask and always succeeds.
+            let _umask = Umask(unsafe { libc::umask(0o022) });
+            write_copy(&copy, &target, |file| {
+                while_written.push(file.metadata()?.permissions().mode() & 0o777);
+                file.write_all(b"new")?;
+                while_written.push(file.metadata()?.permissions().mode() & 0o777);
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(while_written, [0o600, 0o600]);
+        // The target's own bits come back once the text is in.
+        assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o640);
         assert_eq!(fs::read_to_string(&copy).unwrap(), "new");
     }
 

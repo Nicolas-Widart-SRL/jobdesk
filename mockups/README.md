@@ -4,7 +4,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 ## Building a canvas
 
-`Grid.html` and `UiPass.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.up`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
+`Grid.html`, `UiPass.html` and `Profile.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.up`, `.pf`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
 
 ## Canvases
 
@@ -12,6 +12,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | --- | --- | --- | --- |
 | `Grid.html` | `?screen=today\|jobs\|tracker\|turn\|firstrun&theme=light\|dark` | 6 `Grid-*.png` | [look](handoff/look.md), [today](handoff/today.md), [tasks](handoff/tasks.md) |
 | `UiPass.html` | `?scene=states\|jobs\|failed\|loading\|empty&theme=light\|dark` | 6 `UiPass-*.png` | [ui-pass](handoff/ui-pass.md) |
+| `Profile.html` | `?state=view\|edit\|busy\|conflict\|empty\|loading\|failed\|updated\|setup&theme=light\|dark` | 10 `Profile-*.png` | [profile](handoff/profile.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
 
 ## Handoff files
@@ -20,6 +21,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **Today**: the head and day stamp, the deal card, Done today and Coming up, the other states, motion and accessibility → see [handoff/today.md](handoff/today.md). Open it when you change the Today screen.
 - **Tasks**: the head, the turn band, the question bar, the run's story and the side column → see [handoff/tasks.md](handoff/tasks.md). Open it when you change the Tasks screen or how a run asks for the user.
 - **UI pass**: the rules for hover, selected, pressed, disabled, links, copyable text, and loading, failed and empty states → see [handoff/ui-pass.md](handoff/ui-pass.md). Open it before adding or changing a clickable widget or an empty, loading or failed state.
+- **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature and doc changes → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen or how Jobdesk writes profile files.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
 
 A new round writes or updates one handoff file per screen or topic it changes, its canvas's row in the Canvases table, and its line under Handoff files (`.claude/agents/designer.md` step 6).

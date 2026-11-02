@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Profile</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* Profile: the candidate's profile, read by topic and edited one block at a time. A topic rail beside one topic on paper.
+   Choose with ?state=view|edit|busy|conflict|empty|loading|failed|updated|setup and ?theme=light|dark.
+   setup draws the Setup screen, to show its Profile panel shrunk to one summary line.
+   Grid.html's scoped shell, copied under .pf, so app.css and the other canvases are unchanged. Fictional data only. */
+body { margin: 0; }
+.pf {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.pf[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.pf .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; position: relative; }
+.pf .num { font-variant-numeric: tabular-nums; }
+
+/* Shell, as Grid.html draws it. Profile sits before Setup. */
+.pf .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.pf .menu .brand { margin-right: 0; }
+.pf .menu .brand svg path:last-child { stroke: var(--sheet); }
+.pf .tabs { display: flex; gap: 6px; }
+.pf .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.pf .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.pf .tabs a.on { color: var(--text); font-weight: 600; }
+.pf .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.pf .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.pf .failsq { display: inline-block; width: 8px; height: 8px; background: var(--closed); }
+.pf .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.pf .newtask .keys { color: var(--muted); }
+.pf .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.pf .statusbar .seg { margin-left: auto; border: 0; }
+.pf .statusbar .seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 12.5px; }
+.pf .statusbar .seg button.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.pf .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Controls, as UiPass.html draws them: opaque, disabled at half ink over the rest fill. */
+.pf .b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; white-space: nowrap; position: relative; }
+.pf .b.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.pf .b.pri { background: var(--pri); border-color: var(--pri); color: var(--on-pri); }
+.pf .b.bad { color: var(--closed); border-color: var(--closed); }
+.pf .b.on { background: var(--text); border-color: var(--text); color: var(--sheet); }
+.pf .b .keys { color: inherit; opacity: 1; font: 500 13px/1 "Schibsted Grotesk", system-ui, sans-serif; }
+.pf .b.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
+.pf .b.pri.dis { background: color-mix(in srgb, var(--pri) 50%, var(--card)); border-color: transparent; color: var(--card); }
+.pf .b.onpanel { background: var(--panel); }
+.pf .b.onpanel.dis { color: color-mix(in srgb, var(--text) 50%, var(--panel)); border-color: color-mix(in srgb, var(--line) 50%, var(--panel)); }
+.pf .b.pri.onpanel.dis { background: color-mix(in srgb, var(--pri) 50%, var(--panel)); color: var(--panel); }
+.pf .lk { display: inline-flex; align-items: center; height: 24px; color: var(--active); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.pf .tip { position: absolute; z-index: 5; max-width: 260px; padding: 6px 9px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); color: var(--text); font-size: 13px; line-height: 1.4; white-space: normal; }
+.pf .ptr { position: absolute; z-index: 6; width: 18px; height: 22px; pointer-events: none; }
+.pf .path { font: 400 13px/1.3 var(--type); }
+
+/* Page head on the grid. */
+.pf .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
+.pf .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.pf .phead .sub { margin-top: 2px; color: var(--muted); }
+.pf .bbody { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 0 32px 14px; }
+
+/* The topic rail: a slip of pickable rows, grouped by what the topic is for. */
+.pf .rail { flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0; border-radius: 4px; background: var(--panel); }
+.pf .rail .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 4px; font: 600 17px/1.3 var(--slab); }
+.pf .rail .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.pf .rail .tl { display: flex; gap: 3px; padding: 4px 14px 10px; border-bottom: 1px solid var(--line); }
+.pf .rail .tl i { display: block; width: 6px; height: 18px; background: var(--text); }
+.pf .rail .tl i.f { background: var(--interview); }
+.pf .rail .tl i.x { background: var(--closed); }
+.pf .rail .tl i.o { background: var(--off); }
+.pf .gt { padding: 10px 14px 3px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.pf .tr { flex: none; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 6px; padding: 0 8px; border-radius: 3px; }
+.pf .tr .t { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf .tr .s { flex: none; font-size: 13px; color: var(--muted); }
+.pf .tr .s.f { color: var(--interview); font-weight: 600; }
+.pf .tr .s.x { color: var(--closed); font-weight: 600; }
+.pf .tr.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); font-weight: 600; }
+.pf .tr.on .s { font-weight: 600; }
+.pf .rail .rfoot { margin-top: auto; padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+
+/* The topic on paper: a head with the topic's actions, the scrolling document, a footnote strip. */
+.pf .sheetp { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.pf .dh { flex: none; display: flex; align-items: flex-start; gap: 16px; padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
+.pf .dh h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.pf .dh p { margin-top: 3px; color: var(--muted); }
+.pf .dh .acts { margin-left: auto; display: flex; gap: 6px; padding-top: 4px; }
+.pf .dscroll { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; padding: 0 22px; }
+.pf .bar-y { position: absolute; top: 6px; right: 4px; width: 6px; height: 46%; border-radius: 3px; background: var(--line); }
+.pf .dfoot { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px 9px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); }
+.pf .dfoot .path { font-size: 12.5px; }
+.pf .dfoot .r { margin-left: auto; color: var(--muted); }
+
+/* A role: dates in a fixed column, then title, company and the bullets, with Edit at the paper's right edge. */
+.pf .role { display: grid; grid-template-columns: 115px minmax(0, 620px) minmax(0, 1fr) auto; column-gap: 0; padding: 14px 0 12px; border-top: 1px solid var(--line); }
+.pf .role:first-child { border-top: 0; }
+.pf .role .when { grid-column: 1; padding-top: 3px; font-size: 13px; color: var(--muted); line-height: 1.35; }
+.pf .role .what { grid-column: 2; }
+.pf .role .ed-b { grid-column: 4; align-self: start; }
+.pf .role h3 { margin: 0; font: 600 17px/1.3 var(--slab); }
+.pf .role .co { color: var(--muted); }
+.pf .role ul, .pf .tdoc ul { margin: 6px 0 0; padding: 0; list-style: none; font-size: 15px; line-height: 1.5; }
+.pf .role li, .pf .tdoc li { position: relative; padding-left: 18px; margin-bottom: 2px; }
+.pf .role li::before, .pf .tdoc li::before { content: ""; position: absolute; left: 4px; top: .66em; width: 5px; height: 5px; background: currentColor; }
+/* A placeholder reads as a blank to fill: warning ink, semibold, underlined. */
+.pf .blank { color: var(--interview); font-weight: 600; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.pf .addrow { padding: 10px 0 18px 115px; border-top: 1px solid var(--line); }
+
+/* The block editor: a slip in place of the block, a field of plain Markdown, Save and Cancel under it. */
+.pf .role.editing { grid-template-columns: minmax(0, 1fr); padding: 12px 0; }
+.pf .ed { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; border-radius: 4px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.pf .ed .top { display: flex; align-items: center; gap: 10px; }
+.pf .ed .top b { font-weight: 600; }
+.pf .ed .top .acts { margin-left: auto; display: flex; gap: 6px; }
+.pf .area { position: relative; min-height: 180px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--field); white-space: pre-wrap; font-size: 14px; line-height: 1.55; }
+.pf .area.foc { border-color: var(--text); outline: 2px solid var(--active); outline-offset: 1px; }
+.pf .area .md { color: var(--muted); }
+.pf .area .ph { color: var(--interview); font-weight: 600; }
+.pf .caret { display: inline-block; width: 1.5px; height: 17px; margin-left: 1px; vertical-align: -3px; background: var(--text); }
+.pf .ed .foot { display: flex; align-items: center; gap: 8px; }
+.pf .ed .foot .note { margin-left: 8px; font-size: 13px; color: var(--muted); }
+.pf .ed .foot .r { margin-left: auto; font-size: 13px; color: var(--muted); }
+/* Changed on disk: a warning box at the top of the editor, the file's new text under it, plain and copyable. */
+.pf .warnbox { display: flex; flex-direction: column; gap: 8px; margin-right: 5px; padding: 11px 14px 12px; border: 1px solid var(--interview); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--interview); }
+.pf .warnbox .wt { font-weight: 600; color: var(--interview); }
+.pf .theirs { padding: 8px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); white-space: pre-wrap; font-size: 13.5px; line-height: 1.5; }
+.pf .theirs .new { box-shadow: inset 3px 0 0 var(--interview); padding-left: 11px; margin-left: -11px; display: block; }
+.pf .busyline { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+
+/* Empty topic: the shared empty state at the top of the paper, then the topic's outline with its blanks, faded. */
+.pf .empty { display: flex; flex-direction: column; gap: 12px; max-width: 560px; padding: 24px 0 18px; }
+.pf .empty h3 { margin: 0; font: 600 19px/1.25 var(--slab); }
+.pf .empty p { color: var(--muted); line-height: 1.45; font-size: 15px; }
+.pf .empty .row { gap: 10px; }
+.pf .outline { padding: 14px 0 0; border-top: 1px solid var(--line); opacity: .8; }
+.pf .outline .ot { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.pf .tdoc { max-width: 620px; font-size: 15px; line-height: 1.5; }
+.pf .tdoc h4 { margin: 12px 0 2px; font: 600 17px/1.3 var(--slab); }
+.pf .tdoc p { margin: 0 0 4px; }
+.pf .code { padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.3 var(--type); white-space: pre; }
+
+/* Loading and failed. */
+.pf .sk { display: block; height: 12px; border-radius: 2px; background: var(--raised); }
+.pf .alert { flex: none; display: flex; align-items: flex-start; gap: 16px; margin: 0 37px 12px 32px; padding: 12px 16px; border: 1px solid var(--closed); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--closed); }
+.pf .alert .at { color: var(--closed); font-weight: 600; }
+
+/* Updated by the last task: an outlined tag in active ink on the rail row, and one line in the paper head. */
+.pf .tr .tag, .pf .dh .tag { height: 20px; padding: 0 6px; font-size: 12.5px; }
+.pf .dh .upd { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+
+/* Setup, as built: page actions, the promise line, panels on paper and slips beside them. */
+.pf .sbody { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; row-gap: 16px; align-content: start; padding: 0 32px 14px; overflow: hidden; }
+.pf .promise { flex: none; padding: 0 32px 14px; color: var(--muted); }
+.pf .pnl { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.pf .slp { border-radius: 4px; background: var(--panel); }
+.pf .ph2 { display: flex; align-items: baseline; gap: 12px; padding: 11px 16px 10px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.pf .ph2 .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.pf .lr { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 16px; border-top: 1px solid var(--line); }
+.pf .lr:first-of-type { border-top: 0; }
+.pf .lr .r { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.pf .lr .m { color: var(--muted); }
+.pf .sum { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
+.pf .sum .tl { display: flex; gap: 3px; }
+.pf .sum .tl i { display: block; width: 6px; height: 18px; background: var(--text); }
+.pf .sum .tl i.f { background: var(--interview); }
+.pf .sum .r { margin-left: auto; }
+
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const STATE = (P.get('state') || 'view').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
+const B = (t, cls = '') => `<span class="b ${cls}">${t}</span>`;
+const blank = (hint) => `<span class="blank">${hint ? `to fill: ${hint}` : 'to fill'}</span>`;
+
+function shell(inner, o = {}) {
+  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', ''], ['Profile', ''], ['Setup', '']]
+    .map(([t, c]) => `<a class="${t === (o.tab || 'Profile') ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}${t === 'Profile' && o.failed ? '<span class="failsq" title="Part of your profile could not be read"></span>' : ''}</a>`).join('');
+  return `<div class="app pf" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar"><span><span class="sq" style="background: var(--hired)"></span>Claude is ready</span>
+      <div class="seg"><button type="button">System</button><button type="button" class="${THEME === 'light' ? 'on' : ''}">Light</button><button type="button" class="${THEME === 'dark' ? 'on' : ''}">Dark</button></div></footer></div>`;
+}
+
+const head = (sub) => `<header class="phead"><div><h1>Profile</h1><div class="sub">${sub}</div></div></header>`;
+const SUB = 'Sample Candidate. Claude reads this before it scores a job or writes a CV or a letter.';
+
+// Topics, grouped by what they are for. s: filled | number to fill | 'new' | 'x' (unreadable).
+function topics(o = {}) {
+  return [
+    ['On your CV', [
+      ['Identity and languages', o.cvx ? 'x' : 'filled'],
+      ['Experience', o.cvx ? 'x' : 2],
+      ['Education', o.cvx ? 'x' : 'filled'],
+      ['Skills', o.cvx ? 'x' : 1],
+      ['Projects and publications', o.cvx ? 'x' : 'filled'],
+      ['References', o.cvx ? 'x' : 'filled'],
+      ['Profile statements', 'filled'],
+    ]],
+    ['What guides Claude', [
+      ['How I work', 'filled'],
+      ['Goals and deal-breakers', o.goalsNew ? 'new' : 'filled'],
+      ['Interview stories', 3],
+      ['Job search', 'filled'],
+    ]],
+  ];
+}
+const stateWord = (s) => s === 'filled' ? ['', 'Filled'] : s === 'new' ? ['f', 'Not started'] : s === 'x' ? ['x', 'Hidden'] : ['f', `${s} to fill`];
+
+function rail(on, o = {}) {
+  const upd = o.updated || [];
+  const groups = topics(o);
+  const all = groups.flatMap(([, list]) => list);
+  const filled = all.filter(([, s]) => s === 'filled').length;
+  const marks = all.map(([, s]) => `<i class="${s === 'filled' ? '' : s === 'x' ? 'x' : 'f'}"></i>`).join('');
+  const rows = groups.map(([g, list]) => `<div class="gt">${g}</div>` + list.map(([t, s]) => {
+    const [cls, w] = stateWord(s);
+    const tag = upd.includes(t) ? '<span class="tag c-active" title="Updated by the last task. Open the topic to see it.">Updated</span>' : '';
+    return `<div class="tr${t === on ? ' on' : ''}"><span class="t">${t}</span>${tag}<span class="s ${cls}">${w}</span></div>`;
+  }).join('')).join('');
+  return `<aside class="rail" aria-label="Topics"><div class="sh">Topics <span class="n num">${filled} of ${all.length} filled</span></div>
+    <div class="tl" role="img" aria-label="${filled} of ${all.length} topics filled">${marks}</div>${rows}
+    ${o.cvx ? '' : '<div class="rfoot">Each topic saves to your job search folder. Claude reads the change on its next task.</div>'}</aside>`;
+}
+
+// Experience, as roles.
+const ROLES = [
+  ['2021 – present', 'Lead Software Engineer', 'Calder Freight, Antwerp. Freelance.', [
+    'Leads a team of six building the route-planning platform for 40 depots.',
+    'Moved nightly batch planning to event streams, so plans now update within a minute.',
+    `Budget or headcount you owned: ${blank()}`]],
+  ['2017 – 2021', 'Senior Backend Engineer', 'Wren Health, Ghent', [
+    'Built the appointment service used by 120 clinics, at 99.95% uptime over three years.',
+    'Mentored four engineers, two of whom now lead teams.']],
+  ['2014 – 2017', 'Software Engineer', 'Pemberton Labs, Leuven', [
+    'Wrote the data import tools for a lab-sample tracking product.',
+    `Result you are proudest of: ${blank()}`]],
+  ['2011 – 2014', 'Junior Developer', 'Fable and Finch Studio, Brussels', [
+    'Built booking sites for small hotels and cultural venues.']],
+];
+
+function role([when, title, co, bullets], o = {}) {
+  return `<article class="role"><div class="when num">${when}</div>
+    <div class="what"><h3>${title}</h3><div class="co">${co}</div><ul>${bullets.map((b) => `<li>${b}</li>`).join('')}</ul></div>
+    <div class="ed-b">${B('Edit', 'sm' + (o.dis ? ' dis' : ''))}</div></article>`;
+}
+
+const SOURCE = `<span class="md">###</span> Lead Software Engineer - Calder Freight (2021 – present)
+
+Antwerp. Freelance.
+
+<span class="md">-</span> Leads a team of six building the route-planning platform for 40 depots.
+<span class="md">-</span> Moved nightly batch planning to event streams, so plans now update within a minute.
+<span class="md">-</span> Budget or headcount you owned: EUR 1.2M a year, eight people at the peak<span class="caret"></span>`;
+
+function editor(o = {}) {
+  const busy = o.busy, conflict = o.conflict;
+  const warn = conflict ? `<div class="warnbox" role="group" aria-label="This role changed while you were editing">
+      <div><span class="wt">This role changed while you were editing.</span> A task added a line to it. Your text below is not saved yet.</div>
+      <div class="theirs"><span class="muted" style="font-size: 12.5px">Now in the file, the end of this role</span>
+- Budget or headcount you owned: [PLACEHOLDER]
+<span class="new">- Introduced a weekly planning review with depot managers.</span></div>
+      <div class="row" style="gap: 6px">${B('Use the new version', 'sm')}<span class="muted" style="font-size: 13px; margin-left: 6px">Replaces your text with the file's. To keep both, copy the new line into your text, then save.</span></div></div>` : '';
+  const foot = busy
+    ? `<div class="foot" style="position: relative">${B('Save <span class="keys">Cmd Enter</span>', 'pri onpanel dis')}${B('Cancel <span class="keys">Esc</span>', 'onpanel')}
+        <span class="busyline"><span class="sq" style="background: var(--active); margin: 0"></span>A task is running, so Save waits until it ends. Your text stays here.</span>
+        <div class="tip" style="left: 30px; top: 44px">A task is running and may change this file. Save once it ends.</div>${ARROW(60, 14)}</div>`
+    : `<div class="foot">${conflict ? B('Save mine over it <span class="keys">Cmd Enter</span>', 'bad onpanel') : B('Save <span class="keys">Cmd Enter</span>', 'pri')}${B('Cancel <span class="keys">Esc</span>', 'onpanel')}
+        <span class="note">${conflict ? 'Your text replaces the role as it is now in the file.' : 'Only this role changes. The rest of the file stays as it is.'}</span><span class="r">Unsaved changes</span></div>`;
+  return `<article class="role editing"><div class="ed" role="group" aria-label="Editing Lead Software Engineer">
+    <div class="top"><b>Edit this role</b><span class="muted" style="font-size: 13px">Markdown. Placeholders read [PLACEHOLDER].</span>
+      <span class="acts">${B('Preview', 'sm onpanel')}</span></div>
+    ${warn}
+    <div class="area foc" style="${conflict ? 'min-height: 0' : ''}">${SOURCE}</div>
+    ${foot}</div></article>`;
+}
+
+function paper(body, o = {}) {
+  const upd = o.noClaude ? '' : B('Update with Claude…', 'sm' + (o.busy ? ' dis' : ''));
+  const edit = B('Edit section', 'sm' + (o.editing ? ' dis' : ''));
+  return `<section class="sheetp" aria-label="${o.title}">
+    <header class="dh"><div><h2>${o.title}</h2><p>${o.lead}</p>${o.updated ? `<div class="upd"><span class="tag c-active">Updated</span>${o.updated}</div>` : ''}</div><div class="acts">${o.noEdit ? '' : edit}${upd}</div></header>
+    <div class="dscroll">${body}${o.bar === false ? '' : '<span class="bar-y"></span>'}</div>
+    <footer class="dfoot"><span>Kept in <span class="path">${o.file}</span>, under ${o.under}</span><span class="r">${o.right || ''}</span></footer></section>`;
+}
+
+function a_view() {
+  const body = ROLES.map((r) => role(r)).join('') + `<div class="addrow">${B('Add a role', 'sm')}</div>`;
+  return shell(`${head(SUB)}<div class="bbody">${rail('Experience')}
+    ${paper(body, { title: 'Experience', lead: '4 roles, newest first. Claude picks from these for each CV.', file: '01-candidate-profile.md', under: 'Professional Experience', right: '2 to fill in this topic' })}</div>`);
+}
+
+function a_edit(o = {}) {
+  const body = editor(o) + ROLES.slice(1).map((r) => role(r, { dis: true })).join('');
+  return shell(`${head(SUB)}<div class="bbody">${rail('Experience')}
+    ${paper(body, { title: 'Experience', lead: '4 roles, newest first. Claude picks from these for each CV.', file: '01-candidate-profile.md', under: 'Professional Experience', right: o.conflict ? 'Changed on disk 1 minute ago' : '2 to fill in this topic', editing: true, busy: o.busy })}</div>`);
+}
+
+function a_empty() {
+  const body = `<div class="empty"><h3>Not filled in yet</h3>
+      <p>Claude asks what you want next, what you will not accept and how far you will travel, then writes it here. It takes about ten minutes, and you can change any of it afterwards.</p>
+      <div class="row">${B('Update with Claude…', 'pri')}${B('Write it myself')}</div>
+      <div class="col" style="gap: 4px"><span class="lk">Hide the command</span><div class="code" style="align-self: flex-start">/setup --section goals</div></div></div>
+    <div class="outline"><div class="ot">What this topic holds</div><div class="tdoc">
+      <h4>Career goals</h4><p>${blank('the role you want next')}</p><p>${blank('where you want to be in three years')}</p>
+      <h4>Motivation filters</h4><ul><li>${blank('what makes a job worth it')}</li><li>${blank()}</li></ul>
+      <h4>Deal-breakers</h4><ul><li>${blank('what you will not accept')}</li></ul>
+      <h4>Commute</h4><p>${blank('how far, and how often')}</p></div></div>`;
+  return shell(`${head(SUB)}<div class="bbody">${rail('Goals and deal-breakers', { goalsNew: true })}
+    ${paper(body, { title: 'Goals and deal-breakers', lead: 'What you want, and what rules a job out. Claude scores every job against it.', file: '04-job-evaluation.md', under: 'Career Goals, Motivation Filters and Commute', right: '9 to fill', noEdit: true, bar: false })}</div>`);
+}
+
+function a_loading() {
+  const sk = (w, extra = '') => `<span class="sk" style="width: ${w}px; ${extra}"></span>`;
+  const rows = [150, 96, 120, 80, 170, 110, 140].map((w) => `<div class="tr">${sk(w)}<span style="margin-left: auto">${sk(44)}</span></div>`).join('');
+  const rows2 = [100, 160, 130, 96].map((w) => `<div class="tr">${sk(w)}<span style="margin-left: auto">${sk(44)}</span></div>`).join('');
+  const roleSk = () => `<article class="role"><div class="when">${sk(80)}</div><div class="what" style="display: flex; flex-direction: column; gap: 8px">${sk(240, 'height: 16px')}${sk(180)}${sk(520)}${sk(460)}${sk(380)}</div><div></div></article>`;
+  return shell(`${head('Reading your profile…')}<div class="bbody">
+    <aside class="rail" aria-label="Topics"><div class="sh">Topics</div><div class="tl">${Array.from({ length: 11 }, () => '<i class="o"></i>').join('')}</div>
+      <div class="gt">On your CV</div>${rows}<div class="gt">What guides Claude</div>${rows2}</aside>
+    <section class="sheetp"><header class="dh"><div style="display: flex; flex-direction: column; gap: 10px; padding-top: 6px">${sk(220, 'height: 22px')}${sk(380)}</div></header>
+      <div class="dscroll">${roleSk()}${roleSk()}${roleSk()}</div></section></div>`);
+}
+
+function a_failed() {
+  const body = `<div class="empty"><h3>Your experience is hidden, not gone</h3>
+      <p>Jobdesk could not read the file that holds it, so this topic and five others are not shown. Nothing in the file was changed. Jobdesk reads it again as soon as the file changes.</p></div>`;
+  return shell(`${head(SUB)}
+    <div class="alert" role="alert"><div><div class="at">Part of your profile could not be read.</div>
+      <div><span class="path">01-candidate-profile.md</span>: not UTF-8 text. Open it in a text editor and save it as UTF-8.</div>
+      <div class="muted">The other topics still show, and every task still runs.</div></div></div>
+    <div class="bbody">${rail('Experience', { cvx: true })}
+    ${paper(body, { title: 'Experience', lead: 'Roles, newest first. Claude picks from these for each CV.', file: '01-candidate-profile.md', under: 'Professional Experience', noEdit: true, bar: false, busy: true })}</div>`, { failed: true });
+}
+
+// After a task changed two topics. Experience is open, so its rail mark has cleared and its head says what changed.
+function a_updated() {
+  const roles = ROLES.map((r, i) => i === 0 ? [r[0], r[1], r[2], [r[3][0], r[3][1], 'Introduced a weekly planning review with depot managers.', r[3][2]]] : r);
+  const body = roles.map((r) => role(r)).join('') + `<div class="addrow">${B('Add a role', 'sm')}</div>`;
+  return shell(`${head(SUB)}<div class="bbody">${rail('Experience', { updated: ['Identity and languages'] })}
+    ${paper(body, { title: 'Experience', lead: '4 roles, newest first. Claude picks from these for each CV.', file: '01-candidate-profile.md', under: 'Professional Experience', right: '2 to fill in this topic',
+      updated: 'by the last task, 4 minutes ago. It changed one role: Lead Software Engineer.' })}</div>`);
+}
+
+// Setup, with its Profile panel shrunk to one summary line. The other panels are as built.
+function a_setup() {
+  const marks = topics().flatMap(([, list]) => list).map(([, s]) => `<i class="${s === 'filled' ? '' : 'f'}"></i>`).join('');
+  const tool = (n, note, t, tone) => `<div class="lr"><span class="path">${n}</span><span class="r"><span class="m">${note}</span><span class="tag c-${tone}">${t}</span></span></div>`;
+  const portal = (n, seen, on) => `<div class="lr"><span>${n}</span><span class="r"><span class="m num">${seen}</span><span class="tag c-${on ? 'hired' : 'plain'}">${on ? 'Enabled' : 'Disabled'}</span></span></div>`;
+  return shell(`<header class="phead" style="align-items: center"><div><h1>Setup</h1><div class="sub path">ai-job-search</div></div>
+      <div class="row" style="margin-left: auto; gap: 10px">${B('Look for more in your documents…')}${B('Change folder')}</div></header>
+    <div class="promise">Jobdesk changes your folder only when you save an edit on the Profile screen. Everything else changes through a task you start, with Claude Code on this computer.</div>
+    <div class="sbody">
+      <section class="pnl" aria-label="Profile"><div class="ph2">Profile <span class="n path">.claude/skills/job-application-assistant</span></div>
+        <div class="sum"><span class="tl" role="img" aria-label="8 of 11 topics filled">${marks}</span><span><b class="num">8 of 11</b> topics filled</span><span class="r">${B('Open Profile', 'sm')}</span></div></section>
+      <section class="slp" aria-label="Environment" style="grid-row: span 2"><div class="ph2">Environment <span class="n num">4 of 5 ready</span></div>
+        ${tool('claude', '1.0', 'Ready', 'hired')}${tool('python3', 'State tools', 'Ready', 'hired')}
+        <div class="lr"><span>Job site search: missing bun</span><span class="r"><span class="tag c-closed">Missing</span></span></div>
+        ${tool('lualatex', 'CV', 'Ready', 'hired')}${tool('xelatex', 'Cover letter', 'Ready', 'hired')}${tool('pdftotext', 'Layout check', 'Optional', 'plain')}${tool('salary_data.json', 'Salary figures', 'Optional', 'plain')}
+        <div style="padding: 10px 16px 14px">${B('Check again', 'sm onpanel')}</div></section>
+      <section class="pnl" aria-label="Portals"><div class="ph2">Portals <span class="n path">.agents/skills</span></div>
+        ${portal('LinkedIn', '412', true)}${portal('Freehire', '96', true)}${portal('Regional Jobs Board', '38', true)}${portal('Sample Tech Careers', '0', false)}
+        <div class="row" style="gap: 8px; padding: 10px 16px 14px">${B('Check portal health…', 'sm')}${B('Add portal…', 'sm')}</div></section>
+    </div>`, { tab: 'Setup' });
+}
+
+const A = { view: a_view, edit: () => a_edit(), busy: () => a_edit({ busy: true }), conflict: () => a_edit({ conflict: true }), empty: a_empty, loading: a_loading, failed: a_failed, updated: a_updated, setup: a_setup };
+const pick = A[STATE] || a_view;
+document.getElementById('root').innerHTML = pick();
+</script>
+</body>
+</html>

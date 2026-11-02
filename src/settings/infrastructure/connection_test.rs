@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::settings::domain::{ConnectionTester, Outcome, TestDone, TestReport, redacted};
+use crate::settings::domain::{ConnectionTester, Outcome, TestDone, TestReport};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, own_group};
-use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY};
+use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, redacted};
 
 const PROMPT: &str = "Reply with the single word: ready";
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -156,6 +156,8 @@ fn command_for(claude: &Path, folder: &Path, path: &str, key: Option<&ApiKey>) -
     // Without a key the environment stays as a task on the Claude sign-in has it, and the init line says what was used.
     if let Some(key) = key {
         command.env(KEY_VARIABLE, key.expose());
+        // The test starts no tools, but if the CLI starts a hook or an MCP server it keeps the key out of their environment.
+        command.env("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1");
         for name in ENV_THAT_OUTRANKS_THE_KEY {
             command.env_remove(name);
         }
@@ -418,6 +420,7 @@ mod tests {
         );
         assert!(!args(&command).iter().any(|arg| arg.contains("sk-ant") || arg.contains("R2kd")), "no key on the command line");
         assert_eq!(env(&command, KEY_VARIABLE), Some(Some(OsStr::new(FAKE))));
+        assert_eq!(env(&command, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), Some(Some(OsStr::new("1"))), "as a task's");
         for name in ENV_THAT_OUTRANKS_THE_KEY {
             assert_eq!(env(&command, name), Some(None), "{name} could outrank the key");
         }

@@ -540,7 +540,7 @@ fn key_detail(
 }
 
 /// The field to paste a key, Save key, Cancel and the way to the Console. Save key writes the key to the keychain and
-/// tests it, and the field is emptied either way.
+/// tests it when a test can start, and the field is emptied either way.
 fn key_entry(ui: &mut Ui, screen: &mut ProvidersScreen, settings: &mut Settings, providers: &mut Providers, view: ProvidersView) {
     ui.add(
         Label::new(rich(
@@ -565,9 +565,16 @@ fn key_entry(ui: &mut Ui, screen: &mut ProvidersScreen, settings: &mut Settings,
         cancel = button(ui, "Cancel").clicked();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| open(ui, CONSOLE_LINK, CONSOLE_URL));
     });
-    let note = format!(
-        "Save key keeps it in the {KEYCHAIN}, never in a file, then tests it for about a cent. Tasks switch to the key once the test passes. Jobdesk passes it only to the Claude Code process of each task."
-    );
+    // Save key tests only when a test could start now, so the note says what it will do.
+    let note = match providers.test_gate(view.task_running) {
+        TestGate::Ready => format!(
+            "Save key keeps it in the {KEYCHAIN}, never in a file, then tests it for about a cent. Tasks switch to the key once the test passes. Jobdesk passes it only to the Claude Code process of each task."
+        ),
+        gate => format!(
+            "Save key keeps it in the {KEYCHAIN}, never in a file. {}, so it waits at Not tested yet until you choose Test connection or Use for tasks. Tasks switch to the key once a test passes. Jobdesk passes it only to the Claude Code process of each task.",
+            if gate == TestGate::Testing { "Another test is finishing" } else { "A task is open" }
+        ),
+    };
     ui.add(Label::new(rich(ui, note, Type::NOTE, Ink::Muted)).wrap());
     if save && !screen.secret.is_blank() {
         // Taken first, so the field is empty even when the keychain refuses the key.

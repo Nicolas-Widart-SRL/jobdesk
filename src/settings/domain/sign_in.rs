@@ -1,6 +1,6 @@
 use chrono::NaiveDateTime;
 
-use crate::shared_kernel::{ApiKey, SignIn};
+use crate::shared_kernel::{ApiKey, KeyMask, SignIn};
 
 /// The place the API key is kept: the system keychain, never a file.
 pub trait KeyStore: Send + Sync {
@@ -15,40 +15,6 @@ pub trait KeyStore: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyStoreError {
     pub message: String,
-}
-
-const MASK: &str = "••••••••";
-const PREFIX: &str = "sk-ant-";
-/// The last four show only when the secret part of the key, after the public `sk-ant-` prefix, has this many characters.
-/// So at most a third of the secret is ever on the screen.
-const LONG_ENOUGH: usize = 12;
-
-/// What the screen may show of a saved key: whether it has the usual prefix, and the last four characters of a long key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyMask {
-    prefixed: bool,
-    last_four: Option<String>,
-}
-
-impl KeyMask {
-    pub fn of(key: &ApiKey) -> Self {
-        let text = key.expose();
-        let prefixed = text.starts_with(PREFIX);
-        let count = text.chars().count();
-        let secret = if prefixed { count - PREFIX.len() } else { count };
-        let last_four = (secret >= LONG_ENOUGH).then(|| text.chars().skip(count - 4).collect());
-        Self { prefixed, last_four }
-    }
-
-    /// The dots, after `sk-ant-` when the key has that prefix.
-    pub fn shown(&self) -> String {
-        if self.prefixed { format!("{PREFIX}{MASK}") } else { MASK.to_owned() }
-    }
-
-    /// The last four characters, for a key long enough to show them.
-    pub fn ending(&self) -> Option<&str> {
-        self.last_four.as_deref()
-    }
 }
 
 /// What the keychain holds, as far as this session knows.
@@ -86,50 +52,9 @@ mod tests {
 
     const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
 
-    fn mask_of(text: &str) -> KeyMask {
-        KeyMask::of(&ApiKey::parse(text).unwrap())
-    }
-
-    #[test]
-    fn a_long_key_shows_only_its_last_four() {
-        let mask = mask_of(FAKE);
-        assert_eq!(mask.shown(), "sk-ant-••••••••");
-        assert_eq!(mask.ending(), Some("R2kd"));
-        assert!(!format!("{mask:?}{}", mask.shown()).contains("api03"));
-    }
-
-    #[test]
-    fn a_short_key_shows_no_characters() {
-        let mask = mask_of("sk-ant-1234");
-        assert_eq!(mask.shown(), "sk-ant-••••••••");
-        assert_eq!(mask.ending(), None);
-        assert_eq!(mask_of("abc").ending(), None);
-        assert!(!format!("{mask:?}").contains("1234"));
-    }
-
-    #[test]
-    fn twelve_secret_characters_are_long_enough() {
-        assert_eq!(mask_of("FAKE12345678").ending(), Some("5678"));
-        assert_eq!(mask_of("FAKE1234567").ending(), None);
-    }
-
-    #[test]
-    fn the_public_prefix_does_not_count_toward_the_secret() {
-        assert_eq!(mask_of("sk-ant-12345").ending(), None, "five secret characters");
-        assert_eq!(mask_of("sk-ant-12345678901").ending(), None, "eleven secret characters");
-        assert_eq!(mask_of("sk-ant-123456789012").ending(), Some("9012"));
-    }
-
-    #[test]
-    fn an_unprefixed_key_gets_only_dots() {
-        let mask = mask_of("FAKE-not-a-real-key-0000-R2kd");
-        assert_eq!(mask.shown(), "••••••••");
-        assert_eq!(mask.ending(), Some("R2kd"));
-    }
-
     #[test]
     fn a_task_uses_the_key_only_when_chosen_and_not_known_to_be_missing() {
-        let present = || Saved::Present(mask_of(FAKE));
+        let present = || Saved::Present(KeyMask::of(&ApiKey::parse(FAKE).unwrap()));
         let unreadable = || Saved::Unreadable("locked".to_owned());
         let cases = [
             (SignIn::ClaudeSignIn, Saved::NotRead, SignIn::ClaudeSignIn),

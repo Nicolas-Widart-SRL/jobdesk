@@ -81,10 +81,6 @@ impl RunDesk {
         self.testing = testing;
     }
 
-    pub fn testing(&self) -> bool {
-        self.testing
-    }
-
     /// Whether a reply to `id` would wait for Test connection: it needs a new process, and a test runs.
     pub fn reply_waits_for_test(&self, id: &str) -> bool {
         self.testing && !self.sessions.contains_key(id)

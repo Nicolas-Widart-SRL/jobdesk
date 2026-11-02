@@ -5016,6 +5016,20 @@ fn test_connection_waits_while_a_task_runs() {
     assert_eq!(harness.query_all_by_label(reason).count(), 2, "and on hover");
 }
 
+/// A key saved while a task is open is not tested, and the note says so before Save key.
+#[test]
+fn a_key_saved_while_a_task_is_open_waits_untested() {
+    let mut shell = sign_in_shell("providers_save_task_open", answering(Outcome::Passed, 0.004, "ready"));
+    *shell.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut harness = tray_harness(shell);
+    type_key(&mut harness, FAKE_KEY);
+    assert!(harness.query_by_label_contains("A task is open, so it waits at Not tested yet until you choose Test connection or Use for tasks.").is_some());
+    assert!(harness.query_by_label_contains("then tests it for about a cent").is_none(), "no test is promised");
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "Not tested yet"), "the tester was not asked");
+    assert!(is_shown(&harness, "R2kd"), "the key is saved");
+}
+
 /// Remove asks first. Esc keeps the key; Remove key deletes it and moves tasks back to the Claude sign-in.
 #[test]
 fn remove_asks_first_and_esc_keeps_the_key() {

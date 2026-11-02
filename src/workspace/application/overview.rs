@@ -1,5 +1,6 @@
 use crate::discovery::application::JobBoard;
 use crate::profile::application::{ProfileView, TopicCounts, topic_counts};
+use crate::shared_kernel::{KeySource, key_source};
 use crate::workspace::domain::{SyncState, TemplateState, ToolCheck, WorkspaceStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,11 +43,13 @@ pub enum AuthMode {
     ApiKey,
 }
 
+/// Read as Settings › Providers reads it. A sign-in Claude Code chose itself, such as an `apiKeyHelper`, reads as an API key:
+/// the only other sources the CLI names are keys too.
 pub fn auth_mode(api_key_source: Option<&str>) -> AuthMode {
-    match api_key_source {
+    match api_key_source.map(key_source) {
         None => AuthMode::NoRunYet,
-        Some("none" | "") => AuthMode::ClaudeLogin,
-        Some(_) => AuthMode::ApiKey,
+        Some(KeySource::ClaudeSignIn) => AuthMode::ClaudeLogin,
+        Some(KeySource::KeyVariable | KeySource::Other) => AuthMode::ApiKey,
     }
 }
 
@@ -147,5 +150,12 @@ mod tests {
         assert_eq!(auth_mode(None), AuthMode::NoRunYet);
         assert_eq!(auth_mode(Some("none")), AuthMode::ClaudeLogin);
         assert_eq!(auth_mode(Some("ANTHROPIC_API_KEY")), AuthMode::ApiKey);
+    }
+
+    #[test]
+    fn the_login_key_is_the_claude_sign_in_as_on_providers() {
+        assert_eq!(auth_mode(Some("/login managed key")), AuthMode::ClaudeLogin);
+        assert_eq!(auth_mode(Some("")), AuthMode::ClaudeLogin);
+        assert_eq!(auth_mode(Some("apiKeyHelper")), AuthMode::ApiKey, "a key Claude Code found itself is still a key");
     }
 }

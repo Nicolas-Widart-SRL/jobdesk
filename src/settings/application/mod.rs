@@ -3,8 +3,7 @@ mod settings;
 mod usage;
 
 pub use providers::{
-    KeyFailure, Providers, SignInCheck, TASK_OPEN, TASK_RUNNING, TESTING, TestGate, TestTarget, WordTone, age_words, is_claude_sign_in, said_text,
-    sign_in_words, task_wait_reason,
+    KeyFailure, Providers, SignInCheck, TESTING, TestGate, TestTarget, WordTone, age_words, is_claude_sign_in, sign_in_words, task_wait_reason,
 };
 pub use settings::{
     CAP_READING, CapCheck, ClaudeVersion, IssueKind, RuntimeWord, SearchHits, Settings, about_details, addable_commands, cap_check, cap_line, cap_reason,
@@ -19,7 +18,7 @@ pub use crate::runs::application::{Period, UsageReport, YearOfDays, heat_step};
 pub use crate::settings::domain::{
     CapReached, CommandDefault, ConnectionTester, DataSizes, Dollars, Group, KeyMask, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode,
     Preferences, PreferencesStore, Retention, RunDefaults, Saved, SpendCap, StartScreen, StartValues, TestDone, TestReport, TextSize, ThemeChoice, drawn_index,
-    index, task_sign_in,
+    index,
 };
 pub use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 pub use crate::tracking::application::Pipeline;

@@ -19,12 +19,13 @@ Builders write every line of code, tests and snapshots included.
 - Use `Write` only for your plan file in `.claude/plans/`.
 - Name the plan file after the branch, with each `/` turned into `-`. Its first line is `# <branch>`, the exact branch name.
 - Use Bash to read, and to run `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`.
+- After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.
 
 ## Session start
 
-At the start of a session, and when the user says a pull request merged:
+At the start of a session, when the user says a pull request merged, and when a watch wake shows it merged:
 
 1. List the change's branches: the first line of each plan file in `.claude/plans/`, and `git branch --list`, leaving out `main` and `worktree-*`. Read the branch from that line, never from the file name.
 2. For each branch, run `gh pr view <branch> --json state -q .state`.

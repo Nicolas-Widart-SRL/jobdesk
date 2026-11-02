@@ -1,13 +1,13 @@
 ---
 name: cleanup
-description: Removes merged agent worktrees, merged branches and their plan files in .claude/plans/. Use when the user asks to clean up worktrees, branches or plan files. When the user says a pull request merged, follow the lead's Session start, which runs this script.
+description: Removes merged agent worktrees, merged branches and their plan files in .claude/plans/. Use when the user asks to clean up worktrees, branches or plan files. When the user says a pull request merged, or the lead sees it merged on a watch wake, follow the lead's Session start, which runs this script.
 argument-hint: "[change-branch]"
 ---
 
 # Clean up after merged work
 
 Run `scripts/cleanup.sh $ARGUMENTS` from the main checkout.
-When the user says a pull request merged, follow Session start in `.claude/agents/lead.md` instead: it checks each branch with `gh pr view` first.
+When the user says a pull request merged, or the lead sees it merged on a watch wake, follow Session start in `.claude/agents/lead.md` instead: it checks each branch with `gh pr view` first.
 
 - With no argument, it cleans up after a merged pull request, against `origin/main`.
 - With a change's branch, it also cleans up the steps already merged into that branch.

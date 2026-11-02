@@ -4,8 +4,9 @@ use std::sync::Arc;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
+use crate::shared_kernel::placeholders::{blank_words, placeholder_spans};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
@@ -201,15 +202,23 @@ pub fn lead_line(ui: &mut Ui, strong: &str, rest: &str) -> Response {
 /// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.
 /// Images never load: each shows as its alt text. A link opens only on click, and only for `http` or `https`.
 pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
-    render(ui, cache, text, false);
+    render(ui, cache, text, None);
 }
 
-/// `markdown`, with inline math drawn as blanks when `blanks`. Only `with_blanks` text may take them.
-fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: bool) {
+/// `markdown`, with each inline math span drawn as the blank its index names in `blanks`. Only `with_blanks` text has
+/// them, and a span that names no blank draws nothing.
+fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: Option<Arc<[String]>>) {
     // The image pass runs once per distinct text, and is kept while the text stays on screen.
     let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<ImageFreeCache>().get(text).clone());
     let before = ui.ctx().output(|output| output.commands.len());
-    let viewer = if blanks { CommonMarkViewer::new().render_math_fn(Some(&show_blank)) } else { CommonMarkViewer::new() };
+    let shown = blanks.is_some();
+    // The hook has to own what it reads, so it holds its own handle on the words.
+    let blank = move |ui: &mut Ui, index: &str, _inline: bool| {
+        if let Some(words) = index.parse::<usize>().ok().and_then(|index| blanks.as_ref()?.get(index)) {
+            show_blank(ui, words);
+        }
+    };
+    let viewer = if shown { CommonMarkViewer::new().render_math_fn(Some(&blank)) } else { CommonMarkViewer::new() };
     copyable(ui, |ui| viewer.show(ui, cache, &text));
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
 }
@@ -218,11 +227,11 @@ fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: bool) {
 /// section size. A top-level table leaves the column for the whole width, and scrolls only past that.
 /// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
-    document_as(ui, cache, text, false);
+    document_as(ui, cache, text, None);
 }
 
-/// `document`, with inline math drawn as blanks when `blanks`, as `render` says.
-fn document_as(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: bool) {
+/// `document`, with inline math drawn as `render` says.
+fn document_as(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: Option<Arc<[String]>>) {
     let parts = ui.ctx().memory_mut(|memory| memory.caches.cache::<PartsCache>().get(text).clone());
     ui.scope(|ui| {
         let styles = &mut ui.style_mut().text_styles;
@@ -238,7 +247,7 @@ fn document_as(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, blanks: boo
             ui.push_id(("document part", index), |ui| {
                 let width = ui.available_width();
                 ui.set_max_width(if part.table { width } else { width.min(DOC_MEASURE) });
-                render(ui, cache, &part.text, blanks);
+                render(ui, cache, &part.text, blanks.clone());
             });
         }
     });
@@ -414,12 +423,6 @@ fn without_images(text: &str) -> String {
     escaped(&text)
 }
 
-/// What a blank always says first. A token with words of its own adds them, as in "to fill: first name".
-const BLANK: &str = "to fill";
-
-/// The token that names nothing but a gap, so its blank says only "to fill".
-const BARE_TOKEN: &str = "PLACEHOLDER";
-
 /// The look of a placeholder to fill, as a text format so it flows in a sentence: `interview` ink in the semibold face at
 /// `size`, the size of the text around it, underlined in a hairline of the same ink.
 pub fn blank_mark(ui: &Ui, size: f32) -> TextFormat {
@@ -427,42 +430,38 @@ pub fn blank_mark(ui: &Ui, size: f32) -> TextFormat {
     TextFormat { underline: Stroke::new(HAIRLINE, ink), ..TextFormat::simple(FontId::new(size, Type::STRONG.face.family()), ink) }
 }
 
-/// Profile text as `markdown` renders it, with each `[TOKEN]` placeholder read as a blank (`blank_mark`).
+/// Profile text as `markdown` renders it, with each placeholder the shared counter finds read as a blank (`blank_mark`)
+/// where it reads as text. Anywhere else, such as in code or a link's text, it shows as written.
 pub fn markdown_with_blanks(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
-    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
-    render(ui, cache, &text, true);
+    let blanked = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
+    render(ui, cache, &blanked.text, Some(Arc::clone(&blanked.words)));
 }
 
-/// Profile text as `document` renders it, with each `[TOKEN]` placeholder read as a blank.
+/// Profile text as `document` renders it, with placeholders read as `markdown_with_blanks` reads them.
 pub fn document_with_blanks(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
-    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
-    document_as(ui, cache, &text, true);
+    let blanked = ui.ctx().memory_mut(|memory| memory.caches.cache::<BlanksCache>().get(text).clone());
+    document_as(ui, cache, &blanked.text, Some(Arc::clone(&blanked.words)));
+}
+
+/// Markdown whose blanks are inline math spans, each holding the index of its words in `words`.
+struct Blanked {
+    text: String,
+    words: Arc<[String]>,
 }
 
 #[derive(Default)]
 struct Blanks;
 
-impl egui::cache::ComputerMut<&str, Arc<str>> for Blanks {
-    fn compute(&mut self, text: &str) -> Arc<str> {
+impl egui::cache::ComputerMut<&str, Arc<Blanked>> for Blanks {
+    fn compute(&mut self, text: &str) -> Arc<Blanked> {
         with_blanks(text).into()
     }
 }
 
-type BlanksCache = egui::cache::FrameCache<Arc<str>, Blanks>;
+type BlanksCache = egui::cache::FrameCache<Arc<Blanked>, Blanks>;
 
-/// A placeholder as `/reset` writes it: three or more capitals and underscores, such as `FIRST_NAME`.
-fn is_token(token: &str) -> bool {
-    token.len() >= 3 && token.chars().all(|c| c.is_ascii_uppercase() || c == '_') && token.chars().any(|c| c.is_ascii_uppercase())
-}
-
-/// What the blank for `token` says.
-fn blank_words(token: &str) -> String {
-    if token == BARE_TOKEN { BLANK.to_owned() } else { format!("{BLANK}: {}", token.to_lowercase().replace('_', " ").trim()) }
-}
-
-/// One blank in a sentence of `markdown_with_blanks`: egui_commonmark hands each inline math span here, and every one
-/// of them is a blank, because `with_blanks` escapes each dollar sign the text had.
-fn show_blank(ui: &mut Ui, words: &str, _inline: bool) {
+/// One blank in a sentence, at the size of the body text around it.
+fn show_blank(ui: &mut Ui, words: &str) {
     let size = ui.style().text_styles.get(&TextStyle::Body).map_or(Type::BODY.size, |font| font.size);
     let mut job = LayoutJob::default();
     job.append(words, 0.0, blank_mark(ui, size));
@@ -477,14 +476,10 @@ pub(in crate::ui_kit) fn blank_line(ui: &Ui, text: &str, style: Type, ink: impl 
     let mark = blank_mark(ui, style.size);
     let mut job = LayoutJob::default();
     let mut copied = 0;
-    for (open, _) in text.match_indices('[') {
-        let Some(close) = text[open + 1..].find(']').map(|at| open + 1 + at) else { break };
-        if open < copied || !is_token(&text[open + 1..close]) {
-            continue;
-        }
-        job.append(&text[copied..open], 0.0, plain.clone());
-        job.append(&blank_words(&text[open + 1..close]), 0.0, mark.clone());
-        copied = close + 1;
+    for span in placeholder_spans(&text) {
+        job.append(&text[copied..span.start], 0.0, plain.clone());
+        job.append(&blank_words(&text[span.clone()]), 0.0, mark.clone());
+        copied = span.end;
     }
     job.append(&text[copied..], 0.0, plain);
     job
@@ -495,25 +490,26 @@ fn escaped_at(text: &str, at: usize) -> bool {
     text[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
 }
 
-/// Markdown with each placeholder that reads as text swapped for an inline math span of its blank's words, which
-/// `show_blank` draws. egui_commonmark has no hook for an inline format, and inline math is the one inline it hands
-/// back. Every dollar sign the text itself had is escaped first, so no text of its own can reach that hook.
-/// A token in code, HTML, an image, a link's own brackets, a link destination, an autolink or a reference definition
-/// is not text, so it stays as written.
-fn with_blanks(text: &str) -> String {
+/// Markdown with each placeholder that `placeholder_spans` finds, and that reads as text, swapped for an inline math
+/// span holding the index of its words. egui_commonmark has no hook for an inline format, and inline math is the one
+/// inline it hands back, to `render`. Every dollar sign the text itself had is escaped first, so no text of its own can
+/// reach that hook. A placeholder in code, HTML, an image, a link's text or destination, an autolink or a reference
+/// definition, or after an escape, is not text: it stays as written, so the counter's every token still shows.
+fn with_blanks(text: &str) -> Blanked {
     if !text.contains(['[', '$']) {
-        return text.to_owned();
+        return Blanked { text: text.to_owned(), words: Arc::new([]) };
     }
-    let (mut prose, mut autolinks): (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) = (Vec::new(), Vec::new());
-    let (mut in_code, mut in_image) = (false, 0);
+    let mut prose: Vec<std::ops::Range<usize>> = Vec::new();
+    let (mut in_code, mut in_image, mut in_link) = (false, 0, 0);
     for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::CodeBlock(_)) => in_code = true,
             Event::End(TagEnd::CodeBlock) => in_code = false,
             Event::Start(Tag::Image { .. }) => in_image += 1,
             Event::End(TagEnd::Image) => in_image -= 1,
-            Event::Text(_) if !in_code && in_image == 0 => prose.push(range),
-            Event::Start(Tag::Link { link_type: LinkType::Autolink | LinkType::Email, .. }) => autolinks.push(range),
+            Event::Start(Tag::Link { .. }) => in_link += 1,
+            Event::End(TagEnd::Link) => in_link -= 1,
+            Event::Text(_) if !in_code && in_image == 0 && in_link == 0 => prose.push(range),
             _ => {}
         }
     }
@@ -526,32 +522,25 @@ fn with_blanks(text: &str) -> String {
             _ => runs.push(range),
         }
     }
-    let in_text = |span: &std::ops::Range<usize>| {
-        runs.iter().any(|run| run.start <= span.start && span.end <= run.end) && !autolinks.iter().any(|link| link.start < span.end && span.start < link.end)
-    };
-    let mut out = String::with_capacity(text.len());
+    let in_text = |span: &std::ops::Range<usize>| runs.iter().any(|run| run.start <= span.start && span.end <= run.end);
+    let mut blanks = placeholder_spans(text).into_iter().filter(|span| in_text(span) && !escaped_at(text, span.start)).peekable();
+    let (mut out, mut words) = (String::with_capacity(text.len()), Vec::new());
     let mut at = 0;
     while let Some(c) = text[at..].chars().next() {
-        let next = at + c.len_utf8();
-        if c == '$' && in_text(&(at..next)) && !escaped_at(text, at) {
-            out.push_str("\\$");
-            at = next;
+        if let Some(span) = blanks.next_if(|span| span.start == at) {
+            out.push_str(&format!("${}$", words.len()));
+            words.push(blank_words(&text[span.clone()]));
+            at = span.end;
             continue;
         }
-        if c == '[' && !escaped_at(text, at) {
-            let close = text[next..].find(']').map(|end| next + end);
-            if let Some(close) = close.filter(|&close| is_token(&text[next..close]) && in_text(&(at..close + 1))) {
-                out.push('$');
-                out.push_str(&blank_words(&text[next..close]));
-                out.push('$');
-                at = close + 1;
-                continue;
-            }
+        let next = at + c.len_utf8();
+        if c == '$' && in_text(&(at..next)) && !escaped_at(text, at) {
+            out.push('\\');
         }
         out.push(c);
         at = next;
     }
-    out
+    Blanked { text: out, words: words.into() }
 }
 
 /// The height `text` takes wrapped at `width`, for rows sized before they are drawn.
@@ -879,22 +868,39 @@ mod tests {
         assert_eq!(parts("Intro.\n\n| A |\n|---|\n| x |\n\nAfter[^1].\n\n[^1]: A note.").len(), 3);
     }
 
+    /// The text `with_blanks` hands the viewer, and each blank's words.
+    fn rewritten(text: &str) -> (String, Vec<String>) {
+        let blanked = with_blanks(text);
+        (blanked.text, blanked.words.to_vec())
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|words| (*words).to_owned()).collect()
+    }
+
     #[test]
     fn placeholders_read_as_blanks() {
-        assert_eq!(with_blanks("Name: [FIRST_NAME] [LAST_NAME]"), "Name: $to fill: first name$ $to fill: last name$");
-        assert_eq!(with_blanks("- Budget you owned: [PLACEHOLDER]"), "- Budget you owned: $to fill$");
-        assert_eq!(with_blanks("### Role - [COMPANY] ([DATES])"), "### Role - $to fill: company$ ($to fill: dates$)");
-        assert_eq!(with_blanks("Bracketed [[NAME]] and a[0], [x], [AB], [Note], - [ ] task"), "Bracketed [$to fill: name$] and a[0], [x], [AB], [Note], - [ ] task");
-        assert_eq!(with_blanks("Use the ` key for [FIRST_NAME]."), "Use the ` key for $to fill: first name$.");
-        assert_eq!(with_blanks("Owner: `[NAME]"), "Owner: `$to fill: name$");
+        assert_eq!(rewritten("Name: [FIRST_NAME] [LAST_NAME]"), ("Name: $0$ $1$".to_owned(), words(&["to fill: first name", "to fill: last name"])));
+        assert_eq!(rewritten("- Budget you owned: [PLACEHOLDER]"), ("- Budget you owned: $0$".to_owned(), words(&["to fill"])));
+        assert_eq!(rewritten("### Role - [COMPANY] ([DATES])"), ("### Role - $0$ ($1$)".to_owned(), words(&["to fill: company", "to fill: dates"])));
+        assert_eq!(rewritten("Bracketed [[NAME]] and a[0], [x], [AB], [Note], - [ ] task").0, "Bracketed [$0$] and a[0], [x], [AB], [Note], - [ ] task");
+        assert_eq!(rewritten("Use the ` key for [FIRST_NAME]."), ("Use the ` key for $0$.".to_owned(), words(&["to fill: first name"])));
+        assert_eq!(rewritten("Owner: `[NAME]").0, "Owner: `$0$");
+        assert_eq!(rewritten("An escaped backslash, then \\\\[NAME]").0, "An escaped backslash, then \\\\$0$");
+    }
+
+    #[test]
+    fn a_hint_reads_in_its_blank() {
+        let text = r#"- German: [LEVEL, e.g. "Native" / "C2"] and [CONTEXT - what was happening]"#;
+        assert_eq!(rewritten(text), ("- German: $0$ and $1$".to_owned(), words(&[r#"to fill: level, e.g. "Native" / "C2""#, "to fill: context - what was happening"])));
     }
 
     #[test]
     fn the_texts_own_dollar_signs_never_reach_the_blank_hook() {
-        assert_eq!(with_blanks("Pay $120k to $150k, or $to fill$."), "Pay \\$120k to \\$150k, or \\$to fill\\$.");
-        assert_eq!(with_blanks("Already \\$5 and \\\\$6"), "Already \\$5 and \\\\\\$6");
-        for source in ["Use `$x$` here.", "```\n$$ to fill $$\n```", "[s](https://x.example/$a$)"] {
-            assert_eq!(with_blanks(source), source);
+        assert_eq!(rewritten("Pay $120k to $150k, or $0$.").0, "Pay \\$120k to \\$150k, or \\$0\\$.");
+        assert_eq!(rewritten("Already \\$5 and \\\\$6").0, "Already \\$5 and \\\\\\$6");
+        for source in ["Use `$x$` here.", "```\n$$ 0 $$\n```", "[s](https://x.example/$a$)"] {
+            assert_eq!(rewritten(source).0, source);
         }
     }
 
@@ -902,16 +908,46 @@ mod tests {
     fn placeholders_outside_text_stay_as_written() {
         for source in [
             "Use `[FIRST_NAME]` here.",
-            "```\n[FIRST_NAME]\n```",
+            "```\n[YOUR_CITY]\n```",
             "[LINK](https://x.example/a) and [REF][r]\n\n[r]: https://x.example/b",
+            "[[NAME]](https://x.example/a) and [the [COMPANY] page](https://x.example/b)",
             "[s](https://x.example/[PATH])",
             "<https://x.example/[PATH]>",
             "[NAME]: https://x.example/c\n\nSee [the page][NAME].",
             "\\[NAME] is escaped",
             "<div>\n[NAME]\n</div>",
             "![badge [NAME]](https://x.example/b.png)",
+            "Cloud [AWS, GCP], remote [EU], and [2024 UPDATE]",
         ] {
-            assert_eq!(with_blanks(source), source);
+            assert_eq!(rewritten(source), (source.to_owned(), Vec::new()));
+        }
+    }
+
+    /// Every label's text when `source` renders through `markdown_with_blanks`.
+    fn labels_with_blanks(source: &'static str) -> Vec<String> {
+        let mut cache = CommonMarkCache::default();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([800.0, 400.0]).with_context_setup(setup).build_ui(move |ui| markdown_with_blanks(ui, &mut cache, source));
+        harness.run();
+        harness.query_all_by_role(egui::accesskit::Role::Label).filter_map(|node| node.value()).collect()
+    }
+
+    /// Every counted placeholder shows: as a blank where it reads as text, as written anywhere else, such as in code.
+    #[test]
+    fn every_counted_placeholder_shows_on_the_paper() {
+        for (source, count, blanks, raw) in [
+            ("See `[FIRST_NAME]` and [LINK](https://x.example).", 1, 0, "[FIRST_NAME]"),
+            ("```\n[YOUR_CITY]\n```", 1, 0, "[YOUR_CITY]"),
+            ("Open [[NAME]](https://x.example) now.", 1, 0, "[NAME]"),
+            ("Pay [AMOUNT]5 and [LEVEL, e.g. \"Native\"]", 2, 2, ""),
+        ] {
+            assert_eq!(crate::shared_kernel::placeholders::placeholder_count(source), count, "{source}");
+            let labels = labels_with_blanks(source);
+            assert_eq!(labels.iter().filter(|label| label.starts_with("to fill")).count(), blanks, "{source}: {labels:?}");
+            assert!(raw.is_empty() || !painted(blanked, source, raw).is_empty(), "{source} hides {raw}");
         }
     }
 
@@ -929,7 +965,7 @@ mod tests {
         for render in [blanked as Render, blanked_document] {
             assert_eq!(opened_through(render, source, "terminal"), Vec::<String>::new());
             assert_eq!(opened_through(render, source, "script"), Vec::<String>::new());
-            assert_eq!(opened_through(render, source, "to fill: company site"), Vec::<String>::new());
+            assert_eq!(opened_through(render, source, "[COMPANY_SITE]"), Vec::<String>::new());
             assert_eq!(opened_through(render, source, "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
         }
     }
@@ -996,7 +1032,7 @@ mod tests {
     #[test]
     fn code_keeps_its_look_and_cannot_pass_for_a_blank() {
         let ink = Palette::for_theme(egui::Theme::Dark).interview;
-        for (source, words) in [("Run `to fill in by March` first.", "to fill in by March"), ("```\nto fill later\n```", "to fill later"), ("Say $to fill$ now.", "to fill")] {
+        for (source, words) in [("Run `to fill in by March` first.", "to fill in by March"), ("```\nto fill later\n```", "to fill later"), ("Say $to fill$ now.", "to fill"), ("Cloud [AWS, GCP], remote [EU], and [2024 UPDATE]", "")] {
             let shown = painted(blanked, source, words);
             assert!(!shown.is_empty(), "{source} paints no {words:?}");
             for (color, underline, _, family) in shown {

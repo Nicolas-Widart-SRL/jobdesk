@@ -112,6 +112,18 @@ fn name_len(text: &str) -> usize {
     len
 }
 
+/// What a placeholder token reads as on screen, such as `to fill: first name` for `FIRST_NAME`.
+/// The name reads in lower case. A hint after it keeps its case: `LEVEL, e.g. "Native"` gives `to fill: level, e.g. "Native"`.
+pub fn blank_words(token: &str) -> String {
+    let token = token.strip_prefix('[').unwrap_or(token);
+    let token = token.strip_suffix(']').unwrap_or(token);
+    if token == "PLACEHOLDER" {
+        return "to fill".to_owned();
+    }
+    let name = token_name(token);
+    format!("to fill: {}{}", name.replace('_', " ").to_lowercase(), &token[name.len()..])
+}
+
 /// The `]` that closes the token whose hint starts at `from`, skipping brackets nested in the hint. A line break ends the search.
 fn matching_close(text: &str, from: usize) -> Option<usize> {
     let mut depth = 0usize;
@@ -129,7 +141,7 @@ fn matching_close(text: &str, from: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{placeholder_count, placeholder_spans, token_name};
+    use super::{blank_words, placeholder_count, placeholder_spans, token_name};
 
     fn found(text: &str) -> Vec<&str> {
         placeholder_spans(text).into_iter().map(|span| &text[span]).collect()
@@ -207,5 +219,15 @@ mod tests {
         assert_eq!(token_name("1-2 SENTENCE_SUMMARY"), "1-2 SENTENCE_SUMMARY");
         assert_eq!(token_name("CONTEXT - what"), "CONTEXT");
         assert_eq!(token_name("lower"), "");
+    }
+
+    #[test]
+    fn blank_words_turn_a_token_into_words() {
+        assert_eq!(blank_words("FIRST_NAME"), "to fill: first name");
+        assert_eq!(blank_words("PLACEHOLDER"), "to fill");
+        assert_eq!(blank_words("[LAST_NAME]"), "to fill: last name");
+        assert_eq!(blank_words(r#"LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)""#), r#"to fill: level, e.g. "Native" / "C2" / "B1/B2 (conversational)""#);
+        assert_eq!(blank_words("[CONTEXT - What Was Happening]"), "to fill: context - What Was Happening");
+        assert_eq!(blank_words("1-2 SENTENCE_SUMMARY"), "to fill: 1-2 sentence summary");
     }
 }

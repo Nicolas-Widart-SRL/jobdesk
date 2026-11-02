@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::profile::domain::document::{BlockKey, find, heading_len, is_atx, lines_with_endings};
-use crate::shared_kernel::placeholders::{placeholder_count, token_name};
+use crate::shared_kernel::placeholders::placeholder_count;
 
 /// How much of a topic the user has written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,18 +52,6 @@ fn without_comments(text: &str) -> String {
     }
     kept.push_str(rest);
     kept
-}
-
-/// What a placeholder token reads as on screen, such as `to fill: first name` for `FIRST_NAME`.
-/// The name reads in lower case. A hint after it keeps its case: `LEVEL, e.g. "Native"` gives `to fill: level, e.g. "Native"`.
-pub fn blank_words(token: &str) -> String {
-    let token = token.strip_prefix('[').unwrap_or(token);
-    let token = token.strip_suffix(']').unwrap_or(token);
-    if token == "PLACEHOLDER" {
-        return "to fill".to_owned();
-    }
-    let name = token_name(token);
-    format!("to fill: {}{}", name.replace('_', " ").to_lowercase(), &token[name.len()..])
 }
 
 /// What a save finds in the file compared with what the user opened.
@@ -140,16 +128,6 @@ mod tests {
         let text = "## Experience\n- [RESPONSIBILITY_OR_ACHIEVEMENT_1]\n- [CONTEXT - what was happening]\n| [LEVEL, e.g. \"Native\" / \"C2\"] |\n[Jobdesk](https://x.example) [x][ref]\n- [ ] task\n";
         assert_eq!(topic_fill(&[text], true), Fill::ToFill(3));
         assert_eq!(open_placeholders(text), 3);
-    }
-
-    #[test]
-    fn blank_words_turn_a_token_into_words() {
-        assert_eq!(blank_words("FIRST_NAME"), "to fill: first name");
-        assert_eq!(blank_words("PLACEHOLDER"), "to fill");
-        assert_eq!(blank_words("[LAST_NAME]"), "to fill: last name");
-        assert_eq!(blank_words(r#"LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)""#), r#"to fill: level, e.g. "Native" / "C2" / "B1/B2 (conversational)""#);
-        assert_eq!(blank_words("[CONTEXT - What Was Happening]"), "to fill: context - What Was Happening");
-        assert_eq!(blank_words("1-2 SENTENCE_SUMMARY"), "to fill: 1-2 sentence summary");
     }
 
     #[test]

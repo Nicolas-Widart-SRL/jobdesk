@@ -4305,3 +4305,51 @@ fn write_it_myself_waits_for_a_missing_section() {
     harness.run_steps(8);
     assert!(is_shown(&harness, "This topic's section is not in the file. Update with Claude… adds it."));
 }
+
+fn ask_to_close(harness: &mut Harness) {
+    harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    harness.run_steps(3);
+}
+
+/// Closing the window while the tab's ask shows leaves one ask on screen: the quit's.
+#[test]
+fn one_ask_shows_at_a_time() {
+    let mut harness = tray_harness(probed(shell(Screen::Profile, "profile_edit_one_ask"), FixedTools));
+    settle(&mut harness);
+    fill_the_budget(&mut harness);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Setup").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("Leaving Profile drops them.").is_some());
+    ask_to_close(&mut harness);
+    assert_eq!(harness.query_all_by_label(DISCARD_ASK).count(), 1, "one ask");
+    assert!(harness.query_by_label_contains("Quitting drops them.").is_some());
+    assert!(harness.query_by_label_contains("Leaving Profile drops them.").is_none());
+}
+
+/// Discard on the quit ask closes the window, and a live session asks next. Keep working there keeps the draft too.
+#[test]
+fn discard_on_quit_waits_for_the_session_ask() {
+    let (shell, _root, _sink, _feed) = profile_with_run("profile_edit_quit_session");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    ask_to_close(&mut harness);
+    button(&harness, "Discard changes").click();
+    let mut sent = Vec::new();
+    for _ in 0..3 {
+        harness.run_steps(1);
+        sent.extend(harness.output().viewport_output.get(&egui::ViewportId::ROOT).map(|viewport| viewport.commands.clone()).unwrap_or_default());
+    }
+    assert!(sent.contains(&egui::ViewportCommand::Close), "Discard asks the window to close");
+    assert!(!is_shown(&harness, DISCARD_ASK));
+
+    // The platform answers with a close request, and the live session asks.
+    ask_to_close(&mut harness);
+    assert!(is_shown(&harness, "Keep working"));
+    assert!(!is_shown(&harness, DISCARD_ASK), "the draft does not ask again");
+    harness.get_by_label("Keep working").click();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the quit was cancelled, so the draft stays");
+
+    ask_to_close(&mut harness);
+    assert!(is_shown(&harness, DISCARD_ASK), "the next quit asks about the draft again");
+}

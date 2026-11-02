@@ -141,6 +141,11 @@ pub struct Shell {
     /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
     /// take the focus.
     away: Option<(Pending, bool)>,
+    /// The window was asked to close while the folder ask showed, so the close comes back once that ask is answered.
+    quit_after: bool,
+    /// The user agreed to drop their profile draft to quit. The draft stays until the window really closes, so a quit
+    /// cancelled later, at the session ask, keeps it.
+    quit_agreed: bool,
 }
 
 /// What would drop unsaved profile text from outside Profile, once the user agrees.
@@ -195,6 +200,8 @@ impl Shell {
             leave_to: None,
             profile_saved: None,
             away: None,
+            quit_after: false,
+            quit_agreed: false,
         }
     }
 
@@ -359,7 +366,10 @@ impl Shell {
             return;
         }
         match pick() {
-            Some(path) if self.draft_unsaved() => self.away = Some((Pending::Folder(path), true)),
+            Some(path) if self.draft_unsaved() => {
+                self.profile_screen.put_away();
+                self.away = Some((Pending::Folder(path), true));
+            }
             Some(path) => self.open(ctx, &path),
             None => {}
         }
@@ -378,21 +388,29 @@ impl Shell {
             Pending::Folder(_) => Away::Folder,
             Pending::Quit => Away::Quit,
         };
-        let Some(discard) = self.profile_screen.ask_away(ctx, away, focus) else { return };
+        if let Some(discard) = self.profile_screen.ask_away(ctx, away, focus) {
+            self.settle_away(ctx, discard);
+        }
+    }
+
+    /// Closes the ask over every screen with the user's answer. A close asked for while it showed comes back after it.
+    fn settle_away(&mut self, ctx: &egui::Context, discard: bool) {
         let Some((pending, _)) = self.away.take() else { return };
         if discard {
             self.answer_away(ctx, pending);
         }
+        if std::mem::take(&mut self.quit_after) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
-    /// Goes on with what waited on the ask, once the user agreed to drop their draft.
+    /// Goes on with what waited on the ask, once the user agreed to drop their draft. Quitting keeps the draft until the
+    /// window closes: a live session may still ask, and Keep working there keeps everything.
     fn answer_away(&mut self, ctx: &egui::Context, pending: Pending) {
         match pending {
             Pending::Folder(path) => self.open(ctx, &path),
             Pending::Quit => {
-                if let Some(editor) = self.profile_editor.as_mut() {
-                    self.profile_screen.drop_edit(editor);
-                }
+                self.quit_agreed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -538,16 +556,22 @@ impl Shell {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
             });
             if keep {
-                self.confirm_quit = false;
+                (self.confirm_quit, self.quit_agreed) = (false, false);
             }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         let closing = ctx.input(|input| input.viewport().close_requested());
-        // Unsaved profile text asks first. Once it is dropped, the window asks to close again, and a live session asks next.
-        if closing && self.draft_unsaved() {
+        // Unsaved profile text asks first, one ask at a time. Once the user agrees, the window asks to close again, and a
+        // live session asks next. A close while the folder ask shows waits for its answer.
+        if closing && self.draft_unsaved() && !self.quit_agreed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.away.is_none() {
-                self.away = Some((Pending::Quit, true));
+            match self.away {
+                None => {
+                    self.profile_screen.put_away();
+                    self.away = Some((Pending::Quit, true));
+                }
+                Some((Pending::Folder(_), _)) => self.quit_after = true,
+                Some((Pending::Quit, _)) => {}
             }
         } else if closing && active {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -583,7 +607,7 @@ impl Shell {
                     self.quit_focus = false;
                 }
                 if keep.clicked() {
-                    self.confirm_quit = false;
+                    (self.confirm_quit, self.quit_agreed) = (false, false);
                 }
                 if button(ui, "End session and quit").clicked() {
                     self.desk = None;
@@ -1153,8 +1177,10 @@ pub fn run() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::fs;
     use std::path::Path;
+    use std::rc::Rc;
 
     use super::*;
     use crate::runs::application::{AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest, StartOptions};
@@ -1330,5 +1356,111 @@ mod tests {
         });
         assert!(asked.get(), "with no session, the dialog opens");
         assert_eq!(shell.folder_wait(), None);
+    }
+
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(entry.file_name());
+            if entry.path().is_dir() { copy_tree(&entry.path(), &target) } else { fs::copy(entry.path(), target).map(|_| ()).unwrap() }
+        }
+    }
+
+    /// The sample workspace as a checkout named `name`.
+    fn sample_checkout(folder: &tempfile::TempDir, name: &str) -> PathBuf {
+        let root = checkout_named(folder, name);
+        copy_tree(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace"), &root);
+        fs::rename(root.join("CLAUDE.profile.md"), root.join("CLAUDE.md")).unwrap();
+        root
+    }
+
+    const CANDIDATE: &str = ".claude/skills/job-application-assistant/01-candidate-profile.md";
+
+    /// egui keeps a field's undo history for the life of the window, and a folder change starts a new Profile screen.
+    /// An edit in the new folder still has a field of its own, so undo never brings back the last folder's text.
+    #[test]
+    fn undo_never_crosses_folders() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let folder = tempfile::tempdir().unwrap();
+        let (first, second) = (sample_checkout(&folder, "search-a"), sample_checkout(&folder, "search-b"));
+        let text = fs::read_to_string(second.join(CANDIDATE)).unwrap().replace("Antwerp. Freelance.", "Ghent. Employed.");
+        fs::write(second.join(CANDIDATE), &text).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let shell = Rc::new(RefCell::new(Shell::with_snapshot(Screen::Profile, workspace::open(&first).unwrap(), Snapshot::load(&first, today))));
+        let inner = Rc::clone(&shell);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+        harness.run_steps(3);
+        let field = |harness: &Harness| harness.get_by_role(egui::accesskit::Role::MultilineTextInput).value().unwrap_or_default();
+
+        harness.get_all_by_label("Edit").next().unwrap().click();
+        harness.run_steps(3);
+        harness.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text(" Remote since 2023.");
+        harness.run_steps(3);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert!(fs::read_to_string(first.join(CANDIDATE)).unwrap().contains("Remote since 2023."), "saved in the first folder");
+
+        {
+            let ctx = harness.ctx.clone();
+            let mut shell = shell.borrow_mut();
+            shell.open(&ctx, &second);
+            (shell.snapshot, shell.loaded) = (Snapshot::load(&second, today), true);
+        }
+        harness.run_steps(3);
+        harness.get_all_by_label("Edit").next().unwrap().click();
+        harness.run_steps(3);
+        let opened = field(&harness);
+        assert!(opened.contains("Ghent. Employed."), "{opened}");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        harness.run_steps(3);
+        assert_eq!(field(&harness), opened, "undo has nothing of the first folder's");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert_eq!(fs::read_to_string(second.join(CANDIDATE)).unwrap(), text, "nothing of the first folder was written");
+    }
+
+    /// A frame of `shell`'s keys with the window asked to close, and the commands it sent to the window.
+    fn close_frame(ctx: &egui::Context, shell: &mut Shell) -> Vec<egui::ViewportCommand> {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        commands(ctx.run_ui(input, |ui| shell.handle_shortcuts_and_quit(ui.ctx())))
+    }
+
+    /// The commands a frame sent to the window. Its textures are dropped, as no renderer takes them.
+    fn commands(mut output: egui::FullOutput) -> Vec<egui::ViewportCommand> {
+        output.textures_delta.clear();
+        output.viewport_output.get(&egui::ViewportId::ROOT).map(|viewport| viewport.commands.clone()).unwrap_or_default()
+    }
+
+    /// A close asked for while the folder ask shows is not forgotten: once that ask is answered, the close comes back.
+    #[test]
+    fn a_close_during_the_folder_ask_comes_back_after_it() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        let editor = shell.profile_editor.as_mut().unwrap();
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+        let other = checkout_named(&folder, "other-search");
+        shell.away = Some((Pending::Folder(other.clone()), true));
+
+        let sent = close_frame(&ctx, &mut shell);
+        assert!(sent.contains(&egui::ViewportCommand::CancelClose));
+        assert_eq!(shell.away, Some((Pending::Folder(other), true)), "the folder ask stays, one ask at a time");
+
+        let sent = commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.settle_away(ui.ctx(), false)));
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Keep editing, then the close comes back");
+        close_frame(&ctx, &mut shell);
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "and asks about the draft");
     }
 }

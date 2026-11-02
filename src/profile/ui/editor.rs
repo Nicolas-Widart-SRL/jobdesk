@@ -271,7 +271,9 @@ pub(super) fn discard_ask(ctx: &egui::Context, ask: Ask, noun: Noun, focus: &mut
         Ask::Folder => "Opening another folder drops them.",
         Ask::Quit => "Quitting drops them.",
     };
-    let shown = Modal::new(Id::NULL.with("profile_discard_ask")).show(ctx, |ui| {
+    // The shell's asks have an id apart from the screen's, though only one ever shows at a time.
+    let id = if matches!(ask, Ask::Folder | Ask::Quit) { "profile_away_ask" } else { "profile_discard_ask" };
+    let shown = Modal::new(Id::NULL.with(id)).show(ctx, |ui| {
         ui.set_max_width(ASK_WIDTH);
         strong(ui, "Discard your changes?");
         let body = format!("Your changes to this {noun} are not saved. {then}");

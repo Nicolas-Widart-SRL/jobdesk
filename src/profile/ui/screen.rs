@@ -2,6 +2,7 @@ use chrono::NaiveDateTime;
 use egui::{Align, Frame, Key, Label, Layout, Margin, Modifiers, Rect, Ui, UiBuilder, pos2};
 use egui_commonmark::CommonMarkCache;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::profile::application::{
@@ -41,8 +42,14 @@ pub struct ProfileScreen {
     edit: Option<Edit>,
     /// What waits on the discard ask, and whether Keep editing still has to take the focus.
     ask: Option<(Ask, bool)>,
-    /// How many edits have opened, so each has a field of its own.
-    opened: u64,
+}
+
+/// How many edits have opened in this process. A folder change starts a new screen, but egui keeps each field's undo
+/// history for the life of the window, so no two edits may ever share a field.
+static OPENED: AtomicU64 = AtomicU64::new(0);
+
+fn next_edit() -> u64 {
+    OPENED.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 impl ProfileScreen {
@@ -72,12 +79,6 @@ impl ProfileScreen {
         };
         let noun = self.edit.as_ref().map_or(Noun::Part, Edit::noun);
         discard_ask(ctx, ask, noun, focus).map(|answer| answer == Answer::Discard)
-    }
-
-    /// Drops the open edit, as the answer to `ask_away`.
-    pub fn drop_edit(&mut self, editor: &mut ProfileEditor) {
-        editor.cancel();
-        self.edit = None;
     }
 }
 
@@ -238,13 +239,11 @@ impl ProfileScreen {
             Intent::Open { .. } | Intent::AddRole { .. } if editor.editing().is_some() => {}
             Intent::Open { key, text, noun } => {
                 editor.open(key, text);
-                self.opened += 1;
-                self.edit = Some(Edit::new(topic, noun, self.opened));
+                self.edit = Some(Edit::new(topic, noun, next_edit()));
             }
             Intent::AddRole { after } => {
                 editor.open_new(after, ROLE_STUB.to_owned());
-                self.opened += 1;
-                self.edit = Some(Edit::new(topic, Noun::Role, self.opened));
+                self.edit = Some(Edit::new(topic, Noun::Role, next_edit()));
             }
             Intent::Editor(action) => {
                 let edit = self.edit.as_mut()?;

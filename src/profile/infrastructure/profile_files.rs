@@ -113,17 +113,33 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permission bits of `target`.
-/// Anything else tied to the old file is lost with it: its other hard links keep the old text, and its ACLs and extended
-/// attributes are not copied.
+/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permission bits of `target`,
+/// set only once the text is in. Anything else tied to the old file is lost with it: its other hard links keep the old
+/// text, and its ACLs and extended attributes are not copied.
 fn write_copy(copy: &Path, target: &Path, text: &str) -> io::Result<()> {
-    let mut file = OpenOptions::new().write(true).create_new(true).open(copy)?;
+    let kept = fs::metadata(target).ok().map(|metadata| metadata.permissions());
+    let mut file = create_copy(copy, kept.is_some())?;
     file.write_all(text.as_bytes())?;
-    if let Ok(metadata) = fs::metadata(target) {
-        file.set_permissions(metadata.permissions())?;
+    if let Some(permissions) = kept {
+        file.set_permissions(permissions)?;
     }
     // On disk before the rename, or a power loss could keep the rename and lose the text.
     file.sync_all()
+}
+
+/// Creates the copy, empty. When it `replaces` a file, on Unix only its owner may open it until the text is in, so the
+/// text of a private file is never open to other users, not even while it is written. A new file gets the usual mode.
+fn create_copy(copy: &Path, replaces: bool) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if replaces {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = replaces;
+    options.open(copy)
 }
 
 impl ProfileStore for ProfileFiles {
@@ -243,6 +259,29 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         files.write(ProfileFile::Candidate, "new").unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then.
+    #[cfg(unix)]
+    #[test]
+    fn the_copy_is_private_until_its_text_is_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, _) = files();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let copy = dir.path().join("01-candidate-profile.md.jobdesk-save");
+        let mut file = create_copy(&copy, true).unwrap();
+        assert_eq!(mode(&copy), 0o600);
+        file.write_all(b"new").unwrap();
+        assert_eq!(mode(&copy), 0o600);
+        drop(file);
+        fs::remove_file(&copy).unwrap();
+        // The target's own bits come back once the text is in.
+        let target = dir.path().join("01-candidate-profile.md");
+        fs::write(&target, "old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        write_copy(&copy, &target, "new").unwrap();
+        assert_eq!(mode(&copy), 0o640);
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "new");
     }
 
     #[test]

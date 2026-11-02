@@ -132,7 +132,8 @@ impl ProfileEditor {
     /// only with `over_theirs`: over the block, or at the end of its `##`, or of the file. A new block goes in at the end
     /// of the block it was opened after, and when that block is gone, at the end of the file, again only with `over_theirs`.
     /// `over_theirs` holds only while the file still holds what the last save found and showed: anything newer is kept
-    /// and returned again, so a save never writes over text the user has not seen.
+    /// and returned again, so a save never writes over text the user has not seen when it reads the file. The write does
+    /// not check again: another program that writes the file between that read and the write loses its text, unwarned.
     pub fn save(&mut self, busy: bool, over_theirs: bool) -> SaveOutcome {
         if busy {
             return SaveOutcome::Busy;

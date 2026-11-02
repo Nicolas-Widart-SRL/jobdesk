@@ -3431,6 +3431,30 @@ fn clearing_tray_decisions_asks_first() {
     assert_eq!(file[ELSEWHERE].as_array().map(Vec::len), Some(1), "the other folder keeps its decisions");
 }
 
+/// Settings left by Cmd K, not Back, closes the popover too, so Cmd , reopens Data and privacy with nothing asking.
+#[test]
+fn leaving_settings_any_way_closes_the_clear_popover() {
+    let data = tempfile::tempdir().unwrap();
+    let mut shell = shell_with_decisions("settings_clear_cmd_k", data.path(), 2);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let (mut harness, shell) = shared_harness(shell);
+    let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 2 tray decisions?").next().is_some();
+    clear_decisions_button(&harness).click();
+    harness.run_steps(3);
+    assert!(asking(&harness));
+
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER));
+
+    cmd_comma(&mut harness);
+    assert!(shell.borrow().settings_open());
+    assert!(is_shown(&harness, Page::Data.lead()), "Settings reopens on Data and privacy");
+    assert!(!asking(&harness), "with the popover closed");
+    assert_eq!(shell.borrow_mut().tray_slot().as_ref().unwrap().decision_count(), 2);
+}
+
 /// Ask me before each tool saves the setting, and the open desk then waits on a permission instead of allowing it.
 #[test]
 fn ask_me_turns_prompts_on() {

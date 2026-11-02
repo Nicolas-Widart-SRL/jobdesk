@@ -19,7 +19,7 @@ use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
-use crate::settings::application::{DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check};
+use crate::settings::application::{ClaudeVersion, DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
@@ -405,6 +405,10 @@ impl Shell {
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
+        // However Settings closed, Back, Cmd K or a link out, what it was asking closes too, before Cmd , can reopen it.
+        if !self.settings_open {
+            self.settings_screen.closed();
+        }
         let queue = self.queue();
         // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
         desk(ui, |ui| {
@@ -858,7 +862,14 @@ impl Shell {
         let data = self.data_label.clone().or_else(|| self.data.as_ref().map(|data| data.display().to_string()));
         // Only the open folder's decisions can be cleared, and none from a tray that could not be read.
         let decisions = self.tray.as_ref().filter(|tray| folder_open && tray.issue().is_none()).map(InTray::decision_count);
+        // Until the first tool check answers, About says it is checking, as Runtime status does, never that Claude Code is missing.
+        let checking = self.environment.as_ref().is_some_and(|environment| environment.results().is_none());
         let claude_version = self.environment.as_ref().and_then(|environment| environment.version_of("claude")).map(str::to_owned);
+        let claude = match claude_version.as_deref() {
+            Some(version) => ClaudeVersion::Found(version),
+            None if checking => ClaudeVersion::Checking,
+            None => ClaudeVersion::NotFound,
+        };
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -878,7 +889,7 @@ impl Shell {
                     sizes: self.data_sizes,
                     decisions,
                     version: &self.version,
-                    claude_version: claude_version.as_deref(),
+                    claude,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),

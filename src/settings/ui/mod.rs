@@ -10,8 +10,8 @@ use chrono::NaiveDate;
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    CapCheck, DataSizes, Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, UsageState,
-    cap_word, index, rail_word, search, size_short,
+    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice,
+    UsageState, cap_word, index, rail_word, search, size_short,
 };
 use crate::settings::ui::about::AboutView;
 use crate::settings::ui::data::DataView;
@@ -52,6 +52,11 @@ impl SettingsScreen {
     pub fn page(&self) -> Page {
         self.page
     }
+
+    /// Settings is closed, by whatever way: a popover that was asking closes with it, so reopening never finds it open.
+    pub fn closed(&mut self) {
+        self.clearing = None;
+    }
 }
 
 pub struct SettingsView<'a> {
@@ -74,9 +79,9 @@ pub struct SettingsView<'a> {
     pub sizes: Option<DataSizes>,
     /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read.
     pub decisions: Option<usize>,
-    /// This copy's version, and Claude Code's once the tool check found it.
+    /// This copy's version, and Claude Code's as the tool check knows it.
     pub version: &'a str,
-    pub claude_version: Option<&'a str>,
+    pub claude: ClaudeVersion<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +165,7 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             request = asked.or(request);
         }
         Page::About => {
-            let about = AboutView { version: view.version, claude: view.claude_version };
+            let about = AboutView { version: view.version, claude: view.claude };
             settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
         }
         _ => other_page(&mut page_ui, page, &query),
@@ -455,6 +460,7 @@ mod tests {
         reading: bool,
         decisions: Option<usize>,
         cap: CapCheck,
+        no_folder: bool,
     }
 
     /// The fictional data folder's sizes: 212 MB in all.
@@ -497,7 +503,7 @@ mod tests {
             let usage = if state.reading { UsageState::Reading } else { UsageState::Read { report: &state.report, pipeline: &state.pipeline, today: today() } };
             let view = SettingsView {
                 settings: &mut state.settings,
-                folder: Some("~/Documents/ai-job-search"),
+                folder: (!state.no_folder).then_some("~/Documents/ai-job-search"),
                 folder_read: true,
                 runtime: RuntimeWord::Missing(1),
                 folder_wait: None,
@@ -508,7 +514,7 @@ mod tests {
                 sizes: Some(SIZES),
                 decisions: state.decisions,
                 version: "0.1.0",
-                claude_version: Some("2.1.4"),
+                claude: ClaudeVersion::Found("2.1.4"),
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -549,6 +555,7 @@ mod tests {
             reading: false,
             decisions: Some(214),
             cap: CapCheck::Open,
+            no_folder: false,
         }))
     }
 
@@ -714,7 +721,7 @@ mod tests {
                 sizes: None,
                 decisions: None,
                 version: "0.1.0",
-                claude_version: None,
+                claude: ClaudeVersion::NotFound,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -833,13 +840,82 @@ mod tests {
         state.borrow_mut().decisions = Some(0);
         let mut harness = harness(state.clone());
         harness.run();
-        assert!(clear_button(&harness).accesskit_node().is_disabled());
+        // Each reason shows on hover over the disabled button.
+        let waits_because = |harness: &mut Harness<'static>, why: &str| {
+            assert!(clear_button(harness).accesskit_node().is_disabled(), "{why}");
+            clear_button(harness).hover();
+            harness.run_steps(8);
+            assert!(harness.query_by_label(why).is_some(), "{why}");
+        };
+        waits_because(&mut harness, "No decisions to clear.");
+
         state.borrow_mut().decisions = None;
         harness.run();
-        assert!(clear_button(&harness).accesskit_node().is_disabled(), "a tray that could not be read clears nothing");
+        waits_because(&mut harness, "Today's decisions could not be read.");
+        assert!(harness.query_by_label("No decisions to clear.").is_none(), "a tray that could not be read is not an empty one");
         clear_button(&harness).click();
         harness.run();
         assert!(harness.query_all_by_label_contains("tray decisions?").next().is_none(), "nothing asks");
+
+        state.borrow_mut().no_folder = true;
+        harness.run();
+        waits_because(&mut harness, "Choose a folder first.");
+    }
+
+    /// A command's budget saves only an amount. Text that is not one stays in the field while it has the focus, and
+    /// the saved budget stays as it was.
+    #[test]
+    fn a_command_budget_that_does_not_read_keeps_the_saved_one() {
+        let mut settings = Settings::unsaved();
+        settings.add_command(crate::runs::application::CATALOG.iter().find(|spec| spec.name == "/rank").unwrap());
+        let saved = settings.preferences().run_defaults.commands[0].budget;
+        let state = state_with(settings);
+        on(&state, Page::Defaults);
+        let mut harness = harness(state.clone());
+        harness.run();
+        fn field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+            harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("Spend at most for /rank"))
+        }
+        field(&harness).focus();
+        harness.run();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("abc");
+        harness.run();
+        assert_eq!(field(&harness).value().as_deref(), Some("abc"), "the typed text stays while the field has the focus");
+        assert_eq!(state.borrow().settings.preferences().run_defaults.commands[0].budget, saved, "the saved budget stays");
+
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("2.5");
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().run_defaults.commands[0].budget, crate::settings::application::Dollars::parse("2.50").unwrap());
+    }
+
+    #[test]
+    fn about_says_checking_while_the_tool_check_runs() {
+        let mut settings = Settings::unsaved();
+        let mut screen = SettingsScreen::default();
+        screen.open_on(Page::About);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let view = SettingsView {
+                settings: &mut settings,
+                folder: None,
+                folder_read: false,
+                runtime: RuntimeWord::None,
+                folder_wait: None,
+                usage: UsageState::NoFolder,
+                today: today(),
+                cap: CapCheck::Open,
+                data: None,
+                sizes: None,
+                decisions: None,
+                version: "0.1.0",
+                claude: ClaudeVersion::Checking,
+            };
+            show(ui, &mut screen, view, &mut |_, _, _| {});
+        });
+        harness.run();
+        harness.get_by_label("Checking…");
+        assert!(harness.query_by_label("Not found").is_none(), "a check still running never says Claude Code is missing");
     }
 
     #[test]
@@ -1046,7 +1122,7 @@ mod tests {
                 sizes: None,
                 decisions: None,
                 version: "0.1.0",
-                claude_version: None,
+                claude: ClaudeVersion::NotFound,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

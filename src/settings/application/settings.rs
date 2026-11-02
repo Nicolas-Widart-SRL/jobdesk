@@ -238,10 +238,23 @@ fn sized(bytes: u64, detail: bool) -> String {
     unreachable!("the last unit always returns")
 }
 
+/// What the tool check knows of Claude Code's version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeVersion<'a> {
+    /// The first check has not answered yet.
+    Checking,
+    Found(&'a str),
+    NotFound,
+}
+
 /// What About's Copy details puts on the clipboard for a bug report: Jobdesk's version, the system it runs on, and
-/// Claude Code's version, or that it was not found.
-pub fn about_details(jobdesk: &str, system: &str, arch: &str, claude: Option<&str>) -> String {
-    let claude = claude.map_or_else(|| "not found".to_owned(), str::to_owned);
+/// Claude Code's version, that it was not found, or that the check has not answered yet.
+pub fn about_details(jobdesk: &str, system: &str, arch: &str, claude: ClaudeVersion) -> String {
+    let claude = match claude {
+        ClaudeVersion::Found(version) => version,
+        ClaudeVersion::NotFound => "not found",
+        ClaudeVersion::Checking => "not checked yet",
+    };
     format!("Jobdesk {jobdesk}\n{system} ({arch})\nClaude Code {claude}")
 }
 
@@ -429,8 +442,13 @@ mod tests {
 
     #[test]
     fn the_details_name_both_versions_and_the_system() {
-        assert_eq!(about_details("0.1.0", "macOS", "aarch64", Some("2.1.4")), "Jobdesk 0.1.0\nmacOS (aarch64)\nClaude Code 2.1.4");
-        assert_eq!(about_details("0.1.0", "Windows", "x86_64", None), "Jobdesk 0.1.0\nWindows (x86_64)\nClaude Code not found");
+        assert_eq!(about_details("0.1.0", "macOS", "aarch64", ClaudeVersion::Found("2.1.4")), "Jobdesk 0.1.0\nmacOS (aarch64)\nClaude Code 2.1.4");
+        assert_eq!(about_details("0.1.0", "Windows", "x86_64", ClaudeVersion::NotFound), "Jobdesk 0.1.0\nWindows (x86_64)\nClaude Code not found");
+        assert_eq!(
+            about_details("0.1.0", "macOS", "aarch64", ClaudeVersion::Checking),
+            "Jobdesk 0.1.0\nmacOS (aarch64)\nClaude Code not checked yet",
+            "a check still running never claims Claude Code is missing"
+        );
     }
 
     #[test]

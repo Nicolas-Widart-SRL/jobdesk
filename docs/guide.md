@@ -53,7 +53,7 @@ Settings (Cmd+, , Ctrl+, on Windows, or Settings at the right of the status bar)
 - Run defaults: the model and Spend at most that each new task starts from, a table of commands with their own model and budget (a command's row beats the defaults, and Add a command picks from the commands Jobdesk knows), and a monthly cap. Left empty, Spend at most keeps each command's suggested budget. You can still change both in the launcher. At or over the cap, Run is disabled with the reason and a link back to the cap, and it opens again on the 1st. A task already running is not stopped, and replies in a session already open still send. The cap counts this month's tasks as Usage statistics does.
 - Permissions: Allow and note in the activity, the default, or Ask me before each tool. Either way, questions from Claude always reach you, and a rule you let it remember lasts only until the task ends and is never saved to your folder.
 - Data and privacy: where Jobdesk keeps its data, with the size of the run logs and the tray decisions. Keep run logs for 30 days, 90 days or Forever, which is the default. A shorter time deletes older logs when Jobdesk starts, never those of the current month, and Usage statistics then counts only the logs kept. Clear tray decisions asks first and forgets what you decided on Today.
-- About: the Jobdesk and Claude Code versions with Copy details for a bug report, and links to the auth review, the changelog and the licences.
+- About: the Jobdesk and Claude Code versions with Copy details for a bug report, and links to the auth review and the changelog. The licences are not available there yet.
 
 The other sections show in the rail and open in later versions.
 

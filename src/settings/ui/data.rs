@@ -14,6 +14,8 @@ const NO_DATA: &str = "Jobdesk has no data folder on this computer.";
 const NOTHING_KEPT: &str = "Nothing is kept yet.";
 const NO_FOLDER: &str = "Choose a folder first.";
 const NO_DECISIONS: &str = "No decisions to clear.";
+/// Why Clear tray decisions waits while the tray could not be read: clearing would overwrite a file Jobdesk cannot read.
+const UNREAD: &str = "Today's decisions could not be read.";
 const CLEAR_NOTE: &str = "Today deals every card again, the ones you skipped too. This cannot be undone.";
 
 /// What the page shows of the data folder, as the shell read it.
@@ -56,7 +58,11 @@ pub fn body(ui: &mut Ui, settings: &mut Settings, view: DataView, clearing: &mut
     });
     setting_section(ui, tray, None, query);
     let count = view.decisions.unwrap_or(0);
-    let why = if view.workspace_open { NO_DECISIONS } else { NO_FOLDER };
+    let why = match view.decisions {
+        _ if !view.workspace_open => NO_FOLDER,
+        None => UNREAD,
+        Some(_) => NO_DECISIONS,
+    };
     let enabled = count > 0;
     let mut button = None;
     setting_row(ui, clear, clear_help, query, |ui| {

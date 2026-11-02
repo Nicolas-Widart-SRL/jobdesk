@@ -30,3 +30,5 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 18 `.claude/agents/designer.md`: step 1 limited reads to "only" handoff files and touched canvases while step 2 required `Grid.html`, `app.css` and `support.js`. Class: contradiction between steps.
 - PR 17 `.claude/skills/ship/SKILL.md`: comments posted between opening the pull request and the watch call never woke the lead. Class: state over time.
 - PR 17 `.claude/skills/ship/SKILL.md`: a user comment starting with "Not changed" on a judged finding was taken as the lead's reply and never judged. Class: state over time.
+- PR 21 `src/settings/infrastructure/preferences_file.rs`: atomic replace renamed the temp file without sync_all, so the crash-safety doc comment overclaimed. Class: state over time.
+- PR 21 `src/workspace/ui.rs`: runtime_status returned an Option that was always None while the shell still matched on it. Class: dead signature.

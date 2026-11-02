@@ -46,7 +46,10 @@ impl PreferencesFile {
         options.create(true).write(true).truncate(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        options.open(&temporary)?.write_all(text.as_bytes())?;
+        let mut file = options.open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        // On disk before the rename, or a power loss could keep the rename and lose the data.
+        file.sync_all()?;
         fs::rename(temporary, &self.path)
     }
 }

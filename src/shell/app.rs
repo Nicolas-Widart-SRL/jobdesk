@@ -718,7 +718,6 @@ impl Shell {
         let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
         let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
-        let mut change_folder = false;
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
         let asked = Frame::new()
@@ -726,9 +725,7 @@ impl Shell {
             .show(ui, |ui| {
                 let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
-                    (Page::Runtime, Some(environment)) => {
-                        change_folder |= workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query) == Some(WorkspaceAction::ChangeFolder);
-                    }
+                    (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
                     // Only previews lack the tool check. They draw no tools, but still the alert.
                     (Page::Runtime, None) => alerts(ui),
                     _ => {}
@@ -741,16 +738,13 @@ impl Shell {
                 self.settings_open = false;
                 ctx.request_repaint();
             }
-            Some(SettingsRequest::ChangeFolder) => change_folder = true,
+            Some(SettingsRequest::ChangeFolder) => self.choose_folder(&ctx),
             Some(SettingsRequest::ShowFolder) => {
                 if let Some(workspace) = &self.workspace {
                     settings::reveal_folder(workspace.path());
                 }
             }
             None => {}
-        }
-        if change_folder {
-            self.choose_folder(&ctx);
         }
     }
 }

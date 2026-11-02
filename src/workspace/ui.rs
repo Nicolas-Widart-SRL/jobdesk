@@ -132,7 +132,7 @@ pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, 
 /// Settings › Runtime status: Setup's content in one column, under Claude Code's version and sign-in.
 /// `sign_in` is what the last task reported. Without `folder_open`, only Claude Code and the tools show.
 /// Headings and labels mark the hits of the search `query`.
-pub fn runtime_status(ui: &mut Ui, state: &ScreenState, view: &WorkspaceView, environment: &mut EnvironmentChecks, sign_in: AuthMode, folder_open: bool, query: &str) -> Option<WorkspaceAction> {
+pub fn runtime_status(ui: &mut Ui, state: &ScreenState, view: &WorkspaceView, environment: &mut EnvironmentChecks, sign_in: AuthMode, folder_open: bool, query: &str) {
     environment.ensure_started();
     let running = environment.is_running();
     let read = folder_open && !state.reading();
@@ -188,7 +188,6 @@ pub fn runtime_status(ui: &mut Ui, state: &ScreenState, view: &WorkspaceView, en
     if recheck {
         environment.recheck();
     }
-    None
 }
 
 /// What runs every task: the program's version, and how the last task signed in.

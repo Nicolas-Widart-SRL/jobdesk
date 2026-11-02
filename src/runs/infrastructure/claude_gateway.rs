@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -151,19 +151,31 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     command
 }
 
+/// Masks the key a process was given wherever the key appears whole in what the process says, on stdout or stderr.
+/// Its clones share one copy of the key, dropped with the last of them once the process ended and its output was read.
+#[derive(Debug, Clone, Default)]
+struct KeyMasker(Option<Arc<ApiKey>>);
+
+impl KeyMasker {
+    fn mask(&self, text: &str) -> String {
+        redacted(text, self.0.as_deref())
+    }
+}
+
 /// Starts the process. A key that cannot be had ends it before any process exists, and never falls back to the Claude plan.
-/// The key comes back with the process, kept only to mask it in what the process says on stderr.
-fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader) -> Result<(Child, Option<ApiKey>), String> {
+/// The key comes back with the process, kept only to mask it in what the process says.
+fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader) -> Result<(Child, KeyMasker), String> {
     let key = task_key(request.sign_in, keys)?;
     // The command holds the key only until it is spawned.
     let spawned = command_for(claude, workspace, path, request, key.as_ref()).spawn();
-    spawned.map(|child| (child, key)).map_err(|error| format!("Could not start Claude: {error}"))
+    spawned.map(|child| (child, KeyMasker(key.map(Arc::new)))).map_err(|error| format!("Could not start Claude: {error}"))
 }
 
-/// Why a process that did not succeed failed: the last lines of its stderr, with the key it was given masked, or else its exit status.
-fn failure_of(status: &ExitStatus, tail: &[String], key: Option<&ApiKey>) -> String {
-    let tail = tail.join("\n");
-    if tail.is_empty() { format!("Claude exited with {status}") } else { redacted(&tail, key) }
+/// Why a process failed, or None when it succeeded: the last lines of its stderr with its key masked, or else its exit status.
+fn failure_of(status: io::Result<ExitStatus>, stderr_tail: &Mutex<VecDeque<String>>, masker: &KeyMasker) -> Option<String> {
+    let status = status.ok().filter(|status| !status.success())?;
+    let tail = stderr_tail.lock().map(|tail| tail.iter().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default();
+    Some(if tail.is_empty() { format!("Claude exited with {status}") } else { masker.mask(&tail) })
 }
 
 fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>, process: &Mutex<Process>) {
@@ -182,7 +194,7 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
         emit(AgentEvent::ProcessExited { failure: Some("Claude CLI not found. Install Claude Code, then run this again.".to_owned()) });
         return;
     };
-    let (mut child, key) = match spawn_claude(&claude, workspace, path, request, keys) {
+    let (mut child, masker) = match spawn_claude(&claude, workspace, path, request, keys) {
         Ok(spawned) => spawned,
         Err(failure) => {
             emit(AgentEvent::ProcessExited { failure: Some(failure) });
@@ -199,7 +211,7 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
     let log = RunLog::open(logs, workspace, request).ok().map(|log| Arc::new(Mutex::new(log)));
     let stderr_tail = collect_stderr(&mut child);
     let mut stdin = child.stdin.take();
-    read_stdout(&mut child, log.clone(), emit.clone(), to_self);
+    read_stdout(&mut child, log.clone(), emit.clone(), to_self, masker.clone());
     write_line(&mut stdin, &user_message(&request.line));
 
     let note = |write: &dyn Fn(&mut RunLog)| {
@@ -231,11 +243,8 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
     if let Ok(mut process) = process.lock() {
         process.pid = None;
     }
-    let failure = status.ok().filter(|status| !status.success()).map(|status| {
-        let tail = stderr_tail.lock().map(|tail| tail.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
-        failure_of(&status, &tail, key.as_ref())
-    });
-    drop(key);
+    let failure = failure_of(status, &stderr_tail, &masker);
+    drop(masker);
     emit(AgentEvent::ProcessExited { failure });
 }
 
@@ -247,10 +256,12 @@ fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
     }
 }
 
-fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn(AgentEvent) + Send + 'static, done: Sender<Outgoing>) {
+/// Each line is masked before the log and the events see it. The mask holds no quote or backslash, so a JSON line stays JSON.
+fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn(AgentEvent) + Send + 'static, done: Sender<Outgoing>, masker: KeyMasker) {
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let line = masker.mask(&line);
             if let Some(log) = &log
                 && let Ok(mut log) = log.lock()
             {
@@ -285,8 +296,6 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
 #[cfg(test)]
 mod key_tests {
     use super::*;
-    use crate::settings::application::{ConnectionTester, Outcome, Preferences, TestDone, TestReport};
-    use crate::settings::{memory_keychain, open_providers, open_settings};
     use crate::shared_kernel::KeyMask;
 
     const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
@@ -401,112 +410,157 @@ mod key_tests {
     }
 
     #[cfg(unix)]
-    fn exit_one() -> ExitStatus {
-        std::os::unix::process::ExitStatusExt::from_raw(256)
+    fn exit_with(code: i32) -> ExitStatus {
+        std::os::unix::process::ExitStatusExt::from_raw(code << 8)
     }
 
     #[cfg(windows)]
-    fn exit_one() -> ExitStatus {
-        std::os::windows::process::ExitStatusExt::from_raw(1)
+    fn exit_with(code: i32) -> ExitStatus {
+        std::os::windows::process::ExitStatusExt::from_raw(code as u32)
+    }
+
+    fn masker() -> KeyMasker {
+        KeyMasker(ApiKey::parse(FAKE).map(Arc::new))
+    }
+
+    fn tail_of(lines: &[String]) -> Mutex<VecDeque<String>> {
+        Mutex::new(lines.iter().cloned().collect())
     }
 
     #[test]
     fn a_failure_masks_the_key_the_process_said() {
-        let key = ApiKey::parse(FAKE).unwrap();
-        let tail = [format!("error: invalid x-api-key {FAKE}"), format!("key was {FAKE}")];
-        assert_eq!(failure_of(&exit_one(), &tail, Some(&key)), "error: invalid x-api-key sk-ant-••••••••R2kd\nkey was sk-ant-••••••••R2kd");
-        assert_eq!(failure_of(&exit_one(), &tail[..1], None), format!("error: invalid x-api-key {FAKE}"), "no key was passed, so none is known");
-        assert!(failure_of(&exit_one(), &[], Some(&key)).starts_with("Claude exited with "));
+        let tail = tail_of(&[format!("error: invalid x-api-key {FAKE}"), format!("key was {FAKE}")]);
+        let failure = failure_of(Ok(exit_with(1)), &tail, &masker());
+        assert_eq!(failure.as_deref(), Some("error: invalid x-api-key sk-ant-••••••••R2kd\nkey was sk-ant-••••••••R2kd"));
+        let one = tail_of(&[format!("error: invalid x-api-key {FAKE}")]);
+        assert_eq!(failure_of(Ok(exit_with(1)), &one, &KeyMasker::default()), Some(format!("error: invalid x-api-key {FAKE}")), "no key was passed");
+        assert!(failure_of(Ok(exit_with(1)), &tail_of(&[]), &masker()).unwrap().starts_with("Claude exited with "));
+        assert_eq!(failure_of(Ok(exit_with(0)), &tail, &masker()), None, "a success is no failure");
     }
 
-    /// Answers every test at once with a pass, and says the key back, so the report has to be masked.
-    struct PassingTester;
-
-    impl ConnectionTester for PassingTester {
-        fn start(&self, key: Option<ApiKey>, done: TestDone) {
-            let said = key.map(|key| format!("ready {}", key.expose())).unwrap_or_default();
-            done(TestReport { outcome: Outcome::Passed, cost_usd: 0.004, said, source: Some("ANTHROPIC_API_KEY".to_owned()) });
-        }
-    }
-
-    /// Whether `text` holds the key, or any `sk-ant-` text but its mask: the dots and at most the last four.
-    fn leaks(text: &str) -> bool {
-        let mask = KeyMask::of(&ApiKey::parse(FAKE).unwrap()).shown();
-        text.contains(FAKE)
-            || text.contains("api03")
-            || text.match_indices("sk-ant-").any(|(at, _)| {
-                let Some(rest) = text[at..].strip_prefix(&mask) else { return true };
-                rest.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).count() > 4
-            })
-    }
-
-    fn files_in(dir: &Path, found: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap().flatten() {
-            let path = entry.path();
-            if path.is_dir() { files_in(&path, found) } else { found.push(path) }
-        }
-    }
-
-    /// A key typed on Providers, tested, then used by a task, leaves no trace in the data folder, the command line or the failure.
-    #[cfg(unix)]
     #[test]
-    fn a_saved_key_reaches_no_file_argument_or_failure() {
-        use std::os::unix::fs::PermissionsExt;
+    fn a_masked_json_line_stays_json() {
+        let mask = KeyMask::of(&ApiKey::parse(FAKE).unwrap()).text();
+        assert!(!mask.contains(['"', '\\']), "{mask}");
+        let line = format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"key {FAKE}"}}]}}}}"#);
+        let masked = masker().mask(&line);
+        assert!(!masked.contains(FAKE));
+        let events = parse_line(&masked);
+        assert_eq!(events, [AgentEvent::AssistantText { text: format!("key {mask}"), nested: false }]);
+    }
 
-        assert!(!leaks("key sk-ant-••••••••R2kd.") && leaks("sk-ant-••••••••R2kdX") && leaks("sk-ant-api") && leaks(FAKE), "the scan itself");
+    /// The whole path of a key, from Save key on Providers to a task's process, on a stand-in for `claude`.
+    #[cfg(unix)]
+    mod leaks {
+        use super::*;
+        use crate::settings::application::{ConnectionTester, Outcome, Preferences, TestDone, TestReport};
+        use crate::settings::{memory_keychain, open_providers, open_settings};
 
-        let data = tempfile::tempdir().unwrap();
-        let mut settings = open_settings(data.path(), Preferences::default());
-        let mut providers = open_providers(memory_keychain(None), Box::new(PassingTester));
-        providers.save_key(FAKE, &mut settings, false).unwrap();
-        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap().and_hms_opt(9, 30, 0).unwrap();
-        assert!(providers.poll(&mut settings, now));
-        let mut request = request();
-        request.sign_in = providers.task_sign_in(settings.preferences());
-        assert_eq!(request.sign_in, SignIn::ApiKey, "the pass put tasks on the key");
+        /// Answers every test at once with a pass, and says the key back, so the report has to be masked.
+        struct PassingTester;
 
-        let reader = providers.key_reader();
-        let key = task_key(request.sign_in, &reader).unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let command = command_for(Path::new("/bin/claude"), workspace.path(), "/bin", &request, key.as_ref());
-        for arg in command.get_args() {
-            assert!(!leaks(&arg.to_string_lossy()), "{arg:?}");
+        impl ConnectionTester for PassingTester {
+            fn start(&self, key: Option<ApiKey>, done: TestDone) {
+                let said = key.map(|key| format!("ready {}", key.expose())).unwrap_or_default();
+                done(TestReport { outcome: Outcome::Passed, cost_usd: 0.004, said, source: Some("ANTHROPIC_API_KEY".to_owned()) });
+            }
         }
-        drop(key);
 
-        // A stand-in for claude that gets the same command: it answers, says its key on stderr, and fails.
-        let bin = tempfile::tempdir().unwrap();
-        let claude = bin.path().join("claude");
-        let script = "#!/bin/sh\nread line\necho '{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"ANTHROPIC_API_KEY\"}'\necho \"error: bad key $ANTHROPIC_API_KEY\" >&2\nexit 1\n";
-        std::fs::write(&claude, script).unwrap();
-        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let (mut child, key) = spawn_claude(&claude, workspace.path(), "/bin:/usr/bin", &request, &reader).unwrap();
-        let mut log = RunLog::open(&data.path().join("runs"), workspace.path(), &request).unwrap();
-        let mut stdin = child.stdin.take();
-        write_line(&mut stdin, &user_message(&request.line));
-        drop(stdin);
-        for line in BufReader::new(child.stdout.take().unwrap()).lines().map_while(Result::ok) {
-            log.append(&line);
+        /// Whether `text` holds the key, or any `sk-ant-` text but its mask: the dots and at most the last four.
+        fn leaks(text: &str) -> bool {
+            let mask = KeyMask::of(&ApiKey::parse(FAKE).unwrap()).shown();
+            text.contains(FAKE)
+                || text.contains("api03")
+                || text.match_indices("sk-ant-").any(|(at, _)| {
+                    let Some(rest) = text[at..].strip_prefix(&mask) else { return true };
+                    rest.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).count() > 4
+                })
         }
-        log.append_user("Thanks");
-        log.note_stop();
-        drop(log);
-        // Its stderr is a line, far less than a pipe holds, so it can be read after stdout ended.
-        let tail = Mutex::new(VecDeque::new());
-        read_tail(child.stderr.take().unwrap(), &tail);
-        let status = child.wait().unwrap();
-        let tail: Vec<String> = tail.into_inner().unwrap().into();
-        assert!(tail.iter().any(|line| line.contains(FAKE)), "the stand-in got the key");
-        let failure = failure_of(&status, &tail, key.as_ref());
-        assert_eq!(failure, "error: bad key sk-ant-••••••••R2kd");
 
-        let mut files = Vec::new();
-        files_in(data.path(), &mut files);
-        let names: Vec<_> = files.iter().map(|path| path.strip_prefix(data.path()).unwrap().to_string_lossy().into_owned()).collect();
-        assert!(names.contains(&"settings.json".to_owned()) && names.contains(&"runs/r.jsonl".to_owned()), "{names:?}");
-        for path in &files {
-            let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
-            assert!(!leaks(&text), "{} holds the key", path.display());
+        fn files_in(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() { files_in(&path, found) } else { found.push(path) }
+            }
+        }
+
+        /// A key typed on Providers, tested, then used by a task, leaves no trace in the data folder, the command line,
+        /// the events or the failure, even when the process prints it on stdout and stderr.
+        #[test]
+        fn a_saved_key_reaches_no_file_argument_event_or_failure() {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert!(!leaks("key sk-ant-••••••••R2kd.") && leaks("sk-ant-••••••••R2kdX") && leaks("sk-ant-api") && leaks(FAKE), "the scan itself");
+
+            let data = tempfile::tempdir().unwrap();
+            let mut settings = open_settings(data.path(), Preferences::default());
+            let mut providers = open_providers(memory_keychain(None), Box::new(PassingTester));
+            providers.save_key(FAKE, &mut settings, false).unwrap();
+            let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 14).unwrap().and_hms_opt(9, 30, 0).unwrap();
+            assert!(providers.poll(&mut settings, now));
+            let mut request = request();
+            request.sign_in = providers.task_sign_in(settings.preferences());
+            assert_eq!(request.sign_in, SignIn::ApiKey, "the pass put tasks on the key");
+
+            let reader = providers.key_reader();
+            let key = task_key(request.sign_in, &reader).unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let command = command_for(Path::new("/bin/claude"), workspace.path(), "/bin", &request, key.as_ref());
+            for arg in command.get_args() {
+                assert!(!leaks(&arg.to_string_lossy()), "{arg:?}");
+            }
+            drop(key);
+
+            // A stand-in for claude that gets the same command: it answers, says its key on stdout and stderr, and fails.
+            let bin = tempfile::tempdir().unwrap();
+            let claude = bin.path().join("claude");
+            let script = concat!(
+                "#!/bin/sh\n",
+                "read line\n",
+                "echo '{\"type\":\"system\",\"subtype\":\"init\",\"apiKeySource\":\"ANTHROPIC_API_KEY\"}'\n",
+                "echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"key '\"$ANTHROPIC_API_KEY\"'\"}]}}'\n",
+                "echo \"error: bad key $ANTHROPIC_API_KEY\" >&2\n",
+                "exit 1\n",
+            );
+            std::fs::write(&claude, script).unwrap();
+            std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+            // As `supervise` does, without its search for `claude` on the PATH.
+            let (mut child, masker) = spawn_claude(&claude, workspace.path(), "/bin:/usr/bin", &request, &reader).unwrap();
+            let log = Arc::new(Mutex::new(RunLog::open(&data.path().join("runs"), workspace.path(), &request).unwrap()));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let (ended, stream_end) = mpsc::channel();
+            let seen = Arc::clone(&events);
+            read_stdout(&mut child, Some(Arc::clone(&log)), move |event| seen.lock().unwrap().push(event), ended, masker.clone());
+            let mut stdin = child.stdin.take();
+            write_line(&mut stdin, &user_message(&request.line));
+            drop(stdin);
+            assert!(matches!(stream_end.recv().unwrap(), Outgoing::StreamEnded));
+            log.lock().unwrap().append_user("Thanks");
+            log.lock().unwrap().note_stop();
+            drop(log);
+            // Its stderr is a line, far less than a pipe holds, so it can be read after stdout ended.
+            let tail = Mutex::new(VecDeque::new());
+            read_tail(child.stderr.take().unwrap(), &tail);
+            assert!(tail.lock().unwrap().iter().any(|line| line.contains(FAKE)), "the stand-in got the key");
+            let failure = failure_of(child.wait(), &tail, &masker);
+            drop(masker);
+            assert_eq!(failure.as_deref(), Some("error: bad key sk-ant-••••••••R2kd"));
+
+            let events = events.lock().unwrap();
+            assert!(events.contains(&AgentEvent::AssistantText { text: "key sk-ant-••••••••R2kd".to_owned(), nested: false }), "{events:?}");
+            assert!(!leaks(&format!("{events:?}")), "an event holds the key");
+
+            let mut files = Vec::new();
+            files_in(data.path(), &mut files);
+            let names: Vec<_> = files.iter().map(|path| path.strip_prefix(data.path()).unwrap().to_string_lossy().into_owned()).collect();
+            assert!(names.contains(&"settings.json".to_owned()) && names.contains(&"runs/r.jsonl".to_owned()), "{names:?}");
+            for path in &files {
+                let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+                assert!(!leaks(&text), "{} holds the key", path.display());
+            }
+            let log = std::fs::read_to_string(data.path().join("runs/r.jsonl")).unwrap();
+            assert!(log.contains("key sk-ant-••••••••R2kd"), "the masked line is logged");
         }
     }
 }

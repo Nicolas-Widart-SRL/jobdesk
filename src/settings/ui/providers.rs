@@ -571,7 +571,7 @@ fn key_entry(ui: &mut Ui, screen: &mut ProvidersScreen, settings: &mut Settings,
             "Save key keeps it in the {KEYCHAIN}, never in a file, then tests it for about a cent. Tasks switch to the key once the test passes. Jobdesk passes it only to the Claude Code process of each task."
         ),
         gate => format!(
-            "Save key keeps it in the {KEYCHAIN}, never in a file. {}, so it waits at Not tested yet until you choose Test connection or Use for tasks. Tasks switch to the key once a test passes. Jobdesk passes it only to the Claude Code process of each task.",
+            "Save key keeps it in the {KEYCHAIN}, never in a file. {}, so it waits at Not tested yet: once that ends, choose Test connection or Use for tasks. Tasks switch to the key once a test passes. Jobdesk passes it only to the Claude Code process of each task.",
             if gate == TestGate::Testing { "Another test is finishing" } else { "A task is open" }
         ),
     };

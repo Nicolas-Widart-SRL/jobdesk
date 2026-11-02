@@ -5023,10 +5023,27 @@ fn a_key_saved_while_a_task_is_open_waits_untested() {
     *shell.desk_slot() = Some(apply_run(permission_prompt()));
     let mut harness = tray_harness(shell);
     type_key(&mut harness, FAKE_KEY);
-    assert!(harness.query_by_label_contains("A task is open, so it waits at Not tested yet until you choose Test connection or Use for tasks.").is_some());
+    assert!(
+        harness.query_by_label_contains("A task is open, so it waits at Not tested yet: once that ends, choose Test connection or Use for tasks.").is_some()
+    );
     assert!(harness.query_by_label_contains("then tests it for about a cent").is_none(), "no test is promised");
     save_key(&mut harness);
     assert!(is_shown(&harness, "Not tested yet"), "the tester was not asked");
+    assert!(is_shown(&harness, "R2kd"), "the key is saved");
+}
+
+/// A key saved while a test of the Claude sign-in still runs is not tested either, and the note says why.
+#[test]
+fn a_key_saved_while_another_test_finishes_waits_untested() {
+    let mut harness = tray_harness(sign_in_shell("providers_save_testing", idle_tester()));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    type_key(&mut harness, FAKE_KEY);
+    let note = "Another test is finishing, so it waits at Not tested yet: once that ends, choose Test connection or Use for tasks.";
+    assert!(harness.query_by_label_contains(note).is_some());
+    assert!(harness.query_by_label_contains("then tests it for about a cent").is_none(), "no test is promised");
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "Not tested yet"), "the key is not under test");
     assert!(is_shown(&harness, "R2kd"), "the key is saved");
 }
 

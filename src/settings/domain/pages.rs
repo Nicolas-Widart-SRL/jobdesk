@@ -79,6 +79,14 @@ impl Page {
         }
     }
 
+    /// The title in the page's head, which may say more than the rail's name for it.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Page::About => "About Jobdesk",
+            page => page.title(),
+        }
+    }
+
     /// The line under the title.
     pub fn lead(self) -> &'static str {
         match self {
@@ -99,7 +107,7 @@ impl Page {
 
     /// Whether the page has its content yet. The others show a placeholder until their step lands.
     pub fn built(self) -> bool {
-        matches!(self, Page::General | Page::Appearance | Page::Usage | Page::Runtime)
+        matches!(self, Page::General | Page::Appearance | Page::Usage | Page::Defaults | Page::Permissions | Page::Runtime | Page::Data | Page::About)
     }
 }
 
@@ -137,6 +145,70 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
 /// The figures' labels, then the sections under them.
 const USAGE: [&str; 8] = ["Spent", "Tokens", "Cache hits", "Tasks", "Per application sent", "Every day", "By command", "By model"];
 
+/// Every task's two rows, the table's section, then the cap's section and the words of its row.
+const DEFAULTS: [&str; 12] = [
+    "Every task",
+    "The launcher starts with these. You can still change them before you press Run.",
+    "Model",
+    "Claude default leaves the choice to Claude Code.",
+    "Spend at most, USD",
+    "Empty starts each command at its suggested budget, $1 to $5. An amount here starts every task there.",
+    "Per command",
+    "A command listed here starts with its own model and budget.",
+    "Monthly cap",
+    "Stop at",
+    "a month",
+    "Once this month's tasks cost that much, Run in the launcher is disabled until the 1st and says why. A task that is running finishes.",
+];
+
+/// The two choices, the two rows that hold either way, then the line on what allowing costs.
+const PERMISSIONS: [&str; 12] = [
+    "Tool permissions",
+    "What happens when Claude wants to read, write or run something during a task.",
+    "Allow and note in the activity",
+    "Tasks never stop for a permission. Each tool Claude used is listed in the task's activity, under its step.",
+    "Ask me before each tool",
+    "The task waits for you each time, with what Claude wants to do. Safer with postings you do not trust, and slower.",
+    "Either way",
+    "Questions from Claude",
+    "A question Claude asks you always reaches you, as Your turn on Today and Tasks.",
+    "Remembered rules",
+    "A tool you allow for the rest of a task stays allowed only until that task ends. It is never saved to your job search folder.",
+    "Allowing every tool means a posting written to trick Claude could get a command run before you see it. Jobdesk checks postings for hidden instructions before it scores them.",
+];
+
+/// The data folder's section, the run logs', the tray's, then the line on who can read them.
+const DATA: [&str; 11] = [
+    "Data folder",
+    "Everything Jobdesk keeps apart from your job search folder.",
+    "Folder",
+    "Size on disk",
+    "Run logs",
+    "Keep run logs for",
+    "Each log holds the whole text of a task, postings and your replies included. Forever keeps them all. A shorter time deletes older ones when Jobdesk starts. Usage statistics count only the logs kept.",
+    "Tray decisions",
+    "Clear tray decisions",
+    "Forgets every decision and skip reason on Today, so Today deals those cards again. Run logs stay.",
+    "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
+];
+
+/// The versions, the links, then the line on who makes Jobdesk.
+const ABOUT: [&str; 13] = [
+    "This copy",
+    "Jobdesk",
+    "Version and build, for a bug report.",
+    "Claude Code",
+    "The program each task runs, installed on its own.",
+    "Read more",
+    "How Jobdesk signs in",
+    "Why an API key is the documented route, and what Jobdesk stores.",
+    "What changed",
+    "Every release, newest first.",
+    "Licences",
+    "Jobdesk and the open-source parts it is built from.",
+    "Jobdesk runs Claude Code. It is not made by Anthropic.",
+];
+
 /// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
     "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.",
@@ -161,7 +233,11 @@ pub fn index(page: Page) -> &'static [&'static str] {
         Page::Appearance if cfg!(target_os = "macos") => &APPEARANCE_MAC,
         Page::Appearance => &APPEARANCE_WINDOWS,
         Page::Usage => &USAGE,
+        Page::Defaults => &DEFAULTS,
+        Page::Permissions => &PERMISSIONS,
         Page::Runtime => &RUNTIME,
+        Page::Data => &DATA,
+        Page::About => &ABOUT,
         _ => &[],
     }
 }
@@ -215,5 +291,9 @@ mod tests {
         assert_eq!(Page::Usage.title(), "Usage statistics");
         assert_eq!(Page::Runtime.title(), "Runtime status");
         assert_eq!(Page::Data.title(), "Data and privacy");
+        assert_eq!(Page::Defaults.title(), "Run defaults");
+        assert_eq!(Page::Permissions.title(), "Permissions");
+        assert_eq!((Page::About.title(), Page::About.heading()), ("About", "About Jobdesk"));
+        assert_eq!(Page::Data.heading(), Page::Data.title());
     }
 }

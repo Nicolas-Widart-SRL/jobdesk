@@ -111,7 +111,7 @@ fn full(ui: &mut Ui, page: &UsagePage, period: Period, today: NaiveDate, cap: &S
     let commands = |ui: &mut Ui| {
         section_heading(ui, by_command, query);
         let columns = [("Command", None, false), ("Tasks", Some(70.0), true), ("Spent", Some(90.0), true), ("Share", Some(100.0), false)];
-        table(ui, &columns, page.commands.len(), |ui, row, column| {
+        table(ui, &columns, page.commands.len(), ROW_HEIGHT, |ui, row, column| {
             let row = &page.commands[row];
             match column {
                 0 => cell_text(ui, command_name(row), Type::MONO),
@@ -126,7 +126,7 @@ fn full(ui: &mut Ui, page: &UsagePage, period: Period, today: NaiveDate, cap: &S
     let models = |ui: &mut Ui| {
         section_heading(ui, by_model, query);
         let columns = [("Model", None, false), ("Tasks", Some(64.0), true), ("In", Some(70.0), true), ("Out", Some(70.0), true), ("Spent", Some(84.0), true)];
-        table(ui, &columns, page.models.len(), |ui, row, column| {
+        table(ui, &columns, page.models.len(), ROW_HEIGHT, |ui, row, column| {
             let row = &page.models[row];
             match column {
                 0 => cell_text(ui, model_name(row), Type::BODY),
@@ -240,8 +240,8 @@ fn year_of_days(ui: &mut Ui, year: &YearOfDays, today: NaiveDate, faded: bool) {
 }
 
 /// A plain table: each column's head, its width (`None` shares what the others leave) and whether it reads from the right.
-/// `cell(ui, row, column)` fills one cell.
-fn table(ui: &mut Ui, columns: &[(&str, Option<f32>, bool)], rows: usize, mut cell: impl FnMut(&mut Ui, usize, usize)) {
+/// `cell(ui, row, column)` fills one cell of a row `row_height` tall.
+pub(super) fn table(ui: &mut Ui, columns: &[(&str, Option<f32>, bool)], rows: usize, row_height: f32, mut cell: impl FnMut(&mut Ui, usize, usize)) {
     let room = ui.available_width();
     let fixed: f32 = columns.iter().filter_map(|(_, width, _)| *width).sum();
     let widths: Vec<f32> = columns.iter().map(|(_, width, _)| width.unwrap_or((room - fixed).max(0.0))).collect();
@@ -268,7 +268,7 @@ fn table(ui: &mut Ui, columns: &[(&str, Option<f32>, bool)], rows: usize, mut ce
     });
     for row in 0..rows {
         let rule = if row + 1 == rows { CellRule::Last } else { CellRule::Row };
-        line(ui, ROW_HEIGHT, rule, &mut |ui, column| cell(ui, row, column));
+        line(ui, row_height, rule, &mut |ui, column| cell(ui, row, column));
     }
 }
 

@@ -14,7 +14,7 @@ use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
-use jobdesk::settings::application::{Dollars, Page, Settings, drawn_index, index};
+use jobdesk::settings::application::{DataSizes, Dollars, Page, PermissionMode, Settings, drawn_index, index};
 use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
@@ -1412,7 +1412,7 @@ fn esc_clears_the_search_then_leaves_the_field_then_closes_settings() {
     search(&harness).focus();
     search(&harness).type_text("folder");
     harness.run_steps(3);
-    assert!(is_shown(&harness, "4 settings match. Esc clears the search."));
+    assert!(is_shown(&harness, "8 settings match. Esc clears the search."));
     assert!(search(&harness).is_focused(), "the field keeps the focus once Clear shows beside it");
 
     press(&mut harness, Key::Escape);
@@ -2891,9 +2891,17 @@ fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
     harness
 }
 
+/// The fictional data folder's sizes, as the canvas shows them: 212 MB in all.
+const DATA_SIZES: DataSizes = DataSizes { run_logs: 211_800_000, decisions: 18_000 };
+
+/// A shell as Settings' snapshots show it: fictional folders and a fixed version, so no temporary path or release shows.
+fn labelled(shell: Shell) -> Shell {
+    shell.with_folder_label("~/Documents/ai-job-search").with_data_label("~/Library/Application Support/Jobdesk", DATA_SIZES).with_version_label("0.1.0")
+}
+
 /// Settings over Today, on `page`, with bun missing so Runtime status says "1 missing". `query` is typed into the search.
 fn render_settings(page: Page, query: Option<&str>, theme: Theme, name: &str) {
-    let mut shell = shell(Screen::InTray, name).with_folder_label("~/Documents/ai-job-search");
+    let mut shell = labelled(shell(Screen::InTray, name));
     shell.open_settings(page);
     let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
     if let Some(query) = query {
@@ -3036,7 +3044,7 @@ fn usage_shell_on(screen: Screen, name: &str, tasks: Vec<TaskCost>) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), usage_snapshot(&root, tasks)).with_folder_label("~/Documents/ai-job-search")
+    labelled(Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), usage_snapshot(&root, tasks)))
 }
 
 /// The sample folder at `root` as read on 31 October, with `tasks` as the run logs read.
@@ -3128,7 +3136,7 @@ fn settings_usage_empty_light() {
 
 #[test]
 fn settings_loading_light() {
-    let shell = loading_on(Screen::InTray, "settings_loading_light").with_folder_label("~/Documents/ai-job-search");
+    let shell = labelled(loading_on(Screen::InTray, "settings_loading_light"));
     render_usage(shell, None, Theme::Light, "settings_loading_light");
 }
 
@@ -3323,13 +3331,15 @@ fn the_launcher_starts_from_run_defaults() {
     assert_eq!(budget_field(&harness).value().as_deref(), Some("4.00"), "a new command starts from its defaults");
 }
 
-/// The link beside a held Run opens Settings, which keeps the launcher underneath for Back to app.
+/// The link beside a held Run opens Settings on Run defaults, which keeps the launcher underneath for Back to app.
 #[test]
-fn the_cap_link_opens_settings() {
+fn the_cap_link_opens_run_defaults() {
     let (mut harness, shell) = shared_harness(capped_shell(Screen::Launcher, "launcher_cap_link", over_the_cap(), &SharedCalls::default()));
     harness.get_by_label(CAP_LINK).click();
     harness.run_steps(3);
     assert!(shell.borrow().settings_open());
+    assert!(is_shown(&harness, Page::Defaults.lead()), "on Run defaults");
+    assert!(is_shown(&harness, "Cap reached"), "and the rail says why Run stopped");
     press(&mut harness, Key::Escape);
     assert!(!shell.borrow().settings_open());
     assert!(is_shown(&harness, LAUNCHER), "back on the launcher");
@@ -3345,6 +3355,184 @@ fn launcher_cap_light() {
     pick_command(&mut harness, "/rank");
     harness.get_by_label("Run").hover();
     harness.run_steps(8);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// A fictional decisions file in `folder`: `count` skips for the folder at `root`, and one for a folder elsewhere.
+fn decisions_file(folder: &Path, root: &Path, count: usize) {
+    let record = |at: usize| serde_json::json!({ "key": format!("triage:fictional-{at}"), "name": "Kestrel Labs", "outcome": "skipped", "reason": null, "on": "2026-10-30" });
+    let mut file = serde_json::Map::new();
+    file.insert(root.display().to_string(), (0..count).map(record).collect());
+    file.insert(ELSEWHERE.to_owned(), serde_json::Value::Array(vec![record(0)]));
+    fs::create_dir_all(folder).unwrap();
+    fs::write(folder.join("decisions.json"), serde_json::Value::Object(file).to_string()).unwrap();
+}
+
+/// Another job search folder, whose decisions a clear must keep.
+const ELSEWHERE: &str = "/elsewhere/ai-job-search";
+
+/// The sample folder on Settings › Data and privacy, its tray read from a fictional decisions file in `data` with `count`
+/// decisions of its own.
+fn shell_with_decisions(name: &str, data: &Path, count: usize) -> Shell {
+    let mut shell = labelled(shell(Screen::InTray, name));
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let workspace = jobdesk::workspace::open(&root).unwrap();
+    decisions_file(&data.join("intray"), workspace.path(), count);
+    *shell.tray_slot() = Some(jobdesk::intray::open_tray(data.join("intray"), workspace.path()));
+    shell.open_settings(Page::Data);
+    shell
+}
+
+fn clear_decisions_button<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Clear tray decisions")
+}
+
+/// Clear tray decisions asks first. Esc, Keep them and a click elsewhere each keep them, and Settings stays open.
+/// Clear decisions forgets the open folder's only, so another folder keeps its own.
+#[test]
+fn clearing_tray_decisions_asks_first() {
+    let data = tempfile::tempdir().unwrap();
+    let (mut harness, shell) = shared_harness(shell_with_decisions("settings_clear_decisions", data.path(), 2));
+    let count = |shell: &Rc<RefCell<Shell>>| shell.borrow_mut().tray_slot().as_ref().unwrap().decision_count();
+    let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 2 tray decisions?").next().is_some();
+    let open = |harness: &mut Harness<'static>| {
+        clear_decisions_button(harness).click();
+        harness.run_steps(3);
+        assert!(asking(harness), "it asks first");
+    };
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them is the default");
+    press(&mut harness, Key::Escape);
+    assert!(!asking(&harness));
+    assert!(shell.borrow().settings_open(), "Esc keeps them, and Settings stays");
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label("Keep them").click();
+    harness.run_steps(3);
+    assert!(!asking(&harness));
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label(Page::Data.lead()).click();
+    harness.run_steps(3);
+    assert!(!asking(&harness), "a click elsewhere keeps them");
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label("Clear decisions").click();
+    harness.run_steps(3);
+    assert_eq!(count(&shell), 0);
+    assert!(shell.borrow().settings_open());
+    assert!(clear_decisions_button(&harness).accesskit_node().is_disabled(), "nothing is left to clear");
+    let file: serde_json::Value = serde_json::from_str(&fs::read_to_string(data.path().join("intray/decisions.json")).unwrap()).unwrap();
+    assert_eq!(file[ELSEWHERE].as_array().map(Vec::len), Some(1), "the other folder keeps its decisions");
+}
+
+/// Ask me before each tool saves the setting, and the open desk then waits on a permission instead of allowing it.
+#[test]
+fn ask_me_turns_prompts_on() {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    let mut shell = shell(Screen::InTray, "settings_ask_me");
+    *shell.desk_slot() = Some(desk);
+    shell.open_settings(Page::Permissions);
+    let (mut harness, shell) = shared_harness(shell);
+    assert!(!shell.borrow_mut().desk_slot().as_ref().unwrap().asks_permission(), "allowed and noted by default");
+
+    harness.get_by_label("Ask me before each tool").click();
+    harness.run_steps(3);
+    assert_eq!(shell.borrow_mut().settings_mut().preferences().permissions, PermissionMode::Ask);
+    assert!(shell.borrow_mut().desk_slot().as_ref().unwrap().asks_permission());
+    assert!(is_shown(&harness, "Ask first"), "the rail says so");
+
+    emit_all(&sink, [permission_prompt()]);
+    harness.run_steps(3);
+    assert_eq!(shell.borrow_mut().desk_slot().as_ref().unwrap().waiting_count(), 1, "the task waits on the permission");
+    assert!(is_shown(&harness, "A task waits for you"));
+}
+
+/// Every tool but bun and pdftotext answers, and Claude Code says a fictional version.
+struct VersionedTools;
+
+impl ToolProber for VersionedTools {
+    fn probe(&self, tool: &ToolSpec) -> Option<String> {
+        if tool.name == "claude" { Some("2.1.4 (Claude Code)".to_owned()) } else { FixedTools.probe(tool) }
+    }
+}
+
+/// Copy details puts both versions and the system on the clipboard, for a bug report.
+#[test]
+fn copy_details_copies_the_versions() {
+    let mut shell = labelled(probed(shell(Screen::InTray, "settings_copy_details"), VersionedTools));
+    shell.open_settings(Page::About);
+    let copied = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&copied);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| {
+        shell.show(ui);
+        let texts: Vec<String> = ui.ctx().output(|output| {
+            output.commands.iter().filter_map(|command| if let egui::OutputCommand::CopyText(text) = command { Some(text.clone()) } else { None }).collect()
+        });
+        seen.borrow_mut().extend(texts);
+    });
+    settle(&mut harness);
+    assert!(is_shown(&harness, "2.1.4"));
+    harness.get_by_label("Copy details").click();
+    harness.run_steps(3);
+    let system = if cfg!(target_os = "macos") { "macOS" } else { "Windows" };
+    assert_eq!(*copied.borrow(), [format!("Jobdesk 0.1.0\n{system} ({})\nClaude Code 2.1.4", std::env::consts::ARCH)]);
+}
+
+/// Settings on `page` over the usage fixture, with bun missing so Runtime status says "1 missing".
+fn render_settings_shell(mut shell: Shell, page: Page) -> Harness<'static> {
+    shell.open_settings(page);
+    probed_wgpu(probed(shell, VersionedTools), Theme::Light)
+}
+
+/// Run defaults as the canvas draws it: a $60 cap, three commands with their own model and budget, and October's $41.20.
+#[test]
+fn settings_defaults_light() {
+    let name = "settings_defaults_light";
+    let mut shell = shell_with_usage(name, usage_tasks());
+    let settings = shell.settings_mut();
+    settings.set_cap_on(true);
+    settings.set_cap_amount(Dollars::parse("60"));
+    command_row(settings, "/scrape", ModelChoice::Haiku, "1.00");
+    command_row(settings, "/rank", ModelChoice::Sonnet, "3.00");
+    command_row(settings, "/apply", ModelChoice::Opus, "5.00");
+    let mut harness = render_settings_shell(shell, Page::Defaults);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_permissions_light() {
+    let name = "settings_permissions_light";
+    let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::Permissions);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// Data and privacy at the default Forever, with Clear tray decisions asking about 214 fictional decisions.
+#[test]
+fn settings_data_light() {
+    let name = "settings_data_light";
+    let data = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("data");
+    let _ = fs::remove_dir_all(&data);
+    let mut harness = render_settings_shell(shell_with_decisions(name, &data, 214), Page::Data);
+    clear_decisions_button(&harness).click();
+    harness.run_steps(3);
+    // The pointer leaves the button, so it shows at rest under the popover.
+    harness.hover_at(egui::pos2(700.0, 700.0));
+    harness.run_steps(3);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_about_light() {
+    let name = "settings_about_light";
+    let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::About);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 

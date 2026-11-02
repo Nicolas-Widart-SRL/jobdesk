@@ -238,6 +238,18 @@ fn sized(bytes: u64, detail: bool) -> String {
     unreachable!("the last unit always returns")
 }
 
+/// What About's Copy details puts on the clipboard for a bug report: Jobdesk's version, the system it runs on, and
+/// Claude Code's version, or that it was not found.
+pub fn about_details(jobdesk: &str, system: &str, arch: &str, claude: Option<&str>) -> String {
+    let claude = claude.map_or_else(|| "not found".to_owned(), str::to_owned);
+    format!("Jobdesk {jobdesk}\n{system} ({arch})\nClaude Code {claude}")
+}
+
+/// The question Clear tray decisions asks, with how many it forgets.
+pub fn clear_question(decisions: usize) -> String {
+    if decisions == 1 { "Clear 1 tray decision?".to_owned() } else { format!("Clear {decisions} tray decisions?") }
+}
+
 /// The pages a search matches, each with how many of its lines match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHits {
@@ -401,8 +413,30 @@ mod tests {
     #[test]
     fn a_search_counts_lines_per_page() {
         let hits = search("FOLDER", true).unwrap();
-        assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Runtime, 1)]);
-        assert_eq!(hits.total, 4);
+        assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Permissions, 1), (Page::Runtime, 1), (Page::Data, 3)]);
+        assert_eq!(hits.total, 8);
+        let spend = search("spend", true).unwrap();
+        assert_eq!(spend.pages, vec![(Page::Defaults, 1)]);
+    }
+
+    /// Run defaults says what an empty budget falls back to, so the words must follow the catalog.
+    #[test]
+    fn the_suggested_budgets_run_from_one_to_five_dollars() {
+        let budgets = CATALOG.iter().map(|spec| spec.budget_usd);
+        assert_eq!((budgets.clone().min(), budgets.max()), (Some(1), Some(5)));
+        assert!(crate::settings::domain::index(Page::Defaults).iter().any(|line| line.contains("its suggested budget, $1 to $5.")));
+    }
+
+    #[test]
+    fn the_details_name_both_versions_and_the_system() {
+        assert_eq!(about_details("0.1.0", "macOS", "aarch64", Some("2.1.4")), "Jobdesk 0.1.0\nmacOS (aarch64)\nClaude Code 2.1.4");
+        assert_eq!(about_details("0.1.0", "Windows", "x86_64", None), "Jobdesk 0.1.0\nWindows (x86_64)\nClaude Code not found");
+    }
+
+    #[test]
+    fn the_clear_question_counts_the_decisions() {
+        assert_eq!(clear_question(214), "Clear 214 tray decisions?");
+        assert_eq!(clear_question(1), "Clear 1 tray decision?");
     }
 
     #[test]

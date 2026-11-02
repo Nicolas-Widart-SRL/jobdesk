@@ -19,7 +19,7 @@ use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
-use crate::settings::application::{Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check};
+use crate::settings::application::{DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
@@ -124,6 +124,12 @@ pub struct Shell {
     settings_open: bool,
     /// The folder as Settings shows it, in place of its path. Snapshots set it, so no temporary path shows.
     folder_label: Option<String>,
+    /// The data folder as Settings shows it, in place of its path, for snapshots.
+    data_label: Option<String>,
+    /// What the data folder holds: measured at launch, when a task ends and after a clear, never every frame.
+    data_sizes: Option<DataSizes>,
+    /// This copy's version as About shows it. Snapshots set their own, so a release moves none.
+    version: String,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -164,6 +170,9 @@ impl Shell {
             settings_screen: SettingsScreen::default(),
             settings_open: false,
             folder_label: None,
+            data_label: None,
+            data_sizes: None,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
         }
     }
 
@@ -213,6 +222,23 @@ impl Shell {
     /// Shows `label` as the folder in Settings, for snapshots.
     pub fn with_folder_label(self, label: &str) -> Self {
         Self { folder_label: Some(label.to_owned()), ..self }
+    }
+
+    /// Shows `label` as the data folder in Settings, holding `sizes`, for snapshots.
+    pub fn with_data_label(self, label: &str, sizes: DataSizes) -> Self {
+        Self { data_label: Some(label.to_owned()), data_sizes: Some(sizes), ..self }
+    }
+
+    /// Shows `label` as this copy's version in Settings, for snapshots.
+    pub fn with_version_label(self, label: &str) -> Self {
+        Self { version: label.to_owned(), ..self }
+    }
+
+    /// Measures what the data folder holds, if there is one. A shell without one keeps what it was given.
+    fn measure_data(&mut self) {
+        if let Some(data) = &self.data {
+            self.data_sizes = Some(settings::measure_data(data));
+        }
     }
 
     /// Hands the shell snapshots as the folder watcher does, for tests.
@@ -277,6 +303,8 @@ impl Shell {
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
         let mut shell = Self { data, environment: Some(environment), settings, permissions, ..Self::empty(first, Local::now().date_naive()) };
+        // After the pruning, so the size is what stays.
+        shell.measure_data();
         if let Some(path) = path {
             shell.open(ctx, &path);
         }
@@ -359,12 +387,13 @@ impl Shell {
             desk.poll();
         }
         let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
-        if self.was_busy
-            && !busy
-            && let Some(reload) = &self.reload
-        {
+        if self.was_busy && !busy {
             // The run that ended left its cost in its log. A closed worker has nothing to reload.
-            let _ = reload.send(());
+            if let Some(reload) = &self.reload {
+                let _ = reload.send(());
+            }
+            // And its log grew, so Data and privacy measures again.
+            self.measure_data();
         }
         self.was_busy = busy;
         if let Some(pages) = &mut self.pages {
@@ -824,14 +853,33 @@ impl Shell {
             (Some(_), false) => UsageState::Reading,
             (Some(_), true) => UsageState::Read { report: &snapshot.usage, pipeline: &snapshot.pipeline, today: snapshot.today },
         };
+        // The cap as the launcher checks it, so the rail says it is reached exactly when Run stops.
+        let cap = cap_check(&self.settings.preferences().cap, snapshot.usage_read.then_some(&snapshot.usage), snapshot.today);
+        let data = self.data_label.clone().or_else(|| self.data.as_ref().map(|data| data.display().to_string()));
+        // Only the open folder's decisions can be cleared, and none from a tray that could not be read.
+        let decisions = self.tray.as_ref().filter(|tray| folder_open && tray.issue().is_none()).map(InTray::decision_count);
+        let claude_version = self.environment.as_ref().and_then(|environment| environment.version_of("claude")).map(str::to_owned);
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view =
-                    SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait, usage, today: snapshot.today };
+                let page_view = SettingsView {
+                    settings: &mut self.settings,
+                    folder: folder.as_deref(),
+                    folder_read,
+                    runtime,
+                    folder_wait,
+                    usage,
+                    today: snapshot.today,
+                    cap,
+                    data: data.as_deref(),
+                    sizes: self.data_sizes,
+                    decisions,
+                    version: &self.version,
+                    claude_version: claude_version.as_deref(),
+                };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
                     // Only previews lack the tool check. They draw no tools, but still the alert.
@@ -858,6 +906,21 @@ impl Shell {
                 ctx.request_repaint();
             }
             Some(SettingsRequest::NewTask) => self.open_launcher(),
+            // Only Jobdesk's own data folder, never the checkout.
+            Some(SettingsRequest::ShowDataFolder) => {
+                if let Some(data) = &self.data {
+                    settings::reveal_folder(data);
+                }
+            }
+            // The tray belongs to the open folder, so other folders keep their decisions. A tray that could not be read clears nothing.
+            Some(SettingsRequest::ClearDecisions) => {
+                if self.workspace.is_some()
+                    && let Some(tray) = &mut self.tray
+                {
+                    tray.clear_decisions();
+                }
+                self.measure_data();
+            }
             None => {}
         }
     }

@@ -25,7 +25,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri, rust-src
+      # Only main saves: each new nightly would add a large cache entry and evict the test job's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo miri setup
       - run: |
           cargo miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path

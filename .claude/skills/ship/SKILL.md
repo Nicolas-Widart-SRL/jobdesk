@@ -52,7 +52,8 @@ which print one line per check. Read a subagent's report once, then keep only it
    The main checkout stays on `main`, clean, and never holds a change's work: all edits happen in agent worktrees, except the plan file.
    Name the change's branch, such as `feat/standing-orders`, when the user did not.
    If it does not exist, create it with `git branch <change> origin/main`.
-   A change that needs an unmerged change waits until that pull request merges, then starts from the fresh `origin/main`, in the same session.
+   A change that needs an unmerged change waits. Tell the user, and start it, in the same session,
+   once the user says that change merged or `cleanup` shows it merged. Until then it has no branch and no plan file.
    Never create it from local `main` or from what the main checkout has checked out:
    that checkout may be stale, or another session may be using it.
    Never check out, reset or pull in the main checkout.

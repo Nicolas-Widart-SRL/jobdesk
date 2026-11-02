@@ -39,6 +39,8 @@ impl AgentGateway for ClaudeGateway {
 enum Outgoing {
     Message(String),
     Control(String),
+    /// The interrupt request, noted in the log as it goes, since the CLI writes nothing for it.
+    Stop(String),
     StreamEnded,
 }
 
@@ -80,7 +82,7 @@ impl AgentSession for ClaudeSession {
 
     fn interrupt(&mut self) {
         self.interrupts += 1;
-        let _ = self.outbox.send(Outgoing::Control(interrupt_request(&format!("jobdesk-interrupt-{}", self.interrupts))));
+        let _ = self.outbox.send(Outgoing::Stop(interrupt_request(&format!("jobdesk-interrupt-{}", self.interrupts))));
     }
 }
 
@@ -152,17 +154,24 @@ fn supervise(
     read_stdout(&mut child, log.clone(), emit.clone(), to_self);
     write_line(&mut stdin, &user_message(&request.line));
 
+    let note = |write: &dyn Fn(&mut RunLog)| {
+        if let Some(log) = &log
+            && let Ok(mut log) = log.lock()
+        {
+            write(&mut log);
+        }
+    };
     loop {
         match inbox.recv() {
             Ok(Outgoing::Message(text)) => {
-                if let Some(log) = &log
-                    && let Ok(mut log) = log.lock()
-                {
-                    log.append_user(&text);
-                }
+                note(&|log| log.append_user(&text));
                 write_line(&mut stdin, &user_message(&text));
             }
             Ok(Outgoing::Control(line)) => write_line(&mut stdin, &line),
+            Ok(Outgoing::Stop(line)) => {
+                note(&RunLog::note_stop);
+                write_line(&mut stdin, &line);
+            }
             Ok(Outgoing::StreamEnded) => break,
             // The dropped session already killed the process.
             Err(_) => break,

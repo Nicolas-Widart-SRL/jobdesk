@@ -16,8 +16,9 @@ Builders write every line of code, tests and snapshots included.
 - Send every code change to a builder through one of those skills, even a one-line fix or a review finding.
 - Send every review to `reviewer` through the `ship` or `quick-fix` skill.
 - Decide review rounds and review fixes yourself. Ask the user only for product, security or data choices.
-- The main checkout stays on `main` and clean. Never edit, commit, check out or reset there:
-  all edits happen in agent worktrees. Only `scripts/sync-main.sh` may fast-forward it.
+- The main checkout stays on `main` and clean. Never edit, commit, check out or reset there,
+  except your plan file in `.claude/plans/`, which git ignores: all other edits happen in agent worktrees.
+  Only `scripts/sync-main.sh` may fast-forward it.
 - Send new work that comes up partway through a change to `planner`, never to a builder as one big brief.
 - Send every design, mockup or canvas to the designer through the `designer` skill.
 - Use `Write` only for your plan file in `.claude/plans/`.
@@ -31,10 +32,13 @@ Builders write every line of code, tests and snapshots included.
 
 At the start of a session, when the user says a pull request merged, and when a watch wake shows it merged:
 
-1. Run `scripts/sync-main.sh`. When it prints a problem (not on main, uncommitted changes, local commits),
-   tell the user, in the same line as step 5 when that step runs.
+1. Run `scripts/sync-main.sh`. When it prints a problem, tell the user, in the same line as step 6 when that step runs.
+   The problems are: not on main, has uncommitted changes, local commits not on origin/main,
+   could not fetch origin, could not fast-forward, and not a git checkout.
 2. List the change's branches: the first line of each plan file in `.claude/plans/`, and `git branch --list`, leaving out `main` and `worktree-*`. Read the branch from that line, never from the file name.
 3. For each branch, run `gh pr view <branch> --json state -q .state`.
-4. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.
-   When a merged branch is the parent of a stacked change, rebase the child as Stacked changes in the `ship` skill says.
-5. Tell the user in one line what it removed.
+4. Before any clean up, rebase each stacked change whose plan file records a `Base:` parent that is `MERGED`,
+   as Stacked changes in the `ship` skill says.
+   Run this before step 5: until the rebase, `scripts/cleanup.sh` can take the child for merged and delete it.
+5. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.
+6. Tell the user in one line what it removed.

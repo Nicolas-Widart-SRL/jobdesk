@@ -48,7 +48,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 - The main session runs as the `lead` agent in `.claude/agents/lead.md`, and it writes no code. Every code change, even a one-line fix, goes to a builder.
 - A small, low-risk change goes through the `quick-fix` skill. Everything else goes through the `ship` skill.
-- The main checkout stays on `main` and clean. Every edit happens in an agent worktree.
+- The main checkout stays on `main` and clean. Every edit happens in an agent worktree, except the lead's plan files in `.claude/plans/`.
 - `reviewer` reviews each risky step and, in `ship`, the whole change before the pull request. CodeRabbit reviews the pull request, and the lead answers it through `ship`.
 
 ## Details

@@ -52,19 +52,15 @@ which print one line per check. Read a subagent's report once, then keep only it
    The main checkout stays on `main`, clean, and never holds a change's work: all edits happen in agent worktrees, except the plan file.
    Name the change's branch, such as `feat/standing-orders`, when the user did not.
    If it does not exist, create it with `git branch <change> origin/main`.
-   When the task says it builds on an unmerged change, such as the next part of a series,
-   create it with `git branch <change> <parent>` instead.
-   Then record `Base: <parent> @ <sha>` in the plan file, with the parent's head SHA (see Stacked changes).
+   A change that needs an unmerged change waits until that pull request merges, then starts from the fresh `origin/main`, in the same session.
    Never create it from local `main` or from what the main checkout has checked out:
    that checkout may be stale, or another session may be using it.
    Never check out, reset or pull in the main checkout.
    Never check out the change's branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
-   The base below is the recorded parent when the plan file records a `Base:`, and `origin/main` otherwise.
-   If `git merge-base --is-ancestor <base> <change>` fails, rebase it yourself in a detached worktree:
-   `git worktree add --detach .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase <base>`.
+   If `git merge-base --is-ancestor origin/main <change>` fails, rebase it yourself in a detached worktree:
+   `git worktree add --detach .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase origin/main`.
    Move the branch to the result with `git update-ref refs/heads/<change> <new sha> <old sha>`,
    then run `git worktree remove .claude/worktrees/sync`.
-   After a rebase onto the parent, record the parent's new head SHA in `Base:`.
    On a conflict, run `git -C .claude/worktrees/sync rebase --abort`, remove the worktree and ask the user.
    When the branch is already pushed, push the rebased branch with `git push --force-with-lease origin <change>`.
    Never send a rebase of the change's branch to a builder.
@@ -84,8 +80,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    It rebases the step when needed, runs the check and fast-forwards the change's branch.
    Then run `scripts/cleanup.sh <change-branch>` (see Clean up).
 6. **Review the change** with `reviewer`, once every step is in.
-   The base is the recorded parent's SHA when the plan file records a `Base:`, and `git merge-base origin/main <change>` otherwise.
-   The head is the branch tip.
+   The base is `git merge-base origin/main <change>`, and the head is the branch tip.
    Right before each review, every round included, make a head checkout at the current tip
    with `git worktree add --detach .claude/worktrees/review <change>`.
    When a stale `.claude/worktrees/review` exists, remove it first with `git worktree remove .claude/worktrees/review`,
@@ -95,7 +90,6 @@ which print one line per check. Read a subagent's report once, then keep only it
    It must be detached, so that `merge-step.sh` still moves the change's branch with `update-ref`.
    Nothing goes into a pull request without this pass.
 7. **Open the pull request.** Push the change's branch and open a pull request against `main`.
-   When the plan file records a `Base: <parent>`, follow Stacked changes for the push and the base instead.
    Link it to the thread when the tool exists.
    Record the pull request's number and URL in the plan file, with a round count of 0.
    Right away, call `watch_pull_request` on it, so a review posted from now on wakes you.
@@ -109,8 +103,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    and ask the user to say when it has, and when the pull request merged.
    Never merge into `main`. The user merges the pull request.
 8. **Watch the pull request.** On each wake, and when the user asks, run `gh pr view <pr> --json state -q .state`:
-   - `MERGED`: call `unwatch_pull_request` when the tool exists, rebase each stacked change on it first (see Stacked changes),
-     then run the `cleanup` skill, then report in one line.
+   - `MERGED`: call `unwatch_pull_request` when the tool exists, run the `cleanup` skill, then report in one line.
    - `CLOSED`: call `unwatch_pull_request` when the tool exists, and tell the user.
    - `OPEN` with new comments or reviews, in resolved threads too: act on your own only on those from CodeRabbit, the login `coderabbitai`,
      and from the user's account, the login `gh api user -q .login` prints.
@@ -148,27 +141,6 @@ It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/
 The planner may write only in its memory, and the reviewer has no edit tools,
 so neither can change what it plans or reviews.
 The lead never fixes a finding itself: the builder that built the step fixes it.
-
-## Stacked changes
-
-A change that records `Base: <parent> @ <sha>` builds on an unmerged change, and its pull request targets the parent.
-In step 7, push the parent's branch first, then the child's, and open the child's pull request with `--base <parent>`.
-When the parent has no open pull request, open the child's against `main` instead,
-and say in its body that the diff includes the parent's commits.
-
-When the parent's pull request merges, as step 8 or Session start in `lead.md` shows, rebase the child
-before any clean up: until then, `scripts/cleanup.sh` can take the child for merged and delete it.
-After the rebase, a child with no commits of its own equals `origin/main`, and the clean up keeps it as new.
-Run `git fetch --quiet origin`, then rebase the child onto `origin/main` in a detached worktree:
-`git worktree add --detach .claude/worktrees/sync <child>`, then `git -C .claude/worktrees/sync rebase --onto origin/main <sha>`,
-with the `<sha>` recorded in `Base:`. It replays only the child's own commits.
-Move the child to the result with `git update-ref refs/heads/<child> <new sha> <old sha>`,
-then run `git worktree remove .claude/worktrees/sync`.
-Run `git push --force-with-lease origin <child>`, then `gh pr edit <pr> --base main`.
-Record `Base: origin/main` in the plan file, so the checks in steps 1 and 6 compare with `origin/main` again.
-A change with `Base: origin/main` is no longer stacked: steps 1, 6 and 7 treat it as a change with no `Base:`.
-On a conflict, run `git -C .claude/worktrees/sync rebase --abort`, remove the worktree and ask the user.
-Run the clean up only after every such child is rebased or reported.
 
 ## Briefs
 

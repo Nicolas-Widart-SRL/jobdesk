@@ -14,7 +14,7 @@ Design: $ARGUMENTS
 ## Steps
 
 1. **Start the branch.** Run `scripts/sync-main.sh`, then create the change's branch as step 1 of the `ship` skill says:
-   name it, then `git branch <change> origin/main`, or `git branch <change> <parent>` with a recorded `Base:`.
+   name it, then `git branch <change> origin/main`.
    Every designer round starts from it: round 1 from its head, each later round from the round before.
    Each designer works in its own worktree, never in the main checkout.
 2. **Brief.** Find the screen's feature in the Features table of `ARCHITECTURE.md`,

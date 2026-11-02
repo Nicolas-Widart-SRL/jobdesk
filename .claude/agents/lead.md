@@ -32,13 +32,10 @@ Builders write every line of code, tests and snapshots included.
 
 At the start of a session, when the user says a pull request merged, and when a watch wake shows it merged:
 
-1. Run `scripts/sync-main.sh`. When it prints a problem, tell the user, in the same line as step 6 when that step runs.
+1. Run `scripts/sync-main.sh`. When it prints a problem, tell the user, in the same line as step 5 when that step runs.
    The problems are: not on main, has uncommitted changes, local commits not on origin/main,
    could not fetch origin, could not fast-forward, and not a git checkout.
 2. List the change's branches: the first line of each plan file in `.claude/plans/`, and `git branch --list`, leaving out `main` and `worktree-*`. Read the branch from that line, never from the file name.
 3. For each branch, run `gh pr view <branch> --json state -q .state`.
-4. Before any clean up, rebase each stacked change whose plan file records a `Base:` parent that is `MERGED`,
-   as Stacked changes in the `ship` skill says.
-   Run this before step 5: until the rebase, `scripts/cleanup.sh` can take the child for merged and delete it.
-5. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.
-6. Tell the user in one line what it removed.
+4. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.
+5. Tell the user in one line what it removed.

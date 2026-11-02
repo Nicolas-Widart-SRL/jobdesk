@@ -49,7 +49,7 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Always create a new branch: name it `fix/<slug>`, `chore/<slug>` or `docs/<slug>`,
    and create it with `git branch <branch> origin/main`.
    A fix to a merged change gets a new branch too.
-   A fix to an open change that `ship` still builds belongs to `ship`, not here.
+   The code to fix must be on `origin/main`. Otherwise use `ship`.
    Never check out, reset or pull in the main checkout.
    Never check out the branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
 2. **Brief one builder.** Run no planner and no plan waves. Write the one step yourself: its files, the edit and its check.
@@ -57,11 +57,11 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Brief it as the Briefs section of the `ship` skill says.
 3. **Review.** A step on the Also reviewed list gets one `reviewer` pass, one round.
    Brief it as the Briefs section of `ship` says, with the range `<branch>..<step-branch>` and the step's worktree as the head checkout.
-   Send its findings to the builder with SendMessage, as Review rounds in `ship` says.
-   Re-check only when a High or a finding in the risky lens was fixed, and then only the fix range `<old head>..<new head>`.
+   Send its findings to the builder with SendMessage, as Review rounds in `ship` says. Run no re-check.
+   When the pass found a High, escalate after the builder's fix (step 6), so `ship` re-reviews it.
    Every other step gets only the merge check, and CodeRabbit on the pull request.
    When snapshots change, read each changed PNG in the step's worktree with `Read` before the merge.
-   When a change is not clean and intended, escalate as step 6 says.
+   If a changed snapshot PNG is not an intended, clean change, use `ship`.
 4. **Merge.** Run `scripts/merge-step.sh <step-branch> <branch>`.
    Use `NO_CHECK=1` for a step that touches only docs, or only `.claude/` and Markdown.
    Then run `scripts/cleanup.sh <branch>`.
@@ -69,5 +69,6 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Then follow step 7 of `ship`, in its order: it records the pull request, calls `watch_pull_request`,
    runs `squash-msg` and step 8 once, then gives the user one message.
    From then on, step 8 and the Answer CodeRabbit section of `ship` run on this plan file.
-6. **Escalate.** Stop when the builder reports more than 3 files, a risky lens, or two failed checks.
+6. **Escalate.** Stop when the builder reports more than 3 files, a risky lens, or two failed checks,
+   when the review found a High, or when a changed snapshot is not intended and clean.
    Say so to the user in one line, then go on with `ship` from its step 2, on the same branch.

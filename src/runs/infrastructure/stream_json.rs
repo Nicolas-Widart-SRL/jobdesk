@@ -288,8 +288,8 @@ pub fn decision_response(prompt: &Prompt, decision: &Decision) -> String {
     json!({"type": "control_response", "response": {"subtype": "success", "request_id": prompt.request_id, "response": response}}).to_string()
 }
 
-/// The CLI suggests saving rules to project settings. This app never writes to the checkout,
-/// so every remembered rule lasts for the session only.
+/// The CLI suggests saving rules to project settings. Jobdesk keeps tasks from changing those settings, so every
+/// remembered rule lasts for the session only.
 fn session_scoped(suggestions: Option<&str>) -> Value {
     let mut rules: Value = suggestions.and_then(|raw| serde_json::from_str(raw).ok()).unwrap_or_else(|| json!([]));
     if let Some(list) = rules.as_array_mut() {

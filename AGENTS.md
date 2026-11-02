@@ -35,7 +35,6 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 ## Hard rules
 
-- Slash commands are the only writers of the checkout. Jobdesk writes only to its data folder.
 - One run works at a time, because two commands could overwrite each other's files.
 - Card actions never start a run. Y opens the launcher, and the user starts the run there.
 - Tool permissions are allowed automatically and noted in the activity, until a setting can turn prompts back on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Trust](ARCHITECTURE.md#trust).

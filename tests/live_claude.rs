@@ -148,3 +148,43 @@ fn stop_interrupts_a_running_tool() {
     dump(&desk, &id);
     assert!(stopped_at.elapsed() < Duration::from_secs(20));
 }
+
+/// A run may edit a profile file under `.claude/`, as `/setup --section` does from the Profile screen.
+#[test]
+#[ignore = "calls the real Claude CLI"]
+fn a_run_can_edit_a_profile_file_under_dot_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("w");
+    let profile = workspace.join(".claude/skills/job-application-assistant/01-candidate-profile.md");
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(&profile, "Name: Sam\n").unwrap();
+    let mut desk = desk(&workspace, &dir.path().join("logs"));
+
+    let id = desk
+        .start(
+            "Use the Edit tool to change \"Name: Sam\" to \"Name: Alex\" in .claude/skills/job-application-assistant/01-candidate-profile.md. Then say DONE.",
+            &options(),
+            chrono::Local::now().naive_local(),
+        )
+        .unwrap();
+
+    wait(&mut desk, &id, |desk| {
+        let run = desk.run(&id).unwrap();
+        if let Some(prompt) = run.current_prompt().cloned() {
+            let decision = match &prompt.kind {
+                PromptKind::Questions(questions) => Decision::Answer(questions.iter().map(|q| (q.text.clone(), q.options[0].label.clone())).collect()),
+                PromptKind::Permission { tool, .. } => {
+                    println!("permission for {tool}");
+                    Decision::Allow { remember: false }
+                }
+            };
+            desk.decide(&id, &prompt.request_id, decision);
+            return false;
+        }
+        matches!(run.status, RunStatus::AwaitingReply | RunStatus::Failed(_))
+    });
+    dump(&desk, &id);
+    assert_eq!(desk.run(&id).unwrap().status, RunStatus::AwaitingReply);
+    assert_eq!(std::fs::read_to_string(&profile).unwrap().trim_end(), "Name: Alex");
+    desk.close(&id);
+}

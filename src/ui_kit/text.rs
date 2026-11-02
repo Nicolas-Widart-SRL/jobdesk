@@ -2,15 +2,18 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, TextStyle, TextWrapMode, Ui, WidgetText};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer, RenderHtmlFn};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
+use crate::shared_kernel::markdown::only_comments;
+use crate::shared_kernel::placeholders::Piece;
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{CLICKABLE, backed, on_desk};
-use crate::ui_kit::tokens::{DOC_MEASURE, HIT_OVERHANG, HIT_TOP, Type};
+use crate::ui_kit::tokens::{DOC_MEASURE, HAIRLINE, HIT_OVERHANG, HIT_TOP, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
 pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> RichText {
@@ -200,17 +203,47 @@ pub fn lead_line(ui: &mut Ui, strong: &str, rest: &str) -> Response {
 /// Markdown from Claude or a prep pack, rendered as ARCHITECTURE.md#trust says. Every Markdown render goes through here.
 /// Images never load: each shows as its alt text. A link opens only on click, and only for `http` or `https`.
 pub fn markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    render(ui, cache, text, None);
+}
+
+/// Profile text, rendered as `markdown` renders any text: placeholders show as written. A block of HTML that holds only
+/// comments shows nothing, so a template's notes stay off the paper without the text being cut.
+pub fn profile_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    render(ui, cache, text, Some(&comments_hidden));
+}
+
+/// `markdown`, with `html` handed each block of HTML when it is given.
+fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, html: Option<&RenderHtmlFn>) {
     // The image pass runs once per distinct text, and is kept while the text stays on screen.
     let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<ImageFreeCache>().get(text).clone());
     let before = ui.ctx().output(|output| output.commands.len());
-    copyable(ui, |ui| CommonMarkViewer::new().show(ui, cache, &text));
+    let viewer = CommonMarkViewer::new().render_html_fn(html);
+    copyable(ui, |ui| viewer.show(ui, cache, &text));
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
+}
+
+/// A block of HTML on the Profile paper: nothing when it holds only comments, otherwise its text as written, as the
+/// viewer shows HTML it is not handed off.
+fn comments_hidden(ui: &mut Ui, html: &str) {
+    if !only_comments(html) {
+        ui.label(html.trim_end());
+    }
 }
 
 /// A message as a document: one readable column that never grows past the space it has, with headings held to the
 /// section size. A top-level table leaves the column for the whole width, and scrolls only past that.
 /// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    document_with(ui, cache, text, markdown);
+}
+
+/// Profile text as a document, laid out as `document` lays out a message, with each part rendered as `profile_markdown`
+/// renders it: placeholders as written, and comment-only HTML not at all.
+pub fn profile_document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    document_with(ui, cache, text, profile_markdown);
+}
+
+fn document_with(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, render: fn(&mut Ui, &mut CommonMarkCache, &str)) {
     let parts = ui.ctx().memory_mut(|memory| memory.caches.cache::<PartsCache>().get(text).clone());
     ui.scope(|ui| {
         let styles = &mut ui.style_mut().text_styles;
@@ -226,7 +259,7 @@ pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
             ui.push_id(("document part", index), |ui| {
                 let width = ui.available_width();
                 ui.set_max_width(if part.table { width } else { width.min(DOC_MEASURE) });
-                markdown(ui, cache, &part.text);
+                render(ui, cache, &part.text);
             });
         }
     });
@@ -402,6 +435,29 @@ fn without_images(text: &str) -> String {
     escaped(&text)
 }
 
+/// The look of a placeholder to fill, as a text format so it flows in a line: `interview` ink in the semibold face at
+/// `size`, the size of the text around it, underlined in a hairline of the same ink.
+pub fn blank_mark(ui: &Ui, size: f32) -> TextFormat {
+    let ink = Palette::of(ui).interview;
+    TextFormat { underline: Stroke::new(HAIRLINE, ink), ..TextFormat::simple(FontId::new(size, Type::STRONG.face.family()), ink) }
+}
+
+/// A line Jobdesk lays out itself, such as a role's title, from the pieces `placeholders::shown_pieces` gives: text in
+/// `style` and `ink`, and each blank in `blank_mark`. A blank comes only from a token the count found, never from the
+/// text. Hidden and reordering characters are removed first, as for any untrusted line.
+pub(in crate::ui_kit) fn blank_line(ui: &Ui, pieces: &[Piece], style: Type, ink: impl Into<Ink>) -> LayoutJob {
+    let plain = TextFormat::simple(style.font(), ink.into().color(&Palette::of(ui)));
+    let mark = blank_mark(ui, style.size);
+    let mut job = LayoutJob::default();
+    for piece in pieces {
+        match piece {
+            Piece::Text(text) => job.append(&visible_chars(text).collect::<String>(), 0.0, plain.clone()),
+            Piece::Blank(words) => job.append(&visible_chars(words).collect::<String>(), 0.0, mark.clone()),
+        }
+    }
+    job
+}
+
 /// The height `text` takes wrapped at `width`, for rows sized before they are drawn.
 pub fn wrapped_height(ui: &Ui, text: &str, style: Type, width: f32) -> f32 {
     WidgetText::from(RichText::new(text).font(style.font())).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font()).size().y
@@ -455,7 +511,11 @@ mod tests {
         let opened = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&opened);
         let mut cache = CommonMarkCache::default();
-        let mut harness = Harness::builder().with_size([400.0, 200.0]).build_ui(move |ui| {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
             render(ui, &mut cache, source);
             let urls: Vec<String> = ui.ctx().output(|output| {
                 output.commands.iter().filter_map(|command| if let OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
@@ -721,5 +781,198 @@ mod tests {
         }
         // A footnote kept inside one part leaves the table free to widen.
         assert_eq!(parts("Intro.\n\n| A |\n|---|\n| x |\n\nAfter[^1].\n\n[^1]: A note.").len(), 3);
+    }
+
+    fn profiled(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+        profile_markdown(ui, cache, text);
+    }
+
+    /// Every text `render` paints for `source`, joined in paint order, and how many of its shapes are in the blank's ink.
+    fn painted_text(render: Render, source: &'static str) -> (String, usize) {
+        let found = Rc::new(RefCell::new((String::new(), 0)));
+        let seen = Rc::clone(&found);
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([800.0, 900.0]).with_context_setup(setup).build_ui(move |ui| {
+            render(ui, &mut cache, source);
+            let ink = Palette::of(ui).interview;
+            let layer = ui.layer_id();
+            *seen.borrow_mut() = ui.ctx().graphics(|layers| {
+                let (mut text, mut blanks) = (String::new(), 0);
+                for clipped in layers.get(layer).map(|list| list.all_entries().collect::<Vec<_>>()).unwrap_or_default() {
+                    if let egui::Shape::Text(shape) = &clipped.shape {
+                        text.push_str(&shape.galley.job.text);
+                        blanks += usize::from(shape.galley.job.sections.iter().any(|section| section.format.color == ink));
+                    }
+                }
+                (text, blanks)
+            });
+        });
+        harness.run();
+        found.take()
+    }
+
+    /// Every round's inputs: each token the page counts shows on the paper as written, and the body draws no blank.
+    #[test]
+    fn every_counted_token_shows_on_the_paper() {
+        let sources: [&'static str; 41] = [
+            "Name: [FIRST_NAME] [LAST_NAME]\n\n- Budget you owned: [PLACEHOLDER]",
+            "### Role - [COMPANY] ([DATES])\n\nBracketed [[NAME]] and a[0], [x], [AB], [Note], - [ ] task",
+            "- German: [LEVEL, e.g. \"Native\" / \"C2\"] and [CONTEXT - what was happening]",
+            "Use the ` key for [FIRST_NAME]. Owner: `[NAME]",
+            "An escaped backslash, then \\\\[NAME], and an escaped bracket \\[NAME]",
+            "[FIRST_NAME] [LAST_NAME]\n\n[SECTOR_1]: [EXAMPLE_COMPANIES]\n[x]: https://x.example/$1$\n\nSee [x].",
+            "- [SECTOR_1]: [EXAMPLE_COMPANIES]\n- [SECTOR_1]: [EXAMPLE_COMPANIES]\n",
+            "[r]: https://x.example\n[r]: https://y.example/[PATH]\n\nSee [r].",
+            "[SECTOR_1]: [EXAMPLE_COMPANIES]\n[Sector_1]: [OTHER_COMPANIES]\n\nSee [sector_1] and [OWNER_NAME].",
+            "See [Salary $100k].\n\n[Salary $100k]: https://x.example",
+            "See [FIRST_NAME].\n\n[FIRST_NAME]: https://x.example",
+            "See `[FIRST_NAME]` and [LINK](https://x.example).",
+            "```\n[YOUR_CITY]\n```",
+            "Open [[NAME]](https://x.example) now.",
+            "Pay [AMOUNT]5 and [LEVEL, e.g. \"Native\"]",
+            "[Salary guide $100k-$150k](https://x.example)",
+            "[FIRST_NAME] and [see $0$](https://x.example)",
+            "# Pay $1$ [DAY_RATE]\n\n| Rate |\n|---|\n| $2$ [RATE_NOTE] |\n\n> Quote $3$ [QUOTE_TEXT]\n\n- Item $4$ [ITEM_TEXT]\n\n![alt $5$ [ALT_TEXT]](https://x.example/a.png)",
+            "Term [TERM_NAME]\n: Defined $6$ [TERM_TEXT][^n]\n\n[^n]: Note $7$ [NOTE_TEXT]",
+            "## Goals [GOAL_NAME]\n\n### Lead - [COMPANY] ([DATES])",
+            "Cloud [AWS, GCP], remote [EU], and [2024 UPDATE]",
+            "[LinkedIn](https://linkedin.com/in/[YOUR_HANDLE]) and ![logo](https://x.example/[LOGO_FILE].png)",
+            "Search `[YOUR_JOB_BOARD] [YOUR_CITY]` for \\name{[FIRST_NAME]}",
+            "```ini\n[DEFAULT]\n[YOUR_SECTION]\n```",
+            "<!-- all [PLACEHOLDER] tokens -->\n\nName: <b>[FIRST_NAME]</b> [LAST_NAME]",
+            "Salary: [LEVEL - about $50k] and [FLOOR - $40k at least]",
+            "| Skill | Level |\n|---|---|\n| [SKILL_1] | `[LEVEL_1]` |",
+            "Code such as `to fill` and [a link](https://tessel.example/jobs/1), then [CITY_NAME]$ and $[ROLE_NAME]",
+            "### Lead \\[TEAM_NAME] - Acme (2020)\nShipped.",
+            "### Lead &#91;TEAM_NAME&#93; - Acme (2020)\nShipped.",
+            "### [JOB_TITLE] - Acme (2020)\nShipped.",
+            "### Identity\n<!-- e.g. Ada --> [FIRST_NAME]\n",
+            "Run `<!-- [YOUR_CITY] -->`",
+            "[ROLE_TITLE]: Led the platform team\n\n[FIRST_NAME][LAST_NAME]\n\n[LAST_NAME](pronouns: she/her)",
+            "See [run `$x`] and [a <b>x</b>] for [CITY].\n\n[run `$x`]: https://x.example\n[a <b>x</b>]: https://x.example",
+            "Costs $5 [UNIT_NAME]$ a day",
+            "Pay $5 for[x] and $[ROLE_NAME] now [CITY]",
+            "![alt [CITY] $x](u.png) y$",
+            "See [docs].\n\n<!-- old -->[docs]: https://evil.example\n\n[docs]: https://good.example",
+            "## Goals\n<!-- What you want next -->\n\n<!--\n[GOAL_NAME]\n-->\n\n- [GOAL_TEXT]",
+            "<div>\n[NAME_X]\n</div>\n\nAfter [AFTER_TEXT].",
+        ];
+        for render in [profiled as Render, unmarked] {
+            for source in sources {
+                let (text, blanks) = painted_text(render, source);
+                for span in crate::shared_kernel::placeholders::placeholder_spans(source) {
+                    assert!(text.contains(&source[span.clone()]), "{source}: {} is counted but not drawn in {text:?}", &source[span]);
+                }
+                assert_eq!(blanks, 0, "{source}: the body draws no blank");
+            }
+        }
+    }
+
+    /// A block of HTML that holds only comments shows nothing on the Profile paper. Other HTML shows as written, and
+    /// `markdown` itself is unchanged.
+    #[test]
+    fn a_comment_block_stays_off_the_paper() {
+        let source = "Before.\n\n<!-- a note on [GOAL_NAME] -->\n\n<!--\nsecond note\n-->\n\n<!-- old -->[docs]: https://evil.example\n\nAfter.";
+        let (text, _) = painted_text(profiled, source);
+        assert!(text.contains("Before.") && text.contains("After."), "{text:?}");
+        assert!(!text.contains("a note on") && !text.contains("second note"), "{text:?}");
+        assert!(text.contains("[docs]: https://evil.example"), "{text:?}");
+        fn plain(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+            markdown(ui, cache, text);
+        }
+        assert!(painted_text(plain, source).0.contains("a note on"));
+        // `<!-->` is an empty comment, so the text after it shows, and so does text after `--!>`.
+        let (text, _) = painted_text(profiled, "Before.\n\n<!-->Open to relocation: no [CITY_NAME]\n\n<!-- a --!> Visible\n-->\n\nAfter.");
+        assert!(text.contains("Open to relocation: no [CITY_NAME]") && text.contains("Visible"), "{text:?}");
+    }
+
+    #[test]
+    fn a_profile_page_keeps_only_web_links() {
+        let source = "[terminal](file:///Applications/Utilities/Terminal.app) and [posting](https://tessel.example/jobs/1) for [COMPANY]\n\n[script](javascript:alert(1)) and [[COMPANY_SITE]](file:///etc/hosts)";
+        assert_eq!(opened_through(profiled, source, "terminal"), Vec::<String>::new());
+        assert_eq!(opened_through(profiled, source, "script"), Vec::<String>::new());
+        assert_eq!(opened_through(profiled, source, "[COMPANY_SITE]"), Vec::<String>::new());
+        assert_eq!(opened_through(profiled, source, "posting"), vec!["https://tessel.example/jobs/1".to_owned()]);
+    }
+
+    /// A comment cut from the text could have made a definition of the line after it. The text is never cut, so the
+    /// link keeps its target.
+    #[test]
+    fn a_comment_cannot_retarget_a_link() {
+        let source = "See [docs].\n\n<!-- old -->[docs]: https://evil.example\n\n[docs]: https://good.example";
+        assert_eq!(opened_through(profiled, source, "docs"), vec!["https://good.example".to_owned()]);
+    }
+
+    #[test]
+    fn a_reference_link_with_a_dollar_sign_stays_a_link() {
+        for source in [
+            "See [Salary $100k].\n\n[Salary $100k]: https://x.example",
+            "See [Salary $100k][].\n\n[Salary $100k]: https://x.example",
+            "See [run `$x`].\n\n[run `$x`]: https://x.example",
+        ] {
+            let label = if source.contains("run") { "run $x" } else { "Salary $100k" };
+            assert_eq!(opened_through(profiled, source, label), vec!["https://x.example".to_owned()], "{source}");
+        }
+        let source = "[FIRST_NAME] [LAST_NAME]\n\n[SECTOR_1]: [EXAMPLE_COMPANIES]\n[x]: https://x.example/$1$\n\nSee [x].";
+        assert_eq!(opened_through(profiled, source, "x"), vec!["https://x.example/$1$".to_owned()]);
+    }
+
+    #[test]
+    fn a_profile_page_shows_images_as_alt_text() {
+        let source: &'static str = "Logo ![company logo](https://x.example/l.png) for [COMPANY].\n\n![alt [CITY] $x](u.png) y$";
+        let (text, blanks) = painted_text(profiled, source);
+        assert!(text.contains("company logo") && text.contains("alt [CITY] $x") && text.contains("y$"), "{text:?}");
+        assert!(!text.contains("x.example") && !text.contains("u.png"), "{text:?}");
+        assert_eq!(blanks, 0);
+    }
+
+    /// The pieces of a role's title, laid out: hidden characters dropped, each blank in the blank's ink, and nothing
+    /// else in it.
+    fn role_line(pieces: Vec<Piece>) -> (String, usize) {
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let found = Rc::new(RefCell::new((String::new(), 0)));
+        let seen = Rc::clone(&found);
+        let mut harness = Harness::builder().with_size([400.0, 100.0]).with_context_setup(setup).build_ui(move |ui| {
+            let job = blank_line(ui, &pieces, Type::SECTION, Ink::Text);
+            let ink = Palette::of(ui).interview;
+            *seen.borrow_mut() = (job.text.clone(), job.sections.iter().filter(|section| section.format.color == ink).count());
+        });
+        harness.run();
+        found.take()
+    }
+
+    #[test]
+    fn a_role_line_drops_hidden_characters() {
+        let pieces = vec![Piece::Text("Lead\u{202E}reenignE\u{200B} - ".to_owned()), Piece::Blank("to fill: company\u{200B}".to_owned())];
+        assert_eq!(role_line(pieces), ("LeadreenignE - to fill: company".to_owned(), 1));
+    }
+
+    /// A role's title draws a blank exactly where the block's count found a token, and never for text of its own.
+    #[test]
+    fn a_role_line_draws_the_blanks_its_block_counts() {
+        for (block, title, shown) in [
+            ("### [JOB_TITLE] - Acme (2020)\nShipped.", "[JOB_TITLE]", "to fill: job title"),
+            ("### Lead \\[TEAM_NAME] - Acme (2020)\nShipped.", "Lead \\[TEAM_NAME]", "Lead [TEAM_NAME]"),
+            ("### Lead &#91;TEAM_NAME&#93; - Acme (2020)\nShipped.", "Lead &#91;TEAM_NAME&#93;", "Lead [TEAM_NAME]"),
+            ("### Lead $\u{F0000}$ [ROLE_NAME] - Acme (2020)", "Lead $\u{F0000}$ [ROLE_NAME]", "Lead $\u{F0000}$ to fill: role name"),
+            ("### Lead <b>[TEAM_NAME]</b> - Acme (2020)", "Lead <b>[TEAM_NAME]</b>", "Lead <b>to fill: team name</b>"),
+        ] {
+            let start = block.find(title).unwrap();
+            let pieces = crate::shared_kernel::placeholders::shown_pieces(block, start..start + title.len());
+            let counted = crate::shared_kernel::placeholders::placeholder_spans(block)
+                .into_iter()
+                .filter(|span| span.start >= start && span.end <= start + title.len())
+                .count();
+            let (text, blanks) = role_line(pieces);
+            assert_eq!(text, shown, "{block}");
+            assert_eq!(blanks, counted, "{block}");
+        }
     }
 }

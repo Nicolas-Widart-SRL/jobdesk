@@ -35,6 +35,9 @@ pub const MIN_HIT: f32 = 24.0;
 
 pub const TAG_HEIGHT: f32 = 22.0;
 pub const TAG_PADDING: f32 = 7.0;
+/// A tag inside a pick row, such as Updated on a topic, is a step smaller, so a long title still fits beside it.
+pub const ROW_TAG_HEIGHT: f32 = 20.0;
+pub const ROW_TAG_PADDING: f32 = 6.0;
 pub const KEY_SIZE: f32 = 18.0;
 pub const KEY_PADDING: f32 = 4.0;
 
@@ -248,6 +251,15 @@ pub const SETTING_CHECK_GAP: f32 = 12.0;
 /// The room between a setting's label and its help, and between a section's heading and its note.
 pub const SETTING_HELP_GAP: f32 = 2.0;
 pub const SETTING_NOTE_GAP: f32 = 1.0;
+/// A role on a profile's paper: the room above and below it, and its dates column, which fits "2021 – present".
+pub const ROLE_PADDING: (f32, f32) = (14.0, 12.0);
+pub const ROLE_DATES: f32 = COMMAND_NAME_WIDTH;
+/// The block editor: its padding, the gap between its parts, and how many lines its field shows before it grows.
+pub const EDITOR_PADDING: (i8, i8, i8) = (14, 12, 14);
+pub const EDITOR_GAP: f32 = 10.0;
+pub const EDITOR_ROWS: usize = 7;
+/// Under the warning box of a change on disk, the field takes only the lines of its draft.
+pub const EDITOR_ROWS_CHANGED: usize = 1;
 
 pub const RADIUS_TAB: u8 = 6;
 pub const RADIUS_PANEL: u8 = 4;

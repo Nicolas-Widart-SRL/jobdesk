@@ -2,26 +2,34 @@ use std::sync::Arc;
 
 use egui::{
     Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow,
-    Stroke, StrokeKind, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
+    Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
 };
+use egui_commonmark::CommonMarkCache;
 
 use crate::shared_kernel::Source;
+use crate::shared_kernel::placeholders::Piece;
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{dialog_open, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
-use crate::ui_kit::marks::KnotState;
+use crate::ui_kit::controls::{
+    dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
+    reveal_command,
+};
+use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
-    add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, table_head, wrapped,
+    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
+    table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
-    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
-    FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP,
-    KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW,
-    PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
-    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
-    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
-    TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
+    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES,
+    FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP,
+    LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING,
+    PROMPT_PADDING, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING,
+    SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP,
+    SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING,
+    STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -462,6 +470,19 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
         })
         .response;
     interactive_row(ui, &response, RADIUS_PANEL);
+    response
+}
+
+/// `pick_row`, heard as `spoken`, so what a mark in the row says on hover reaches focus too. `focus_tip`, if any, shows
+/// as a tooltip while the row has keyboard focus, so a sighted keyboard user reads what the pointer would.
+pub fn spoken_pick_row(ui: &mut Ui, on: bool, spoken: &str, focus_tip: Option<&str>, add: impl FnOnce(&mut Ui)) -> Response {
+    let response = pick_row(ui, on, add);
+    response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), on, spoken));
+    if let Some(tip) = focus_tip
+        && response.has_focus()
+    {
+        response.show_tooltip_text(tip);
+    }
     response
 }
 
@@ -935,6 +956,53 @@ pub fn paper_with_footer(ui: &mut Ui, body: impl FnOnce(&mut Ui), footer: impl F
     });
 }
 
+/// A sheet of paper that takes all the height it has: `head`, padded as a deal is, a hairline, then `body`, which scrolls
+/// with its bar shown at rest, over `foot`, a one-line strip pinned at the bottom under a hairline. `foot` lays out left to
+/// right with no gap of its own, so its words carry their own spaces.
+pub fn headed_paper<R>(ui: &mut Ui, head: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui) -> R, foot: impl FnOnce(&mut Ui)) -> R {
+    paper(ui, false, |ui| {
+        let (x, y) = DEAL_PADDING;
+        Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            head(ui);
+        });
+        divider(ui);
+        footed(
+            ui,
+            true,
+            false,
+            |ui| {
+                Frame::new()
+                    .inner_margin(Margin { left: x, right: x, top: 0, bottom: y })
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        body(ui)
+                    })
+                    .inner
+            },
+            |ui| {
+                divider(ui);
+                Frame::new().inner_margin(margin(DEAL_FOOT_PADDING)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        foot(ui);
+                    });
+                });
+            },
+        )
+    })
+}
+
+/// What `add` lays out, faded to `FADED_OPACITY`, such as a template's outline shown for what it holds.
+pub fn faded<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope(|ui| {
+        ui.multiply_opacity(FADED_OPACITY);
+        add(ui)
+    })
+    .inner
+}
+
 /// A scrolling body over a footer pinned at its foot, inside a frame's content `ui`. `fill` takes all the height left,
 /// where otherwise the two take what the body needs, up to it. `fresh` opens the body at the top.
 pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
@@ -978,15 +1046,31 @@ pub(in crate::ui_kit) fn footer_row(ui: &mut Ui, (x, y): (i8, i8), add: impl FnO
 /// What a screen shows when it has nothing yet: a title, a sentence on what to do, then the actions, all on paper.
 /// The actions only open the launcher: the user starts the run there.
 pub fn empty_state(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui)) {
-    empty_sheet(ui, title, body, Some(actions));
+    empty_sheet(ui, title, body, Some(actions), None::<fn(&mut Ui)>);
+}
+
+/// `empty_state` with "Show the command" under its actions, which shows `line` as `reveal_command` does. The caller holds `open`.
+pub fn empty_state_with_command(ui: &mut Ui, title: &str, body: &str, actions: impl FnOnce(&mut Ui), line: &str, open: &mut bool) {
+    empty_sheet(
+        ui,
+        title,
+        body,
+        Some(actions),
+        Some(|ui: &mut Ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = ITEM_GAP;
+                reveal_command(ui, line, open);
+            });
+        }),
+    );
 }
 
 /// The same with no actions, such as a lane that is empty with nothing to offer. A blank `body` leaves the sentence out.
 pub fn empty_note(ui: &mut Ui, title: &str, body: &str) {
-    empty_sheet(ui, title, body, None::<fn(&mut Ui)>);
+    empty_sheet(ui, title, body, None::<fn(&mut Ui)>, None::<fn(&mut Ui)>);
 }
 
-fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>) {
+fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce(&mut Ui)>, below: Option<impl FnOnce(&mut Ui)>) {
     paper(ui, false, |ui| {
         Frame::new().inner_margin(Margin::same(EMPTY_PADDING)).show(ui, |ui| {
             ui.set_max_width(EMPTY_WIDTH);
@@ -997,6 +1081,9 @@ fn empty_sheet(ui: &mut Ui, title: &str, body: &str, actions: Option<impl FnOnce
             }
             if let Some(actions) = actions {
                 ui.horizontal(actions);
+            }
+            if let Some(below) = below {
+                below(ui);
             }
         });
     });
@@ -1129,10 +1216,17 @@ pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadiu
 }
 
 /// One stage in a band of counts.
+/// A stage's marks: runs of `(count, ink)`, spoken as the lit ones of all, or a fill, spoken as the filled ones of all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeMarks {
+    Runs(Vec<(usize, Option<Ink>)>),
+    Fill(FillMarks),
+}
+
 pub struct FlowNode<'a> {
     pub label: &'a str,
     pub figure: String,
-    pub marks: Vec<(usize, Option<Ink>)>,
+    pub marks: NodeMarks,
     pub note: String,
     /// Why the stage's counts are hidden. It shows in place of the figure, tally and note, so no zero reads as a real count.
     pub hidden: Option<&'a str>,
@@ -1161,7 +1255,10 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                     }
                     add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
-                    let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
+                    let tally = match &node.marks {
+                        NodeMarks::Runs(runs) => crate::ui_kit::tally_strip(ui, runs, false),
+                        NodeMarks::Fill(fill) => crate::ui_kit::fill_tally(ui, *fill, false),
+                    };
                     ui.add_space((NODE_TALLY_HEIGHT - tally.rect.height()).max(0.0) + NODE_TALLY_MARGIN.1);
                     add_text(ui, node.note.as_str(), Type::BODY, Ink::Muted);
                 });
@@ -1422,10 +1519,272 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
     Some(line.union(toggled))
 }
 
+/// One role from a profile, as a CV line. Every part is the profile's own text, so it is untrusted.
+#[derive(Debug, Clone, Copy)]
+pub struct RoleEntry<'a> {
+    /// The parts of the role's heading as `placeholders::shown_pieces` gives them, such as "2021 – present".
+    pub dates: &'a [Piece],
+    pub title: &'a [Piece],
+    pub company: &'a [Piece],
+    /// Markdown under the role's heading, such as its bullets.
+    pub body: &'a str,
+    /// The first role on the paper takes no rule above it.
+    pub first: bool,
+}
+
+/// A role as a CV line: the dates in a fixed column, then the title over the company and the body, held to the measure,
+/// and a small Edit button at the right edge, outside the copyable text. A placeholder in the heading reads as a blank,
+/// and one in the body shows as written. `blocked` says why
+/// Edit is off, such as another open edit. Returns the Edit button's response.
+pub fn role_entry(ui: &mut Ui, cache: &mut CommonMarkCache, role: &RoleEntry, blocked: Option<&str>) -> Response {
+    if !role.first {
+        divider(ui);
+    }
+    ui.add_space(ROLE_PADDING.0);
+    let edit = ui
+        .with_layout(Layout::right_to_left(Align::Min), |ui| {
+            let edit = enabled_when(ui, blocked.is_none(), blocked.unwrap_or_default(), |ui| crate::ui_kit::small_button(ui, "Edit"));
+            ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui_with_layout(vec2(ROLE_DATES, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(ROLE_DATES);
+                    let dates = blank_line(ui, role.dates, Type::NOTE, Ink::Muted);
+                    copyable(ui, |ui| add_job(ui, dates, TextWrapMode::Wrap));
+                });
+                let width = (ui.available_width() - ITEM_GAP).clamp(0.0, DOC_MEASURE);
+                ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let (title, company) = (blank_line(ui, role.title, Type::SECTION, Ink::Text), blank_line(ui, role.company, Type::BODY, Ink::Muted));
+                    copyable(ui, |ui| {
+                        add_job(ui, title, TextWrapMode::Wrap);
+                        add_job(ui, company, TextWrapMode::Wrap);
+                    });
+                    ui.add_space(ITEM_GAP);
+                    ui.spacing_mut().item_spacing.y = ITEM_GAP;
+                    ui.style_mut().text_styles.insert(egui::TextStyle::Body, Type::TAKE.font());
+                    profile_markdown(ui, cache, role.body);
+                });
+            });
+            edit
+        })
+        .inner;
+    ui.add_space(ROLE_PADDING.1);
+    edit
+}
+
+/// A run works: Save is off and says `why` on hover, and `line` says the same beside Cancel.
+#[derive(Debug, Clone, Copy)]
+pub struct EditorBusy<'a> {
+    pub why: &'a str,
+    pub line: &'a str,
+}
+
+/// The warning box at the top of a block editor whose block changed on disk.
+#[derive(Debug, Clone, Copy)]
+pub struct ChangedOnDisk<'a> {
+    /// In `interview` ink, then `detail` after it.
+    pub title: &'a str,
+    pub detail: &'a str,
+    /// What the lines are, such as "Now in the file, the end of this role".
+    pub caption: &'a str,
+    /// The block's lines in the file now, each with whether it is new. `None` when the block is gone from the file.
+    pub lines: Option<&'a [(&'a str, bool)]>,
+    /// The button that takes the file's text, and the note beside it.
+    pub take: &'a str,
+    pub take_note: &'a str,
+}
+
+/// What a `block_editor` holds besides its draft. The words are the screen's.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockEditor<'a> {
+    /// Such as "Edit this role", with `hint` beside it.
+    pub title: &'a str,
+    pub hint: &'a str,
+    /// Save's label: "Save", or what saving does over a change on disk.
+    pub save: &'a str,
+    /// The note beside Cancel.
+    pub note: &'a str,
+    /// Shown at the right of the footer, such as "Unsaved changes".
+    pub unsaved: Option<&'a str>,
+    /// While a run works. It holds over a change on disk too: no Save of either kind writes while a run works.
+    pub busy: Option<EditorBusy<'a>>,
+    /// The block changed on disk since the editor opened.
+    pub changed: Option<&'a ChangedOnDisk<'a>>,
+    /// The field takes the focus this frame, such as on the frame the editor opens.
+    pub focus: bool,
+    /// The footer scrolls into view this frame, such as when the warning box opens and pushes Save down.
+    pub reveal: bool,
+}
+
+/// What the user asked of a `block_editor` this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorAction {
+    Save,
+    Cancel,
+    /// Replace the draft with the block as it is in the file now.
+    TakeTheirs,
+}
+
+/// A slip in place of a block, to edit its raw Markdown: a title row with Preview, then the draft in a field in the body
+/// face, then Save (the command key and Enter) and Cancel (Esc). The field renders nothing. With Preview on, `preview`
+/// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save of either kind is
+/// off and the command key and Enter do nothing, and a change on disk still shows. A held chord saves once: its repeats
+/// do nothing. The caller names the field with an id of its own around the call, one per block opened, so no two blocks
+/// share an undo history.
+pub fn block_editor(
+    ui: &mut Ui,
+    editor: &BlockEditor,
+    draft: &mut String,
+    preview: &mut bool,
+    show_preview: impl FnOnce(&mut Ui, &str),
+) -> Option<EditorAction> {
+    let p = Palette::of(ui);
+    let busy = editor.busy.is_some();
+    // Taken before the field sees it, so the chord never types a line break.
+    let mut action = None;
+    if !busy && fresh_chord(ui, Key::Enter) {
+        action = Some(EditorAction::Save);
+    }
+    if crate::ui_kit::back_pressed(ui.ctx()) {
+        action = Some(EditorAction::Cancel);
+    }
+    let (left, top, bottom) = EDITOR_PADDING;
+    let frame =
+        Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(Margin { left, right: left, top, bottom });
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = EDITOR_GAP;
+        let title = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                let title = add_text(ui, editor.title, Type::STRONG, Ink::Text);
+                add_text(ui, editor.hint, Type::NOTE, Ink::Muted);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if crate::ui_kit::small_toggle(ui, "Preview", *preview).clicked() {
+                        *preview = !*preview;
+                    }
+                });
+                title.id
+            })
+            .inner;
+        if let Some(changed) = editor.changed
+            && changed_box(ui, changed)
+        {
+            action = Some(EditorAction::TakeTheirs);
+        }
+        if *preview {
+            show_preview(ui, draft);
+        } else {
+            // A named field keeps its focus and cursor when the warning box opens above it.
+            let field = egui::TextEdit::multiline(draft)
+                .id_salt("block_editor_draft")
+                .font(Type::BODY.font())
+                .margin(Margin::same(FIELD_PADDING as i8))
+                .desired_width(f32::INFINITY)
+                // Under the warning box the field takes only the draft's lines, so Save stays near.
+                .desired_rows(if editor.changed.is_some() { EDITOR_ROWS_CHANGED } else { EDITOR_ROWS });
+            let field = ui.add(field).labelled_by(title);
+            if editor.focus {
+                field.request_focus();
+            }
+            if field.has_focus() {
+                ui.painter().rect_stroke(field.rect.expand(FOCUS_OFFSET), RADIUS_BUTTON, Stroke::new(FOCUS_RING, p.active), StrokeKind::Outside);
+            }
+        }
+        let footer = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = BUTTON_GAP;
+            let chord = crate::ui_kit::command_chord("Enter");
+            let why = editor.busy.map_or("", |busy| busy.why);
+            let save = enabled_when(ui, !busy, why, |ui| {
+                if editor.changed.is_some() {
+                    crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord)
+                } else {
+                    crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord)
+                }
+            });
+            if save.clicked() {
+                action = Some(EditorAction::Save);
+            }
+            if plain_shortcut_button(ui, "Cancel", &["Esc"]).clicked() {
+                action = Some(EditorAction::Cancel);
+            }
+            ui.add_space(ROW_ITEM_GAP);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(unsaved) = editor.unsaved {
+                    add_text(ui, unsaved, Type::NOTE, Ink::Muted);
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| match editor.busy {
+                    Some(busy) => {
+                        ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+                        let (square, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
+                        ui.painter().rect_filled(square, 0.0, p.active);
+                        add_text(ui, busy.line, Type::NOTE, Ink::Text);
+                    }
+                    None => {
+                        add_text(ui, editor.note, Type::NOTE, Ink::Muted);
+                    }
+                });
+            });
+        });
+        if editor.reveal {
+            // With the slip's own bottom padding, so its edge shows under Save.
+            let rect = footer.response.rect;
+            ui.scroll_to_rect(rect.with_max_y(rect.bottom() + f32::from(bottom)), Some(Align::Max));
+        }
+    });
+    action
+}
+
+/// Whether the command key and `key` were pressed this frame and not only held: the press is taken either way, so a
+/// held chord neither acts again nor reaches a field.
+fn fresh_chord(ui: &Ui, key: Key) -> bool {
+    ui.input_mut(|input| {
+        let fresh = input.events.iter().any(|event| {
+            matches!(event, egui::Event::Key { key: pressed, pressed: true, repeat: false, modifiers, .. } if *pressed == key && modifiers.matches_logically(Modifiers::COMMAND))
+        });
+        input.consume_key(Modifiers::COMMAND, key) && fresh
+    })
+}
+
+/// The warning box over a block that changed on disk: what happened, the block's lines as they are now, plain and
+/// copyable with an `interview` edge on each new line, and the button that takes them. Returns whether it was clicked.
+fn changed_box(ui: &mut Ui, changed: &ChangedOnDisk) -> bool {
+    let p = Palette::of(ui);
+    prompt_box_tone(ui, Tone::Interview, |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        let mut job = egui::text::LayoutJob::default();
+        job.append(changed.title, 0.0, egui::TextFormat::simple(Type::STRONG.font(), p.interview));
+        job.append(&format!(" {}", changed.detail), 0.0, egui::TextFormat::simple(Type::BODY.font(), p.text));
+        copyable(ui, |ui| add_job(ui, job, TextWrapMode::Wrap));
+        let Some(lines) = changed.lines else { return false };
+        code_box(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let edge = ui.max_rect().left() - f32::from(CODE_PADDING.0);
+            add_text(ui, changed.caption, Type::SMALL, Ink::Muted);
+            for (text, added) in lines {
+                // The file's own text: shown, and copied, without hidden characters, as the paper shows it.
+                let shown = add_text(ui, visible_chars(text).collect::<String>(), Type::BODY, Ink::Text);
+                if *added {
+                    let rect = Rect::from_min_max(pos2(edge, shown.rect.top()), pos2(edge + PICK_EDGE, shown.rect.bottom()));
+                    ui.painter().rect_filled(rect, 0.0, p.interview);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
+            let take = crate::ui_kit::small_button(ui, changed.take).clicked();
+            add_text(ui, changed.take_note, Type::NOTE, Ink::Muted);
+            take
+        })
+        .inner
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
 
@@ -1574,5 +1933,146 @@ mod tests {
         harness.key_press(egui::Key::Tab);
         harness.run();
         assert!(harness.get_by_label("After").is_focused(), "the next Tab leaves the row");
+    }
+
+    const CHANGED_LINES: [(&str, bool); 2] = [("- Budget you owned: [PLACEHOLDER]", false), ("- Introduced a weekly\u{202e} planning review.", true)];
+
+    const CHANGED: ChangedOnDisk = ChangedOnDisk {
+        title: "This role changed while you were editing.",
+        detail: "A task added a line to it.",
+        caption: "Now in the file",
+        lines: Some(&CHANGED_LINES),
+        take: "Use the new version",
+        take_note: "Replaces your text with the file's.",
+    };
+
+    /// An editor on the bench: whether a run works, whether the block changed on disk, and what it asked for so far.
+    struct Bench {
+        busy: bool,
+        changed: bool,
+        draft: String,
+        actions: Vec<EditorAction>,
+    }
+
+    fn bench(busy: bool, changed: bool) -> Harness<'static, Bench> {
+        let state = Bench { busy, changed, draft: "### Lead Engineer - Calder Freight (2021 – present)".to_owned(), actions: Vec::new() };
+        Harness::builder().with_size([800.0, 600.0]).with_context_setup(setup).build_ui_state(
+            |ui, bench: &mut Bench| {
+                let editor = BlockEditor {
+                    title: "Edit this role",
+                    hint: "Markdown.",
+                    save: if bench.changed { "Save mine over it" } else { "Save" },
+                    note: "Only this role changes.",
+                    unsaved: None,
+                    busy: bench.busy.then_some(EditorBusy { why: "A task is running.", line: "Save waits until it ends." }),
+                    changed: bench.changed.then_some(&CHANGED),
+                    focus: false,
+                    reveal: false,
+                };
+                if let Some(action) = block_editor(ui, &editor, &mut bench.draft, &mut false, |_, _| {}) {
+                    bench.actions.push(action);
+                }
+                crate::ui_kit::note_focus(ui.ctx());
+            },
+            state,
+        )
+    }
+
+    fn save_button<'h>(harness: &'h Harness<'static, Bench>) -> egui_kittest::Node<'h> {
+        let label = if harness.state().changed { "Save mine over it" } else { "Save" };
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, label)
+    }
+
+    #[test]
+    fn the_command_key_and_enter_saves_only_while_no_run_works() {
+        for changed in [false, true] {
+            let mut harness = bench(false, changed);
+            harness.run();
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+            assert_eq!(harness.state().actions, vec![EditorAction::Save], "changed: {changed}");
+
+            let mut harness = bench(true, changed);
+            harness.run();
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+            save_button(&harness).click();
+            harness.run();
+            assert_eq!(harness.state().actions, Vec::new(), "changed: {changed}");
+            assert!(save_button(&harness).accesskit_node().is_disabled());
+        }
+    }
+
+    /// A held chord saves once, and its repeats do nothing.
+    #[test]
+    fn a_held_chord_saves_once() {
+        let mut harness = bench(false, true);
+        harness.run();
+        harness.key_down_modifiers(Modifiers::COMMAND, Key::Enter);
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::Save], "the press");
+        // The key is still down, so egui reads each further press as a repeat.
+        for _ in 0..3 {
+            harness.key_down_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+        }
+        assert_eq!(harness.state().actions, vec![EditorAction::Save], "the repeats");
+    }
+
+    /// A line of the file shows as the paper shows it, with no hidden characters to make it read as another line.
+    #[test]
+    fn the_lines_on_disk_show_without_hidden_characters() {
+        let mut harness = bench(false, true);
+        harness.state_mut().changed = true;
+        harness.run();
+        assert!(harness.query_by_label("- Introduced a weekly planning review.").is_some());
+        assert!(harness.query_by_label_contains("\u{202e}").is_none());
+    }
+
+    #[test]
+    fn a_change_on_disk_still_shows_while_a_run_works() {
+        let mut harness = bench(true, true);
+        harness.run();
+        assert!(harness.query_by_label_contains("This role changed").is_some());
+        harness.get_by_label("Use the new version").click();
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::TakeTheirs]);
+    }
+
+    #[test]
+    fn the_first_esc_leaves_the_field_and_the_second_cancels() {
+        let mut harness = bench(false, false);
+        harness.run();
+        harness.query_all_by_role(egui::accesskit::Role::MultilineTextInput).next().expect("the field").focus();
+        harness.run();
+        harness.key_press(Key::Escape);
+        harness.run();
+        assert_eq!(harness.state().actions, Vec::new());
+        harness.key_press(Key::Escape);
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::Cancel]);
+    }
+
+    #[test]
+    fn a_blocked_role_offers_no_edit() {
+        for (blocked, clicks) in [(None, 1), (Some("Save or cancel the open edit first."), 0)] {
+            let mut cache = CommonMarkCache::default();
+            let text = |text: &str| vec![Piece::Text(text.to_owned())];
+            let (dates, title, company) = (text("2021 – present"), text("Lead Engineer"), text("Calder Freight"));
+            let mut harness = Harness::builder().with_size([800.0, 300.0]).with_context_setup(setup).build_ui_state(
+                move |ui, clicked: &mut usize| {
+                    let role = RoleEntry { dates: &dates, title: &title, company: &company, body: "- Leads a team of six.", first: true };
+                    if role_entry(ui, &mut cache, &role, blocked).clicked() {
+                        *clicked += 1;
+                    }
+                },
+                0,
+            );
+            harness.run();
+            assert_eq!(harness.get_by_label("Edit").accesskit_node().is_disabled(), blocked.is_some());
+            harness.get_by_label("Edit").click();
+            harness.run();
+            assert_eq!(*harness.state(), clicks, "blocked: {blocked:?}");
+        }
     }
 }

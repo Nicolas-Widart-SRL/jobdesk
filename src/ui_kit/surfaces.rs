@@ -1,20 +1,20 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, RichText, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2,
-    WidgetInfo, WidgetText, pos2, vec2,
+    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, UiStackInfo, Vec2,
+    WidgetInfo, pos2, vec2,
 };
 
 use crate::shared_kernel::Source;
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{dialog_open, interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
+use crate::ui_kit::controls::{dialog_open, hand, interactive, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_text, table_head, wrapped};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CODE_PADDING, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL,
-    ROW_PADDING, SCREEN_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    ROW_PADDING, SCREEN_PADDING, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -419,12 +419,17 @@ pub fn table_cell<R>(ui: &mut Ui, rule: CellRule, add: impl FnOnce(&mut Ui) -> R
 }
 
 /// A whole row that picks something, such as a run in a list. Picked, it takes an ink edge at its leading side.
+/// Disabled, it fades to `FADED_OPACITY`, takes no hover and keeps the arrow, so `enabled_when` can hold it.
 pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
     let response = ui
         .scope_builder(clickable(), |ui| {
+            if !enabled {
+                ui.multiply_opacity(FADED_OPACITY);
+            }
             let row = ui.response();
-            let look = pick_look(&p, on, pointer_over(&row), pressed(&row));
+            let look = pick_look(&p, on, enabled && pointer_over(&row), enabled && pressed(&row));
             let frame = Frame::new().fill(look.fill).corner_radius(RADIUS_PANEL).inner_margin(margin(PICK_PADDING));
             let shown = frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -437,6 +442,189 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
         .response;
     interactive_row(ui, &response, RADIUS_PANEL);
     response
+}
+
+/// A page of Settings on paper: `title` in `Type::H1` over one `lead` line in `Type::TAKE` `muted`, `actions` at the right,
+/// their bottom edge level with the lead's, a hairline, then `body`, which scrolls with its bar shown at rest.
+/// The page takes all the height it has. Unlike `page_head`'s, `actions` runs once, so it may change state and give ids.
+pub fn settings_page<A, B>(ui: &mut Ui, title: &str, lead: &str, actions: impl FnOnce(&mut Ui) -> A, body: impl FnOnce(&mut Ui) -> B) -> (A, B) {
+    paper(ui, false, |ui| {
+        let (x, top, bottom) = SETTINGS_HEAD_PADDING;
+        let acted = Frame::new()
+            .inner_margin(Margin { left: x, right: x, top, bottom })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let full = ui.available_width();
+                let p = Palette::of(ui);
+                // The actions go in first, at the right, so the words take the room they leave.
+                // They end on the bottom of the words as measured on the frame before.
+                let kept = KeptHeight::read(ui, ui.scope_id().with("settings_page_head"), BUTTON_HEIGHT);
+                let row = Rect::from_min_size(ui.cursor().min, vec2(full, (kept.height - SETTINGS_ACTIONS_LIFT).max(0.0)));
+                let mut side = ui.new_child(UiBuilder::new().id_salt("settings_page_actions").max_rect(row).layout(Layout::right_to_left(Align::Max)));
+                side.spacing_mut().item_spacing.x = BUTTON_GAP;
+                let acted = actions(&mut side);
+                let used = side.min_rect();
+                let room = if used.width() > 0.0 { full - used.width() - HEAD_GAP.0 } else { full };
+                let title_line = line(ui, title, Type::H1, p.text, room);
+                let lead_lines = wrapped(ui, lead, Type::TAKE, p.muted, room.min(DOC_MEASURE));
+                let words = ui
+                    .vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                        let shown = add_galley(ui, title_line.clone());
+                        cut_hover(shown, &title_line, title);
+                        add_galley(ui, lead_lines);
+                    })
+                    .response
+                    .rect;
+                kept.keep(ui, words.height().max(used.height() + SETTINGS_ACTIONS_LIFT), "a settings head changed height");
+                ui.expand_to_include_rect(used);
+                acted
+            })
+            .inner;
+        divider(ui);
+        let (x, top, bottom) = SETTINGS_BODY_PADDING;
+        let shown = egui::ScrollArea::vertical().id_salt("settings_page_body").auto_shrink([false, false]).show(ui, |ui| {
+            Frame::new()
+                .inner_margin(Margin { left: x, right: x, top, bottom })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    body(ui)
+                })
+                .inner
+        });
+        (acted, shown.inner)
+    })
+}
+
+fn section_rule_id() -> egui::Id {
+    egui::Id::NULL.with("setting_section_rule")
+}
+
+/// A setting's ink: `ink`, or at the disabled opacity while `ui` is disabled.
+fn setting_ink(ui: &Ui, ink: Color32) -> Color32 {
+    if ui.is_enabled() { ink } else { ink.gamma_multiply(DISABLED_OPACITY) }
+}
+
+/// A part of a Settings page: its heading in `Type::SECTION`, an optional `note` in `Type::NOTE` `muted`, then a hairline.
+/// Hits of the search `query` are highlighted. Inside paper there is no heavier section rule.
+pub fn setting_section(ui: &mut Ui, title: &str, note: Option<&str>, query: &str) {
+    if ui.min_rect().height() > 0.0 {
+        ui.add_space(SETTING_SECTION_GAP.0);
+    }
+    let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let width = ui.available_width();
+        add_marked(ui, line(ui, title, Type::SECTION, text, width), title, query);
+        if let Some(note) = note {
+            ui.add_space(SETTING_NOTE_GAP);
+            add_marked(ui, wrapped(ui, note, Type::NOTE, muted, width.min(DOC_MEASURE)), note, query);
+        }
+        ui.add_space(SETTING_SECTION_GAP.1);
+        divider(ui);
+    });
+    // The first row under it takes this rule as its own.
+    let at = (ui.ctx().cumulative_pass_nr(), ui.cursor().min);
+    ui.ctx().data_mut(|data| data.insert_temp(section_rule_id(), at));
+}
+
+/// The hairline above a setting row, unless the row sits straight under a section's rule.
+fn setting_rule(ui: &mut Ui) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    let ruled: Option<(u64, Pos2)> = ui.ctx().data(|data| data.get_temp(section_rule_id()));
+    if !ruled.is_some_and(|(at_pass, at)| at_pass == pass && at.distance(ui.cursor().min) < 0.5) {
+        divider(ui);
+    }
+}
+
+/// One setting: `label` in `Type::STRONG` over its `help` in `Type::NOTE` `muted`, held to `DOC_MEASURE`, and the
+/// `control` at the right, centred on them. A hairline sits above. Hits of the search `query` are highlighted.
+pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: impl FnOnce(&mut Ui)) -> Response {
+    let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    // Each row keeps its own measure, so it is keyed on its place among its parent's widgets.
+    let id = ui.next_auto_id();
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        setting_rule(ui);
+        let full = ui.available_width();
+        let origin = ui.cursor().min;
+        let top = origin.y + SETTING_ROW_PADDING;
+        let least = SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0;
+        // The control goes in first, at the right, so the words take the room it leaves.
+        // It is centred on the height the row measured on the frame before.
+        let kept = KeptHeight::read(ui, id.with("setting_row"), least);
+        let band = Rect::from_min_size(pos2(origin.x, top), vec2(full, kept.height));
+        let mut side = ui.new_child(UiBuilder::new().id_salt("setting_control").max_rect(band).layout(Layout::right_to_left(Align::Center)));
+        side.spacing_mut().item_spacing.x = BUTTON_GAP;
+        control(&mut side);
+        let used = side.min_rect();
+        let beside = if used.width() > 0.0 { used.width() + SETTING_CONTROL_GAP } else { 0.0 };
+        let room = (full - beside).clamp(0.0, DOC_MEASURE);
+        let label_lines = wrapped(ui, label, Type::STRONG, text, room);
+        let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
+        let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        let height = words.max(used.height()).max(least);
+        let place = Rect::from_min_size(pos2(origin.x, top + (height - words) / 2.0), vec2(room, words));
+        let mut column = ui.new_child(UiBuilder::new().id_salt("setting_words").max_rect(place).layout(Layout::top_down(Align::Min)));
+        column.spacing_mut().item_spacing.y = SETTING_HELP_GAP;
+        add_marked(&mut column, label_lines, label, query);
+        if let Some(help_lines) = help_lines {
+            add_marked(&mut column, help_lines, help, query);
+        }
+        kept.keep(ui, height, "a setting row changed height");
+        ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover())
+    })
+    .inner
+}
+
+/// A setting that is on or off: egui's checkbox at `CHECK_BOX` first, then `label` over its `help`, either of which
+/// also flips it. A hairline sits above. A screen reader hears one checkbox named `label`.
+pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query: &str) -> Response {
+    let enabled = ui.is_enabled();
+    let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    let id = ui.next_auto_id();
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        setting_rule(ui);
+        let full = ui.available_width();
+        let origin = ui.cursor().min;
+        let top = origin.y + SETTING_ROW_PADDING;
+        let lead = CHECK_BOX + SETTING_CHECK_GAP;
+        let room = (full - lead).clamp(0.0, DOC_MEASURE);
+        let label_lines = wrapped(ui, label, Type::STRONG, text, room);
+        let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
+        let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        // The box sits on the label's first line.
+        let first_line = label_lines.rows.first().map_or(CHECK_BOX, |row| row.rect().height());
+        let boxed = Rect::from_min_size(pos2(origin.x, top + ((first_line - CHECK_BOX) / 2.0).max(0.0)), vec2(CHECK_BOX, CHECK_BOX));
+        let mut tick = ui.new_child(UiBuilder::new().id_salt("setting_check_box").max_rect(boxed).layout(Layout::left_to_right(Align::Center)));
+        tick.spacing_mut().icon_width = CHECK_BOX;
+        tick.spacing_mut().icon_width_inner = CHECK_BOX * 2.0 / 3.0;
+        tick.spacing_mut().interact_size.y = CHECK_BOX;
+        if !enabled {
+            tick.multiply_opacity(DISABLED_OPACITY);
+        }
+        let mut response = hand(tick.add(egui::Checkbox::without_text(on)));
+        let place = Rect::from_min_size(pos2(origin.x + lead, top), vec2(room, words));
+        let mut column = ui.new_child(UiBuilder::new().id_salt("setting_check_words").max_rect(place).layout(Layout::top_down(Align::Min)));
+        column.spacing_mut().item_spacing.y = SETTING_HELP_GAP;
+        add_marked(&mut column, label_lines, label, query);
+        if let Some(help_lines) = help_lines {
+            add_marked(&mut column, help_lines, help, query);
+        }
+        let words_hit = hand(ui.interact(column.min_rect(), id.with("setting_check_words"), Sense::click()));
+        if words_hit.clicked() {
+            *on = !*on;
+            response.mark_changed();
+        }
+        let checked = *on;
+        response.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, checked, label));
+        let height = words.max(CHECK_BOX).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
+        ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover());
+        response
+    })
+    .inner
 }
 
 /// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.
@@ -973,11 +1161,6 @@ pub struct BandCell<'a> {
     pub note: &'a str,
     pub look: CellLook,
     pub marks: &'a [(usize, Option<Ink>)],
-}
-
-/// Text wrapped to `width`, for widgets that paint their own.
-fn wrapped(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
-    WidgetText::from(RichText::new(text).font(style.font()).color(color)).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font())
 }
 
 /// How far the first line's baseline sits below the galley's top.

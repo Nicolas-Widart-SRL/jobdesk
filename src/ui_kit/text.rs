@@ -1,7 +1,8 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, TextStyle, TextWrapMode, Ui, WidgetText};
+use egui::{Align2, Color32, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -9,7 +10,7 @@ use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{CLICKABLE, backed, on_desk};
-use crate::ui_kit::tokens::{DOC_MEASURE, Type};
+use crate::ui_kit::tokens::{DOC_MEASURE, HIT_OVERHANG, HIT_TOP, Type};
 
 /// Text in a named type style. The way a screen asks for anything beyond body text.
 pub fn rich(ui: &Ui, text: impl Into<String>, style: Type, ink: impl Into<Ink>) -> RichText {
@@ -99,6 +100,67 @@ pub fn score(ui: &mut Ui, text: impl Into<String>) -> Response {
 /// A large count, read at a glance.
 pub fn figure(ui: &mut Ui, text: impl Into<String>, ink: impl Into<Ink>) -> Response {
     add_text(ui, text, Type::FIGURE, ink)
+}
+
+/// Text in `style` and `ink`, wrapped to the room it has, with each hit of a search for `query` highlighted.
+/// The highlighter is the open tab's `mark` swipe without its rule: a hit means "here". An empty `query` marks nothing.
+pub fn hit_mark(ui: &mut Ui, text: &str, style: Type, ink: impl Into<Ink>, query: &str) -> Response {
+    let galley = wrapped(ui, text, style, ink.into().color(&Palette::of(ui)), ui.available_width());
+    add_marked(ui, galley, text, query)
+}
+
+/// `galley`, laid out from `text`, as a label with each hit of `query` highlighted under its glyphs.
+pub(in crate::ui_kit) fn add_marked(ui: &mut Ui, galley: Arc<Galley>, text: &str, query: &str) -> Response {
+    // The swipes go under the text, so their place is kept before the label paints.
+    let under = ui.painter().add(Shape::Noop);
+    let response = add_galley(ui, galley.clone());
+    let hits = hit_ranges(text, query);
+    if !hits.is_empty() {
+        let fill = Palette::of(ui).mark;
+        ui.painter().set(under, Shape::Vec(hit_swipes(&galley, response.rect.min, &hits, fill)));
+    }
+    response
+}
+
+/// Where `query` shows in `text`, as char ranges, matched without regard to case. Hits never overlap.
+/// A query of only spaces matches nothing.
+pub(in crate::ui_kit) fn hit_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let query: Vec<char> = query.trim().chars().collect();
+    let chars: Vec<char> = text.chars().collect();
+    let same = |a: char, b: char| a == b || a.to_lowercase().eq(b.to_lowercase());
+    let mut hits = Vec::new();
+    let mut at = 0;
+    while !query.is_empty() && at + query.len() <= chars.len() {
+        if query.iter().enumerate().all(|(k, &q)| same(chars[at + k], q)) {
+            hits.push(at..at + query.len());
+            at += query.len();
+        } else {
+            at += 1;
+        }
+    }
+    hits
+}
+
+/// The swipe under each hit in `galley` laid at `at`, one per row a hit runs over, over the lower part of the line.
+fn hit_swipes(galley: &Galley, at: Pos2, hits: &[Range<usize>], fill: Color32) -> Vec<Shape> {
+    let mut shapes = Vec::new();
+    let mut first = 0;
+    for row in &galley.rows {
+        let count = row.glyphs.len();
+        for hit in hits {
+            let (from, to) = (hit.start.max(first), hit.end.min(first + count));
+            if from >= to {
+                continue;
+            }
+            let rect = row.rect();
+            let left = at.x + row.pos.x + row.glyphs[from - first].pos.x - HIT_OVERHANG;
+            let right = at.x + row.pos.x + row.glyphs[to - 1 - first].max_x() + HIT_OVERHANG;
+            let top = at.y + rect.top() + rect.height() * HIT_TOP;
+            shapes.push(Shape::rect_filled(Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, at.y + rect.bottom())), 0.0, fill));
+        }
+        first += count + usize::from(row.ends_with_newline);
+    }
+    shapes
 }
 
 /// A strong line over a muted one, each cut to one line, the pair centred in the height it has. Such as a role in a table row.
@@ -332,6 +394,11 @@ pub fn wrapped_height(ui: &Ui, text: &str, style: Type, width: f32) -> f32 {
     WidgetText::from(RichText::new(text).font(style.font())).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font()).size().y
 }
 
+/// Text wrapped to `width`, for widgets that lay out their own.
+pub(in crate::ui_kit) fn wrapped(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
+    WidgetText::from(RichText::new(text).font(style.font()).color(color)).into_galley(ui, Some(TextWrapMode::Wrap), width, style.font())
+}
+
 /// A single line cut to `width`, for widgets that paint their own text.
 pub(in crate::ui_kit) fn line(ui: &Ui, text: &str, style: Type, color: Color32, width: f32) -> Arc<Galley> {
     let text = RichText::new(text).font(style.font()).color(color);
@@ -386,6 +453,16 @@ mod tests {
         harness.get_by_label(label).click();
         harness.run();
         opened.take()
+    }
+
+    #[test]
+    fn a_search_hits_every_place_regardless_of_case() {
+        assert_eq!(hit_ranges("Spend at most, spend less", "spend"), vec![0..5, 15..20]);
+        assert_eq!(hit_ranges("Reduce motion", " MOTION "), vec![7..13]);
+        assert_eq!(hit_ranges("Été café", "é"), vec![0..1, 2..3, 7..8]);
+        assert!(hit_ranges("Theme", "").is_empty());
+        assert!(hit_ranges("Theme", "   ").is_empty());
+        assert!(hit_ranges("Theme", "themes").is_empty());
     }
 
     #[test]

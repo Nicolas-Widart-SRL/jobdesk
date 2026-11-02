@@ -8,11 +8,11 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab,
-    check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, faint_mono, fat_tally, figure,
-    flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
+    check_tag, code_box, command_button, command_row, copy_button, danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure,
+    flow_band, folder_tab, group_title, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
     page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, reveal_command, rich,
-    score, segmented, select_row, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
-    stamp_square, stamped_head, status_dot, status_frame, status_line, status_segmented, step_line, strong, table_head, tag, tally, tally_strip, turn_band, undo_row,
+    score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
+    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_segmented, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -32,6 +32,9 @@ const TONES: [(&str, Tone); 8] = [
 ];
 
 const SWATCHES_PER_ROW: usize = 7;
+
+/// The sheet's size. One point per pixel keeps it under the 8192px a texture holds.
+const SHEET: [f32; 2] = [1000.0, 8192.0];
 
 /// The row the pointer rests on in the snapshots.
 const HOVERED_ROW: &str = "/match    Pick row, hovered";
@@ -354,6 +357,68 @@ fn tray(ui: &mut Ui) {
     });
 }
 
+/// The height the sample Settings page takes in the sheet.
+const SETTINGS_PAGE_HEIGHT: f32 = 640.0;
+
+fn settings(ui: &mut Ui) {
+    ui.columns_const(|[left, right]| {
+        slip(left, |ui| {
+            panel_body(ui, |ui| {
+                search_field(ui, &mut String::new(), "Search settings");
+                search_field(ui, &mut "spend".to_owned(), "Search settings");
+                group_title(ui, "Personal");
+                pick_row(ui, true, |ui| {
+                    strong(ui, "Settings row, picked");
+                });
+                pick_row(ui, false, |ui| {
+                    strong(ui, "Settings row");
+                });
+                enabled_when(ui, false, "Waits for the task that runs", |ui| {
+                    pick_row(ui, false, |ui| {
+                        strong(ui, "Settings row, disabled");
+                    })
+                });
+            });
+        });
+        status_frame(right).show(right, |ui| {
+            ui.vertical(|ui| {
+                status_waits(ui, "Claude waits on you");
+                ui.horizontal(|ui| {
+                    status_button(ui, "Settings", &["Cmd", ","], false);
+                    status_button(ui, "Settings", &["Cmd", ","], true);
+                    ui.add_enabled_ui(false, |ui| status_button(ui, "Settings", &["Cmd", ","], false));
+                });
+            });
+        });
+    });
+    ui.add_space(10.0);
+    ui.allocate_ui(egui::vec2(ui.available_width(), SETTINGS_PAGE_HEIGHT), |ui| {
+        settings_page(ui, "Appearance", "How Jobdesk looks on this computer.", |ui| {
+            button(ui, "Check again");
+        }, |ui| {
+            setting_section(ui, "Look", None, "");
+            setting_row(ui, "Theme", "System follows your Mac.", "", |ui| {
+                toggle_group(ui, Some(1), &[(0, "System"), (1, "Light"), (2, "Dark")]);
+            });
+            setting_row(ui, "Text size", "Off a step, no size is on.", "", |ui| {
+                toggle_group(ui, None, &[(90, "90%"), (100, "100%"), (110, "110%")]);
+            });
+            setting_section(ui, "Motion", Some("Decoration only: off, every change shows at once."), "");
+            setting_check(ui, &mut false, "Reduce motion", "Cards and the day stamp change at once, with no slide.", "");
+            setting_section(ui, "Spend", Some("A search for spend marks every place it shows."), "spend");
+            setting_row(ui, "Spend at most, USD", "Empty starts each command at its suggested budget, so tasks spend what they need.", "spend", |ui| {
+                button(ui, "Suggested");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                setting_check(ui, &mut true, "When a task finishes", "One notification per task, with what it cost.", "");
+                setting_row(ui, "Open on", "The screen you see first.", "", |ui| {
+                    toggle_group(ui, Some(0), &[(0, "Today"), (1, "Jobs")]);
+                });
+            });
+        });
+    });
+}
+
 fn runs(ui: &mut Ui) {
     let at_stop = [(1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Turn))), (5, None)];
     let working = [(2, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Active))), (4, None)];
@@ -517,7 +582,7 @@ type Section = (&'static str, fn(&mut Ui));
 fn gallery(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        let sections_of_gallery: [Section; 13] = [
+        let sections_of_gallery: [Section; 14] = [
             ("Palette", swatches),
             ("Type scale", type_scale),
             ("Text", text_styles),
@@ -528,6 +593,7 @@ fn gallery(ui: &mut Ui) {
             ("Sections and rows", sections),
             ("Board", board),
             ("Today", tray),
+            ("Settings", settings),
             ("Tasks", runs),
             ("Document", document_sample),
             ("Postmark", postmark),
@@ -544,7 +610,7 @@ fn gallery(ui: &mut Ui) {
 fn render(theme: Theme, name: &str) {
     // One point per pixel: at more, the sheet is taller than the 8192px a texture holds.
     let mut harness = Harness::builder()
-        .with_size([1000.0, 7450.0])
+        .with_size(SHEET)
         .with_pixels_per_point(1.0)
         .with_theme(theme)
         .with_context_setup(install_look)
@@ -572,7 +638,7 @@ fn ui_kit_gallery_light() {
 /// Every clickable kit widget in the gallery shows the pointing hand under the pointer, and a disabled one keeps the arrow.
 #[test]
 fn every_clickable_widget_shows_the_hand() {
-    let mut harness = Harness::builder().with_size([1000.0, 7450.0]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(|ui| {
+    let mut harness = Harness::builder().with_size(SHEET).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(|ui| {
         jobdesk::ui_kit::desk(ui, |ui| {
             jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
                 ui.add_enabled_ui(false, |ui| button(ui, "Switched off"));

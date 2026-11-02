@@ -45,6 +45,9 @@ pub const MARK_RULE: f32 = 2.0;
 pub const MARK_OVERHANG: f32 = 6.0;
 /// The line box of a tab's label, centred in the tab. The swipe's bottom sits 1px under it.
 pub const MARK_LINE: f32 = 20.0;
+/// A search hit's swipe: how far it reaches past the matched glyphs, and where it starts down the line, as a share of it.
+pub const HIT_OVERHANG: f32 = 2.0;
+pub const HIT_TOP: f32 = 0.45;
 pub const SEGMENT_HEIGHT: f32 = 34.0;
 pub const SEGMENT_GAP: f32 = 3.0;
 pub const SEGMENT_PADDING: f32 = 12.0;
@@ -86,10 +89,7 @@ pub const DAY_STAMP_EMPTY_TICKS: usize = 12;
 pub const DAY_STAMP_MAX_TICKS: usize = 40;
 /// The day stamp's size the moment its last tick fills, before it settles to its own.
 pub const DAY_STAMP_SETTLE: f32 = 1.04;
-/// Motion is decoration only: off, every change shows at once.
-pub const MOTION: bool = true;
-/// How long a decision moves for, in seconds, and how far a decided card slides toward the rail.
-pub const MOTION_TIME: f32 = if MOTION { 0.15 } else { 0.0 };
+/// How far a decided card slides toward the rail. How long it moves for is `motion_time`, which reduced motion zeroes.
 pub const MOTION_SLIDE: f32 = 12.0;
 pub const AGENDA_DAY_WIDTH: f32 = 50.0;
 pub const AGENDA_TIP_WIDTH: f32 = 250.0;
@@ -220,6 +220,21 @@ pub const FIELD_HEIGHT: f32 = 34.0;
 pub const FIELD_PADDING: f32 = 8.0;
 pub const FIELD_AREA_HEIGHT: f32 = 72.0;
 pub const FIELD_TINY_WIDTH: f32 = 92.0;
+/// A settings page's head padding (inline, top, bottom), its body padding (inline, top, bottom),
+/// and how far its actions sit above the lead's bottom edge.
+pub const SETTINGS_HEAD_PADDING: (i8, i8, i8) = (22, 18, 14);
+pub const SETTINGS_BODY_PADDING: (i8, i8, i8) = (22, 14, 18);
+pub const SETTINGS_ACTIONS_LIFT: f32 = 2.0;
+/// The room above a settings section after another, and between its heading or note and its rule.
+pub const SETTING_SECTION_GAP: (f32, f32) = (20.0, 6.0);
+/// A setting row's padding above and below, its least height, the gap before its control, and the gap after a checkbox.
+pub const SETTING_ROW_PADDING: f32 = 10.0;
+pub const SETTING_ROW_MIN: f32 = 58.0;
+pub const SETTING_CONTROL_GAP: f32 = 32.0;
+pub const SETTING_CHECK_GAP: f32 = 12.0;
+/// The room between a setting's label and its help, and between a section's heading and its note.
+pub const SETTING_HELP_GAP: f32 = 2.0;
+pub const SETTING_NOTE_GAP: f32 = 1.0;
 
 pub const RADIUS_TAB: u8 = 6;
 pub const RADIUS_PANEL: u8 = 4;

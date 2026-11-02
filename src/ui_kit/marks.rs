@@ -6,12 +6,13 @@ use egui::{Color32, CornerRadius, Galley, Pos2, Rect, Response, Role, Sense, Sha
 
 use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
+use crate::ui_kit::controls::motion_time;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::on_desk;
 use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
-    KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, MOTION_TIME, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
+    KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
     TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
@@ -209,7 +210,7 @@ fn lit_ticks(total: usize, done: usize, ticks: usize) -> usize {
 
 /// The day's postmark: two rings, one tick per decision filled as it is made, and the date inside.
 /// With nothing to decide, the ring shows `DAY_STAMP_EMPTY_TICKS` unlit ticks in quieter rings.
-/// A new tick fills over `MOTION_TIME`, and when the last one fills the stamp settles from `DAY_STAMP_SETTLE`, once.
+/// A new tick fills over `motion_time`, and when the last one fills the stamp settles from `DAY_STAMP_SETTLE`, once.
 /// Each animation is keyed on the tick count, so a ring that first shows or changes size never moves.
 pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usize, done: usize, spoken: &str) -> Response {
     let p = Palette::of(ui);
@@ -218,9 +219,10 @@ pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usiz
     let empty = total == 0;
     let ticks = if empty { DAY_STAMP_EMPTY_TICKS } else { total.min(DAY_STAMP_MAX_TICKS) };
     let lit = if empty { 0 } else { lit_ticks(total, done, ticks) };
-    let filled = ui.ctx().animate_value_with_time(response.id.with(("lit", ticks)), lit as f32, MOTION_TIME);
+    let motion = motion_time(ui.ctx());
+    let filled = ui.ctx().animate_value_with_time(response.id.with(("lit", ticks)), lit as f32, motion);
     let full = !empty && lit == ticks;
-    let settled = ui.ctx().animate_bool_with_time(response.id.with(("full", ticks)), full, MOTION_TIME);
+    let settled = ui.ctx().animate_bool_with_time(response.id.with(("full", ticks)), full, motion);
     // A disc of the desk's base under the outer ring, so no grid line crosses the date.
     let mut shapes = vec![Shape::circle_filled(centre, DAY_STAMP_RINGS.0, p.sheet)];
     let (inner, outer, width) = DAY_STAMP_TICK;
@@ -342,10 +344,21 @@ pub fn status_dot(ui: &mut Ui, tone: Tone) -> Response {
 /// The status line in the status strip: a square that says whether all is well, then the words.
 pub fn status_line(ui: &mut Ui, ok: bool, text: &str) -> Response {
     let p = Palette::of(ui);
+    squared_status(ui, if ok { p.hired } else { p.closed }, text)
+}
+
+/// The status line while something waits on the user, such as a question in a running task: its square in stamp ink.
+pub fn status_waits(ui: &mut Ui, text: &str) -> Response {
+    let p = Palette::of(ui);
+    squared_status(ui, p.turn, text)
+}
+
+fn squared_status(ui: &mut Ui, square: Color32, text: &str) -> Response {
+    let p = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, if ok { p.hired } else { p.closed });
+        ui.painter().rect_filled(rect, 0.0, square);
         add_galley(ui, line(ui, text, Type::NOTE, p.muted, f32::INFINITY));
     })
     .response

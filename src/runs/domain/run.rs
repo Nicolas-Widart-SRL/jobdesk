@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, RunRequest, StepRail, Usage};
+use crate::shared_kernel::SignIn;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunStatus {
@@ -71,6 +72,11 @@ pub struct Run {
     pub model: Option<String>,
     /// How the CLI authenticated. `none` means its own Claude login.
     pub api_key_source: Option<String>,
+    /// How Jobdesk started the process that reported `api_key_source`, which says whether a key it reports came from
+    /// Jobdesk. None for a run read back from its log, which does not keep it, and before its process reports.
+    pub sign_in: Option<SignIn>,
+    /// How the process starting now signs in, until it reports how it did.
+    starting_sign_in: Option<SignIn>,
     pub status: RunStatus,
     /// Whether the failure reason is the tail of the process's stderr, which ends on its error,
     /// rather than the turn's result text, which opens with it.
@@ -108,6 +114,8 @@ impl Run {
             session_id: request.resume_session.clone(),
             model: None,
             api_key_source: None,
+            sign_in: None,
+            starting_sign_in: Some(request.sign_in),
             status: RunStatus::Starting,
             failed_on_stderr: false,
             rail_moved_at: 0,
@@ -168,6 +176,16 @@ impl Run {
 
     pub fn current_prompt(&self) -> Option<&Prompt> {
         self.prompts.front()
+    }
+
+    /// A new process continues the run, signed in with `sign_in`, which holds once it reports.
+    pub fn note_process_start(&mut self, sign_in: SignIn) {
+        self.starting_sign_in = Some(sign_in);
+    }
+
+    /// A run read back from its log: the log does not keep how its processes signed in.
+    pub fn forget_sign_in(&mut self) {
+        (self.sign_in, self.starting_sign_in) = (None, None);
     }
 
     pub fn note_reply(&mut self, text: &str) {
@@ -236,6 +254,10 @@ impl Run {
                 self.session_id = Some(session_id);
                 self.model = Some(model);
                 self.api_key_source = Some(api_key_source);
+                // A live session reports again each turn, with the process it started with.
+                if let Some(sign_in) = self.starting_sign_in.take() {
+                    self.sign_in = Some(sign_in);
+                }
                 // Each turn starts with this, including the one Claude takes on its own when a background agent reports.
                 if matches!(self.status, RunStatus::Starting | RunStatus::AwaitingReply | RunStatus::Stopped | RunStatus::Failed(_)) {
                     // The first turn begins with the command line. Any later one is Claude's own.

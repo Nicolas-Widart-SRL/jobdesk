@@ -15,7 +15,8 @@ use jobdesk::runs::application::{
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
 use jobdesk::settings::application::{
-    ApiKey, ConnectionTester, DataSizes, Dollars, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn, TestDone, TestReport, drawn_index, index,
+    ApiKey, ConnectionTester, DataSizes, Dollars, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn, TestDone,
+    TestReport, drawn_index, index,
 };
 use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
@@ -4831,17 +4832,25 @@ struct AnsweringTester {
     outcome: Outcome,
     cost_usd: f64,
     said: &'static str,
+    /// How Claude Code said it signed in.
+    source: Option<&'static str>,
 }
 
 impl ConnectionTester for AnsweringTester {
     fn start(&self, _: Option<ApiKey>, done: TestDone) {
-        let source = (self.outcome == Outcome::Passed).then(|| "ANTHROPIC_API_KEY".to_owned());
-        done(TestReport { outcome: self.outcome, cost_usd: self.cost_usd, said: self.said.to_owned(), source });
+        done(TestReport { outcome: self.outcome, cost_usd: self.cost_usd, said: self.said.to_owned(), source: self.source.map(str::to_owned) });
     }
 }
 
+/// A tester of the saved key, which Claude Code reports as `ANTHROPIC_API_KEY` once it got that far.
 fn answering(outcome: Outcome, cost_usd: f64, said: &'static str) -> Box<dyn ConnectionTester> {
-    Box::new(AnsweringTester { outcome, cost_usd, said })
+    let source = (outcome == Outcome::Passed).then_some("ANTHROPIC_API_KEY");
+    Box::new(AnsweringTester { outcome, cost_usd, said, source })
+}
+
+/// A tester whose Claude Code signed in through `source`, as the init line says.
+fn answering_from(outcome: Outcome, said: &'static str, source: &'static str) -> Box<dyn ConnectionTester> {
+    Box::new(AnsweringTester { outcome, cost_usd: 0.004, said, source: Some(source) })
 }
 
 /// 31 October at `hour`:`minute`, the clock Providers counts ages to.
@@ -4849,10 +4858,11 @@ fn at(hour: u32, minute: u32) -> NaiveDateTime {
     NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(hour, minute, 0).unwrap()
 }
 
-/// A desk whose one task, started at `started`, said it signed in through `source`, then ended.
-fn signed_in_desk(source: &str, started: NaiveDateTime) -> RunDesk {
+/// A desk whose one task, started at `started` with `method`, said it signed in through `source`, then ended.
+fn signed_in_desk(source: &str, method: SignIn, started: NaiveDateTime) -> RunDesk {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.set_sign_in(method);
     desk.start("/rank", &StartOptions { model: None, budget_usd: 1.0 }, started).unwrap();
     emit_all(
         &sink,
@@ -4866,24 +4876,26 @@ fn signed_in_desk(source: &str, started: NaiveDateTime) -> RunDesk {
 }
 
 /// Settings › Providers over Today at 11:30, with the usage fixture and a $60 cap, as the canvas's rail shows them.
-/// The last task signed in through `source` at `started`, and `providers` holds the key and Test connection.
-fn providers_shell(name: &str, providers: Providers, source: &str, started: NaiveDateTime) -> Shell {
+/// The last task, started with `method` at `started`, signed in through `source`, and `providers` holds the key and
+/// Test connection.
+fn providers_shell(name: &str, providers: Providers, (source, method): (&str, SignIn), started: NaiveDateTime) -> Shell {
     let mut shell = shell_with_usage(name, usage_tasks()).with_providers(providers).with_now(at(11, 30));
     shell.settings_mut().set_cap_on(true);
     shell.settings_mut().set_cap_amount(Dollars::parse("60"));
-    *shell.desk_slot() = Some(signed_in_desk(source, started));
+    *shell.desk_slot() = Some(signed_in_desk(source, method, started));
     shell.open_settings(Page::Providers);
     shell
 }
 
 /// No key saved, and the last task signed in with the Claude sign-in two hours ago.
 fn sign_in_shell(name: &str, tester: Box<dyn ConnectionTester>) -> Shell {
-    providers_shell(name, open_providers(memory_keychain(None), tester), "none", at(9, 30))
+    providers_shell(name, open_providers(memory_keychain(None), tester), ("none", SignIn::ClaudeSignIn), at(9, 30))
 }
 
 /// A key saved and in use, its test passed a minute ago, and the last task signed in with it four minutes ago.
 fn key_saved_shell(name: &str) -> Shell {
-    let mut shell = providers_shell(name, open_providers(memory_keychain(Some(FAKE_KEY)), idle_tester()), "ANTHROPIC_API_KEY", at(11, 26));
+    let providers = open_providers(memory_keychain(Some(FAKE_KEY)), idle_tester());
+    let mut shell = providers_shell(name, providers, ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
     shell.settings_mut().set_sign_in(SignIn::ApiKey);
     shell.settings_mut().set_key_test(Some(KeyTest { passed: true, at: at(11, 29), cost_usd: 0.004 }));
     shell
@@ -4995,11 +5007,13 @@ fn test_connection_waits_while_a_task_runs() {
     let mut shell = sign_in_shell("providers_task_running", idle_tester());
     *shell.desk_slot() = Some(apply_run(permission_prompt()));
     let mut harness = tray_harness(shell);
+    let reason = "A task is running. Test once it ends.";
+    assert!(is_shown(&harness, reason), "the reason shows without the pointer, for the keyboard and a screen reader");
     let test = harness.get_by_label("Test connection");
     assert!(test.accesskit_node().is_disabled());
     test.hover();
     harness.run_steps(8);
-    assert!(is_shown(&harness, "A task is running. Test once it ends."));
+    assert_eq!(harness.query_all_by_label(reason).count(), 2, "and on hover");
 }
 
 /// Remove asks first. Esc keeps the key; Remove key deletes it and moves tasks back to the Claude sign-in.
@@ -5007,7 +5021,7 @@ fn test_connection_waits_while_a_task_runs() {
 fn remove_asks_first_and_esc_keeps_the_key() {
     let keys = memory_keychain(Some(FAKE_KEY));
     let providers = open_providers(Arc::clone(&keys), idle_tester());
-    let mut shell = providers_shell("providers_remove", providers, "ANTHROPIC_API_KEY", at(11, 26));
+    let mut shell = providers_shell("providers_remove", providers, ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
     shell.settings_mut().set_sign_in(SignIn::ApiKey);
     let (mut harness, shell) = shared_harness(shell);
     let asking = |harness: &Harness<'static>| harness.query_all_by_label("Remove the API key?").next().is_some();
@@ -5119,4 +5133,200 @@ fn settings_key_failed_light() {
     harness.hover_at(egui::pos2(700.0, 700.0));
     harness.run_steps(3);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The note names the method each task started with, not the one in use now.
+#[test]
+fn the_note_names_the_method_the_task_started_with() {
+    // A task on the Claude sign-in found a key in the environment, then the user saved a key that passed.
+    let (mut harness, shell) = shared_harness(providers_shell(
+        "providers_note_env_key",
+        open_providers(memory_keychain(None), answering(Outcome::Passed, 0.004, "ready")),
+        ("ANTHROPIC_API_KEY", SignIn::ClaudeSignIn),
+        at(9, 30),
+    ));
+    type_key(&mut harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert_eq!(desk_sign_in(&shell), SignIn::ApiKey);
+    assert!(is_shown(&harness, "Last task signed in with an API key from your environment"), "not the key saved since");
+
+    // A task on the saved key, then the user removed it.
+    let keys = memory_keychain(Some(FAKE_KEY));
+    let mut shell = providers_shell("providers_note_removed", open_providers(keys, idle_tester()), ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
+    shell.settings_mut().set_sign_in(SignIn::ApiKey);
+    let (mut harness, shell) = shared_harness(shell);
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove key").click();
+    harness.run_steps(3);
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn);
+    assert!(is_shown(&harness, "Last task signed in with your API key"), "the key the task used, though it is gone now");
+}
+
+/// A key typed and not saved is forgotten whichever way the user leaves it.
+#[test]
+fn a_typed_key_is_forgotten_on_the_way_out() {
+    let empty = |harness: &Harness<'static>| key_field(harness).value().unwrap_or_default().is_empty();
+    let typed = |name: &str| {
+        let (mut harness, shell) = shared_harness(sign_in_shell(name, idle_tester()));
+        type_key(&mut harness, FAKE_KEY);
+        assert!(!empty(&harness), "the field holds the key");
+        (harness, shell)
+    };
+    let back_to_key = |harness: &mut Harness<'static>| {
+        harness.get_by_label(KEY_LINE).click();
+        harness.run_steps(3);
+    };
+
+    let (mut harness, _) = typed("providers_forget_row");
+    harness.get_by_label("Your login in Claude Code").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "another row was picked");
+
+    let (mut harness, _) = typed("providers_forget_page");
+    harness.get_by_label("General").click();
+    harness.run_steps(3);
+    harness.get_by_label("Providers").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "another page was opened");
+
+    let (mut harness, shell) = typed("providers_forget_esc");
+    press(&mut harness, Key::Escape);
+    press(&mut harness, Key::Escape);
+    assert!(!shell.borrow().settings_open(), "the first Esc leaves the field, the second closes Settings");
+    cmd_comma(&mut harness);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "Settings was closed");
+
+    let (mut harness, _) = typed("providers_forget_cancel");
+    harness.get_by_label("Cancel").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "Cancel");
+}
+
+/// A keychain that will not take the key: the field is emptied all the same, and the page says why.
+struct LockedKeychain;
+
+impl KeyStore for LockedKeychain {
+    fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
+        Ok(None)
+    }
+
+    fn write(&self, _: &ApiKey) -> Result<(), KeyStoreError> {
+        Err(KeyStoreError { message: "The keychain is locked.".to_owned() })
+    }
+
+    fn delete(&self) -> Result<(), KeyStoreError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_refused_keychain_write_still_empties_the_field() {
+    let providers = open_providers(Arc::new(LockedKeychain), idle_tester());
+    let mut harness = tray_harness(providers_shell("providers_locked", providers, ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    type_key(&mut harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "The keychain is locked."));
+    assert!(key_field(&harness).value().unwrap_or_default().is_empty());
+    assert_never_shown(&harness, FAKE_KEY);
+}
+
+/// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too.
+#[test]
+fn test_connection_waits_for_a_session_that_waits_on_a_reply() {
+    let mut shell = sign_in_shell("providers_session_waits", idle_tester());
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    let harness = tray_harness(shell);
+    assert!(harness.get_by_label("Test connection").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "A task is running. Test once it ends."), "the reason shows without the pointer");
+}
+
+/// While Test connection runs, a reply that would start a new process waits and says why.
+#[test]
+fn a_reply_that_needs_a_process_waits_for_the_test() {
+    let calls = SharedCalls::default();
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: STOP_EVALUATION.into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.12, duration_ms: 303_000 },
+            AgentEvent::ProcessExited { failure: None },
+        ],
+    );
+    let mut shell = shell(Screen::InTray, "providers_reply_waits").with_providers(open_providers(memory_keychain(None), idle_tester()));
+    *shell.desk_slot() = Some(desk);
+    shell.open_settings(Page::Providers);
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Tasks").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Test connection is running. You can reply once it ends."));
+    assert!(harness.get_by_label("Send").accesskit_node().is_disabled());
+    assert_eq!(calls.lock().unwrap().starts, 1, "no process started for a reply");
+}
+
+/// Testing… is the shown method's own: a test of the other method, or one turned away from, reads as still finishing.
+#[test]
+fn another_methods_test_reads_as_still_finishing() {
+    let keys = memory_keychain(Some(FAKE_KEY));
+    let mut harness = tray_harness(providers_shell("providers_other_test", open_providers(keys, idle_tester()), ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Testing…"), "the Claude sign-in's own test");
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    let test = harness.get_by_label("Test connection");
+    assert!(test.accesskit_node().is_disabled());
+    assert!(!is_shown(&harness, "Testing…"));
+    assert!(is_shown(&harness, "Another test is still finishing."));
+}
+
+/// A Claude sign-in test that a key in the environment answered says so: its pass is that key's, and its refusal is
+/// mended there, not with /login.
+#[test]
+fn a_sign_in_test_names_a_key_from_the_environment() {
+    let mut harness = tray_harness(sign_in_shell("providers_env_pass", answering_from(Outcome::Passed, "ready", "ANTHROPIC_API_KEY")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Passed"));
+    assert!(is_shown(
+        &harness,
+        "Claude Code used an API key from your environment, not your Claude sign-in. Tasks on the Claude sign-in use it too while it is set."
+    ));
+
+    let mut harness = tray_harness(sign_in_shell("providers_env_refused", answering_from(Outcome::Refused, "Invalid API key", "ANTHROPIC_API_KEY")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "The API key in your environment was refused."));
+    assert!(!is_shown(&harness, "Claude Code is not signed in."));
+    assert!(harness.query_by_label_contains("then /login, and test again").is_none(), "/login would not mend it");
+
+    let mut harness = tray_harness(sign_in_shell("providers_login_refused", answering_from(Outcome::Refused, "Not logged in", "none")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Claude Code is not signed in."));
+}
+
+/// Each way in is one control a screen reader names, with whether it is picked. Cloud providers says why it waits.
+#[test]
+fn the_ways_in_are_heard() {
+    let harness = tray_harness(sign_in_shell("providers_heard", idle_tester()));
+    let login = harness.get_by_label("Claude sign-in, Your login in Claude Code, In use");
+    assert_eq!(login.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    let key_name = format!("API key, {KEY_LINE}, Not set");
+    let key = harness.get_by_label(&key_name);
+    assert_eq!(key.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    let cloud = harness.get_by_label("Cloud providers, Amazon Bedrock, Google Vertex AI, Later");
+    assert!(cloud.accesskit_node().is_disabled());
+    assert_eq!(cloud.accesskit_node().description().as_deref(), Some("Not available yet."));
 }

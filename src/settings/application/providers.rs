@@ -331,13 +331,20 @@ pub fn age_words(at: NaiveDateTime, now: NaiveDateTime) -> String {
 /// The CLI's `apiKeySource` in words. A value it does not name never reaches the screen as it is.
 /// `passed` is how Jobdesk started that process: only with `SignIn::ApiKey` did the key in its environment come from Jobdesk.
 /// Otherwise it came from the shell that started Jobdesk, and must not read as the key saved here.
-pub fn sign_in_words(source: &str, passed: SignIn) -> &'static str {
+/// None is a process whose method is not known, such as a task read back from its log: a key then reads as no one's.
+pub fn sign_in_words(source: &str, passed: Option<SignIn>) -> &'static str {
     match (source, passed) {
         ("" | "none", _) => "your Claude sign-in",
-        ("ANTHROPIC_API_KEY", SignIn::ApiKey) => "your API key",
-        ("ANTHROPIC_API_KEY", SignIn::ClaudeSignIn) => "an API key from your environment",
+        ("ANTHROPIC_API_KEY", Some(SignIn::ApiKey)) => "your API key",
+        ("ANTHROPIC_API_KEY", Some(SignIn::ClaudeSignIn)) => "an API key from your environment",
+        ("ANTHROPIC_API_KEY", None) => "an API key",
         _ => "a sign-in Claude Code chose itself",
     }
+}
+
+/// Whether `source` is Claude Code's own sign-in, as a test of it hopes: not a key it found in its environment.
+pub fn is_claude_sign_in(source: Option<&str>) -> bool {
+    matches!(source, None | Some("" | "none"))
 }
 
 #[cfg(test)]
@@ -714,19 +721,27 @@ mod tests {
 
     #[test]
     fn sign_in_sources_read_in_words() {
-        use SignIn::{ApiKey, ClaudeSignIn};
+        let (key, sign_in) = (Some(SignIn::ApiKey), Some(SignIn::ClaudeSignIn));
         let cases = [
-            ("", ClaudeSignIn, "your Claude sign-in"),
-            ("none", ClaudeSignIn, "your Claude sign-in"),
-            ("none", ApiKey, "your Claude sign-in"),
-            ("ANTHROPIC_API_KEY", ApiKey, "your API key"),
-            ("ANTHROPIC_API_KEY", ClaudeSignIn, "an API key from your environment"),
-            ("apiKeyHelper", ApiKey, "a sign-in Claude Code chose itself"),
-            ("/login managed key", ClaudeSignIn, "a sign-in Claude Code chose itself"),
-            ("\u{202E}evil", ClaudeSignIn, "a sign-in Claude Code chose itself"),
+            ("", sign_in, "your Claude sign-in"),
+            ("none", sign_in, "your Claude sign-in"),
+            ("none", key, "your Claude sign-in"),
+            ("none", None, "your Claude sign-in"),
+            ("ANTHROPIC_API_KEY", key, "your API key"),
+            ("ANTHROPIC_API_KEY", sign_in, "an API key from your environment"),
+            ("ANTHROPIC_API_KEY", None, "an API key"),
+            ("apiKeyHelper", key, "a sign-in Claude Code chose itself"),
+            ("/login managed key", sign_in, "a sign-in Claude Code chose itself"),
+            ("\u{202E}evil", None, "a sign-in Claude Code chose itself"),
         ];
         for (source, passed, words) in cases {
             assert_eq!(sign_in_words(source, passed), words, "{source:?} {passed:?}");
         }
+    }
+
+    #[test]
+    fn only_no_key_is_the_claude_sign_in() {
+        assert!(is_claude_sign_in(None) && is_claude_sign_in(Some("none")) && is_claude_sign_in(Some("")));
+        assert!(!is_claude_sign_in(Some("ANTHROPIC_API_KEY")) && !is_claude_sign_in(Some("apiKeyHelper")));
     }
 }

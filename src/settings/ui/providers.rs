@@ -2,14 +2,15 @@ use chrono::NaiveDateTime;
 use egui::{Align, Label, Layout, Rect, Response, Sense, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    ClaudeVersion, KeyFailure, KeyMask, Outcome, Page, Providers, Saved, Settings, SignIn, SignInCheck, TestGate, TestTarget, age_words, index, sign_in_words,
+    ClaudeVersion, KeyFailure, KeyMask, Outcome, Page, Providers, Saved, Settings, SignIn, SignInCheck, TESTING, TestGate, TestTarget, age_words, index,
+    is_claude_sign_in, sign_in_words,
 };
 use crate::settings::ui::SettingsRequest;
 use crate::settings::ui::about::open;
 use crate::ui_kit::tokens::{BUTTON_GAP, COMMAND_NAME_WIDTH, FIELD_GAP, ITEM_GAP, NOTE_PADDING, PICK_PADDING, ROW_ITEM_GAP, ROW_TAG_HEIGHT};
 use crate::ui_kit::{
-    Confirm, Ink, Secret, Tone, Type, button, code_box, confirm_popover, divider, enabled_when, hit_mark, link, paper, pick_row, primary_button,
-    prompt_box_tone, rich, row_tag, ruled_panel, secret_field, small_button, small_danger_button, tag,
+    Confirm, Ink, Secret, Tone, Type, button, confirm_popover, divider, enabled_when, hit_mark, later_pick_row, link, paper, primary_button, prompt_box_tone,
+    rich, row_tag, ruled_code_box, ruled_panel, secret_field, small_button, small_danger_button, spoken_pick_row, tag,
 };
 
 /// Where a key is made. A fixed `https` address, never read from a file.
@@ -24,6 +25,8 @@ const ONLY_KEYCHAIN: &str = if cfg!(windows) {
     "Jobdesk runs Claude Code, which signs in on its own. Only an API key is kept by Jobdesk, and only in your keychain."
 };
 const NOT_YET: &str = "Not available yet.";
+/// Why a test waits for one the page no longer shows: of the other method, or one the user turned away from.
+const OTHER_TEST: &str = "Another test is still finishing.";
 const BLANK: &str = "Paste a key first.";
 const TEST: &str = "Test connection";
 const USE_FOR_TASKS: &str = "Use for tasks";
@@ -85,8 +88,8 @@ impl ProvidersScreen {
 pub struct LastTask {
     /// The CLI's `apiKeySource`.
     pub source: String,
-    /// How Jobdesk started it, which says whether a key it reports came from Jobdesk.
-    pub method: SignIn,
+    /// How Jobdesk started it, which says whether a key it reports came from Jobdesk. None when not known.
+    pub method: Option<SignIn>,
     /// When it started, if its start reads as a time.
     pub at: Option<NaiveDateTime>,
 }
@@ -225,10 +228,11 @@ fn ways(ui: &mut Ui, way: Way, lines: &[WayLine; 3], query: &str) -> Option<Way>
                 divider(ui);
             }
             let this = [Some(Way::ClaudeSignIn), Some(Way::ApiKey), None][at];
-            let row = |ui: &mut Ui| pick_row(ui, this == Some(way), |ui| way_row(ui, line, query));
+            // Heard as one control: its name, its line and its tag, picked or not.
+            let spoken = format!("{}, {}, {}", line.title, line.line, line.tag.0);
             let clicked = match this {
-                Some(_) => row(ui).clicked(),
-                None => enabled_when(ui, false, NOT_YET, row).clicked(),
+                Some(_) => spoken_pick_row(ui, this == Some(way), &spoken, None, |ui| way_row(ui, line, query)).clicked(),
+                None => later_pick_row(ui, &spoken, NOT_YET, |ui| way_row(ui, line, query)).clicked(),
             };
             if clicked {
                 picked = this;
@@ -396,8 +400,16 @@ fn sign_in_detail(
             kv(ui, "Last test", "", Align::Center, |ui| last_check(ui, check.outcome, check.at, check.cost_usd, view.now), |_| {});
         }
     });
-    if let Some(check) = providers.sign_in_check().filter(|check| check.outcome != Outcome::Passed) {
-        sign_in_failure(ui, check);
+    wait_line(ui, gate, testing);
+    match providers.sign_in_check() {
+        // A key in the environment Jobdesk started in outranks the Claude sign-in, so a pass may not be the sign-in's.
+        Some(check) if check.outcome == Outcome::Passed && !is_claude_sign_in(check.source.as_deref()) => {
+            let words = sign_in_words(check.source.as_deref().unwrap_or_default(), Some(SignIn::ClaudeSignIn));
+            let note = format!("Claude Code used {words}, not your Claude sign-in. Tasks on the Claude sign-in use it too while it is set.");
+            ui.add(Label::new(rich(ui, note, Type::NOTE, Ink::Muted)).wrap());
+        }
+        Some(check) if check.outcome != Outcome::Passed => sign_in_failure(ui, check),
+        _ => {}
     }
     if in_use != SignIn::ClaudeSignIn {
         ui.horizontal(|ui| {
@@ -414,13 +426,23 @@ fn sign_in_detail(
     problem_line(ui, screen);
 }
 
-/// What a sign-in test that did not pass found, as plain text.
+/// What a sign-in test that did not pass found, as plain text. A refusal of a key from the environment is that key's,
+/// and /login would not mend it.
 fn sign_in_failure(ui: &mut Ui, check: &SignInCheck) {
-    let headline = match check.outcome {
-        Outcome::Refused => "Claude Code is not signed in.",
-        _ => "Claude Code could not be reached.",
+    let source = check.source.as_deref();
+    let (headline, next) = match check.outcome {
+        Outcome::Refused if source == Some("ANTHROPIC_API_KEY") => (
+            "The API key in your environment was refused.",
+            "Claude Code used ANTHROPIC_API_KEY from the environment Jobdesk started in, not your Claude sign-in. Unset it or fix it, start Jobdesk again, then test again.",
+        ),
+        Outcome::Refused if !is_claude_sign_in(source) => (
+            "Claude Code was refused with a sign-in it chose itself.",
+            "It did not use your Claude sign-in. Check Claude Code's own settings, then test again.",
+        ),
+        Outcome::Refused => ("Claude Code is not signed in.", "Run claude in a terminal, then /login, and test again."),
+        _ => ("Claude Code could not be reached.", "Check that Claude Code is installed and can reach the internet, then test again."),
     };
-    failure_box(ui, headline, &check.said, "Run claude in a terminal, then /login, and test again.");
+    failure_box(ui, headline, &check.said, next);
 }
 
 /// A test that did not pass: what it means in `Closed`, what Claude Code said as plain text, then what to do.
@@ -433,17 +455,37 @@ fn failure_box(ui: &mut Ui, headline: &str, said: &str, next: &str) {
                 ui.spacing_mut().item_spacing.y = FIELD_GAP;
                 ui.label(rich(ui, "It said", Type::NOTE, Ink::Muted));
                 // Plain text only, never Markdown: it comes from outside Jobdesk.
-                code_box(ui, |ui| ui.add(Label::new(rich(ui, said, Type::MONO, Ink::Text)).wrap()));
+                ruled_code_box(ui, |ui| ui.add(Label::new(rich(ui, said, Type::MONO, Ink::Text)).wrap()));
             });
         }
         ui.add(Label::new(rich(ui, next, Type::BODY, Ink::Text)).wrap());
     });
 }
 
-/// Test connection, which reads Testing… while its test runs, and waits with its reason while it cannot start.
+/// Test connection, which reads Testing… while the test of the method shown runs, and waits with its reason while it
+/// cannot start.
 fn test_button(ui: &mut Ui, gate: TestGate, testing: bool) -> Response {
-    let label = if testing || gate == TestGate::Testing { "Testing…" } else { TEST };
-    enabled_when(ui, gate == TestGate::Ready, gate.reason().unwrap_or_default(), |ui| small_button(ui, label))
+    let label = if testing { TESTING } else { TEST };
+    enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing).unwrap_or_default(), |ui| small_button(ui, label))
+}
+
+/// Why a test cannot start now, if it cannot. The test of the method shown says so on its own button, so it has none.
+/// Another test, of the other method or one the user turned away from, is still finishing.
+fn wait_reason(gate: TestGate, testing: bool) -> Option<&'static str> {
+    match gate {
+        TestGate::Ready => None,
+        TestGate::Testing if testing => Some(TESTING),
+        TestGate::Testing => Some(OTHER_TEST),
+        TestGate::TaskRunning => gate.reason(),
+    }
+}
+
+/// Why a test waits, under the detail's rows, so it reads without the pointer: the hover says it too.
+/// The test of the method shown needs no line: its button reads Testing….
+fn wait_line(ui: &mut Ui, gate: TestGate, testing: bool) {
+    if let Some(why) = wait_reason(gate, testing).filter(|_| !testing) {
+        ui.add(Label::new(rich(ui, why, Type::NOTE, Ink::Muted)).wrap());
+    }
 }
 
 /// How a test went: its tag, then its age and its cost, which shows only here.
@@ -598,6 +640,7 @@ fn saved_key(
             |ui| test = test_button(ui, gate, testing).clicked(),
         );
     });
+    wait_line(ui, gate, testing);
     if let Err(why) = mask {
         ui.add(Label::new(rich(ui, why, Type::NOTE, Ink::Muted)).wrap());
     }
@@ -615,7 +658,8 @@ fn saved_key(
     } else {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
-            use_key = enabled_when(ui, gate == TestGate::Ready, gate.reason().unwrap_or_default(), |ui| primary_button(ui, USE_FOR_TASKS)).clicked();
+            use_key =
+                enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, testing).unwrap_or_default(), |ui| primary_button(ui, USE_FOR_TASKS)).clicked();
             ui.add(Label::new(rich(ui, "Tests the key first, for about a cent. Tasks switch to it once it passes.", Type::NOTE, Ink::Muted)).wrap());
         });
     }
@@ -658,12 +702,14 @@ fn failed_key(
         kv(ui, "Key", "", Align::Center, |ui| mask_words(ui, mask), |ui| remove = Some(small_danger_button(ui, "Remove")));
         kv(ui, "Last test", "", Align::Center, |ui| last_check(ui, failure.outcome, failure.at, failure.cost_usd, view.now), |_| {});
     });
+    // This view shows only while no test of the key runs.
     let gate = providers.test_gate(view.task_running);
+    wait_line(ui, gate, false);
     let (mut replace, mut again) = (false, false);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BUTTON_GAP;
         replace = primary_button(ui, "Replace key").clicked();
-        again = enabled_when(ui, gate == TestGate::Ready, gate.reason().unwrap_or_default(), |ui| button(ui, "Test again")).clicked();
+        again = enabled_when(ui, gate == TestGate::Ready, wait_reason(gate, false).unwrap_or_default(), |ui| button(ui, "Test again")).clicked();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| open(ui, CONSOLE_LINK, CONSOLE_URL));
     });
     if replace {

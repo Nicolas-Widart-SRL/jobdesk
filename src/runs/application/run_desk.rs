@@ -20,6 +20,8 @@ pub struct StartOptions {
 pub enum StartError {
     /// Two commands at once could overwrite each other's files.
     AnotherRunIsActive,
+    /// Settings' Test connection runs Claude Code, and one Claude process runs at a time.
+    TestRunning,
 }
 
 /// Owns every run of a workspace, newest first.
@@ -35,6 +37,8 @@ pub struct RunDesk {
     asks_permission: bool,
     /// How the next process signs in. A run already working keeps the method it started with.
     sign_in: SignIn,
+    /// Settings' Test connection is running, so no new process starts.
+    testing: bool,
 }
 
 impl RunDesk {
@@ -50,6 +54,7 @@ impl RunDesk {
             started: 0,
             asks_permission: false,
             sign_in: SignIn::ClaudeSignIn,
+            testing: false,
         }
     }
 
@@ -69,6 +74,20 @@ impl RunDesk {
 
     pub fn sign_in(&self) -> SignIn {
         self.sign_in
+    }
+
+    /// While a test runs, no task process starts: no new run, and no reply that needs a new process.
+    pub fn set_testing(&mut self, testing: bool) {
+        self.testing = testing;
+    }
+
+    pub fn testing(&self) -> bool {
+        self.testing
+    }
+
+    /// Whether a reply to `id` would wait for Test connection: it needs a new process, and a test runs.
+    pub fn reply_waits_for_test(&self, id: &str) -> bool {
+        self.testing && !self.sessions.contains_key(id)
     }
 
     pub fn restore(&mut self, history: &dyn RunHistory) {
@@ -152,6 +171,9 @@ impl RunDesk {
         if self.is_busy() {
             return Err(StartError::AnotherRunIsActive);
         }
+        if self.testing {
+            return Err(StartError::TestRunning);
+        }
         self.started += 1;
         let request = RunRequest {
             run_id: format!("{}-{}", now.format("%Y%m%d-%H%M%S"), self.started),
@@ -174,9 +196,16 @@ impl RunDesk {
         if self.runs.iter().any(|run| run.id != id && run.is_busy()) {
             return Err(StartError::AnotherRunIsActive);
         }
+        if self.reply_waits_for_test(id) {
+            return Err(StartError::TestRunning);
+        }
         let sign_in = self.sign_in;
+        let live = self.sessions.contains_key(id);
         let Some(run) = self.run_mut(id) else { return Ok(()) };
         run.note_reply(text);
+        if !live {
+            run.note_process_start(sign_in);
+        }
         let request = RunRequest {
             run_id: run.id.clone(),
             line: text.to_owned(),
@@ -407,6 +436,50 @@ mod tests {
         assert_eq!(desk.latest_signed_in().map(|run| run.id.as_str()), Some(first.as_str()), "the newest run has reported none yet");
         desk.poll();
         assert_eq!(desk.latest_signed_in().map(|run| run.id.as_str()), Some(second.as_str()));
+    }
+
+    #[test]
+    fn a_run_keeps_the_sign_in_its_process_started_with() {
+        let (mut desk, _) = desk();
+        desk.set_sign_in(SignIn::ApiKey);
+        let id = desk.start("/apply x", &options(), now()).unwrap();
+        assert_eq!(desk.run(&id).unwrap().sign_in, None, "not before its process reports");
+        desk.poll();
+        assert_eq!(desk.run(&id).unwrap().sign_in, Some(SignIn::ApiKey));
+        desk.set_sign_in(SignIn::ClaudeSignIn);
+        assert_eq!(desk.run(&id).unwrap().sign_in, Some(SignIn::ApiKey), "a later change of method is not the run's");
+
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.sink_for(&id)(AgentEvent::ProcessExited { failure: None });
+        desk.poll();
+        desk.reply(&id, "continue").unwrap();
+        assert_eq!(desk.run(&id).unwrap().sign_in, Some(SignIn::ApiKey), "until the new process reports");
+        desk.poll();
+        assert_eq!(desk.run(&id).unwrap().sign_in, Some(SignIn::ClaudeSignIn), "a resumed run takes its new process's");
+    }
+
+    #[test]
+    fn no_task_process_starts_while_a_test_runs() {
+        let (mut desk, script) = desk();
+        let live = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&live)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        desk.set_testing(true);
+        assert!(!desk.reply_waits_for_test(&live), "its process is up, so a reply starts none");
+        desk.reply(&live, "yes").unwrap();
+        desk.sink_for(&live)(AgentEvent::ProcessExited { failure: None });
+        desk.poll();
+
+        assert_eq!(desk.start("/rank", &options(), now()), Err(StartError::TestRunning));
+        assert!(desk.reply_waits_for_test(&live));
+        assert_eq!(desk.reply(&live, "again"), Err(StartError::TestRunning));
+        assert_eq!(script.borrow().requests.len(), 1, "no process started");
+        assert_eq!(desk.run(&live).unwrap().turn_number(), 2, "the refused reply is not in the story");
+
+        desk.set_testing(false);
+        desk.reply(&live, "again").unwrap();
+        assert_eq!(script.borrow().requests.len(), 2);
     }
 
     #[test]

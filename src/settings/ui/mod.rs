@@ -119,6 +119,8 @@ pub enum SettingsRequest {
 /// `other_page` draws the pages another feature owns, such as Runtime status, with the search query.
 pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_page: &mut dyn FnMut(&mut Ui, Page, &str)) -> Option<SettingsRequest> {
     let mut request = None;
+    // The rail may pick another page before the page draws, so the page open as the frame began is kept.
+    let opened_on = screen.page;
     // Esc clears a search before anything else takes it, the field included. While Clear tray decisions asks, Esc
     // belongs to its popover, which egui's memory of open popups does not hold, and keeps the decisions.
     let ctx = ui.ctx().clone();
@@ -199,7 +201,7 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
         screen.clearing = None;
     }
     // Leaving Providers forgets a key typed and not saved, and picks the way in use when it opens again.
-    if page == Page::Providers && (screen.page != Page::Providers || request == Some(SettingsRequest::Back)) {
+    if opened_on == Page::Providers && (screen.page != Page::Providers || request == Some(SettingsRequest::Back)) {
         screen.providers.reset();
     }
     ui.advance_cursor_after_rect(area);

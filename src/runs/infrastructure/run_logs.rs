@@ -112,6 +112,8 @@ impl RunLogs {
             resume_session: None,
             sign_in: SignIn::ClaudeSignIn,
         });
+        // The log keeps no sign-in, so the run does not claim the one above.
+        run.forget_sign_in();
         for line in lines {
             if line == STOP_LINE {
                 run.note_stop_requested();
@@ -345,6 +347,22 @@ mod tests {
         assert_eq!(runs[0].cost_usd, 0.5);
         assert_eq!(runs[0].activity.len(), 3);
         assert!(RunLogs::new(dir.path().to_owned(), Path::new("/other")).recent(10).is_empty());
+    }
+
+    /// The log keeps no sign-in, so a run read back from it claims none, though its init line names a source.
+    #[test]
+    fn a_replayed_run_does_not_know_its_sign_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Path::new("/w");
+        let request = RunRequest { sign_in: SignIn::ApiKey, ..request("a", "/rank") };
+        let mut log = RunLog::open(dir.path(), workspace, &request).unwrap();
+        log.append(r#"{"type":"system","subtype":"init","session_id":"s","model":"m","apiKeySource":"ANTHROPIC_API_KEY"}"#);
+        drop(log);
+
+        let runs = RunLogs::new(dir.path().to_owned(), workspace).recent(10);
+
+        assert_eq!(runs[0].api_key_source.as_deref(), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(runs[0].sign_in, None);
     }
 
     fn result(cost: f64) -> String {

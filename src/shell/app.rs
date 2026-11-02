@@ -519,7 +519,10 @@ impl Shell {
             ui.ctx().request_repaint();
         }
         self.follow_sign_in();
+        // One Claude process at a time: while a test runs, the desk starts none of its own.
+        let testing = self.providers.test_gate(false) == TestGate::Testing;
         if let Some(desk) = &mut self.desk {
+            desk.set_testing(testing);
             desk.poll();
         }
         self.follow_runs();
@@ -1100,13 +1103,12 @@ impl Shell {
         cap_check(&self.settings.preferences().cap, usage, snapshot.today)
     }
 
-    /// The newest task that said how it signed in. A run does not keep the method it started with, so the desk's method
-    /// stands in for it: it changes only between tasks, when Settings switches it.
+    /// The newest task that said how it signed in, with the method its process started with. A task read back from its
+    /// log has none, so a key it reports is nobody's in particular.
     fn last_task(&self) -> Option<LastTask> {
-        let desk = self.desk.as_ref()?;
-        let run = desk.latest_signed_in()?;
+        let run = self.desk.as_ref()?.latest_signed_in()?;
         let at = NaiveDateTime::parse_from_str(&run.started_at, "%Y-%m-%d %H:%M").ok();
-        Some(LastTask { source: run.api_key_source.clone().unwrap_or_default(), method: desk.sign_in(), at })
+        Some(LastTask { source: run.api_key_source.clone().unwrap_or_default(), method: run.sign_in, at })
     }
 
     /// Every source that could not be read. The tray reports its own file.
@@ -1164,7 +1166,8 @@ impl Shell {
             self.providers.read_once();
         }
         let last_task = self.last_task();
-        let task_running = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        // Any task process still up counts, a session that waits on a reply included: one Claude process at a time.
+        let task_running = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         let now = self.now();
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;

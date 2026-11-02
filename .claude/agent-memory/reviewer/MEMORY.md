@@ -36,3 +36,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 21 `src/settings/infrastructure/preferences_file.rs`: atomic replace synced the file but not the parent directory after rename. Class: state over time.
 - PR 22 tests/architecture.rs: a new scanning helper landed with no fixture proving it changes the outcome. Class: untested guard.
 - PR 24 src/ui_kit/marks.rs: heatmap day nodes sensed hover only, so keyboard focus never reached them. Class: hover/focus/keyboard.
+- PR 27 .github/workflows/miri.yml: a rust-cache step on a weekly nightly job saves entries the next run cannot reuse. Class: state over time.

@@ -1420,6 +1420,43 @@ fn the_status_button_shows_settings_as_on() {
     assert_eq!(settings_button(&harness).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
 }
 
+/// A running task keeps its folder: Change folder waits on Settings › General and on Setup, and the task stays live.
+#[test]
+fn change_folder_waits_while_a_task_runs() {
+    let mut settings = shell(Screen::InTray, "change_folder_settings");
+    *settings.desk_slot() = Some(apply_run(permission_prompt()));
+    settings.open_settings(Page::General);
+    let (harness, settings) = shared_harness(settings);
+    assert!(harness.get_by_label("Change folder").accesskit_node().is_disabled(), "General waits");
+    let show = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
+    assert!(!harness.get_by_label(show).accesskit_node().is_disabled(), "the folder can still be shown");
+    assert!(settings.borrow_mut().desk_slot().as_ref().unwrap().has_live_process());
+
+    let mut setup = shell(Screen::Workspace, "change_folder_setup");
+    *setup.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *setup.environment_slot() = Some(checks);
+    let harness = tray_harness(setup);
+    assert!(harness.get_by_label("Change folder").accesskit_node().is_disabled(), "Setup waits");
+}
+
+/// With no task running, Change folder answers on both.
+#[test]
+fn change_folder_is_open_with_no_task() {
+    let mut settings = shell(Screen::InTray, "change_folder_idle");
+    settings.open_settings(Page::General);
+    let harness = tray_harness(settings);
+    assert!(!harness.get_by_label("Change folder").accesskit_node().is_disabled());
+
+    let mut setup = shell(Screen::Workspace, "change_folder_setup_idle");
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *setup.environment_slot() = Some(checks);
+    let harness = tray_harness(setup);
+    assert!(!harness.get_by_label("Change folder").accesskit_node().is_disabled());
+}
+
 #[test]
 fn unbuilt_sections_are_disabled() {
     let mut shell = shell(Screen::InTray, "settings_unbuilt");

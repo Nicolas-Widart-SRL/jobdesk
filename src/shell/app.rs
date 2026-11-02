@@ -258,7 +258,15 @@ impl Shell {
         shell
     }
 
+    /// A running task keeps its folder: a new one would replace the desk and drop the task's live session.
+    fn folder_locked(&self) -> bool {
+        self.desk.as_ref().is_some_and(RunDesk::has_live_process)
+    }
+
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        if self.folder_locked() {
+            return;
+        }
         match workspace::open(path) {
             Some(root) => {
                 let repaint = ctx.clone();
@@ -284,6 +292,9 @@ impl Shell {
     }
 
     fn choose_folder(&mut self, ctx: &egui::Context) {
+        if self.folder_locked() {
+            return;
+        }
         if let Some(path) = rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder() {
             self.open(ctx, &path);
         }
@@ -659,8 +670,9 @@ impl Shell {
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
+                let task_live = self.folder_locked();
                 let action = match self.environment.as_mut() {
-                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment, task_live),
                     None => {
                         page_body(ui, alerts);
                         None
@@ -717,13 +729,14 @@ impl Shell {
         let folder_read = folder_open && self.loaded;
         let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
         let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
+        let task_live = self.folder_locked();
         let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime };
+                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, task_live };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
                     // Only previews lack the tool check. They draw no tools, but still the alert.
@@ -912,6 +925,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::runs::application::{AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest, StartOptions};
     use crate::settings::application::{Preferences, ThemeChoice};
     use crate::workspace::application::{ToolProber, ToolSpec};
 
@@ -928,9 +942,28 @@ mod tests {
         Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})))
     }
 
+    /// A session that stays up until the test ends.
+    struct Idle;
+
+    impl AgentGateway for Idle {
+        fn start(&self, _: &RunRequest, _: EventSink) -> Box<dyn AgentSession> {
+            Box::new(Idle)
+        }
+    }
+
+    impl AgentSession for Idle {
+        fn send_message(&mut self, _: &str) {}
+        fn respond(&mut self, _: &Prompt, _: &Decision) {}
+        fn interrupt(&mut self) {}
+    }
+
     /// An empty folder that opens as a checkout.
     fn checkout(folder: &tempfile::TempDir) -> PathBuf {
-        let root = folder.path().join("ai-job-search");
+        checkout_named(folder, "ai-job-search")
+    }
+
+    fn checkout_named(folder: &tempfile::TempDir, name: &str) -> PathBuf {
+        let root = folder.path().join(name);
         fs::create_dir_all(root.join(".claude/commands")).unwrap();
         fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
         root
@@ -983,5 +1016,27 @@ mod tests {
         let ctx = egui::Context::default();
         let shell = launch(&ctx, None, data.path());
         assert_eq!((shell.screen, shell.launcher_from), (Screen::InTray, Screen::InTray));
+    }
+
+    /// A running task keeps its folder: a new one would replace the desk and drop the live session.
+    #[test]
+    fn a_running_task_keeps_its_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let first = checkout(&folder);
+        let mut shell = launch(&ctx, Some(first.clone()), data.path());
+        let mut desk = RunDesk::new(Box::new(Idle), Arc::new(|| {}));
+        let id = desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(first.as_path()), "the folder stays");
+        assert!(shell.desk.as_ref().is_some_and(|desk| desk.has_session(&id)), "the task keeps its session");
+
+        shell.desk = None;
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+        assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
     }
 }

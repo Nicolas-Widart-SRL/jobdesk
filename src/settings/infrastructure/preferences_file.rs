@@ -50,7 +50,13 @@ impl PreferencesFile {
         file.write_all(text.as_bytes())?;
         // On disk before the rename, or a power loss could keep the rename and lose the data.
         file.sync_all()?;
-        fs::rename(temporary, &self.path)
+        fs::rename(temporary, &self.path)?;
+        // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
+        #[cfg(unix)]
+        if let Some(folder) = self.path.parent().filter(|folder| !folder.as_os_str().is_empty()) {
+            fs::File::open(folder)?.sync_all()?;
+        }
+        Ok(())
     }
 }
 

@@ -21,6 +21,9 @@ const PROFILE_ROW_HEIGHT: f32 = 38.0;
 const PROMISE: &str = "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
 
 /// Runtime status's title and lead, as Settings indexes them for search.
+/// Why Change folder waits: a new folder would leave the running task behind.
+const FOLDER_BUSY: &str = "A task is running. Change the folder once it ends.";
+
 const RUNTIME_TITLE: &str = "Runtime status";
 const RUNTIME_LEAD: &str = "Whether Claude Code, your profile, tools, portals, templates and sync are ready.";
 
@@ -88,13 +91,14 @@ pub enum WorkspaceAction {
 /// `name` is the checkout's folder name, never its full path.
 /// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
 /// so a failed one hides those counts. Until the first read, the slips show their names over grey lines.
-pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks) -> Option<WorkspaceAction> {
+/// While `task_live`, Change folder waits for the task to end.
+pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks, task_live: bool) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
     let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
     let subtitle = if state.reading() { Subtitle::Text("Reading your profile, tools and portals…") } else { Subtitle::Typed(name) };
     page_head(ui, Title::Slab("Setup"), Some(subtitle), |ui| {
-        if button(ui, "Change folder").clicked() {
+        if enabled_when(ui, !task_live, FOLDER_BUSY, |ui| button(ui, "Change folder")).clicked() {
             action = Some(WorkspaceAction::ChangeFolder);
         }
         if has_documents {

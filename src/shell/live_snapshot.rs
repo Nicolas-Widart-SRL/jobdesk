@@ -1,9 +1,10 @@
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
 use chrono::{Local, NaiveDate, NaiveDateTime};
 
+use crate::runs::application::{UsageLogs, UsageReport};
 use crate::shell::Snapshot;
 use crate::workspace::ChangeWatcher;
 use crate::workspace::application::WorkspaceRoot;
@@ -25,14 +26,20 @@ fn next_wait(today: NaiveDate, now: NaiveDateTime) -> Option<Duration> {
 }
 
 /// Rebuilds the snapshot on a worker when the workspace changes. Stops when the receiver drops.
-pub fn spawn(root: WorkspaceRoot, repaint: impl Fn() + Send + 'static) -> Receiver<Snapshot> {
+/// `usage` is read on each load. Run logs sit outside the checkout, so a send on the returned sender reloads
+/// after a run ends.
+pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint: impl Fn() + Send + 'static) -> (Receiver<Snapshot>, Sender<()>) {
     let (snapshots, received) = mpsc::channel();
+    let (changed, changes) = mpsc::channel();
+    let nudge = changed.clone();
     thread::spawn(move || {
-        let (changed, changes) = mpsc::channel();
         let _watcher = ChangeWatcher::start(root.path(), changed);
         loop {
             let today = Local::now().date_naive();
-            let snapshot = Snapshot::load(root.path(), today);
+            let mut snapshot = Snapshot::load(root.path(), today);
+            if let Some(logs) = usage.as_mut() {
+                snapshot.usage = UsageReport::new(logs.tasks());
+            }
             if snapshots.send(snapshot).is_err() {
                 return;
             }
@@ -48,7 +55,7 @@ pub fn spawn(root: WorkspaceRoot, repaint: impl Fn() + Send + 'static) -> Receiv
             while changes.try_recv().is_ok() {}
         }
     });
-    received
+    (received, nudge)
 }
 
 #[cfg(test)]
@@ -79,12 +86,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
         fs::write(dir.path().join(".claude/commands/apply.md"), "").unwrap();
-        let updates = spawn(workspace::open(dir.path()).unwrap(), || {});
+        let (updates, _) = spawn(workspace::open(dir.path()).unwrap(), None, || {});
         let timeout = Duration::from_secs(10);
         assert!(updates.recv_timeout(timeout).unwrap().pipeline.is_empty());
 
         fs::write(dir.path().join("job_search_tracker.csv"), "date,company,role,status\n2026-10-01,Acme,Lead,applied\n").unwrap();
 
         assert_eq!(updates.recv_timeout(timeout).unwrap().pipeline.open_count(), 1);
+    }
+
+    #[test]
+    fn a_finished_run_reaches_the_usage_after_a_nudge() {
+        let checkout = tempfile::tempdir().unwrap();
+        fs::create_dir_all(checkout.path().join(".claude/commands")).unwrap();
+        fs::write(checkout.path().join(".claude/commands/apply.md"), "").unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let root = workspace::open(checkout.path()).unwrap();
+        let reader = crate::runs::usage_logs(logs.path().to_owned(), root.path());
+        let (updates, nudge) = spawn(root.clone(), Some(reader), || {});
+        let timeout = Duration::from_secs(10);
+        assert!(updates.recv_timeout(timeout).unwrap().usage.is_empty());
+
+        let meta = serde_json::json!({
+            "type": "jobdesk_meta", "workspace": root.path().display().to_string(), "id": "a", "line": "/rank",
+            "model": null, "budget_usd": 2.0, "started_at": "2026-10-31 10:00",
+        });
+        let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
+        fs::write(logs.path().join("a.jsonl"), format!("{meta}\n{result}\n")).unwrap();
+        nudge.send(()).unwrap();
+
+        // The runs folder is not watched, so only the nudge brings the log in. A load already under way may come first.
+        let shown = std::iter::from_fn(|| updates.recv_timeout(timeout).ok()).take(3).any(|snapshot| !snapshot.usage.is_empty());
+        assert!(shown);
     }
 }

@@ -3320,3 +3320,37 @@ screens! {
     insights_dark: Screen::Insights, Theme::Dark;
     insights_light: Screen::Insights, Theme::Light;
 }
+
+/// The run logs sit outside the checkout, so the shell asks for a reload when a run stops working.
+fn reload_harness() -> (Harness<'static>, SharedSink, std::sync::mpsc::Receiver<()>) {
+    let mut shell = shell(Screen::Runs, "reload_nudge");
+    let reloads = shell.reload_feed();
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    let harness = tray_harness(shell);
+    (harness, sink, reloads)
+}
+
+#[test]
+fn a_run_that_ends_its_turn_sends_one_reload() {
+    let (mut harness, sink, reloads) = reload_harness();
+    assert!(reloads.try_recv().is_err(), "a working run sends none");
+
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.4, duration_ms: 9_000 }]);
+    harness.run_steps(4);
+
+    assert!(reloads.try_recv().is_ok(), "the end of the turn asks for a reload");
+    assert!(reloads.try_recv().is_err(), "and only once");
+}
+
+#[test]
+fn a_run_that_keeps_working_sends_no_reload() {
+    let (mut harness, sink, reloads) = reload_harness();
+
+    emit_all(&sink, [tool("1", "Read", "cv/main.tex", false), done("1")]);
+    harness.run_steps(4);
+
+    assert!(reloads.try_recv().is_err());
+}

@@ -2,17 +2,17 @@ use egui::{Align, Frame, Label, Layout, Margin, ScrollArea, Ui, vec2};
 
 use crate::profile::application::{Fill, Group, ProfileView, TopicCounts, TopicId, TopicView, UpdatedMarks};
 use crate::ui_kit::tokens::{BODY_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, SKELETON_LINE};
-use crate::ui_kit::{FillMarks, Ink, Tone, Type, divider, fill_tally, rail_title, rich, skeleton, slip, spoken_pick_row, tag, tally_strip};
+use crate::ui_kit::{FillMarks, Ink, Tone, Type, divider, fill_tally, rail_title, rich, row_tag, skeleton, slip, spoken_pick_row, tally_strip};
 
 /// What the Updated mark says on hover, on the rail and in the head.
 pub const UPDATED_HOVER: &str = "Updated by the last task. Open the topic to see it.";
 
-/// The room between a row's title, its Updated mark and its state word. With `ROW_SIDE`, it is tight so the longest
-/// title, Identity and languages, fits beside the mark at `RUN_SIDE`.
-const ROW_PART_GAP: f32 = 2.0;
+/// While the Updated mark shows, the room on each side of it is tighter than a row's usual gap, so the longest title,
+/// Identity and languages, fits beside it at `RUN_SIDE`. The title's side, where its own letters leave air, is the tighter.
+const MARKED_GAPS: (f32, f32) = (3.0, 4.0);
 
-/// Rows sit nearly as far in as the group titles: 2 points short, which is the room the longest title needs.
-const ROW_SIDE: i8 = INSET - PICK_PADDING.0 - 2;
+/// Rows sit in so their words line up with the group titles.
+const ROW_SIDE: i8 = INSET - PICK_PADDING.0;
 
 /// The widths of the loading rail's grey titles, per group.
 const LOADING_ROWS: [&[f32]; 2] = [&[150.0, 96.0, 120.0, 80.0, 170.0, 110.0, 140.0], &[100.0, 160.0, 130.0, 96.0]];
@@ -96,15 +96,18 @@ pub fn row_spoken(title: &str, word: &str, updated: bool) -> String {
 fn topic_row(ui: &mut Ui, topic: &TopicView, on: bool, updated: bool) -> egui::Response {
     let (word, style, ink) = state_word(topic.fill);
     let spoken = row_spoken(topic.title, &word, updated);
-    spoken_pick_row(ui, on, &spoken, |ui| {
+    spoken_pick_row(ui, on, &spoken, updated.then_some(UPDATED_HOVER), |ui| {
         let height = PICK_ROW_HEIGHT - f32::from(PICK_PADDING.1) * 2.0;
         ui.allocate_ui_with_layout(vec2(ui.available_width(), height), Layout::left_to_right(Align::Center), |ui| {
             ui.set_min_height(height);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = ROW_PART_GAP;
+                if updated {
+                    ui.spacing_mut().item_spacing.x = MARKED_GAPS.1;
+                }
                 ui.add(Label::new(rich(ui, word, style, ink)));
                 if updated {
-                    tag(ui, "Updated", Tone::Active).on_hover_text(UPDATED_HOVER);
+                    row_tag(ui, "Updated", Tone::Active).on_hover_text(UPDATED_HOVER);
+                    ui.spacing_mut().item_spacing.x = MARKED_GAPS.0;
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(Label::new(rich(ui, topic.title, Type::BODY, Ink::Text)).truncate());

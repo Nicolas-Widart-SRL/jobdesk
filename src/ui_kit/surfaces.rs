@@ -472,10 +472,16 @@ pub fn pick_row(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui)) -> Response {
     response
 }
 
-/// `pick_row`, heard as `spoken`, so what a mark in the row says on hover reaches focus too.
-pub fn spoken_pick_row(ui: &mut Ui, on: bool, spoken: &str, add: impl FnOnce(&mut Ui)) -> Response {
+/// `pick_row`, heard as `spoken`, so what a mark in the row says on hover reaches focus too. `focus_tip`, if any, shows
+/// as a tooltip while the row has keyboard focus, so a sighted keyboard user reads what the pointer would.
+pub fn spoken_pick_row(ui: &mut Ui, on: bool, spoken: &str, focus_tip: Option<&str>, add: impl FnOnce(&mut Ui)) -> Response {
     let response = pick_row(ui, on, add);
     response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), on, spoken));
+    if let Some(tip) = focus_tip
+        && response.has_focus()
+    {
+        response.show_tooltip_text(tip);
+    }
     response
 }
 

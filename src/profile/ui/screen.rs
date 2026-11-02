@@ -239,27 +239,31 @@ fn sections(ui: &mut Ui, cache: &mut CommonMarkCache, topic: &TopicView) {
     }
 }
 
-/// What a section's sub-heading says. A part from `CLAUDE.md` is named by where it lives, so it reads apart from the
-/// topic's own blocks of the same name. When `CLAUDE.md` adds to a topic held in one other section, that section takes a
-/// short label, such as Roles. Every other section keeps its own heading.
+/// The `CLAUDE.md` headings that sum up a topic's own section, so they read as its summary.
+const SUMMARIES: [&str; 4] = ["Identity", "Professional Experience", "Education", "Behavioral Profile"];
+
+/// What a section's sub-heading says. A part from `CLAUDE.md` is named by where it lives: "Summary in CLAUDE.md" where
+/// it sums up the topic's own section, and its own heading in `CLAUDE.md` otherwise. When `CLAUDE.md` adds to a topic
+/// held in one other section, that section takes a short label, such as Roles, but only one its blocks bear out.
+/// Every other section keeps its own heading.
 fn section_label(topic: &TopicView, section: &SectionView) -> String {
     let in_claude = |section: &SectionView| section.block.key.file == ProfileFile::ClaudeMd;
-    let summaries = topic.sections.iter().filter(|section| in_claude(section)).count();
     let own = || visible_chars(&section.block.heading).collect::<String>();
     if in_claude(section) {
-        return if summaries == 1 { "Summary in CLAUDE.md".to_owned() } else { format!("{} in CLAUDE.md", own()) };
+        return if SUMMARIES.contains(&section.block.heading.as_str()) { "Summary in CLAUDE.md".to_owned() } else { format!("{} in CLAUDE.md", own()) };
     }
-    match short_label(topic.id) {
-        Some(label) if summaries > 0 && topic.sections.len() - summaries == 1 => label.to_owned(),
+    let others = topic.sections.iter().filter(|section| !in_claude(section)).count();
+    match short_label(topic.id, section) {
+        Some(label) if others == 1 && topic.sections.len() > others => label.to_owned(),
         _ => own(),
     }
 }
 
-/// The label of a topic's one section outside `CLAUDE.md`, beside the summary there.
-fn short_label(topic: TopicId) -> Option<&'static str> {
+/// The label of a topic's one section outside `CLAUDE.md`, beside the part there.
+fn short_label(topic: TopicId, section: &SectionView) -> Option<&'static str> {
     match topic {
         TopicId::Identity => Some("Details and languages"),
-        TopicId::Experience => Some("Roles"),
+        TopicId::Experience if section.children.iter().any(|child| child.role.is_some()) => Some("Roles"),
         TopicId::Education => Some("Degrees"),
         _ => None,
     }
@@ -486,14 +490,20 @@ mod tests {
     #[test]
     fn sections_from_claude_md_are_named_by_where_they_live() {
         let candidate = "## Professional Experience\n\n### Lead - Calder (2021 – now)\nShipped.\n\n## Technical Skills\nRust\n";
-        let claude = "## Candidate Profile\n\n### Professional Experience\n- Lead at Calder\n\n### Technical Skills\n- Rust\n\n### Certifications\n- CKA\n";
-        let view = view(candidate, Some(claude));
+        let claude = "## Candidate Profile\n\n### Professional Experience\n- Lead at Calder\n\n### Technical Skills\n- Rust\n\n### Certifications\n- CKA\n\n### Deal-breakers\n- No travel\n";
+        let view_of = view;
+        let view = view_of(candidate, Some(claude));
         let labels = |id: TopicId| {
             let topic = topic(&view, id);
             topic.sections.iter().map(|section| section_label(topic, section)).collect::<Vec<_>>()
         };
         assert_eq!(labels(TopicId::Experience), ["Roles", "Summary in CLAUDE.md"]);
         assert_eq!(labels(TopicId::Skills), ["Technical Skills", "Technical Skills in CLAUDE.md", "Certifications in CLAUDE.md"]);
+        assert_eq!(labels(TopicId::Goals), ["Deal-breakers in CLAUDE.md"], "a part that sums up nothing of the topic's keeps its name");
+        let no_roles = view_of("## Professional Experience\nI freelance.\n", Some(claude));
+        let experience = topic(&no_roles, TopicId::Experience);
+        let labels: Vec<String> = experience.sections.iter().map(|section| section_label(experience, section)).collect();
+        assert_eq!(labels, ["Professional Experience", "Summary in CLAUDE.md"], "Roles only where the section holds roles");
     }
 
     #[test]

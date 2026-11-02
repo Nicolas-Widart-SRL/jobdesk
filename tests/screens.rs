@@ -3534,8 +3534,37 @@ fn a_reply_before_the_reload_keeps_the_first_turns_changes() {
 
     assert_eq!(marked_rows(&harness), ["Identity and languages", "Experience"], "both turns' changes are marked");
     assert_eq!(harness.get_all_by_label("Identity and languages").next().unwrap().rect().width(), identity, "the longest title fits beside the mark");
-    harness.get_by_label("Identity and languages, Filled. Updated by the last task. Open the topic to see it.");
     harness.get_by_label("Education, Filled");
+
+    // A sighted keyboard user who tabs to the marked row reads what the pointer would.
+    assert!(!is_shown(&harness, "Updated by the last task. Open the topic to see it."));
+    harness.get_by_label("Identity and languages, Filled. Updated by the last task. Open the topic to see it.").focus();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Updated by the last task. Open the topic to see it."), "focus shows the mark's tip");
+}
+
+/// A run that starts before the folder is first read takes that first read as its start, not the empty snapshot.
+#[test]
+fn a_run_started_before_the_first_read_still_marks_its_changes() {
+    let root = sample_root("profile_marks_first_read");
+    let mut shell = Shell::loading(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), day());
+    let feed = shell.snapshot_feed();
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/setup --section experience", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Reading your profile…"));
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    pick_topic(&mut harness, "Education");
+
+    rewrite(&root, CANDIDATE, "Mentored four engineers", "Mentored five engineers");
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert_eq!(marked_rows(&harness), ["Experience"]);
 }
 
 /// The empty topic shows the command it opens, on asking, and starts nothing.

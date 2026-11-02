@@ -15,18 +15,26 @@ use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, pa
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE,
     DAY_STAMP_SIZE, DAY_STAMP_TICK, FADED_OPACITY, HAIRLINE, HEAT_LABELS, HEAT_SIDE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD,
-    RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT, TALLY_GAP_Y,
-    TALLY_THIN, TallySize, Type,
+    RADIUS_STAMP, ROW_GAP, ROW_TAG_HEIGHT, ROW_TAG_PADDING, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
+    TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
 /// Straight on the desk it fills with the desk's base, so no grid line runs through its small type.
 pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
-    let text = text.into();
+    sized_tag(ui, text.into(), tone, TAG_PADDING, TAG_HEIGHT)
+}
+
+/// A `tag` a step smaller, for a mark inside a pick row beside a title that should not be cut.
+pub fn row_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
+    sized_tag(ui, text.into(), tone, ROW_TAG_PADDING, ROW_TAG_HEIGHT)
+}
+
+fn sized_tag(ui: &mut Ui, text: String, tone: Tone, padding: f32, height: f32) -> Response {
     let p = Palette::of(ui);
     let color = tone.color(&p);
     let galley = line(ui, &text, Type::TAG, color, f32::INFINITY);
-    let size = vec2(galley.size().x + TAG_PADDING * 2.0, TAG_HEIGHT);
+    let size = vec2(galley.size().x + padding * 2.0, height);
     let fill = if on_desk(ui) { p.sheet } else { Color32::TRANSPARENT };
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect(rect, RADIUS_CARD, fill, Stroke::new(HAIRLINE, color), StrokeKind::Inside);

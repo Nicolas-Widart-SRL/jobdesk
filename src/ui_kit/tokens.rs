@@ -35,6 +35,9 @@ pub const MIN_HIT: f32 = 24.0;
 
 pub const TAG_HEIGHT: f32 = 22.0;
 pub const TAG_PADDING: f32 = 7.0;
+/// A tag inside a pick row, such as Updated on a topic, is a step smaller, so a long title still fits beside it.
+pub const ROW_TAG_HEIGHT: f32 = 20.0;
+pub const ROW_TAG_PADDING: f32 = 6.0;
 pub const KEY_SIZE: f32 = 18.0;
 pub const KEY_PADDING: f32 = 4.0;
 

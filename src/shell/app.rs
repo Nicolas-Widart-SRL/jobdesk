@@ -353,8 +353,13 @@ impl Shell {
                 self.marks.finish(&latest.profile, Local::now().naive_local());
                 self.run_ended = None;
             }
+            // A run that started before the folder was first read keeps the first snapshot as its start.
+            let first = !self.loaded;
             self.snapshot = latest;
             self.loaded = true;
+            if first && self.was_busy && self.run_ended.is_none() {
+                self.marks.begin(&self.snapshot.profile);
+            }
             if let Some(open) = &mut self.open_dossier {
                 open.view = None;
             }
@@ -408,7 +413,8 @@ impl Shell {
     fn follow_runs(&mut self) {
         let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         if busy && !self.was_busy {
-            if self.run_ended.take().is_none() {
+            // Before the first read the snapshot is empty, so the start waits for it.
+            if self.run_ended.take().is_none() && self.loaded {
                 self.marks.begin(&self.snapshot.profile);
             }
         } else if !busy && self.was_busy {

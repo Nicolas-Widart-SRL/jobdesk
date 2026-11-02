@@ -89,7 +89,10 @@ pub fn blocks(text: &str) -> Vec<Block> {
 
 /// The range of the block `key` names, or `None` when the file no longer has it.
 pub fn find(text: &str, key: &BlockKey) -> Option<Range<usize>> {
-    blocks(text).into_iter().find(|block| block.level == key.level && block.heading == key.heading && block.parent == key.parent && block.nth == key.nth).map(|block| block.range)
+    blocks(text)
+        .into_iter()
+        .find(|block| block.level == key.level && block.heading == key.heading && block.parent == key.parent && block.nth == key.nth)
+        .map(|block| block.range)
 }
 
 fn bare(heading: &str) -> &str {
@@ -113,7 +116,11 @@ pub fn select(blocks: &[Block], section: &SectionRef) -> Vec<Block> {
         .filter(|block| match (section.parent, section.heading) {
             (None, None) => block.level == 2,
             (None, Some(heading)) => block.level == 2 && heading_matches(&block.heading, heading),
-            (Some(parent), Some(heading)) => block.level == 3 && heading_matches(&block.heading, heading) && block.parent.as_deref().is_some_and(|found| parent_matches(section.file, found, parent)),
+            (Some(parent), Some(heading)) => {
+                block.level == 3
+                    && heading_matches(&block.heading, heading)
+                    && block.parent.as_deref().is_some_and(|found| parent_matches(section.file, found, parent))
+            }
             (Some(_), None) => false,
         })
         .cloned()

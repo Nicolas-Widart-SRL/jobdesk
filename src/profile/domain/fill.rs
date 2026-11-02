@@ -46,7 +46,9 @@ pub enum SaveCheck {
     /// The block is as opened, here.
     Same(Range<usize>),
     /// The block changed on disk since the user opened it.
-    Changed { now: String },
+    Changed {
+        now: String,
+    },
     Gone,
 }
 

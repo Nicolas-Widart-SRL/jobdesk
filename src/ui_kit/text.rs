@@ -6,9 +6,9 @@ use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Re
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer, RenderHtmlFn};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
+use crate::shared_kernel::markdown::only_comments;
 use crate::shared_kernel::placeholders::Piece;
 use crate::shared_kernel::visible_text::visible_chars;
-use crate::shared_kernel::markdown::only_comments;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
@@ -899,7 +899,11 @@ mod tests {
 
     #[test]
     fn a_reference_link_with_a_dollar_sign_stays_a_link() {
-        for source in ["See [Salary $100k].\n\n[Salary $100k]: https://x.example", "See [Salary $100k][].\n\n[Salary $100k]: https://x.example", "See [run `$x`].\n\n[run `$x`]: https://x.example"] {
+        for source in [
+            "See [Salary $100k].\n\n[Salary $100k]: https://x.example",
+            "See [Salary $100k][].\n\n[Salary $100k]: https://x.example",
+            "See [run `$x`].\n\n[run `$x`]: https://x.example",
+        ] {
             let label = if source.contains("run") { "run $x" } else { "Salary $100k" };
             assert_eq!(opened_through(profiled, source, label), vec!["https://x.example".to_owned()], "{source}");
         }
@@ -952,7 +956,10 @@ mod tests {
         ] {
             let start = block.find(title).unwrap();
             let pieces = crate::shared_kernel::placeholders::shown_pieces(block, start..start + title.len());
-            let counted = crate::shared_kernel::placeholders::placeholder_spans(block).into_iter().filter(|span| span.start >= start && span.end <= start + title.len()).count();
+            let counted = crate::shared_kernel::placeholders::placeholder_spans(block)
+                .into_iter()
+                .filter(|span| span.start >= start && span.end <= start + title.len())
+                .count();
             let (text, blanks) = role_line(pieces);
             assert_eq!(text, shown, "{block}");
             assert_eq!(blanks, counted, "{block}");

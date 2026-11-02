@@ -1,4 +1,6 @@
-use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill};
+use crate::profile::domain::{
+    Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill,
+};
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::placeholders::{Piece, heading_content, placeholder_count, shown_pieces};
 
@@ -137,9 +139,16 @@ fn headings_named(sections: &[SectionRef]) -> Vec<String> {
 }
 
 fn section_view(text: &str, all: &[Block], file: ProfileFile, block: &Block) -> SectionView {
-    let children: Vec<&Block> = if block.level == 2 { all.iter().filter(|child| child.level == 3 && child.range.start >= block.range.start && child.range.end <= block.range.end).collect() } else { Vec::new() };
+    let children: Vec<&Block> = if block.level == 2 {
+        all.iter().filter(|child| child.level == 3 && child.range.start >= block.range.start && child.range.end <= block.range.end).collect()
+    } else {
+        Vec::new()
+    };
     let own_end = children.first().map_or(block.range.end, |first| first.range.start);
-    SectionView { block: block_view(text, file, block, own_end), children: children.into_iter().map(|child| block_view(text, file, child, child.range.end)).collect() }
+    SectionView {
+        block: block_view(text, file, block, own_end),
+        children: children.into_iter().map(|child| block_view(text, file, child, child.range.end)).collect(),
+    }
 }
 
 /// `own_end` is where the block's own words stop: the end of the block, or the start of its first child.
@@ -190,7 +199,8 @@ mod tests {
     use super::*;
 
     const CANDIDATE: &str = "# Candidate Profile\n\n## Identity\nName: Ada Quill\n\n## Professional Experience\nIntro line.\n\n### Lead Engineer - Calder Freight (2021 – present)\nShipped a thing.\n\n### [JOB_TITLE] - [COMPANY] ([START] - [END])\n- [ACHIEVEMENT]\n\n## Education\n[DEGREE] at [SCHOOL]\n\n## Technical Skills\nRust\n";
-    const CLAUDE_MD: &str = "# Notes\n\n## Candidate Profile\n\n### Identity\nAda, Lisbon\n\n### Deal-breakers\nNo travel.\n\n## Repo Structure\nsecret-layout-text\n";
+    const CLAUDE_MD: &str =
+        "# Notes\n\n## Candidate Profile\n\n### Identity\nAda, Lisbon\n\n### Deal-breakers\nNo travel.\n\n## Repo Structure\nsecret-layout-text\n";
 
     fn view_of(files: &[(ProfileFile, &str)]) -> ProfileView {
         let files: Vec<(ProfileFile, String)> = files.iter().map(|(file, text)| (*file, text.to_string())).collect();
@@ -239,7 +249,13 @@ mod tests {
     #[test]
     fn claude_md_shows_only_the_named_profile_blocks() {
         let view = view_of(&[(ProfileFile::ClaudeMd, CLAUDE_MD)]);
-        let shown: Vec<&str> = view.topics.iter().flat_map(|topic| topic.sections.iter()).flat_map(|section| std::iter::once(&section.block).chain(section.children.iter())).flat_map(|block| [block.text.as_str(), block.body.as_str(), block.heading.as_str()]).collect();
+        let shown: Vec<&str> = view
+            .topics
+            .iter()
+            .flat_map(|topic| topic.sections.iter())
+            .flat_map(|section| std::iter::once(&section.block).chain(section.children.iter()))
+            .flat_map(|block| [block.text.as_str(), block.body.as_str(), block.heading.as_str()])
+            .collect();
         assert!(!shown.is_empty());
         assert!(shown.iter().all(|text| !text.contains("Repo Structure") && !text.contains("secret-layout-text")));
         assert!(shown.iter().all(|text| !text.contains("Candidate Profile")));
@@ -285,7 +301,8 @@ mod tests {
 
     #[test]
     fn a_failed_read_hides_the_topic_and_reports_the_error() {
-        let (view, errors) = profile_view(&|file| if file == ProfileFile::Evaluation { Err(LoadError::new("04-job-evaluation.md", "denied")) } else { Ok(None) });
+        let (view, errors) =
+            profile_view(&|file| if file == ProfileFile::Evaluation { Err(LoadError::new("04-job-evaluation.md", "denied")) } else { Ok(None) });
         assert_eq!(errors.len(), 1);
         assert!(!topic(&view, TopicId::Goals).readable);
         assert_eq!(topic(&view, TopicId::Goals).fill, Fill::Hidden);
@@ -325,7 +342,11 @@ mod tests {
     /// A closed heading or a comment after it still names a role, cut from the heading's own content.
     #[test]
     fn a_closed_or_annotated_heading_is_still_a_role() {
-        for heading in ["### Lead Engineer - Calder Freight (2021 – present) ###", "### Lead Engineer - Calder Freight (2021 – present) <!-- check dates -->", "### [JOB_TITLE] - Calder Freight (2021 – present) ##"] {
+        for heading in [
+            "### Lead Engineer - Calder Freight (2021 – present) ###",
+            "### Lead Engineer - Calder Freight (2021 – present) <!-- check dates -->",
+            "### [JOB_TITLE] - Calder Freight (2021 – present) ##",
+        ] {
             let text = format!("## Professional Experience\n\n{heading}\nShipped.\n");
             let view = view_of(&[(ProfileFile::Candidate, &text)]);
             let role = topic(&view, TopicId::Experience).sections[0].children[0].role.clone().unwrap_or_else(|| panic!("{heading} is no role"));

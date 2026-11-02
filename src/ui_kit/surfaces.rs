@@ -15,8 +15,8 @@ use crate::ui_kit::controls::{
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
-    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text,
-    profile_markdown, table_head, wrapped,
+    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
+    table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
@@ -1535,7 +1535,13 @@ pub enum EditorAction {
 /// face, then Save (the command key and Enter) and Cancel (Esc). The field renders nothing. With Preview on, `preview`
 /// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save of either kind is
 /// off and the command key and Enter do nothing, and a change on disk still shows.
-pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, preview: &mut bool, show_preview: impl FnOnce(&mut Ui, &str)) -> Option<EditorAction> {
+pub fn block_editor(
+    ui: &mut Ui,
+    editor: &BlockEditor,
+    draft: &mut String,
+    preview: &mut bool,
+    show_preview: impl FnOnce(&mut Ui, &str),
+) -> Option<EditorAction> {
     let p = Palette::of(ui);
     let busy = editor.busy.is_some();
     // Taken before the field sees it, so the chord never types a line break.
@@ -1547,7 +1553,8 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
         action = Some(EditorAction::Cancel);
     }
     let (left, top, bottom) = EDITOR_PADDING;
-    let frame = Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(Margin { left, right: left, top, bottom });
+    let frame =
+        Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(Margin { left, right: left, top, bottom });
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = EDITOR_GAP;
@@ -1572,7 +1579,11 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
         if *preview {
             show_preview(ui, draft);
         } else {
-            let field = egui::TextEdit::multiline(draft).font(Type::BODY.font()).margin(Margin::same(FIELD_PADDING as i8)).desired_width(f32::INFINITY).desired_rows(EDITOR_ROWS);
+            let field = egui::TextEdit::multiline(draft)
+                .font(Type::BODY.font())
+                .margin(Margin::same(FIELD_PADDING as i8))
+                .desired_width(f32::INFINITY)
+                .desired_rows(EDITOR_ROWS);
             let field = ui.add(field).labelled_by(title);
             if field.has_focus() {
                 ui.painter().rect_stroke(field.rect.expand(FOCUS_OFFSET), RADIUS_BUTTON, Stroke::new(FOCUS_RING, p.active), StrokeKind::Outside);
@@ -1583,7 +1594,11 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
             let chord = crate::ui_kit::command_chord("Enter");
             let why = editor.busy.map_or("", |busy| busy.why);
             let save = enabled_when(ui, !busy, why, |ui| {
-                if editor.changed.is_some() { crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord) } else { crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord) }
+                if editor.changed.is_some() {
+                    crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord)
+                } else {
+                    crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord)
+                }
             });
             if save.clicked() {
                 action = Some(EditorAction::Save);

@@ -653,7 +653,8 @@ fn shown_role(block: &str) -> ShownRole {
 
 const DRAFT: &str = "### Lead Software Engineer - Calder Freight (2021 – present)\n\nAntwerp. Freelance.\n\n- Leads a team of six building the route-planning platform for 40 depots.\n- Budget or headcount you owned: EUR 1.2M a year, eight people at the peak";
 
-const NOW_IN_FILE: [(&str, bool); 2] = [("- Budget or headcount you owned: [PLACEHOLDER]", false), ("- Introduced a weekly planning review with depot managers.", true)];
+const NOW_IN_FILE: [(&str, bool); 2] =
+    [("- Budget or headcount you owned: [PLACEHOLDER]", false), ("- Introduced a weekly planning review with depot managers.", true)];
 
 const CHANGED: ChangedOnDisk = ChangedOnDisk {
     title: "This role changed while you were editing.",
@@ -664,7 +665,10 @@ const CHANGED: ChangedOnDisk = ChangedOnDisk {
     take_note: "Replaces your text with the file's. To keep both, copy the new line into your text, then save.",
 };
 
-const BUSY: EditorBusy = EditorBusy { why: "A task is running and may change this file. Save once it ends.", line: "A task is running, so Save waits until it ends. Your text stays here." };
+const BUSY: EditorBusy = EditorBusy {
+    why: "A task is running and may change this file. Save once it ends.",
+    line: "A task is running, so Save waits until it ends. Your text stays here.",
+};
 
 fn editor(busy: bool, changed: bool, unsaved: bool) -> BlockEditor<'static> {
     BlockEditor {
@@ -680,7 +684,17 @@ fn editor(busy: bool, changed: bool, unsaved: bool) -> BlockEditor<'static> {
 
 fn profile(ui: &mut Ui) {
     let mut cache = CommonMarkCache::default();
-    let topics = [(1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (3, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Closed))), (1, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Interview))), (1, Some(Ink::Text))];
+    let topics = [
+        (1, Some(Ink::Text)),
+        (1, Some(Ink::Status(Tone::Interview))),
+        (1, Some(Ink::Text)),
+        (1, Some(Ink::Status(Tone::Interview))),
+        (3, Some(Ink::Text)),
+        (1, Some(Ink::Status(Tone::Closed))),
+        (1, Some(Ink::Text)),
+        (1, Some(Ink::Status(Tone::Interview))),
+        (1, Some(Ink::Text)),
+    ];
     tally_strip(ui, &topics, true);
     ui.add_space(10.0);
     ui.horizontal(|ui| {
@@ -756,15 +770,12 @@ fn profile_gallery(ui: &mut Ui) {
 const PROFILE_HEIGHT: f32 = 2200.0;
 
 fn render_profile(theme: Theme, name: &str) {
-    let mut harness = Harness::builder()
-        .with_size([1000.0, PROFILE_HEIGHT])
-        .with_pixels_per_point(1.0)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(|ui| {
-            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, profile_gallery));
-        });
+    let mut harness =
+        Harness::builder().with_size([1000.0, PROFILE_HEIGHT]).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(
+            |ui| {
+                jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, profile_gallery));
+            },
+        );
     harness.run_steps(3);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }

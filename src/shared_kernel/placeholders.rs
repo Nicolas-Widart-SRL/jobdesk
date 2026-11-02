@@ -103,7 +103,9 @@ pub fn shown_pieces(text: &str, part: Range<usize>) -> Vec<Piece> {
                 }
             }
             // An escape or an entity inside a token belongs to its blank.
-            Event::Text(shown) if range.start >= part.start && from(range.start).next().is_none_or(|span| span.start >= range.end) => push(Piece::Text(shown.to_string())),
+            Event::Text(shown) if range.start >= part.start && from(range.start).next().is_none_or(|span| span.start >= range.end) => {
+                push(Piece::Text(shown.to_string()))
+            }
             Event::Code(shown) | Event::InlineHtml(shown) | Event::Html(shown) if range.start >= part.start => push(Piece::Text(shown.to_string())),
             Event::SoftBreak | Event::HardBreak if range.start >= part.start => push(Piece::Text(" ".to_owned())),
             _ => {}
@@ -288,7 +290,10 @@ mod tests {
     #[test]
     fn a_name_may_hold_digits_apostrophes_and_spaces() {
         let text = "[RESPONSIBILITY_OR_ACHIEVEMENT_1] [DRIVE_1] [WHAT_DOESN'T_WORK] **T:** [YOUR RESPONSIBILITY] [YOUR_PROFILE_STATEMENT_TEMPLATE_1] [END]";
-        assert_eq!(found(text), ["[RESPONSIBILITY_OR_ACHIEVEMENT_1]", "[DRIVE_1]", "[WHAT_DOESN'T_WORK]", "[YOUR RESPONSIBILITY]", "[YOUR_PROFILE_STATEMENT_TEMPLATE_1]", "[END]"]);
+        assert_eq!(
+            found(text),
+            ["[RESPONSIBILITY_OR_ACHIEVEMENT_1]", "[DRIVE_1]", "[WHAT_DOESN'T_WORK]", "[YOUR RESPONSIBILITY]", "[YOUR_PROFILE_STATEMENT_TEMPLATE_1]", "[END]"]
+        );
     }
 
     #[test]
@@ -300,7 +305,10 @@ mod tests {
     #[test]
     fn every_word_of_a_name_with_spaces_is_a_word() {
         assert_eq!(placeholder_count("Remote [EU UK] and [AI ML] and German [C1 B2] and [YOUR UK] and [WHAT 2 DO]"), 0);
-        assert_eq!(found("[WHAT YOU DID] [PREPARE YOUR ANSWER - be honest] [YOUR RESPONSIBILITY]"), ["[WHAT YOU DID]", "[PREPARE YOUR ANSWER - be honest]", "[YOUR RESPONSIBILITY]"]);
+        assert_eq!(
+            found("[WHAT YOU DID] [PREPARE YOUR ANSWER - be honest] [YOUR RESPONSIBILITY]"),
+            ["[WHAT YOU DID]", "[PREPARE YOUR ANSWER - be honest]", "[YOUR RESPONSIBILITY]"]
+        );
         assert_eq!(found("[YOUR KEY_SKILL] [AWS] [AWS - Solutions Architect]"), ["[YOUR KEY_SKILL]", "[AWS]", "[AWS - Solutions Architect]"]);
     }
 
@@ -323,7 +331,14 @@ mod tests {
     #[test]
     fn a_hint_after_the_name_belongs_to_the_token() {
         let text = r#"- [CONTEXT - what was happening, who was involved] and [LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)"] and [PREPARE YOUR ANSWER - be honest]"#;
-        assert_eq!(found(text), ["[CONTEXT - what was happening, who was involved]", r#"[LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)"]"#, "[PREPARE YOUR ANSWER - be honest]"]);
+        assert_eq!(
+            found(text),
+            [
+                "[CONTEXT - what was happening, who was involved]",
+                r#"[LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)"]"#,
+                "[PREPARE YOUR ANSWER - be honest]"
+            ]
+        );
         assert_eq!(placeholder_count("[CONTEXT - a [nested] hint] [END]"), 2);
         assert_eq!(placeholder_count("[CONTEXT - never closed"), 0);
         assert_eq!(placeholder_count("[CONTEXT - runs\nto the next line]"), 0);
@@ -350,7 +365,10 @@ mod tests {
         assert_eq!(found("![alt [CITY] $x](u.png) y$"), ["[CITY]"]);
         // A page with no inline math reads a dollar sign as text.
         assert_eq!(found("Salary: [LEVEL - about $50k] and [FLOOR - $40k at least]"), ["[LEVEL - about $50k]", "[FLOOR - $40k at least]"]);
-        assert_eq!(found("[ROLE_TITLE]: Led the platform team\n\n[FIRST_NAME][LAST_NAME]\n\n[LAST_NAME](pronouns: she/her)"), ["[ROLE_TITLE]", "[FIRST_NAME]", "[LAST_NAME]", "[LAST_NAME]"]);
+        assert_eq!(
+            found("[ROLE_TITLE]: Led the platform team\n\n[FIRST_NAME][LAST_NAME]\n\n[LAST_NAME](pronouns: she/her)"),
+            ["[ROLE_TITLE]", "[FIRST_NAME]", "[LAST_NAME]", "[LAST_NAME]"]
+        );
     }
 
     #[test]
@@ -394,7 +412,10 @@ mod tests {
         let text = "### Lead &#91;TEAM_NAME&#93; - Acme (2020)";
         assert_eq!(part(text, "Lead &#91;TEAM_NAME&#93;"), [Piece::Text("Lead [TEAM_NAME]".to_owned())]);
         let text = "### Run `[YOUR_CITY]` and [CITY_NAME] - Acme (2020)";
-        assert_eq!(part(text, "Run `[YOUR_CITY]` and [CITY_NAME]"), [Piece::Text("Run [YOUR_CITY] and ".to_owned()), Piece::Blank("to fill: city name".to_owned())]);
+        assert_eq!(
+            part(text, "Run `[YOUR_CITY]` and [CITY_NAME]"),
+            [Piece::Text("Run [YOUR_CITY] and ".to_owned()), Piece::Blank("to fill: city name".to_owned())]
+        );
     }
 
     /// No text of any kind can make a blank on a role line: only a counted token does.
@@ -483,7 +504,10 @@ mod tests {
         assert_eq!(blank_words("FIRST_NAME"), "to fill: first name");
         assert_eq!(blank_words("PLACEHOLDER"), "to fill");
         assert_eq!(blank_words("[LAST_NAME]"), "to fill: last name");
-        assert_eq!(blank_words(r#"LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)""#), r#"to fill: level, e.g. "Native" / "C2" / "B1/B2 (conversational)""#);
+        assert_eq!(
+            blank_words(r#"LEVEL, e.g. "Native" / "C2" / "B1/B2 (conversational)""#),
+            r#"to fill: level, e.g. "Native" / "C2" / "B1/B2 (conversational)""#
+        );
         assert_eq!(blank_words("[CONTEXT - What Was Happening]"), "to fill: context - What Was Happening");
         assert_eq!(blank_words("1-2 SENTENCE_SUMMARY"), "to fill: 1-2 sentence summary");
     }

@@ -38,3 +38,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 24 src/ui_kit/marks.rs: heatmap day nodes sensed hover only, so keyboard focus never reached them. Class: hover/focus/keyboard.
 - PR 25 `src/profile/infrastructure/profile_files.rs`: the save copy was created with the default mode and took a private target's bits only after the text was in, so another user could open it meanwhile. Class: state over time.
 - PR 25 `ARCHITECTURE.md`: Save's unchanged-block check read as a compare-and-swap, though another program can write the file between the check and the rename. Class: copy claims more than the data.
+- PR 25 `src/profile/infrastructure/profile_files.rs`: every save used one fixed copy path and removed a copy found there as stale, so a second Jobdesk saving the same file at once could remove the first save's copy and have its own renamed in, losing the first text while it reported Saved. Class: state over time.

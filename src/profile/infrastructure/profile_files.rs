@@ -1,11 +1,12 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::profile::domain::{ProfileFile, ProfileStore};
 use crate::shared_kernel::LoadError;
 
-/// Added to a file's name for the copy a save writes before it replaces the file.
+/// Added to a file's name, before the process id and a number, for the copy a save writes before it replaces the file.
 const SAVE_SUFFIX: &str = ".jobdesk-save";
 
 /// The profile files of one checkout. A save of one block is the only write Jobdesk makes to the checkout.
@@ -90,22 +91,14 @@ fn folder_of(file: ProfileFile) -> &'static str {
 }
 
 /// Writes a copy beside `target`, then renames it over `target`, so a crash leaves the old file or the new one, never half.
-/// The copy is removed when anything fails.
+/// This save's copy is removed when anything fails, and no other copy is ever touched.
 fn replace(target: &Path, text: &str) -> io::Result<()> {
-    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else { return Err(ErrorKind::InvalidInput.into()) };
-    let mut copy_name = name.to_owned();
-    copy_name.push(SAVE_SUFFIX);
-    let copy = folder.join(copy_name);
-    // A copy left by a crash goes first. Removing a link removes the link, not the file it points to.
-    match fs::remove_file(&copy) {
-        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
-        _ => {}
-    }
-    let result = write_copy(&copy, target, |file| file.write_all(text.as_bytes())).and_then(|()| fs::rename(&copy, target));
-    if result.is_err() {
+    let folder = target.parent().ok_or(ErrorKind::InvalidInput)?;
+    let copy = write_copy(target, next_copy, |file| file.write_all(text.as_bytes()))?;
+    if let Err(error) = fs::rename(&copy, target) {
         let _ = fs::remove_file(&copy);
+        return Err(error);
     }
-    result?;
     // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
     // Best effort: some mounts refuse to sync a folder, and the file is already in place.
     #[cfg(unix)]
@@ -113,23 +106,47 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permission bits of `target`,
-/// set only once `write` has put the text in. Anything else tied to the old file is lost with it: its other hard links
-/// keep the old text, and its ACLs and extended attributes are not copied.
-fn write_copy(copy: &Path, target: &Path, write: impl FnOnce(&mut fs::File) -> io::Result<()>) -> io::Result<()> {
-    let kept = fs::metadata(target).ok().map(|metadata| metadata.permissions());
-    let mut file = create_copy(copy, kept.is_some())?;
-    write(&mut file)?;
-    if let Some(permissions) = kept {
-        file.set_permissions(permissions)?;
-    }
-    // On disk before the rename, or a power loss could keep the rename and lose the text.
-    file.sync_all()
+/// Numbers the copies this process writes, so two saves at once never pick the same name.
+static COPIES: AtomicU64 = AtomicU64::new(0);
+
+fn next_copy() -> u64 {
+    COPIES.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Creates the copy, empty. When it `replaces` a file, on Unix only its owner may open it until the text is in, so the
-/// text of a private file is never open to other users, not even while it is written. A new file gets the usual mode.
-fn create_copy(copy: &Path, replaces: bool) -> io::Result<fs::File> {
+/// Writes the copy of one save and returns its path. It keeps the permission bits of `target`, set only once `write`
+/// has put the text in. Anything else tied to the old file is lost with it: its other hard links keep the old text, and
+/// its ACLs and extended attributes are not copied. The copy is removed when anything here fails.
+fn write_copy(target: &Path, numbers: impl FnMut() -> u64, write: impl FnOnce(&mut fs::File) -> io::Result<()>) -> io::Result<PathBuf> {
+    let kept = fs::metadata(target).ok().map(|metadata| metadata.permissions());
+    let (copy, mut file) = create_copy(target, kept.is_some(), numbers)?;
+    let written = (|| {
+        write(&mut file)?;
+        if let Some(permissions) = kept {
+            file.set_permissions(permissions)?;
+        }
+        // On disk before the rename, or a power loss could keep the rename and lose the text.
+        file.sync_all()
+    })();
+    // Closed first, because Windows cannot remove a file that is open.
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(&copy);
+        return Err(error);
+    }
+    Ok(copy)
+}
+
+/// How many names a save tries for its copy before it gives up.
+const COPY_NAMES: usize = 100;
+
+/// Creates the copy, empty, as `<name>.jobdesk-save-<process id>-<number>`, taking numbers from `numbers` until a name
+/// is free. `create_new` never follows a link and never opens a file that is there, so a copy another save is writing,
+/// one a crash left, or one an earlier version left at `<name>.jobdesk-save` is never opened, reused or removed.
+///
+/// When it `replaces` a file, on Unix only its owner may open the copy until the text is in, so the text of a private
+/// file is never open to other users, not even while it is written. A new file gets the usual mode.
+fn create_copy(target: &Path, replaces: bool, mut numbers: impl FnMut() -> u64) -> io::Result<(PathBuf, fs::File)> {
+    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else { return Err(ErrorKind::InvalidInput.into()) };
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -139,7 +156,17 @@ fn create_copy(copy: &Path, replaces: bool) -> io::Result<fs::File> {
     }
     #[cfg(not(unix))]
     let _ = replaces;
-    options.open(copy)
+    for _ in 0..COPY_NAMES {
+        let mut copy_name = name.to_owned();
+        copy_name.push(format!("{SAVE_SUFFIX}-{}-{}", std::process::id(), numbers()));
+        let copy = folder.join(copy_name);
+        match options.open(&copy) {
+            Ok(file) => return Ok((copy, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(ErrorKind::AlreadyExists, "every name for the save's copy was taken"))
 }
 
 impl ProfileStore for ProfileFiles {
@@ -190,22 +217,99 @@ mod tests {
         assert_eq!(left, [std::ffi::OsString::from("01-candidate-profile.md")]);
     }
 
+    /// The names in `folder`, sorted.
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(folder).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    /// Another save's copy, at the fixed name an earlier version used or at a peer process's name, could be renamed over
+    /// the file at any moment, so a save never removes or reuses one: it writes a copy of its own.
     #[test]
-    fn a_stale_copy_is_replaced_and_a_failed_rename_removes_the_copy() {
+    fn copies_of_other_saves_are_left_alone() {
         let (dir, files) = files();
         let path = dir.path().join(ProfileFile::Candidate.relative_path());
-        let copy = path.with_file_name("01-candidate-profile.md.jobdesk-save");
-        fs::write(&copy, "stale").unwrap();
         fs::write(&path, "old").unwrap();
-        files.write(ProfileFile::Candidate, "new").unwrap();
+        let earlier = path.with_file_name("01-candidate-profile.md.jobdesk-save");
+        fs::write(&earlier, "earlier save").unwrap();
+        let peer = path.with_file_name(format!("01-candidate-profile.md.jobdesk-save-{}-0", std::process::id().wrapping_add(1)));
+        fs::write(&peer, "peer save").unwrap();
+        assert_eq!(files.write(ProfileFile::Candidate, "new"), Ok(()));
         assert_eq!(fs::read_to_string(&path).unwrap(), "new");
-        assert!(!copy.exists());
+        assert_eq!(fs::read_to_string(&earlier).unwrap(), "earlier save");
+        assert_eq!(fs::read_to_string(&peer).unwrap(), "peer save");
+        let peer_name = peer.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(names(path.parent().unwrap()), ["01-candidate-profile.md", "01-candidate-profile.md.jobdesk-save", peer_name.as_str()]);
+    }
+
+    /// A link at the fixed name an earlier version used is neither followed nor removed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_earlier_copy_name_is_not_followed() {
+        let (dir, files) = files();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("notes.md"), "outside").unwrap();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let earlier = path.with_file_name("01-candidate-profile.md.jobdesk-save");
+        std::os::unix::fs::symlink(outside.path().join("notes.md"), &earlier).unwrap();
+        assert_eq!(files.write(ProfileFile::Candidate, "new"), Ok(()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert!(fs::symlink_metadata(&earlier).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(outside.path().join("notes.md")).unwrap(), "outside");
+    }
+
+    /// A name taken in this process, such as one a crash left under a reused process id, is skipped for the next.
+    #[test]
+    fn a_taken_copy_name_is_skipped() {
+        let (dir, _) = files();
+        let target = dir.path().join("01-candidate-profile.md");
+        fs::write(&target, "old").unwrap();
+        let taken = dir.path().join(format!("01-candidate-profile.md.jobdesk-save-{}-0", std::process::id()));
+        fs::write(&taken, "another save").unwrap();
+        let mut number = 0;
+        let copy = write_copy(
+            &target,
+            || {
+                number += 1;
+                number - 1
+            },
+            |file| file.write_all(b"new"),
+        )
+        .unwrap();
+        assert_eq!(copy, dir.path().join(format!("01-candidate-profile.md.jobdesk-save-{}-1", std::process::id())));
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&taken).unwrap(), "another save");
+    }
+
+    /// A save that fails while it writes or renames removes its own copy, and only that.
+    #[test]
+    fn a_failed_save_leaves_no_copy_of_its_own() {
+        let (dir, files) = files();
+        let target = dir.path().join("01-candidate-profile.md");
+        fs::write(&target, "old").unwrap();
+        let peer = dir.path().join(format!("01-candidate-profile.md.jobdesk-save-{}-0", std::process::id().wrapping_add(1)));
+        fs::write(&peer, "peer save").unwrap();
+        let before = names(dir.path());
+        let failed = write_copy(&target, next_copy, |file| {
+            file.write_all(b"half")?;
+            Err(io::Error::other("disk full"))
+        });
+        assert_eq!(failed.unwrap_err().to_string(), "disk full");
+        assert_eq!(names(dir.path()), before);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
         // A folder where the file should be: the rename fails, and the copy goes.
         let folder = dir.path().join(ProfileFile::Behavioral.relative_path());
         fs::create_dir(&folder).unwrap();
         fs::write(folder.join("inside"), "x").unwrap();
+        let skills = folder.parent().unwrap();
+        let peer = skills.join(format!("02-behavioral-profile.md.jobdesk-save-{}-0", std::process::id().wrapping_add(1)));
+        fs::write(&peer, "peer save").unwrap();
+        let before = names(skills);
         assert!(files.write(ProfileFile::Behavioral, "new").is_err());
-        assert!(!folder.with_file_name("02-behavioral-profile.md.jobdesk-save").exists());
+        assert_eq!(names(skills), before);
+        assert_eq!(fs::read_to_string(&peer).unwrap(), "peer save");
     }
 
     #[test]
@@ -284,19 +388,18 @@ mod tests {
         let target = dir.path().join("01-candidate-profile.md");
         fs::write(&target, "old").unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
-        let copy = dir.path().join("01-candidate-profile.md.jobdesk-save");
         let mut while_written = Vec::new();
-        {
+        let copy = {
             // SAFETY: umask takes a mask and always succeeds.
             let _umask = Umask(unsafe { libc::umask(0o022) });
-            write_copy(&copy, &target, |file| {
+            write_copy(&target, next_copy, |file| {
                 while_written.push(file.metadata()?.permissions().mode() & 0o777);
                 file.write_all(b"new")?;
                 while_written.push(file.metadata()?.permissions().mode() & 0o777);
                 Ok(())
             })
-            .unwrap();
-        }
+            .unwrap()
+        };
         assert_eq!(while_written, [0o600, 0o600]);
         // The target's own bits come back once the text is in.
         assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o640);

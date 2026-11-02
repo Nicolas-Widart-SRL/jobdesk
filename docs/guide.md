@@ -42,9 +42,19 @@ Only one run works at a time, because two commands could overwrite each other's 
 
 Text in Claude's messages and questions, your replies, error alerts, command lines, company research, archived postings and follow-up drafts can be selected and copied. A question cut to fit is not, and shows in full under the pointer. Copy says Copied.
 
+## Settings
+
+Settings (Cmd+, , Ctrl+, on Windows, or Settings at the right of the status bar) replaces the menu and the screen until you press Back to app or Esc. A task keeps running meanwhile, and the status bar says when one waits for you. The rail groups the sections, each with a word on its state. Search keeps only the sections with a match and marks the matched words. Esc clears the search first. Changes apply at once and stay on this computer.
+
+- General: your job search folder, with Show in Finder (Show in Explorer on Windows) and Change folder, and the screen Jobdesk opens on.
+- Appearance: the theme (System, Light or Dark), the text size from 90 to 150 percent (Cmd + and Cmd − change it too), and Reduce motion, which drops the card slide and the day stamp's fill.
+- Runtime status: Claude Code's version and the sign-in the last task used, then your profile, tools, portals, templates and sync, as Setup shows them.
+
+The other sections show in the rail and open in later versions.
+
 ## Setup and the status bar
 
-Setup shows whether your profile, tools, portals, templates and sync are ready. Optional tools never count against the ready total. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says that Claude is installed, and that Jobdesk uses its sign-in and stores no passwords.
+Setup shows whether your profile, tools, portals, templates and sync are ready. Its tab stays in the menu only while a required item is not ready, so through your first setup too, and comes back if one goes missing later. A required item is your job search folder or a required tool. Your profile files show their state but never keep the tab, and optional tools never do either. Optional tools never count against the ready total. Settings › Runtime status always shows the same. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says that Claude is installed, and that Jobdesk uses its sign-in and stores no passwords. The theme is set in Settings › Appearance.
 
 ## Privacy and trust
 

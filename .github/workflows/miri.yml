@@ -1,0 +1,31 @@
+name: Miri
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Miri looks for undefined behavior in the domain, application and shared_kernel tests. host_path is skipped: it uses files, env and a shell.
+  # It runs weekly and on demand, not on each change, because it is slow.
+  miri:
+    name: Miri (domain, application and shared_kernel tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri setup
+      - run: |
+          cargo miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path

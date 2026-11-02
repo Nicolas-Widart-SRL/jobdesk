@@ -56,7 +56,7 @@ UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery
 
 Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 
-Miri runs in CI over the domain, application and shared_kernel tests. To run it locally:
+Miri runs weekly and on demand (Actions tab, "Miri", Run workflow) over the domain, application and shared_kernel tests, not on each pull request. To run it locally:
 
 ```bash
 rustup toolchain install nightly --component miri,rust-src

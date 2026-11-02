@@ -781,6 +781,50 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     response
 }
 
+/// A field for an amount of dollars, `width` wide: a `muted` `$` before the number, and the `hint` in `faint` while it
+/// is empty. The response is the text edit's. The caller parses the text, so a half-typed amount stays as typed.
+pub fn amount_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> Response {
+    // The field's id is its place in `ui`, taken before anything is added, as `search_field` takes its own.
+    let id = ui.next_auto_id().with("amount_field");
+    let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_HEIGHT), Sense::hover());
+    amount_in(ui, id, rect, text, hint)
+}
+
+/// An amount field painted at `rect`, which the caller has made room for, such as a place in a line of words.
+pub(in crate::ui_kit) fn amount_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: &mut String, hint: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    // The field's box is painted last, when its focus is known, under what it holds.
+    let under = ui.painter().add(egui::Shape::Noop);
+    let unit_ink = if enabled { p.muted } else { dimmed(p.muted) };
+    let unit = line(ui, "$", Type::BODY, unit_ink, f32::INFINITY);
+    let inner = rect.shrink2(vec2(FIELD_PADDING, 0.0));
+    let unit_at = egui::pos2(inner.left(), rect.center().y - unit.size().y / 2.0);
+    let room =
+        Rect::from_min_max(egui::pos2((unit_at.x + unit.size().x + FIELD_PADDING).min(inner.right()), rect.top()), egui::pos2(inner.right(), rect.bottom()));
+    let ink = if enabled { p.text } else { dimmed(p.text) };
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::ZERO)
+        .font(Type::BODY.font())
+        .text_color(ink)
+        .hint_text(egui::RichText::new(hint).font(Type::BODY.font()).color(if enabled { p.faint } else { dimmed(p.faint) }))
+        .desired_width(room.width())
+        .align(egui::Align2::LEFT_CENTER);
+    let mut field = ui.new_child(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
+    let response = field.add(edit);
+    let border = match (enabled, response.has_focus()) {
+        (false, _) => dimmed(p.line),
+        (true, true) => p.text,
+        (true, false) => p.line,
+    };
+    ui.painter().set(under, egui::Shape::rect_filled(rect, RADIUS_BUTTON, p.field));
+    paint_text(ui, unit_at, unit, unit_ink, p.field);
+    ui.painter().rect_stroke(rect, RADIUS_BUTTON, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    response
+}
+
 /// How long a Copy button reads Copied, in seconds.
 const COPIED_FOR: f64 = 2.0;
 

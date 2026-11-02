@@ -226,6 +226,9 @@ pub const CALL_BODY_GAP: f32 = 20.0;
 pub const TICKET_PADDING: (f32, f32) = (4.0, 9.0);
 pub const TICKET_BOX: f32 = 16.0;
 pub const CHECK_BOX: f32 = 18.0;
+/// A radio button's ring, and the dot in it while it is on.
+pub const RADIO: f32 = 16.0;
+pub const RADIO_DOT: f32 = 6.0;
 pub const ORDER_PADDING: f32 = 12.0;
 pub const ORDER_GAP: (f32, f32) = (16.0, 6.0);
 pub const FIELD_GAP: f32 = 4.0;
@@ -233,6 +236,9 @@ pub const FIELD_HEIGHT: f32 = 34.0;
 pub const FIELD_PADDING: f32 = 8.0;
 pub const FIELD_AREA_HEIGHT: f32 = 72.0;
 pub const FIELD_TINY_WIDTH: f32 = 92.0;
+/// An amount field set in a line of words, such as the monthly cap's: its width and height, and the room either side.
+pub const FIELD_INLINE: (f32, f32) = (96.0, 28.0);
+pub const FIELD_INLINE_MARGIN: f32 = 4.0;
 /// A settings page's head padding (inline, top, bottom), its body padding (inline, top, bottom),
 /// and how far its actions sit above the lead's bottom edge.
 pub const SETTINGS_HEAD_PADDING: (i8, i8, i8) = (22, 18, 14);

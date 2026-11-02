@@ -180,7 +180,7 @@ fn role_of(own: &str) -> Option<Role> {
 }
 
 /// How the topics add up: `filled` of `total`, every topic. `hidden` of them could not be read, so they are neither filled nor not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TopicCounts {
     pub filled: usize,
     pub total: usize,

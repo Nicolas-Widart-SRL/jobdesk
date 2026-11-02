@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use chrono::NaiveDate;
 
@@ -29,6 +30,9 @@ pub struct Snapshot {
     pub usage_read: bool,
     pub issues: Vec<Issue>,
     pub today: NaiveDate,
+    /// When the load began, so the shell can tell a snapshot read after some moment, such as a run's end.
+    /// `None` for a snapshot not read from a folder.
+    pub read_at: Option<Instant>,
 }
 
 /// A source that could not be read, and why.
@@ -42,6 +46,7 @@ impl Snapshot {
     /// A feature that fails to load reports an issue and the others keep working. The run logs are not read here:
     /// `usage` stays empty and unread.
     pub fn load(root: &Path, today: NaiveDate) -> Self {
+        let read_at = Some(Instant::now());
         let mut issues = Vec::new();
         let board = discovery::load_board(root, today).unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Jobs, error });
@@ -70,10 +75,11 @@ impl Snapshot {
             .collect();
         let (profile, errors) = profile::load(root);
         issues.extend(errors.into_iter().map(|error| Issue { source: Source::Profile, error }));
-        let workspace = workspace_view(&workspace::inspect(root), &board);
+        let workspace = workspace_view(&workspace::inspect(root), &board, &profile);
         let insights = search_insights(&pipeline);
         let counts = topic_counts(&profile);
         let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
-        Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage: UsageReport::default(), usage_read: false, issues, today }
+        let (usage, usage_read) = (UsageReport::default(), false);
+        Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage, usage_read, issues, today, read_at }
     }
 }

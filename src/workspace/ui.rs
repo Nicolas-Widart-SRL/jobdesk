@@ -6,19 +6,16 @@ use crate::ui_kit::tokens::{
     INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_PADDING, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT,
 };
 use crate::ui_kit::{
-    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, hidden_note,
-    hit_mark, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich, setting_row, setting_section, settings_page,
-    skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+    CellRule, FillMarks, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono,
+    fill_tally, hidden_note, hit_mark, lead_line, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich, setting_row,
+    setting_section, settings_page, skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
 };
-use crate::workspace::application::{AuthMode, EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
+use crate::workspace::application::{AuthMode, EnvironmentChecks, PortalRow, ToolCheck, WorkspaceView};
 
 /// Environment rows sit closer than other list rows.
 const TOOL_ROW_PADDING: i8 = 6;
 /// Shares of the portal table's width: portal, jobs seen, state.
 const PORTAL_COLUMNS: [f32; 3] = [0.5, 0.3, 0.2];
-
-/// A profile row holds the plain title over the file name.
-const PROFILE_ROW_HEIGHT: f32 = 38.0;
 
 /// What Jobdesk promises about the folder, on Setup and on Runtime status.
 const PROMISE: &str = "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
@@ -86,6 +83,8 @@ fn right<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceAction {
     ChangeFolder,
+    /// Switch to the Profile screen.
+    OpenProfile,
 }
 
 /// `name` is the checkout's folder name, never its full path.
@@ -102,7 +101,7 @@ pub fn show(
 ) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
-    let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
+    let has_documents = view.topics.filled > 0;
     let subtitle = if state.reading() { Subtitle::Text("Reading your profile, tools and portals…") } else { Subtitle::Typed(name) };
     page_head(ui, Title::Slab("Setup"), Some(subtitle), |ui| {
         if enabled_when(ui, folder_wait.is_none(), folder_wait.unwrap_or_default(), |ui| button(ui, "Change folder")).clicked() {
@@ -122,13 +121,15 @@ pub fn show(
         }
         let jobs_failed = state.cannot_read(Source::Jobs);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // The profile is one line, so the portals sit under it rather than under the taller tools.
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
-                profile(main, view);
-                tools(side, environment, view.has_salary_data);
-            });
-            ui.add_space(SPLIT_GAP);
-            split(ui, SPLIT_SIDE_BASIS, |main, side| {
+                if profile(main, view).is_some() {
+                    action = Some(WorkspaceAction::OpenProfile);
+                }
+                main.add_space(12.0);
                 portals(main, view, jobs_failed);
+                tools(side, environment, view.has_salary_data);
+                side.add_space(12.0);
                 templates(side, view);
                 side.add_space(12.0);
                 sync(side, view);
@@ -142,7 +143,7 @@ pub fn show(
 
 /// Settings › Runtime status: Setup's content in one column, under Claude Code's version and sign-in.
 /// `sign_in` is what the last task reported. Without `folder_open`, only Claude Code and the tools show.
-/// Headings and labels mark the hits of the search `query`.
+/// Headings and labels mark the hits of the search `query`. Returns what the user asked the shell to do.
 pub fn runtime_status(
     ui: &mut Ui,
     state: &ScreenState,
@@ -151,11 +152,12 @@ pub fn runtime_status(
     sign_in: AuthMode,
     folder_open: bool,
     query: &str,
-) {
+) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let running = environment.is_running();
     let read = folder_open && !state.reading();
-    let has_documents = read && view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
+    let has_documents = read && view.topics.filled > 0;
+    let mut action = None;
     let checks: &EnvironmentChecks = environment;
     let (recheck, ()) = settings_page(
         ui,
@@ -181,7 +183,7 @@ pub fn runtime_status(
             };
             if waiting.is_none() {
                 setting_section(ui, "Profile", Some(".claude/skills/job-application-assistant"), query);
-                profile_rows(ui, view, Rows::Flush);
+                action = profile_line(ui, view, Rows::Flush);
             }
             // Claude Code has its own section above, so the count leaves it out as the rows do.
             setting_section(ui, "Environment", checks.results().map(|results| ready_note(results, false)).as_deref(), query);
@@ -207,6 +209,7 @@ pub fn runtime_status(
     if recheck {
         environment.recheck();
     }
+    action
 }
 
 /// What runs every task: the program's version, and how the last task signed in.
@@ -272,47 +275,50 @@ fn loading_lines(ui: &mut Ui, title: &str, note: Option<&str>, widths: &[f32]) {
 /// The sections before the first read, in their places.
 fn loading(ui: &mut Ui) {
     split(ui, SPLIT_SIDE_BASIS, |main, side| {
-        panel(main, |ui| loading_lines(ui, "Profile", Some(".claude/skills/job-application-assistant"), &[220.0, 180.0, 240.0, 200.0, 170.0, 230.0, 190.0]));
-        slip(side, |ui| loading_lines(ui, "Environment", None, &[200.0, 170.0, 190.0, 160.0, 180.0]));
-    });
-    ui.add_space(SPLIT_GAP);
-    split(ui, SPLIT_SIDE_BASIS, |main, side| {
+        panel(main, |ui| loading_lines(ui, "Profile", Some(".claude/skills/job-application-assistant"), &[260.0]));
+        main.add_space(12.0);
         panel(main, |ui| loading_lines(ui, "Portals", Some(".agents/skills"), &[180.0, 150.0, 200.0]));
+        slip(side, |ui| loading_lines(ui, "Environment", None, &[200.0, 170.0, 190.0, 160.0, 180.0]));
+        side.add_space(12.0);
         slip(side, |ui| loading_lines(ui, "Templates", None, &[190.0, 160.0]));
         side.add_space(12.0);
         slip(side, |ui| loading_lines(ui, "Sync", None, &[200.0, 170.0]));
     });
 }
 
-fn profile(ui: &mut Ui, view: &WorkspaceView) {
+fn profile(ui: &mut Ui, view: &WorkspaceView) -> Option<WorkspaceAction> {
     panel(ui, |ui| {
         panel_header(ui, "Profile", Some(".claude/skills/job-application-assistant"));
-        profile_rows(ui, view, Rows::Listed);
-    });
+        profile_line(ui, view, Rows::Listed)
+    })
 }
 
-fn profile_rows(ui: &mut Ui, view: &WorkspaceView, rows: Rows) {
-    for (index, file) in view.profile.iter().enumerate() {
-        rows.row(ui, index == 0, |ui| {
-            line(ui, PROFILE_ROW_HEIGHT, |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.label(profile_title(file.name.as_str()));
-                    faint_mono(ui, file.name.as_str());
-                });
-                right(ui, |ui| {
-                    if !matches!(file.state, ProfileState::Filled) {
-                        small_command_action(ui, "Update", "/setup");
-                    }
-                    match file.state {
-                        ProfileState::Filled => tag(ui, "Filled", Tone::Hired),
-                        ProfileState::NeedsSetup { placeholders } => tag(ui, format!("{placeholders} to fill"), Tone::Interview),
-                        ProfileState::Missing => tag(ui, "Missing", Tone::Closed),
-                    };
-                });
-            })
+/// The profile in one line: the tally of topics, how many are filled and how many hidden, then Open Profile.
+/// With no profile file found, the line says so and offers `/setup` instead. Returns Open Profile's press.
+fn profile_line(ui: &mut Ui, view: &WorkspaceView, rows: Rows) -> Option<WorkspaceAction> {
+    let topics = view.topics;
+    let mut action = None;
+    rows.row(ui, true, |ui| {
+        line(ui, SMALL_BUTTON_HEIGHT, |ui| {
+            if !topics.any_found && topics.hidden == 0 {
+                muted(ui, "No profile file found.");
+                right(ui, |ui| small_command_action(ui, "Set up your profile…", "/setup"));
+                return;
+            }
+            let open = topics.total.saturating_sub(topics.filled + topics.hidden);
+            fill_tally(ui, FillMarks { filled: topics.filled, open, hidden: topics.hidden, open_ink: Some(Tone::Interview.into()) }, true);
+            lead_line(ui, &format!("{} of {}", topics.filled, topics.total), "topics filled");
+            if topics.hidden > 0 {
+                ui.label(rich(ui, format!("{} hidden", topics.hidden), Type::BODY, Tone::Closed));
+            }
+            right(ui, |ui| {
+                if small_button(ui, "Open Profile").clicked() {
+                    action = Some(WorkspaceAction::OpenProfile);
+                }
+            });
         });
-    }
+    });
+    action
 }
 
 /// Without `counted`, the Jobs seen column is left out: its counts would read zero.
@@ -413,20 +419,6 @@ fn tool_row(ui: &mut Ui, rows: Rows, first: bool, name: ToolName, note: &str, ma
 enum ToolName<'a> {
     Mono(&'a str),
     Plain(String),
-}
-
-/// What a profile file holds, in words. An unknown file shows its own name.
-fn profile_title(file: &str) -> &str {
-    match file {
-        "01-candidate-profile.md" => "Your profile",
-        "02-behavioral-profile.md" => "How you work",
-        "03-writing-style.md" => "Your writing style",
-        "04-job-evaluation.md" => "How jobs are judged",
-        "05-cv-templates.md" => "CV templates",
-        "06-cover-letter-templates.md" => "Cover letter templates",
-        "07-interview-prep.md" => "Interview prep",
-        other => other,
-    }
 }
 
 fn tool_mark(ui: &mut Ui, check: &ToolCheck) {
@@ -644,8 +636,8 @@ mod tests {
         use egui_kittest::kittest::Queryable;
 
         let mut checks = EnvironmentChecks::new(std::sync::Arc::new(Without("bun")), std::sync::Arc::new(|| {}));
-        let profile = vec![crate::workspace::application::ProfileFile { name: "01-candidate-profile.md".into(), state: ProfileState::Filled }];
-        let view = WorkspaceView { profile, ..WorkspaceView::default() };
+        let topics = crate::profile::application::TopicCounts { filled: 7, total: 11, hidden: 1, any_found: true };
+        let view = WorkspaceView { topics, ..WorkspaceView::default() };
         let mut harness = Harness::builder().with_size([1000.0, 1400.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = ScreenState { load: crate::ui_kit::Load::Ready, unread: &[], alerts: &|_| {} };
             checks.poll();
@@ -660,6 +652,9 @@ mod tests {
             "3 of 4 ready",
             "Check again",
             "Look for more in your documents…",
+            "7 of 11 topics filled",
+            "1 hidden",
+            "Open Profile",
         ] {
             assert!(harness.query_by_label(label).is_some(), "{label} is missing");
         }

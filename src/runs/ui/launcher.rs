@@ -36,13 +36,15 @@ impl Launcher {
         Self { command, values: HashMap::new(), budget: format!("{}.00", command.budget_usd), model: 0, reset_confirmed: false }
     }
 
-    /// Fills the form from a line such as `/outcome followup acme`.
+    /// Fills the form from a line such as `/outcome followup acme`. A field with a flag, such as `/setup --section goals`,
+    /// takes only the value after its flag, because the line puts the flag back.
     pub fn prefill(&mut self, line: &str) {
         let Some(command) = spec_for_line(line) else { return };
         *self = Self::for_command(command);
         let arguments = line[command.name.len()..].trim();
         if let (Some(field), false) = (command.fields.first(), arguments.is_empty()) {
-            self.values.insert(field.key, arguments.to_owned());
+            let after_flag = field.flag.and_then(|flag| arguments.strip_prefix(flag)).filter(|rest| rest.starts_with(char::is_whitespace));
+            self.values.insert(field.key, after_flag.map_or(arguments, str::trim).to_owned());
         }
     }
 
@@ -175,4 +177,21 @@ fn labelled<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, egui::Id) -> 
         add(ui, label.id)
     })
     .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flag in the line is the field's own, so it is not typed into the field a second time.
+    #[test]
+    fn a_flagged_line_fills_only_the_value() {
+        let mut launcher = Launcher::default();
+        launcher.prefill("/setup --section experience");
+        assert_eq!(launcher.line(), "/setup --section experience");
+        launcher.prefill("/outcome followup acme");
+        assert_eq!(launcher.line(), "/outcome followup acme");
+        launcher.prefill("/setup");
+        assert_eq!(launcher.line(), "/setup");
+    }
 }

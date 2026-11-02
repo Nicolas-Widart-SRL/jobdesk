@@ -9,11 +9,11 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, block_editor,
-    brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button, day_heatmap,
-    day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band,
-    figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note,
-    page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button,
+    KnotState, NodeMarks, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card,
+    block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button,
+    day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure,
+    figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure,
+    muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button,
     profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score, search_field, segmented, select_row, setting_check,
     setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button,
     small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits,
@@ -259,7 +259,7 @@ fn sections(ui: &mut Ui) {
     ];
     let nodes: Vec<FlowNode> = stages
         .into_iter()
-        .map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks, note: note.to_owned(), hidden: None })
+        .map(|(label, figure, marks, note)| FlowNode { label, figure: figure.to_owned(), marks: NodeMarks::Runs(marks), note: note.to_owned(), hidden: None })
         .collect();
     flow_band(ui, &nodes);
     ui.add_space(10.0);

@@ -95,8 +95,13 @@ pub fn key_hint(ui: &mut Ui, key: &str) -> Response {
 
 fn tally_marks(ui: &mut Ui, colors: &[Color32], mark: TallySize) -> Response {
     let p = Palette::of(ui);
-    let total = colors.len();
     let marked = colors.iter().filter(|color| **color != p.off).count();
+    tally_spoken(ui, colors, mark, format!("{marked} of {}", colors.len()))
+}
+
+/// Marks that wrap to the width they have, spoken as `spoken`.
+fn tally_spoken(ui: &mut Ui, colors: &[Color32], mark: TallySize, spoken: String) -> Response {
+    let total = colors.len();
     let pitch = mark.width + mark.gap;
     let per_row = ((ui.available_width() + mark.gap) / pitch).floor().max(1.0) as usize;
     let rows = total.div_ceil(per_row).max(1);
@@ -106,7 +111,7 @@ fn tally_marks(ui: &mut Ui, colors: &[Color32], mark: TallySize) -> Response {
         let at = rect.min + vec2((index % per_row) as f32 * pitch, (index / per_row) as f32 * (mark.height + TALLY_GAP_Y));
         ui.painter().rect_filled(Rect::from_min_size(at, vec2(mark.width, mark.height)), 0.0, *color);
     }
-    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("{marked} of {total}")));
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &spoken));
     response
 }
 
@@ -144,6 +149,35 @@ pub(in crate::ui_kit) fn paint_mark_row(ui: &Ui, at: Pos2, colors: &[Color32], m
 pub fn tally_strip(ui: &mut Ui, segments: &[(usize, Option<Ink>)], fat: bool) -> Response {
     let colors = strip_colors(&Palette::of(ui), segments);
     tally_marks(ui, &colors, if fat { TALLY_FAT } else { TALLY_THIN })
+}
+
+/// A tally of things to fill in, such as profile topics, in that order: `filled` ones in `text`, `open` ones in
+/// `open_ink`, or unlit with `None`, then `hidden` ones in `closed`, whose state is unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillMarks {
+    pub filled: usize,
+    pub open: usize,
+    pub hidden: usize,
+    pub open_ink: Option<Ink>,
+}
+
+impl FillMarks {
+    fn runs(self) -> [(usize, Option<Ink>); 3] {
+        [(self.filled, Some(Ink::Text)), (self.open, self.open_ink), (self.hidden, Some(Ink::Status(Tone::Closed)))]
+    }
+
+    /// "6 of 11 filled, 1 hidden": a hidden mark is lit, but it is never counted as filled.
+    pub(in crate::ui_kit) fn spoken(self) -> String {
+        let total = self.filled + self.open + self.hidden;
+        let filled = format!("{} of {total} filled", self.filled);
+        if self.hidden == 0 { filled } else { format!("{filled}, {} hidden", self.hidden) }
+    }
+}
+
+/// One wrapping tally of what is filled in, spoken as filled of all, with the hidden ones apart.
+pub fn fill_tally(ui: &mut Ui, marks: FillMarks, fat: bool) -> Response {
+    let colors = strip_colors(&Palette::of(ui), &marks.runs());
+    tally_spoken(ui, &colors, if fat { TALLY_FAT } else { TALLY_THIN }, marks.spoken())
 }
 
 /// Where a step stands, as its knot shows it.
@@ -752,6 +786,19 @@ mod tests {
         harness.run();
         harness.get_by_label(HEATMAP_LABEL);
         harness.get_by_label("4 or more");
+    }
+
+    /// A hidden mark is lit in `closed`, yet the label counts only the filled ones, as the figure beside it does.
+    #[test]
+    fn a_fill_tally_says_filled_of_all_and_hidden_apart() {
+        let mut harness = harness(|ui| {
+            fill_tally(ui, FillMarks { filled: 6, open: 4, hidden: 1, open_ink: None }, true);
+            fill_tally(ui, FillMarks { filled: 7, open: 4, hidden: 0, open_ink: Some(Tone::Interview.into()) }, false);
+        });
+        harness.step();
+        harness.get_by_label("6 of 11 filled, 1 hidden");
+        harness.get_by_label("7 of 11 filled");
+        assert!(harness.query_by_label("7 of 11").is_none(), "the hidden mark is not counted as filled");
     }
 
     #[test]

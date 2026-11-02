@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::Instant;
 
 use chrono::{Local, NaiveDate};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
@@ -14,6 +15,9 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
+use crate::profile;
+use crate::profile::application::UpdatedMarks;
+use crate::profile::ui::ProfileScreen;
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
@@ -54,13 +58,14 @@ pub enum Screen {
     Tracker,
     Insights,
     Runs,
+    Profile,
     Workspace,
     Launcher,
     Dossier,
 }
 
 impl Screen {
-    const NAV: [Self; 6] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Workspace];
+    const NAV: [Self; 7] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Workspace];
 
     fn title(self) -> &'static str {
         match self {
@@ -69,6 +74,7 @@ impl Screen {
             Self::Tracker => "Applications",
             Self::Insights => "Insights",
             Self::Runs => "Tasks",
+            Self::Profile => "Profile",
             Self::Workspace => "Setup",
             Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
@@ -95,7 +101,7 @@ pub struct Shell {
     updates: Option<Receiver<Snapshot>>,
     /// Asks the snapshot worker to read again, because run logs change outside the checkout.
     reload: Option<Sender<()>>,
-    /// Whether a run was working on the last frame. A run that stops asks for a reload.
+    /// Whether a run was working on the last frame, so its start and end can be seen. A run that stops asks for a reload.
     was_busy: bool,
     jobs: JobsScreen,
     tracker: TrackerScreen,
@@ -121,6 +127,11 @@ pub struct Shell {
     settings_open: bool,
     /// The folder as Settings shows it, in place of its path. Snapshots set it, so no temporary path shows.
     folder_label: Option<String>,
+    profile_screen: ProfileScreen,
+    /// The topics the last run changed, kept in memory only.
+    marks: UpdatedMarks,
+    /// When the last run ended, until a snapshot read after it shows what the run changed.
+    run_ended: Option<Instant>,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -160,6 +171,9 @@ impl Shell {
             settings_screen: SettingsScreen::default(),
             settings_open: false,
             folder_label: None,
+            profile_screen: ProfileScreen::default(),
+            marks: UpdatedMarks::default(),
+            run_ended: None,
         }
     }
 
@@ -288,8 +302,7 @@ impl Shell {
                 let repaint = ctx.clone();
                 let usage = self.data.as_ref().map(|data| runs::usage_logs(data.join("runs"), root.path()));
                 let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
-                self.updates = Some(updates);
-                self.reload = Some(reload);
+                (self.updates, self.reload) = (Some(updates), Some(reload));
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
                     self.desk = Some(runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint())));
@@ -298,6 +311,8 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
+                // The last folder's marks and picked topic mean nothing here.
+                (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
@@ -331,6 +346,13 @@ impl Shell {
 
     pub fn show(&mut self, ui: &mut Ui) {
         if let Some(latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
+            // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
+            if let Some(ended) = self.run_ended
+                && latest.read_at.is_some_and(|read| read >= ended)
+            {
+                self.marks.finish(&latest.profile, Local::now().naive_local());
+                self.run_ended = None;
+            }
             self.snapshot = latest;
             self.loaded = true;
             if let Some(open) = &mut self.open_dossier {
@@ -340,15 +362,7 @@ impl Shell {
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
-        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
-        if self.was_busy
-            && !busy
-            && let Some(reload) = &self.reload
-        {
-            // The run that ended left its cost in its log. A closed worker has nothing to reload.
-            let _ = reload.send(());
-        }
-        self.was_busy = busy;
+        self.follow_runs();
         if let Some(pages) = &mut self.pages {
             pages.poll();
         }
@@ -385,6 +399,23 @@ impl Shell {
             self.quit_dialog(ui.ctx());
         }
         note_focus(ui.ctx());
+    }
+
+    /// A run's start keeps the profile as it stands. Its end asks for a fresh load, and the first snapshot read after the
+    /// end marks the topics the run changed. The snapshot on show at the end may predate the run's last writes.
+    fn follow_runs(&mut self) {
+        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        if busy && !self.was_busy {
+            self.marks.begin(&self.snapshot.profile);
+            self.run_ended = None;
+        } else if !busy && self.was_busy {
+            self.run_ended = Some(Instant::now());
+            // The run that ended left its cost in its log. A closed worker has nothing to reload.
+            if let Some(reload) = &self.reload {
+                let _ = reload.send(());
+            }
+        }
+        self.was_busy = busy;
     }
 
     /// Runs change between snapshots, so the queue is dealt again each frame.
@@ -636,7 +667,7 @@ impl Shell {
         let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
         // Each screen says where its alert goes, so a new one must choose.
         let alert_over_head = match self.screen {
-            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Workspace => false,
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Workspace => false,
             // These keep it over their head until they take a `ScreenState` too.
             Screen::Runs | Screen::Launcher | Screen::Dossier => true,
         };
@@ -712,6 +743,11 @@ impl Shell {
                     self.open_launcher();
                 }
             }
+            Screen::Profile => {
+                // A file that fails hides only the topics it feeds, so the screen as a whole never fails.
+                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+                profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, &mut self.marks, busy, Local::now().naive_local());
+            }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
@@ -723,9 +759,13 @@ impl Shell {
                         None
                     }
                 };
-                if action == Some(WorkspaceAction::ChangeFolder) {
-                    let ctx = ui.ctx().clone();
-                    self.choose_folder(&ctx);
+                match action {
+                    Some(WorkspaceAction::ChangeFolder) => {
+                        let ctx = ui.ctx().clone();
+                        self.choose_folder(&ctx);
+                    }
+                    Some(WorkspaceAction::OpenProfile) => self.screen = Screen::Profile,
+                    None => {}
                 }
             }
             Screen::Launcher => {
@@ -787,19 +827,27 @@ impl Shell {
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
+        let mut runtime_asked = None;
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
                 let page_view =
                     SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait, usage, today: snapshot.today };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
-                    (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
+                    (Page::Runtime, Some(environment)) => {
+                        runtime_asked = workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query);
+                    }
                     // Only previews lack the tool check. They draw no tools, but still the alert.
                     (Page::Runtime, None) => alerts(ui),
                     _ => {}
                 })
             })
             .inner;
+        // Open Profile leaves Settings for the Profile screen, as Back to app would leave it for the screen underneath.
+        if runtime_asked == Some(WorkspaceAction::OpenProfile) {
+            self.settings_open = false;
+            self.screen = Screen::Profile;
+        }
         let ctx = ui.ctx().clone();
         match asked {
             Some(SettingsRequest::Back) => {
@@ -891,7 +939,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Jobs => (Some(Screen::Jobs), true),
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
-        Source::Profile => (Some(Screen::Workspace), false),
+        Source::Profile => (Some(Screen::Profile), false),
         Source::Decisions => (None, false),
     }
 }

@@ -12,7 +12,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
     dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
 };
-use crate::ui_kit::marks::KnotState;
+use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
     add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
@@ -20,14 +20,14 @@ use crate::ui_kit::text::{
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
-    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY,
-    FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE,
-    HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING,
-    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
-    RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP,
-    SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING,
-    SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
-    TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EMPTY_GAP, EMPTY_PADDING,
+    EMPTY_WIDTH, FADED_OPACITY, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING,
+    GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW,
+    NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIUS_BUTTON,
+    RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP,
+    SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT,
+    SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP,
+    STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -941,6 +941,53 @@ pub fn paper_with_footer(ui: &mut Ui, body: impl FnOnce(&mut Ui), footer: impl F
     });
 }
 
+/// A sheet of paper that takes all the height it has: `head`, padded as a deal is, a hairline, then `body`, which scrolls
+/// with its bar shown at rest, over `foot`, a one-line strip pinned at the bottom under a hairline. `foot` lays out left to
+/// right with no gap of its own, so its words carry their own spaces.
+pub fn headed_paper<R>(ui: &mut Ui, head: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui) -> R, foot: impl FnOnce(&mut Ui)) -> R {
+    paper(ui, false, |ui| {
+        let (x, y) = DEAL_PADDING;
+        Frame::new().inner_margin(Margin::symmetric(x, y)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            head(ui);
+        });
+        divider(ui);
+        footed(
+            ui,
+            true,
+            false,
+            |ui| {
+                Frame::new()
+                    .inner_margin(Margin { left: x, right: x, top: 0, bottom: y })
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        body(ui)
+                    })
+                    .inner
+            },
+            |ui| {
+                divider(ui);
+                Frame::new().inner_margin(margin(DEAL_FOOT_PADDING)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        foot(ui);
+                    });
+                });
+            },
+        )
+    })
+}
+
+/// What `add` lays out, faded to `FADED_OPACITY`, such as a template's outline shown for what it holds.
+pub fn faded<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope(|ui| {
+        ui.multiply_opacity(FADED_OPACITY);
+        add(ui)
+    })
+    .inner
+}
+
 /// A scrolling body over a footer pinned at its foot, inside a frame's content `ui`. `fill` takes all the height left,
 /// where otherwise the two take what the body needs, up to it. `fresh` opens the body at the top.
 pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
@@ -1135,10 +1182,17 @@ pub(in crate::ui_kit) fn paint_outlined(ui: &Ui, rect: Rect, radius: CornerRadiu
 }
 
 /// One stage in a band of counts.
+/// A stage's marks: runs of `(count, ink)`, spoken as the lit ones of all, or a fill, spoken as the filled ones of all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeMarks {
+    Runs(Vec<(usize, Option<Ink>)>),
+    Fill(FillMarks),
+}
+
 pub struct FlowNode<'a> {
     pub label: &'a str,
     pub figure: String,
-    pub marks: Vec<(usize, Option<Ink>)>,
+    pub marks: NodeMarks,
     pub note: String,
     /// Why the stage's counts are hidden. It shows in place of the figure, tally and note, so no zero reads as a real count.
     pub hidden: Option<&'a str>,
@@ -1167,7 +1221,10 @@ pub fn flow_band(ui: &mut Ui, nodes: &[FlowNode]) {
                     }
                     add_text(ui, node.figure.as_str(), Type::FIGURE, Ink::Text);
                     ui.add_space(NODE_TALLY_MARGIN.0);
-                    let tally = crate::ui_kit::tally_strip(ui, &node.marks, false);
+                    let tally = match &node.marks {
+                        NodeMarks::Runs(runs) => crate::ui_kit::tally_strip(ui, runs, false),
+                        NodeMarks::Fill(fill) => crate::ui_kit::fill_tally(ui, *fill, false),
+                    };
                     ui.add_space((NODE_TALLY_HEIGHT - tally.rect.height()).max(0.0) + NODE_TALLY_MARGIN.1);
                     add_text(ui, node.note.as_str(), Type::BODY, Ink::Muted);
                 });

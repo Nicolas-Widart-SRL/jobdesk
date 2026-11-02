@@ -5,9 +5,9 @@ use crate::insights::application::{GapRow, SearchInsights, SkillGapView, Workflo
 use crate::shared_kernel::Source;
 use crate::ui_kit::tokens::{SCREEN_GAP, SKELETON_GAP, SKELETON_LINE, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FlowNode, Ink, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note, list_row, muted, note,
-    page_body, page_head, panel, panel_body, panel_header, primary_command_action, rich, skeleton, skeleton_lines, slip, small_command_action, split,
-    table_cell, table_head, tag, tally_strip, wrapped_height,
+    CellRule, FillMarks, FlowNode, Ink, NodeMarks, ScreenState, Subtitle, Title, Tone, Type, command_action, empty_note, empty_state, flow_band, hidden_note,
+    list_row, muted, note, page_body, page_head, panel, panel_body, panel_header, primary_command_action, rich, skeleton, skeleton_lines, slip,
+    small_command_action, split, table_cell, table_head, tag, tally_strip, wrapped_height,
 };
 
 /// Shares of the table's width: gap, priority, change, source.
@@ -119,10 +119,10 @@ fn profile_note(band: &WorkflowBand) -> String {
 }
 
 /// Filled topics in text, then the ones known to be unfilled unlit, then the hidden ones in the failure ink, so a
-/// topic that could not be read never counts as unfilled.
-fn profile_marks(band: &WorkflowBand) -> Vec<(usize, Option<Ink>)> {
+/// topic that could not be read never counts as unfilled, nor as filled.
+fn profile_marks(band: &WorkflowBand) -> FillMarks {
     let unfilled = band.profile_total.saturating_sub(band.profile_filled + band.profile_hidden);
-    vec![(band.profile_filled, Some(Ink::Text)), (unfilled, None), (band.profile_hidden, Some(Ink::Status(Tone::Closed)))]
+    FillMarks { filled: band.profile_filled, open: unfilled, hidden: band.profile_hidden, open_ink: None }
 }
 
 /// With every topic hidden there is nothing to count, so the stage says why instead of showing 0.
@@ -137,36 +137,46 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Optio
         FlowNode {
             label: "Profile",
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
-            marks: profile_marks(band),
+            marks: NodeMarks::Fill(profile_marks(band)),
             note: profile_note(band),
             hidden: profile_hidden(band),
         },
         FlowNode {
             label: "Find",
             figure: band.new_postings.to_string(),
-            marks: vec![(band.new_postings, text), (band.seen.saturating_sub(band.new_postings), None)],
+            marks: NodeMarks::Runs(vec![(band.new_postings, text), (band.seen.saturating_sub(band.new_postings), None)]),
             note: format!("{} new of {} found", band.new_postings, band.seen),
             hidden: jobs,
         },
-        FlowNode { label: "Score", figure: band.shortlisted.to_string(), marks: vec![(band.shortlisted, text)], note: "on shortlist".to_owned(), hidden: jobs },
+        FlowNode {
+            label: "Score",
+            figure: band.shortlisted.to_string(),
+            marks: NodeMarks::Runs(vec![(band.shortlisted, text)]),
+            note: "on shortlist".to_owned(),
+            hidden: jobs,
+        },
         FlowNode {
             label: "Apply",
             figure: band.drafted.to_string(),
-            marks: vec![(band.drafted, Some(Tone::Drafted.into()))],
+            marks: NodeMarks::Runs(vec![(band.drafted, Some(Tone::Drafted.into()))]),
             note: "drafted, not sent".to_owned(),
             hidden: tracker,
         },
         FlowNode {
             label: "In progress",
             figure: (band.active + band.interview + band.offer).to_string(),
-            marks: vec![(band.active, Some(Tone::Active.into())), (band.interview, Some(Tone::Interview.into())), (band.offer, Some(Tone::Offer.into()))],
+            marks: NodeMarks::Runs(vec![
+                (band.active, Some(Tone::Active.into())),
+                (band.interview, Some(Tone::Interview.into())),
+                (band.offer, Some(Tone::Offer.into())),
+            ]),
             note: format!("{} applied, {} interview, {} offer", band.active, band.interview, band.offer),
             hidden: tracker,
         },
         FlowNode {
             label: "Result",
             figure: (band.hired + band.closed).to_string(),
-            marks: vec![(band.hired, Some(Tone::Hired.into())), (band.closed, Some(Tone::Closed.into()))],
+            marks: NodeMarks::Runs(vec![(band.hired, Some(Tone::Hired.into())), (band.closed, Some(Tone::Closed.into()))]),
             note: format!("{} hired, {} closed", band.hired, band.closed),
             hidden: tracker,
         },
@@ -439,8 +449,7 @@ mod tests {
 
     #[test]
     fn hidden_topics_are_marked_apart_from_unfilled_ones() {
-        let closed = Some(Ink::Status(Tone::Closed));
-        assert_eq!(profile_marks(&band(6, 11, 1)), [(6, Some(Ink::Text)), (4, None), (1, closed)]);
-        assert_eq!(profile_marks(&band(7, 11, 0)), [(7, Some(Ink::Text)), (4, None), (0, closed)]);
+        assert_eq!(profile_marks(&band(6, 11, 1)), FillMarks { filled: 6, open: 4, hidden: 1, open_ink: None });
+        assert_eq!(profile_marks(&band(7, 11, 0)), FillMarks { filled: 7, open: 4, hidden: 0, open_ink: None });
     }
 }

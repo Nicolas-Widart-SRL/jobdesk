@@ -1331,7 +1331,7 @@ fn the_launcher_shortcut_works_while_typing() {
 fn the_tabs_use_plain_names() {
     let mut harness = tray_harness(probed(shell(Screen::InTray, "plain_tabs"), FixedTools));
     settle(&mut harness);
-    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Setup"] {
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Setup"] {
         harness.get_by_label_contains(name);
     }
     assert!(harness.query_by_label_contains("In-tray").is_none());
@@ -2655,7 +2655,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Profile],
             subtitle: "ai-job-search",
             alert: "Part of your profile could not be read.",
-            shown: &["Everything else still works.", "Setup, could not be read"],
+            shown: &["Everything else still works.", "Profile, could not be read"],
             not_shown: &[],
         },
         Case {
@@ -3212,15 +3212,12 @@ fn loading_on(screen: Screen, name: &str) -> Shell {
 fn loading_screens_promise_nothing() {
     let empty =
         ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
-    let cases: [(Screen, &str, &[&str]); 4] = [
+    let cases: [(Screen, &str, &[&str]); 5] = [
         (Screen::Jobs, "Reading your saved jobs…", &["Find new jobs…", "Score", "Worth knowing"]),
         (Screen::Tracker, "Reading your applications…", &["Record a result…", "Check mail for replies…", "Not sent yet", "Applied", "Closed"]),
-        (
-            Screen::Insights,
-            "Reading your jobs, applications and reports…",
-            &["Find skill gaps…", "Rebuild dashboard…", "Profile", "Result", "Funnel", "By sector"],
-        ),
-        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Profile", "Environment", "Portals"]),
+        (Screen::Insights, "Reading your jobs, applications and reports…", &["Find skill gaps…", "Rebuild dashboard…", "Result", "Funnel", "By sector"]),
+        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Environment", "Portals"]),
+        (Screen::Profile, "Reading your profile…", &["Topics", "On your CV", "What guides Claude"]),
     ];
     for (screen, subtitle, shown) in cases {
         let mut shell = loading_on(screen, &format!("loading_{screen:?}"));
@@ -3234,6 +3231,10 @@ fn loading_screens_promise_nothing() {
         }
         for text in empty {
             assert!(!is_shown(&harness, text), "{screen:?} promises {text}");
+        }
+        // The Profile tab is always there, so the panel's own "Profile" is the one past it.
+        if matches!(screen, Screen::Insights | Screen::Workspace) {
+            assert_eq!(harness.query_all_by_label("Profile").count(), 2, "{screen:?} names its Profile panel beside the tab");
         }
     }
     let harness = tray_harness(loading_on(Screen::Workspace, "loading_setup_name"));
@@ -3426,4 +3427,251 @@ fn a_run_that_keeps_working_sends_no_reload() {
     harness.run_steps(4);
 
     assert!(reloads.try_recv().is_err());
+}
+
+const CANDIDATE: &str = ".claude/skills/job-application-assistant/01-candidate-profile.md";
+const PROFILE_SUBTITLE: &str = "Claude reads this before it scores a job or writes a CV or a letter.";
+const CLAUDE_UPDATE: &str = "Update with Claude…";
+
+/// The sample folder at a fixed place, for a test that changes its files as a run would.
+fn sample_root(name: &str) -> std::path::PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    root
+}
+
+fn rewrite(root: &Path, relative: &str, from: &str, to: &str) {
+    let path = root.join(relative);
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains(from), "{from} is in {relative}");
+    fs::write(&path, text.replace(from, to)).unwrap();
+}
+
+/// The sample on Profile, with a `/setup` run working and the feed that hands the shell snapshots, as the folder watcher does.
+fn profile_with_run(name: &str) -> (Shell, std::path::PathBuf, SharedSink, std::sync::mpsc::Sender<Snapshot>) {
+    let root = sample_root(name);
+    let mut shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
+    let feed = shell.snapshot_feed();
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start("/setup --section experience", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    (shell, root, sink, feed)
+}
+
+fn day() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()
+}
+
+/// The run's result: its turn ends and its process exits, so nothing works any more.
+fn end_run(sink: &SharedSink) {
+    emit_all(sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.98, duration_ms: 95_000 }, AgentEvent::ProcessExited { failure: None }]);
+}
+
+/// Clicks a topic's row on the rail, which comes before the paper.
+fn pick_topic(harness: &mut Harness, title: &str) {
+    harness.get_all_by_label(title).next().unwrap_or_else(|| panic!("{title} is on the rail")).click();
+    harness.run_steps(3);
+}
+
+/// A run that rewrites one role between its start and its result marks Experience alone. Opening it clears the rail
+/// mark and shows the head line, which names the role.
+#[test]
+fn a_run_that_changes_one_role_marks_experience_only() {
+    let (shell, root, sink, feed) = profile_with_run("profile_marks");
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Identity and languages");
+    assert!(!is_shown(&harness, "Updated"), "nothing is marked while the run works");
+
+    rewrite(&root, CANDIDATE, "Mentored four engineers", "Mentored five engineers");
+    end_run(&sink);
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Updated"), "the snapshot on show predates the run's writes");
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+
+    assert_eq!(harness.query_all_by_label("Updated").count(), 1, "one topic is marked");
+    let mark = harness.get_by_label("Updated").rect();
+    let row = harness.get_all_by_label("Experience").next().unwrap().rect();
+    assert!((mark.center().y - row.center().y).abs() < 4.0, "the mark {mark:?} sits on Experience's row {row:?}");
+    assert!(harness.query_by_label_contains("It changed").is_none(), "Identity's head has no line");
+
+    pick_topic(&mut harness, "Experience");
+    let line = harness.get_by_label_contains("It changed");
+    assert_eq!(
+        line.accesskit_node().value().unwrap_or_default(),
+        "by the last task, just now. It changed Senior Backend Engineer - Wren Health (2017 – 2021)."
+    );
+    assert_eq!(harness.query_all_by_label("Updated").count(), 1, "the rail mark cleared, and the head's shows");
+    assert!(harness.get_by_label("Updated").rect().left() > row.right(), "the mark left is the head's, on the paper");
+
+    pick_topic(&mut harness, "Education");
+    pick_topic(&mut harness, "Experience");
+    assert!(harness.query_by_label_contains("It changed").is_none(), "leaving the topic dropped its head line");
+}
+
+/// Update with Claude… opens the launcher on the topic's section, and the user starts the run there.
+#[test]
+fn update_with_claude_fills_the_launcher_and_starts_nothing() {
+    let started = SharedSink::default();
+    let mut shell = shell(Screen::Profile, "profile_update_with_claude");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "5 roles, newest first. Claude picks from these for each CV."), "Experience opens first: it has blanks to fill");
+
+    harness.get_by_label(CLAUDE_UPDATE).click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/setup --section experience").count() > 0, "the line names the topic's section");
+    assert!(started.lock().unwrap().is_none(), "no run starts");
+}
+
+/// While a run works, Update with Claude… waits and says why.
+#[test]
+fn update_with_claude_waits_while_a_run_works() {
+    let (shell, _root, _sink, _feed) = profile_with_run("profile_update_busy");
+    let mut harness = tray_harness(shell);
+    let update = harness.get_by_label(CLAUDE_UPDATE);
+    assert!(update.accesskit_node().is_disabled(), "a run works");
+    update.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Another run is active. One run at a time keeps your files safe."));
+}
+
+/// Only the profile part of `CLAUDE.md` reaches the screen, on every topic.
+#[test]
+fn the_rest_of_claude_md_never_shows() {
+    let mut harness = tray_harness(shell(Screen::Profile, "profile_claude_md"));
+    for title in TOPIC_TITLES {
+        pick_topic(&mut harness, title);
+        for hidden in ["Repo Structure", "Folder layout notes", "Copied to `CLAUDE.md`", "Copied to CLAUDE.md"] {
+            assert!(harness.query_by_label_contains(hidden).is_none(), "{title} shows {hidden}");
+        }
+    }
+}
+
+const TOPIC_TITLES: [&str; 11] = [
+    "Identity and languages",
+    "Experience",
+    "Education",
+    "Skills",
+    "Projects and publications",
+    "References",
+    "Profile statements",
+    "How I work",
+    "Goals and deal-breakers",
+    "Interview stories",
+    "Job search",
+];
+
+/// `/setup` has no section for these two, so they have no Claude action.
+#[test]
+fn statements_and_stories_have_no_claude_action() {
+    let mut harness = tray_harness(shell(Screen::Profile, "profile_no_section"));
+    assert!(is_shown(&harness, CLAUDE_UPDATE), "Experience has one");
+    for title in ["Profile statements", "Interview stories"] {
+        pick_topic(&mut harness, title);
+        assert!(!is_shown(&harness, CLAUDE_UPDATE), "{title} has none");
+    }
+}
+
+/// Setup's Profile panel is one line: the count of topics filled, and the way to Profile.
+#[test]
+fn setup_sums_up_the_profile_and_opens_it() {
+    let mut harness = tray_harness(probed(shell(Screen::Workspace, "setup_profile_line"), FixedTools));
+    settle(&mut harness);
+    assert!(is_shown(&harness, "7 of 11 topics filled"));
+    for gone in ["Your writing style", "Cover letter templates", "03-writing-style.md", "06-cover-letter-templates.md", "Update…"] {
+        assert!(harness.query_by_label(gone).is_none(), "Setup still shows {gone}");
+    }
+    harness.get_by_label("Open Profile").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, PROFILE_SUBTITLE), "Profile is on show");
+}
+
+/// Runtime status sums up the profile in Setup's line, and Open Profile leaves Settings for Profile.
+#[test]
+fn runtime_status_opens_profile() {
+    let mut shell = shell(Screen::InTray, "runtime_profile_line");
+    shell.open_settings(Page::Runtime);
+    let (mut harness, shell) = shared_harness(probed(shell, FixedTools));
+    settle(&mut harness);
+    assert!(is_shown(&harness, "7 of 11 topics filled"));
+    harness.get_by_label("Open Profile").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, PROFILE_SUBTITLE), "Profile is on show");
+}
+
+/// The smallest window still shows every tab and New task.
+#[test]
+fn the_menu_fits_the_smallest_window() {
+    let mut shell = probed(shell(Screen::Profile, "profile_smallest"), FixedTools);
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+    settle(&mut harness);
+    let tabs: Vec<String> = harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| tab.accesskit_node().label().unwrap_or_default()).collect();
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Setup"] {
+        assert!(tabs.iter().any(|tab| tab.starts_with(name)), "{name} is in {tabs:?}");
+    }
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1040.0, 640.0));
+    for tab in harness.get_all_by_role(egui::accesskit::Role::Tab) {
+        assert!(window.contains_rect(tab.rect()), "{:?} at {:?}", tab.accesskit_node().label(), tab.rect());
+    }
+    assert_in_window(&harness, [1040.0, 640.0], &["New task", CLAUDE_UPDATE]);
+}
+
+/// Renders Profile once the tool check is back, after `pick` picks a topic, if it does.
+fn render_profile(shell: Shell, pick: Option<&str>, theme: Theme, name: &str) {
+    let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
+    if let Some(title) = pick {
+        pick_topic(&mut harness, title);
+    }
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn profile_view_light() {
+    render_profile(shell(Screen::Profile, "profile_view_light"), None, Theme::Light, "profile_view_light");
+}
+
+#[test]
+fn profile_view_dark() {
+    render_profile(shell(Screen::Profile, "profile_view_dark"), None, Theme::Dark, "profile_view_dark");
+}
+
+#[test]
+fn profile_empty_light() {
+    render_profile(shell(Screen::Profile, "profile_empty_light"), Some("Goals and deal-breakers"), Theme::Light, "profile_empty_light");
+}
+
+#[test]
+fn profile_loading_light() {
+    render_profile(loading_on(Screen::Profile, "profile_loading_light"), None, Theme::Light, "profile_loading_light");
+}
+
+/// `01` cannot be read, so its six topics are hidden. Experience is picked, as on the canvas.
+#[test]
+fn profile_failed_light() {
+    let root = sample_root("profile_failed_light");
+    fs::write(root.join(CANDIDATE), b"# Candidate Profile\n\nCaf\xe9\n").unwrap();
+    let snapshot = Snapshot::load(&root, day());
+    assert_eq!(snapshot.issues.len(), 1, "{:?}", snapshot.issues);
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), snapshot);
+    render_profile(shell, Some("Experience"), Theme::Light, "profile_failed_light");
+}
+
+/// A run changed Identity and one role. Experience is open, so its rail mark has cleared and its head says what changed.
+#[test]
+fn profile_updated_light() {
+    let (shell, root, sink, feed) = profile_with_run("profile_updated_light");
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    rewrite(&root, CANDIDATE, "- **Location:** Namur, Belgium\n", "- **Location:** Namur, Belgium (since 2016)\n");
+    rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    harness.snapshot_options("profile_updated_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }

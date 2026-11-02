@@ -3,6 +3,7 @@
 pub mod application;
 mod domain;
 mod infrastructure;
+pub mod ui;
 
 use std::path::Path;
 
@@ -75,7 +76,7 @@ mod tests {
             rail,
             [
                 (TopicId::Identity, Fill::Filled),
-                (TopicId::Experience, Fill::ToFill(2)),
+                (TopicId::Experience, Fill::ToFill(3)),
                 (TopicId::Education, Fill::Filled),
                 (TopicId::Skills, Fill::ToFill(1)),
                 (TopicId::Publications, Fill::Filled),
@@ -89,7 +90,7 @@ mod tests {
         );
         assert!(view.topics.iter().all(|topic| !topic.missing_heading), "every named heading is in the sample");
         let roles: Vec<usize> = view.topics[1].sections[0].children.iter().map(|child| child.placeholders).collect();
-        assert_eq!(roles, [1, 0, 1, 0]);
+        assert_eq!(roles, [1, 1, 0, 1, 0]);
         let shown = format!("{view:?}");
         assert!(!shown.contains("Folder layout notes"), "the rest of CLAUDE.md never reaches the view");
     }

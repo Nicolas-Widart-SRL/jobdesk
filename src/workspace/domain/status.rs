@@ -1,16 +1,3 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProfileState {
-    Filled,
-    NeedsSetup { placeholders: usize },
-    Missing,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileFile {
-    pub name: String,
-    pub state: ProfileState,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortalInfo {
     pub name: String,
@@ -34,7 +21,6 @@ pub struct SyncState {
 /// What the checkout holds right now.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkspaceStatus {
-    pub profile: Vec<ProfileFile>,
     pub portals: Vec<PortalInfo>,
     pub templates: TemplateState,
     pub sync: SyncState,

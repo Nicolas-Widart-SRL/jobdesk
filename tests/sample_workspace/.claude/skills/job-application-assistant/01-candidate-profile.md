@@ -33,6 +33,10 @@ Antwerp. Freelance.
 - Moved nightly batch planning to event streams, so plans now update within a minute.
 - Budget or headcount you owned: [PLACEHOLDER]
 
+### [JOB_TITLE] - Harbour Lane Agency (2020 – 2021)
+Namur. Freelance, alongside Wren Health.
+- Kept the agency's client sites running through a platform move.
+
 ### Senior Backend Engineer - Wren Health (2017 – 2021)
 Ghent.
 - Built the appointment service used by 120 clinics, at 99.95% uptime over three years.

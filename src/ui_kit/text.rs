@@ -234,6 +234,16 @@ fn comments_hidden(ui: &mut Ui, html: &str) {
 /// section size. A top-level table leaves the column for the whole width, and scrolls only past that.
 /// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    document_with(ui, cache, text, markdown);
+}
+
+/// Profile text as a document, laid out as `document` lays out a message, with each part rendered as `profile_markdown`
+/// renders it: placeholders as written, and comment-only HTML not at all.
+pub fn profile_document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    document_with(ui, cache, text, profile_markdown);
+}
+
+fn document_with(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, render: fn(&mut Ui, &mut CommonMarkCache, &str)) {
     let parts = ui.ctx().memory_mut(|memory| memory.caches.cache::<PartsCache>().get(text).clone());
     ui.scope(|ui| {
         let styles = &mut ui.style_mut().text_styles;
@@ -249,7 +259,7 @@ pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
             ui.push_id(("document part", index), |ui| {
                 let width = ui.available_width();
                 ui.set_max_width(if part.table { width } else { width.min(DOC_MEASURE) });
-                markdown(ui, cache, &part.text);
+                render(ui, cache, &part.text);
             });
         }
     });

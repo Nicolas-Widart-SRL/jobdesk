@@ -230,6 +230,16 @@ mod tests {
     }
 
     #[test]
+    fn front_matter_never_reaches_a_topic() {
+        let template = "---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## Working Style\n<!-- Describe how you work -->\n- **Pace:**\n";
+        let view = view_of(&[(ProfileFile::Behavioral, template)]);
+        let how = topic(&view, TopicId::HowIWork);
+        assert_eq!(how.sections.len(), 1);
+        assert_eq!(how.sections[0].block.heading, "Working Style");
+        assert_eq!(how.fill, Fill::NotStarted);
+    }
+
+    #[test]
     fn a_failed_read_hides_the_topic_and_reports_the_error() {
         let (view, errors) = profile_view(&|file| if file == ProfileFile::Evaluation { Err(LoadError::new("04-job-evaluation.md", "denied")) } else { Ok(None) });
         assert_eq!(errors.len(), 1);

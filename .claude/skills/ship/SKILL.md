@@ -59,10 +59,12 @@ which print one line per check. Read a subagent's report once, then keep only it
    Never check out, reset or pull in the main checkout.
    Never check out the change's branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
    If `git merge-base --is-ancestor origin/main <change>` fails, rebase it yourself in a detached worktree:
-   `git worktree add --detach .claude/worktrees/sync <change>`, then `git -C .claude/worktrees/sync rebase origin/main`.
+   `git worktree add --detach .claude/worktrees/sync-<change> <change>`, then `git -C .claude/worktrees/sync-<change> rebase origin/main`.
+   Here `<change>` in the path is the change's branch with each `/` turned into `-`, so two sessions cannot collide.
+   If that path exists, it is a leftover of this change: remove it only when it is detached and clean, and never force.
    Move the branch to the result with `git update-ref refs/heads/<change> <new sha> <old sha>`,
-   then run `git worktree remove .claude/worktrees/sync`.
-   On a conflict, run `git -C .claude/worktrees/sync rebase --abort`, remove the worktree and ask the user.
+   then run `git worktree remove .claude/worktrees/sync-<change>`.
+   On a conflict, run `git -C .claude/worktrees/sync-<change> rebase --abort`, remove the worktree and ask the user.
    When the branch is already pushed, push the rebased branch with `git push --force-with-lease origin <change>`.
    Never send a rebase of the change's branch to a builder.
 2. **Plan.** `planner` turns the task into 4 to 6 steps, each with a check, grouped in waves.

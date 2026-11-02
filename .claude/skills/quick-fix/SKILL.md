@@ -18,7 +18,7 @@ A task qualifies only when all of these hold:
 
 - it touches at most 3 files;
 - it stays in one layer;
-- it adds no feature, screen, public type or design, and no canvas;
+- it adds no feature, screen or public type, and adds or changes no canvas or design;
 - it falls under none of the risky lenses in step 6 of `.claude/agents/planner.md`,
   except a one-value or one-sentence change in `.claude/`.
 

@@ -13,9 +13,10 @@ Design: $ARGUMENTS
 
 ## Steps
 
-1. **Start the branch.** Run `scripts/sync-main.sh`.
-   When it prints `main: could not fetch origin`, stop and tell the user, because `origin/main` may be stale.
-   For any other line, tell the user in one line and go on, because the branch starts from `origin/main`, not from the main checkout.
+1. **Start the branch.** Run `scripts/sync-main.sh`, then `git fetch --quiet origin`. When the fetch fails, stop and tell the user, because `origin/main` may be stale.
+   Report only a problem line from `sync-main.sh` (the six in Session start of `lead.md`): tell the user in one line and go on,
+   because the branch starts from `origin/main`, not from the main checkout.
+   Say nothing about `main: up to date` or `main: fast-forwarded to ...`.
    Then create the change's branch as step 1 of the `ship` skill says:
    name it, then `git branch <change> origin/main`.
    Every designer round starts from it: round 1 from its head, each later round from the round before.

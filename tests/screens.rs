@@ -22,6 +22,8 @@ use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 fn sample_workspace(root: &Path) {
     let source = Path::new("tests/sample_workspace");
     copy_tree(source, root);
+    // A real `CLAUDE.md` in this repository would steer the agents that work on it.
+    fs::rename(root.join("CLAUDE.profile.md"), root.join("CLAUDE.md")).unwrap();
     fs::create_dir_all(root.join(".claude/commands")).unwrap();
     fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
 }
@@ -2565,6 +2567,9 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
             Source::Applications => fs::write(root.join("job_search_tracker.csv"), b"Company,Role,Status\nCaf\xe9 Nordlicht,Platform Lead,Applied\n").unwrap(),
             Source::Jobs => fs::write(root.join("job_scraper/seen_jobs.json"), "{\"seen\": {").unwrap(),
             Source::SkillGaps => fs::write(root.join("upskill/report-2026-10-28.md"), b"# Skill gaps\n\nCaf\xe9\n").unwrap(),
+            Source::Profile => {
+                fs::write(root.join(".claude/skills/job-application-assistant/02-behavioral-profile.md"), b"# Behavioral Profile\n\nCaf\xe9\n").unwrap()
+            }
             Source::Decisions => unreachable!("the tray reports its own file"),
         }
     }
@@ -2681,7 +2686,7 @@ fn insights_hides_only_what_a_failed_source_feeds() {
     let harness = tray_harness(broken_shell(Screen::Insights, "insights_hidden_parts", &[Source::Applications, Source::Jobs]));
     assert_eq!(harness.query_all_by_label(TRACKER_HIDDEN).count(), 7, "Status, Funnel, By channel, By sector, Apply, In progress and Result");
     assert_eq!(harness.query_all_by_label(JOBS_HIDDEN).count(), 2, "Find and Score");
-    assert!(harness.query_by_label_contains("profile parts filled").is_some(), "the profile still counts");
+    assert!(harness.query_by_label_contains("profile topics filled").is_some(), "the profile still counts");
     assert!(is_shown(&harness, "Skill gaps"), "the skill gap report still shows");
 
     let harness = tray_harness(shell(Screen::Insights, "insights_nothing_hidden"));

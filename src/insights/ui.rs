@@ -119,7 +119,7 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Optio
             label: "Profile",
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
             marks: vec![(band.profile_filled, text), (band.profile_total.saturating_sub(band.profile_filled), None)],
-            note: format!("{} of {} profile parts filled", band.profile_filled, band.profile_total),
+            note: format!("{} of {} profile topics filled", band.profile_filled, band.profile_total),
             hidden: None,
         },
         FlowNode {

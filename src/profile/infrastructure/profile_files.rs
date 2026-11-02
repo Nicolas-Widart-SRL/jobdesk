@@ -1,0 +1,189 @@
+use std::fs::{self, OpenOptions};
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+
+use crate::profile::domain::{ProfileFile, ProfileStore};
+use crate::shared_kernel::LoadError;
+
+/// Added to a file's name for the copy a save writes before it replaces the file.
+const SAVE_SUFFIX: &str = ".jobdesk-save";
+
+/// The profile files of one checkout. A save of one block is the only write Jobdesk makes to the checkout.
+pub struct ProfileFiles {
+    root: PathBuf,
+}
+
+impl ProfileFiles {
+    pub fn in_workspace(root: &Path) -> Self {
+        Self { root: root.to_owned() }
+    }
+
+    fn path(&self, file: ProfileFile) -> PathBuf {
+        file.relative_path().split('/').fold(self.root.clone(), |path, part| path.join(part))
+    }
+
+    /// The file a save replaces, with every link resolved. It must sit inside the root, links and all.
+    /// A file that does not exist yet resolves through its folder. A link to nothing is refused.
+    fn target(&self, file: ProfileFile) -> Result<PathBuf, LoadError> {
+        let failed = |error: io::Error| LoadError::new(file.name(), error);
+        let root = fs::canonicalize(&self.root).map_err(failed)?;
+        let path = self.path(file);
+        let target = match fs::symlink_metadata(&path) {
+            Ok(_) => fs::canonicalize(&path).map_err(failed)?,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                let folder = path.parent().ok_or_else(|| LoadError::new(file.name(), "has no folder"))?;
+                fs::canonicalize(folder).map_err(failed)?.join(file.name())
+            }
+            Err(error) => return Err(failed(error)),
+        };
+        if !target.starts_with(&root) {
+            return Err(LoadError::new(file.name(), "is outside your job search folder, so it was not saved"));
+        }
+        if fs::metadata(&target).is_ok_and(|metadata| metadata.permissions().readonly()) {
+            return Err(LoadError::new(file.name(), "is read-only, so it was not saved"));
+        }
+        Ok(target)
+    }
+}
+
+/// Writes a copy beside `target`, then renames it over `target`, so a crash leaves the old file or the new one, never half.
+/// The copy is removed when anything fails.
+fn replace(target: &Path, text: &str) -> io::Result<()> {
+    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else { return Err(ErrorKind::InvalidInput.into()) };
+    let mut copy_name = name.to_owned();
+    copy_name.push(SAVE_SUFFIX);
+    let copy = folder.join(copy_name);
+    // A copy left by a crash goes first. Removing a link removes the link, not the file it points to.
+    match fs::remove_file(&copy) {
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let result = write_copy(&copy, target, text).and_then(|()| fs::rename(&copy, target));
+    if result.is_err() {
+        let _ = fs::remove_file(&copy);
+    }
+    result?;
+    // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
+    // Best effort: some mounts refuse to sync a folder, and the file is already in place.
+    #[cfg(unix)]
+    let _ = fs::File::open(folder).and_then(|folder| folder.sync_all());
+    Ok(())
+}
+
+/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permissions of `target`.
+fn write_copy(copy: &Path, target: &Path, text: &str) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(copy)?;
+    file.write_all(text.as_bytes())?;
+    if let Ok(metadata) = fs::metadata(target) {
+        file.set_permissions(metadata.permissions())?;
+    }
+    // On disk before the rename, or a power loss could keep the rename and lose the text.
+    file.sync_all()
+}
+
+impl ProfileStore for ProfileFiles {
+    fn read(&self, file: ProfileFile) -> Result<Option<String>, LoadError> {
+        let bytes = match fs::read(self.path(file)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(LoadError::new(file.name(), error)),
+        };
+        String::from_utf8(bytes).map(Some).map_err(|_| LoadError::new(file.name(), "not UTF-8 text, re-save it as UTF-8"))
+    }
+
+    fn write(&self, file: ProfileFile, text: &str) -> Result<(), LoadError> {
+        let target = self.target(file)?;
+        replace(&target, text).map_err(|error| LoadError::new(file.name(), error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files() -> (tempfile::TempDir, ProfileFiles) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/skills/job-application-assistant")).unwrap();
+        let files = ProfileFiles::in_workspace(dir.path());
+        (dir, files)
+    }
+
+    #[test]
+    fn a_missing_file_reads_as_none_and_bad_bytes_as_an_error() {
+        let (dir, files) = files();
+        assert_eq!(files.read(ProfileFile::Candidate), Ok(None));
+        fs::write(dir.path().join(ProfileFile::Behavioral.relative_path()), b"Caf\xe9\n").unwrap();
+        let error = files.read(ProfileFile::Behavioral).unwrap_err();
+        assert_eq!(error.source, "02-behavioral-profile.md");
+        assert!(error.reason.contains("UTF-8"));
+    }
+
+    #[test]
+    fn a_write_replaces_the_file_and_leaves_no_copy() {
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        files.write(ProfileFile::Candidate, "new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let left: Vec<_> = fs::read_dir(path.parent().unwrap()).unwrap().flatten().map(|entry| entry.file_name()).collect();
+        assert_eq!(left, [std::ffi::OsString::from("01-candidate-profile.md")]);
+    }
+
+    #[test]
+    fn a_stale_copy_is_replaced_and_a_failed_rename_removes_the_copy() {
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        let copy = path.with_file_name("01-candidate-profile.md.jobdesk-save");
+        fs::write(&copy, "stale").unwrap();
+        fs::write(&path, "old").unwrap();
+        files.write(ProfileFile::Candidate, "new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert!(!copy.exists());
+        // A folder where the file should be: the rename fails, and the copy goes.
+        let folder = dir.path().join(ProfileFile::Behavioral.relative_path());
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("inside"), "x").unwrap();
+        assert!(files.write(ProfileFile::Behavioral, "new").is_err());
+        assert!(!folder.with_file_name("02-behavioral-profile.md.jobdesk-save").exists());
+    }
+
+    #[test]
+    fn a_read_only_file_is_not_saved() {
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        assert!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason.contains("read-only"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_root_is_followed_and_kept() {
+        let (dir, files) = files();
+        let real = dir.path().join("profile-notes.md");
+        fs::write(&real, "old").unwrap();
+        let link = dir.path().join(ProfileFile::Candidate.relative_path());
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        files.write(ProfileFile::Candidate, "new").unwrap();
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_nothing_or_a_linked_folder_outside_is_refused() {
+        let (dir, files) = files();
+        let outside = tempfile::tempdir().unwrap();
+        let link = dir.path().join(ProfileFile::Candidate.relative_path());
+        std::os::unix::fs::symlink(outside.path().join("gone.md"), &link).unwrap();
+        assert!(files.write(ProfileFile::Candidate, "new").is_err());
+        assert!(!outside.path().join("gone.md").exists());
+        // The folder of a file that does not exist yet is a link out of the root.
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".claude/skills/job-scraper")).unwrap();
+        assert!(files.write(ProfileFile::SearchQueries, "new").unwrap_err().reason.contains("outside"));
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+}

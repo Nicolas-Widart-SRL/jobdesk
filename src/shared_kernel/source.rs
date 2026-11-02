@@ -4,6 +4,8 @@ pub enum Source {
     Jobs,
     Applications,
     SkillGaps,
+    /// A profile file of the checkout. The others still read.
+    Profile,
     /// Today's decisions in Jobdesk's own data folder. The tray reports this one, not the snapshot.
     Decisions,
 }

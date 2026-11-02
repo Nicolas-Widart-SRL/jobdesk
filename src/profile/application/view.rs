@@ -4,7 +4,7 @@ use crate::profile::domain::{
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::placeholders::{Piece, heading_content, placeholder_count, shown_pieces};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProfileView {
     pub topics: Vec<TopicView>,
     /// Whether any profile file exists in the checkout.

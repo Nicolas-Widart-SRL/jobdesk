@@ -891,6 +891,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Jobs => (Some(Screen::Jobs), true),
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
+        Source::Profile => (Some(Screen::Workspace), false),
         Source::Decisions => (None, false),
     }
 }
@@ -905,6 +906,7 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
             ("Your saved jobs could not be read.", "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.")
         }
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
+        Source::Profile => ("Part of your profile could not be read.", "Everything else still works."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }

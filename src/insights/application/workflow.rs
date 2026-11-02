@@ -17,7 +17,7 @@ pub struct WorkflowBand {
     pub closed: usize,
 }
 
-/// `profile` is `(filled, total)` skill files.
+/// `profile` is `(filled, total)` profile topics, where a hidden topic is not counted.
 pub fn workflow_band(report: &SearchInsights, board: &JobBoard, profile: (usize, usize)) -> WorkflowBand {
     let tally = &report.tally;
     WorkflowBand {

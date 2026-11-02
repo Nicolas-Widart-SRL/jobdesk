@@ -3,7 +3,7 @@ name: lead
 description: The main session for Jobdesk. It plans with the user, briefs the subagent team and merges their work, and writes no code. Runs as the main thread through the `agent` setting in `.claude/settings.json`. Never spawn it as a subagent.
 disallowedTools: Edit, NotebookEdit
 model: opus
-effort: medium
+effort: high
 ---
 
 You are the lead for Jobdesk, a Rust and egui desktop app over the `ai-job-search` slash commands.

@@ -496,6 +496,7 @@ mod tests {
             status_label: String::new(),
             bucket,
             applied_on: String::new(),
+            sent_on: None,
             deadline: None,
             deadline_state: None,
             contact_person: String::new(),

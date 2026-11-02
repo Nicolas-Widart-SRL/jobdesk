@@ -53,6 +53,11 @@ impl TrackedApplication {
         self.status != ApplicationStatus::Drafted
     }
 
+    /// The day the application went out. A draft has none, and neither has a date that is not exact.
+    pub fn sent_on(&self) -> Option<NaiveDate> {
+        self.applied_on.date().filter(|_| self.was_submitted())
+    }
+
     fn follow_up_dates(&self) -> Vec<NaiveDate> {
         self.notes.match_indices(FOLLOW_UP_MARKER).flat_map(|(at, marker)| iso_dates_in(&self.notes[at + marker.len()..]).into_iter().take(1)).collect()
     }
@@ -171,6 +176,14 @@ mod tests {
         let ahead = application(ApplicationStatus::Applied, "2026-11-05", "");
         assert_eq!(ahead.days_since_sent(today()), Some(0));
         assert_eq!(application(ApplicationStatus::Drafted, "2026-10-01", "").days_since_sent(today()), None);
+    }
+
+    #[test]
+    fn a_draft_was_not_sent_on_any_day() {
+        let sent = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert_eq!(application(ApplicationStatus::Applied, "2026-10-01", "").sent_on(), Some(sent));
+        assert_eq!(application(ApplicationStatus::Drafted, "2026-10-01", "").sent_on(), None);
+        assert_eq!(application(ApplicationStatus::Applied, "2026", "").sent_on(), None);
     }
 
     #[test]

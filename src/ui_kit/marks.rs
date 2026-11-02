@@ -510,7 +510,8 @@ fn heat_width(weeks: usize) -> f32 {
 }
 
 /// A year of days as `STATUS_DOT` squares, `TALLY_GAP_Y` apart, in four neutral steps, with a `text` ring around today.
-/// Hovering a day shows its tip, and a screen reader reads the tip of each day with a task. It takes no click.
+/// Hovering a day shows its tip. Each day with a task takes the keyboard's focus, which shows its tip too, and a screen reader reads it.
+/// It takes no click.
 /// Its notes and legend sit at its right.
 pub fn day_heatmap(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
     ui.scope(|ui| {
@@ -562,14 +563,18 @@ fn heat_grid(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
             ui.painter().rect_filled(cell, 0.0, heat_fill(&p, heat.step));
         }
     }
-    // Pointer-only tips leave the days out of a screen reader's reach, so each day with a task gets a node under the map.
-    // They sense hover only, so they take nothing from the map's own hover.
+    // Pointer-only tips leave the days out of the keyboard's and a screen reader's reach, so each day with a task gets a node under the map.
+    // They take focus but no click or drag, so they take nothing from the map's own hover.
     let spoken = ui.new_child(UiBuilder::new().max_rect(rect).accessibility_parent(response.id));
+    let mut focused = None;
     for (week, days) in map.weeks.iter().enumerate() {
         for (day, heat) in days.iter().enumerate() {
             let Some(heat) = heat.as_ref().filter(|heat| heat.step > 0) else { continue };
-            let node = spoken.interact(cells[week][day], response.id.with((week, day)), Sense::hover());
+            let node = spoken.interact(cells[week][day], response.id.with((week, day)), Sense::focusable_noninteractive());
             node.widget_info(|| WidgetInfo::labeled(Role::Label, true, heat.tip.as_str()));
+            if node.has_focus() {
+                focused = Some((node, cells[week][day], heat));
+            }
         }
     }
     let hovered = response.hover_pos().and_then(|at| {
@@ -578,8 +583,13 @@ fn heat_grid(ui: &mut Ui, map: &DayHeatmap) -> ShownHeatmap {
             Some((days[day], map.weeks[week][day].as_ref()?))
         })
     });
-    if let Some((cell, heat)) = hovered {
-        let mut tooltip = egui::Tooltip::for_enabled(&response);
+    // The pointer's day wins over the focused one, so one tip shows at a time.
+    let tip = match (hovered, focused) {
+        (Some((cell, heat)), _) => Some((egui::Tooltip::for_enabled(&response), cell, heat)),
+        (None, Some((node, cell, heat))) => Some((egui::Tooltip::for_widget(&node), cell, heat)),
+        (None, None) => None,
+    };
+    if let Some((mut tooltip, cell, heat)) = tip {
         // Under the day and ending at it, so the tip covers past days, not the notes at the right.
         tooltip.popup = tooltip.popup.anchor(cell).align(egui::RectAlign::BOTTOM_END);
         tooltip.show(|ui| add_text(ui, heat.tip.as_str(), Type::BODY, Ink::Text));
@@ -695,6 +705,20 @@ mod tests {
         harness.hover_at(cells.borrow()[1][2].center());
         harness.run_steps(4);
         assert_eq!(harness.query_all_by_label("Tip 1 2").count(), 2, "its node and its tip");
+        assert_eq!(harness.query_all_by_label_contains("Tip ").count(), spoken_days() + 1, "one tip at a time");
+    }
+
+    #[test]
+    fn tabbing_to_a_day_shows_its_tip() {
+        let (mut harness, _) = heatmap(false);
+        harness.run();
+        harness.key_press(egui::Key::Tab);
+        harness.run_steps(4);
+        assert!(harness.query_all_by_label("Tip 0 1").any(|node| node.is_focused()), "the first day with a task takes the focus");
+        assert_eq!(harness.query_all_by_label("Tip 0 1").count(), 2, "its node and its tip");
+        harness.key_press(egui::Key::Tab);
+        harness.run_steps(4);
+        assert_eq!(harness.query_all_by_label("Tip 0 2").count(), 2, "the next day's node and tip");
         assert_eq!(harness.query_all_by_label_contains("Tip ").count(), spoken_days() + 1, "one tip at a time");
     }
 

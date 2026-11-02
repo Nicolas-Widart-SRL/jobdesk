@@ -24,7 +24,7 @@ const NOT_INSTALLED: &str = "Claude Code is not installed.";
 const TIMED_OUT: &str = "Claude Code did not answer within a minute.";
 const KEY_NOT_USED: &str = "Claude Code did not use the key.";
 /// Words in a failed result, lowercased, that say the sign-in itself was turned away.
-const REFUSALS: [&str; 6] = ["invalid api key", "invalid x-api-key", "authentication_error", "authentication failed", "not logged in", "please run /login"];
+const REFUSALS: [&str; 5] = ["invalid api key", "invalid x-api-key", "authentication_error", "not logged in", "please run /login"];
 
 /// Runs one `claude -p` with no tools and a one-cent cap, in an empty temporary folder that is removed afterwards.
 /// It takes no data folder, so it writes no run log: Tasks never lists it and Usage never counts it.
@@ -224,7 +224,10 @@ fn report_of(stdout: &[String], stderr: &[String], ending: &Ending, with_key: bo
     let is_error = result.get("is_error").and_then(Value::as_bool).unwrap_or(false) || subtype.starts_with("error");
     let accepted = !is_error || subtype == "error_max_budget_usd";
     let said = text(result, "result");
-    if accepted && with_key && source.as_deref() != Some(KEY_VARIABLE) {
+    // A key test where Claude Code named another sign-in never tried the key, whatever the result. With no init line,
+    // only a pass needs that proof: a refusal still says something was turned away.
+    let other_sign_in = source.as_deref().is_some_and(|source| source != KEY_VARIABLE);
+    if with_key && (other_sign_in || accepted && source.is_none()) {
         return TestReport { outcome: Outcome::Unreached, cost_usd, said: KEY_NOT_USED.to_owned(), source };
     }
     let outcome = if accepted {
@@ -288,6 +291,40 @@ mod tests {
         assert_eq!(report_of(&lines(&[assistant, result]), &[], &exited(), true).outcome, Outcome::Refused);
         let result = r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0}"#;
         assert_eq!(report_of(&lines(&[result]), &[], &exited(), false).outcome, Outcome::Refused, "no Claude sign-in");
+    }
+
+    fn failed_result(said: &str) -> String {
+        serde_json::json!({"type": "result", "subtype": "success", "is_error": true, "result": said, "total_cost_usd": 0}).to_string()
+    }
+
+    #[test]
+    fn each_refusal_phrase_is_a_refusal_on_its_own() {
+        for said in [
+            "Invalid API key · Fix external API key",
+            "API Error: 401 invalid x-api-key",
+            r#"API Error: 401 {"type":"error","error":{"type":"authentication_error"}}"#,
+            "Not logged in",
+            "Your session expired. Please run /login",
+        ] {
+            let report = report_of(&[init("none"), failed_result(said)], &[], &exited(), false);
+            assert_eq!(report.outcome, Outcome::Refused, "{said}");
+        }
+    }
+
+    #[test]
+    fn a_proxy_that_says_authentication_failed_is_no_refusal() {
+        let report = report_of(&[failed_result("API Error: 407 Proxy authentication failed")], &[], &exited(), false);
+        assert_eq!(report.outcome, Outcome::Unreached);
+    }
+
+    #[test]
+    fn a_refusal_of_another_sign_in_in_a_key_test_is_unreached() {
+        for source in ["none", "apiKeyHelper"] {
+            let report = report_of(&[init(source), failed_result("Invalid API key · Fix external API key")], &[], &exited(), true);
+            assert_eq!((report.outcome, report.said.as_str()), (Outcome::Unreached, KEY_NOT_USED), "{source}");
+        }
+        let report = report_of(&[failed_result("Invalid API key")], &[], &exited(), true);
+        assert_eq!(report.outcome, Outcome::Refused, "with no init line a refusal still counts");
     }
 
     #[test]

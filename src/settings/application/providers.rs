@@ -53,7 +53,7 @@ pub struct SignInCheck {
     pub cost_usd: f64,
     /// Clean already: what Claude Code said, for a failed test.
     pub said: String,
-    /// The CLI's `apiKeySource`, for `sign_in_words`.
+    /// The CLI's `apiKeySource`, for `sign_in_words` with `SignIn::ClaudeSignIn`: the test passes no key.
     pub source: Option<String>,
 }
 
@@ -140,8 +140,9 @@ impl Providers {
     }
 
     /// What a running test checks.
+    /// None for a test the user turned away from: it still runs, so `test_gate` stays `Testing`, but nothing is under test.
     pub fn testing(&self) -> Option<TestTarget> {
-        self.running.as_ref().map(|running| running.target)
+        self.running.as_ref().filter(|running| !running.cancelled).map(|running| running.target)
     }
 
     /// The last test of the saved key this session, when it did not pass: refused, or never answered.
@@ -328,10 +329,13 @@ pub fn age_words(at: NaiveDateTime, now: NaiveDateTime) -> String {
 }
 
 /// The CLI's `apiKeySource` in words. A value it does not name never reaches the screen as it is.
-pub fn sign_in_words(source: &str) -> &'static str {
-    match source {
-        "" | "none" => "your Claude sign-in",
-        "ANTHROPIC_API_KEY" => "your API key",
+/// `passed` is how Jobdesk started that process: only with `SignIn::ApiKey` did the key in its environment come from Jobdesk.
+/// Otherwise it came from the shell that started Jobdesk, and must not read as the key saved here.
+pub fn sign_in_words(source: &str, passed: SignIn) -> &'static str {
+    match (source, passed) {
+        ("" | "none", _) => "your Claude sign-in",
+        ("ANTHROPIC_API_KEY", SignIn::ApiKey) => "your API key",
+        ("ANTHROPIC_API_KEY", SignIn::ClaudeSignIn) => "an API key from your environment",
         _ => "a sign-in Claude Code chose itself",
     }
 }
@@ -535,6 +539,7 @@ mod tests {
         f.providers.test_key(false).unwrap();
         f.providers.remove_key(&mut f.settings).unwrap();
         assert_eq!(f.providers.test_gate(false), TestGate::Testing, "its process still runs");
+        assert_eq!(f.providers.testing(), None, "but no key is under test");
         f.tester.answer(Outcome::Passed, "ready");
         assert!(f.poll());
         assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None));
@@ -542,6 +547,7 @@ mod tests {
         let mut f = fixture(Some(FAKE));
         f.providers.test_key(false).unwrap();
         f.providers.use_claude_sign_in(&mut f.settings);
+        assert_eq!((f.providers.testing(), f.providers.test_gate(false)), (None, TestGate::Testing));
         f.tester.answer(Outcome::Passed, "ready");
         f.poll();
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
@@ -550,6 +556,7 @@ mod tests {
         f.providers.test_key(false).unwrap();
         f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
         assert_eq!(f.tester.calls(), 1, "the new key waits for the old test to end");
+        assert_eq!(f.providers.testing(), None, "the new key is not under test yet");
         f.tester.answer(Outcome::Passed, "ready");
         f.poll();
         assert_eq!((f.method(), f.settings.preferences().key_test), (SignIn::ClaudeSignIn, None), "the old key's pass is not the new key's");
@@ -707,16 +714,19 @@ mod tests {
 
     #[test]
     fn sign_in_sources_read_in_words() {
+        use SignIn::{ApiKey, ClaudeSignIn};
         let cases = [
-            ("", "your Claude sign-in"),
-            ("none", "your Claude sign-in"),
-            ("ANTHROPIC_API_KEY", "your API key"),
-            ("apiKeyHelper", "a sign-in Claude Code chose itself"),
-            ("/login managed key", "a sign-in Claude Code chose itself"),
-            ("\u{202E}evil", "a sign-in Claude Code chose itself"),
+            ("", ClaudeSignIn, "your Claude sign-in"),
+            ("none", ClaudeSignIn, "your Claude sign-in"),
+            ("none", ApiKey, "your Claude sign-in"),
+            ("ANTHROPIC_API_KEY", ApiKey, "your API key"),
+            ("ANTHROPIC_API_KEY", ClaudeSignIn, "an API key from your environment"),
+            ("apiKeyHelper", ApiKey, "a sign-in Claude Code chose itself"),
+            ("/login managed key", ClaudeSignIn, "a sign-in Claude Code chose itself"),
+            ("\u{202E}evil", ClaudeSignIn, "a sign-in Claude Code chose itself"),
         ];
-        for (source, words) in cases {
-            assert_eq!(sign_in_words(source), words, "{source:?}");
+        for (source, passed, words) in cases {
+            assert_eq!(sign_in_words(source, passed), words, "{source:?} {passed:?}");
         }
     }
 }

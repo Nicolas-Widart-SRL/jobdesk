@@ -190,7 +190,8 @@ fn keychain_violations(sources: &[(PathBuf, String)]) -> Vec<String> {
     }
     let app = Path::new("src/shell/app.rs");
     let body = sources.iter().find(|(file, _)| file == app).and_then(|(_, text)| {
-        let at = text.find("fn start(")?;
+        // The definition line, so a mention of `fn start(` in a comment or a string does not move the range.
+        let at = text.find("\n    fn start(")? + 1;
         Some(at..at + text[at..].find("\n    }\n")?)
     });
     for (file, at) in occurrences(sources, &keychain_call()) {
@@ -226,6 +227,10 @@ fn the_keychain_check_sees_a_call_outside_its_one_place() {
     assert_eq!(keychain_violations(&[app(&outside)]).len(), 1, "a call in another function is rejected");
     assert_eq!(keychain_violations(&[source("src/shell/other.rs", &inside)]).len(), 1, "a call in another file is rejected");
     assert_eq!(keychain_violations(&[source("src/settings/ui/mod.rs", &inside)]).len(), 1);
+    let mention = format!(
+        "/// Built by `fn start(` below.\nimpl App {{\n    fn other() {{\n        let keys = {call});\n    }}\n\n    fn start() {{\n        let _ = 1;\n    }}\n}}\n"
+    );
+    assert_eq!(keychain_violations(&[app(&mention)]).len(), 1, "a mention of `fn start(` earlier does not widen the body");
     let no_start = format!("fn other() {{\n    let keys = {call});\n}}\n");
     assert_eq!(keychain_violations(&[app(&no_start)]).len(), 1, "no `fn start(` allows nothing");
     let unended = format!("impl App {{\n    fn start() {{\n        let keys = {call});\n");

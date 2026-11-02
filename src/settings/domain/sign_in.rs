@@ -128,11 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn the_last_four_count_characters_not_bytes() {
-        assert_eq!(mask_of("FAKE-key-ünïcödé").ending(), Some("cödé"));
-    }
-
-    #[test]
     fn a_task_uses_the_key_only_when_chosen_and_not_known_to_be_missing() {
         let present = || Saved::Present(mask_of(FAKE));
         let unreadable = || Saved::Unreadable("locked".to_owned());

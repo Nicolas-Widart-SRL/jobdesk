@@ -1,7 +1,9 @@
 use crate::settings::domain::{KeyStore, KeyStoreError};
 use crate::shared_kernel::ApiKey;
 
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 const SERVICE: &str = "Jobdesk API key";
+#[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 const ACCOUNT: &str = "Anthropic Console";
 /// Said when a stored item is no usable key.
 const UNREADABLE: &str = "The keychain item could not be read.";

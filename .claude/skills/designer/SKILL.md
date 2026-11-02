@@ -13,35 +13,45 @@ Design: $ARGUMENTS
 
 ## Steps
 
-1. **Brief.** Find the screen's feature in the Features table of `ARCHITECTURE.md`,
+1. **Start the branch.** Run `scripts/sync-main.sh`, then create the change's branch as step 1 of the `ship` skill says:
+   name it, then `git branch <change> origin/main`, or `git branch <change> <parent>` with a recorded `Base:`.
+   Every designer round starts from it: round 1 from its head, each later round from the round before.
+   Each designer works in its own worktree, never in the main checkout.
+2. **Brief.** Find the screen's feature in the Features table of `ARCHITECTURE.md`,
    its section in `docs/guide.md`, and the index `mockups/README.md` (or the `README.md` of the folder you will use), which names each canvas and the handoff file for each screen. Read only the lines that match.
-2. **Draw.** Spawn `designer` with a brief that stands alone:
+3. **Draw.** Spawn `designer` with a brief that stands alone:
+   - the change's branch name and its head SHA, so it resets its worktree to that commit;
    - what to design, in the user's words;
    - the folder to write in, and the nearest canvases to start from;
    - the feature and the docs that describe it, by path;
    - what is out of scope;
    - at most 2 options.
    The designer renders each canvas to a PNG at 1280x820, the app's window size.
-3. **Show.** Give the user each canvas path and the state it shows, the new widgets and the doc changes.
-   Show the canvas PNGs in the thread as images.
-4. **Iterate.** Spawn a fresh `designer` for each round of feedback.
+4. **Show.** Give the user each canvas path and the state it shows, the new widgets and the doc changes.
+   Show the canvas PNGs in the thread as images, from the designer's worktree.
+   Record the designer's branch and head SHA in the change's plan file.
+5. **Iterate.** Spawn a fresh `designer` for each round of feedback.
    Never send feedback to an earlier designer with SendMessage, because its context grows with each round.
-   Its brief: the user's feedback word for word, the folder, the index and the round's handoff files,
+   Its brief: the previous round's designer branch and head SHA, so it resets its worktree to that commit first,
+   the user's feedback word for word, the folder, the index and the round's handoff files,
    the canvases to change, and what to keep. Stop when the user approves the canvases.
 
 ## After approval
 
 The canvases and their handoff files in `mockups/handoff/` (or the `handoff/` folder of the brief's folder) are the handoff:
 the brief, the states, the rules, the new widgets and the doc changes.
-Spawn one last fresh `designer` to finalize the round. Its brief says the user approved and gives the folder,
-the handoff file paths, the canvases and the options the user chose.
+Spawn one last fresh `designer` to finalize the round. Its brief gives the previous round's designer branch and head SHA,
+says the user approved, and gives the folder, the handoff file paths, the canvases and the options the user chose.
 It rewrites the handoff files, their index lines and the canvases to show only the approved design:
 it removes the options not chosen, names the kept canvas for its screen, re-renders its PNGs,
 drops the Open section, and leaves Doc changes listing only what the approved design still needs.
-Commit the files only when the user asks.
-The design session ends there. Tell the user to commit the canvases and handoff files and merge them to `origin/main`,
-because `ship` builds from it. Then tell them to run `/clear` or start a new session
-and run `ship` with the canvas paths and every changed handoff file there.
+
+The final designer's branch is the finished design.
+Merge it into the change's branch with `NO_CHECK=1 scripts/merge-step.sh <design-branch> <change>`,
+then run `scripts/cleanup.sh <change>`.
+Tell the user in one line that the design is on `<change>`, and ask whether to plan and build it now, in this session.
+The default is yes. On yes, go on with `ship` from its step 2, on the same branch,
+with the canvas paths and every changed handoff file (see Other agents on call in `ship`).
 The planner reads those files and puts their doc changes in a docs step, which also deletes the Doc changes section from each file after applying it.
 
 ## Claude Design

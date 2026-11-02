@@ -29,7 +29,11 @@ impl Settings {
     /// With no file yet, `first` is used and saved at once: what the window already restored, such as its theme and zoom.
     pub fn open(store: Box<dyn PreferencesStore>, first: Preferences) -> Self {
         let (preferences, issue) = match store.load() {
-            Ok(Some(found)) => (found, None),
+            Ok(Some(mut found)) => {
+                // The file layer cannot see the catalog, so rows for names it does not hold are dropped here.
+                found.run_defaults.commands.retain(|row| CATALOG.iter().any(|spec| spec.name == row.command));
+                (found, None)
+            }
             Ok(None) => {
                 let issue = store.save(&first).err().map(|error| (IssueKind::Save, error));
                 (first, issue)
@@ -493,6 +497,32 @@ mod tests {
         settings.add_command(spec("/scrape"));
         assert_eq!(settings.preferences().run_defaults.commands.len(), 2);
         assert_eq!(saves(&shared), before, "a duplicate saves nothing");
+    }
+
+    #[test]
+    fn a_loaded_row_keeps_only_a_name_the_catalog_holds() {
+        let shared = Rc::new(Shared::default());
+        let row = |command: &str| CommandDefault { command: command.to_owned(), model: ModelChoice::Opus, budget: dollars("2") };
+        let stored = Preferences {
+            run_defaults: RunDefaults {
+                commands: vec![
+                    row("/rank"),
+                    row("/rank "),
+                    row("/ranking"),
+                    row("/ra\u{1b}nk"),
+                    row("/rank\n"),
+                    row("/RANK"),
+                    row("/nonsense"),
+                    row("/scrape"),
+                ],
+                ..RunDefaults::default()
+            },
+            ..Preferences::default()
+        };
+        *shared.load.borrow_mut() = Some(Ok(Some(stored)));
+        let settings = Settings::open(Box::new(Fake(shared.clone())), Preferences::default());
+        let kept: Vec<_> = settings.preferences().run_defaults.commands.iter().map(|row| row.command.as_str()).collect();
+        assert_eq!(kept, ["/rank", "/scrape"]);
     }
 
     #[test]

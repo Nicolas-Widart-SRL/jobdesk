@@ -37,10 +37,11 @@ impl Dollars {
 
     /// None for what is not a usable sum: not finite, zero (after rounding to the cent), negative or too large.
     pub fn from_usd(usd: f64) -> Option<Self> {
-        if !usd.is_finite() || usd <= 0.0 || usd > f64::from(Self::MOST_CENTS) / 100.0 {
+        let cents = (usd * 100.0).round();
+        if !cents.is_finite() || cents < 1.0 || cents > f64::from(Self::MOST_CENTS) {
             return None;
         }
-        Self::in_range((usd * 100.0).round() as u32)
+        Self::in_range(cents as u32)
     }
 
     fn in_range(cents: u32) -> Option<Self> {
@@ -314,7 +315,8 @@ mod tests {
         assert_eq!(Dollars::from_usd(4.5).map(Dollars::cents), Some(450));
         assert_eq!(Dollars::from_usd(0.014).map(Dollars::cents), Some(1));
         assert_eq!(Dollars::from_usd(100_000.0).map(Dollars::cents), Some(10_000_000));
-        for usd in [0.0, 0.004, -1.0, 100_000.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(Dollars::from_usd(100_000.004).map(Dollars::cents), Some(10_000_000), "rounds to the cent before the limit");
+        for usd in [0.0, 0.004, -1.0, 100_000.01, 100_000.006, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(Dollars::from_usd(usd), None, "{usd}");
         }
     }

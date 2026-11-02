@@ -22,17 +22,26 @@ impl ProfileFiles {
         file.relative_path().split('/').fold(self.root.clone(), |path, part| path.join(part))
     }
 
-    /// The file a save replaces, with every link resolved. It must sit inside the root, links and all.
-    /// A file that does not exist yet resolves through its folder. A link to nothing is refused.
+    /// The file a save replaces, with every link resolved, checked to sit inside the root. A file that does not exist yet
+    /// resolves through its folder. A link to nothing is refused.
+    ///
+    /// The check runs once, before the write. A folder swapped for a link between the two can still send the write out
+    /// of the root: the standard library has no folder-relative open that would close that gap. So the check stops links
+    /// that are in place when the user saves, not a link made during the save.
     fn target(&self, file: ProfileFile) -> Result<PathBuf, LoadError> {
         let failed = |error: io::Error| LoadError::new(file.name(), error);
-        let root = fs::canonicalize(&self.root).map_err(failed)?;
+        let gone = |why: &str| {
+            let why = why.to_owned();
+            move |error: io::Error| if error.kind() == ErrorKind::NotFound { LoadError::new(file.name(), &why) } else { failed(error) }
+        };
+        let root = fs::canonicalize(&self.root).map_err(gone("is in a job search folder that is no longer there, so it was not saved"))?;
         let path = self.path(file);
         let target = match fs::symlink_metadata(&path) {
-            Ok(_) => fs::canonicalize(&path).map_err(failed)?,
+            Ok(_) => fs::canonicalize(&path).map_err(gone("links to a file that is no longer there, so it was not saved"))?,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 let folder = path.parent().ok_or_else(|| LoadError::new(file.name(), "has no folder"))?;
-                fs::canonicalize(folder).map_err(failed)?.join(file.name())
+                let missing = format!("cannot be created, because its folder {} is no longer there", folder_of(file));
+                fs::canonicalize(folder).map_err(gone(&missing))?.join(file.name())
             }
             Err(error) => return Err(failed(error)),
         };
@@ -44,6 +53,12 @@ impl ProfileFiles {
         }
         Ok(target)
     }
+}
+
+/// The folder of `file` from the root, as the user would look for it.
+fn folder_of(file: ProfileFile) -> &'static str {
+    let path = file.relative_path();
+    path.rsplit_once('/').map_or(".", |(folder, _)| folder)
 }
 
 /// Writes a copy beside `target`, then renames it over `target`, so a crash leaves the old file or the new one, never half.
@@ -70,7 +85,9 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permissions of `target`.
+/// `create_new` never follows a link, so the copy is a new file in the folder. It keeps the permission bits of `target`.
+/// Anything else tied to the old file is lost with it: its other hard links keep the old text, and its ACLs and extended
+/// attributes are not copied.
 fn write_copy(copy: &Path, target: &Path, text: &str) -> io::Result<()> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(copy)?;
     file.write_all(text.as_bytes())?;
@@ -161,6 +178,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_private_file_stays_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        files.write(ProfileFile::Candidate, "new").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn a_missing_folder_says_which() {
+        let (dir, files) = files();
+        let error = files.write(ProfileFile::SearchQueries, "new").unwrap_err();
+        assert_eq!(error.reason, "cannot be created, because its folder .claude/skills/job-scraper is no longer there");
+        let gone = ProfileFiles::in_workspace(&dir.path().join("moved"));
+        assert_eq!(gone.write(ProfileFile::Candidate, "new").unwrap_err().reason, "is in a job search folder that is no longer there, so it was not saved");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_link_inside_the_root_is_followed_and_kept() {
         let (dir, files) = files();
         let real = dir.path().join("profile-notes.md");
@@ -179,7 +217,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let link = dir.path().join(ProfileFile::Candidate.relative_path());
         std::os::unix::fs::symlink(outside.path().join("gone.md"), &link).unwrap();
-        assert!(files.write(ProfileFile::Candidate, "new").is_err());
+        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "links to a file that is no longer there, so it was not saved");
         assert!(!outside.path().join("gone.md").exists());
         // The folder of a file that does not exist yet is a link out of the root.
         std::os::unix::fs::symlink(outside.path(), dir.path().join(".claude/skills/job-scraper")).unwrap();

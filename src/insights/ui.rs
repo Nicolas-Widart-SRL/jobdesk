@@ -16,6 +16,7 @@ const ORDER_NUMBER_WIDTH: f32 = 12.0;
 /// What a part fed by the tracker says while the tracker cannot be read. An open dossier says it too.
 pub const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
 const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+const PROFILE_HIDDEN: &str = "Hidden while your profile cannot be read.";
 /// The band's stages, in order.
 const STAGES: [&str; 6] = ["Profile", "Find", "Score", "Apply", "In progress", "Result"];
 const PANELS: [&str; 4] = ["Status", "Funnel", "By channel", "By sector"];
@@ -111,6 +112,17 @@ fn loading(ui: &mut Ui) {
     });
 }
 
+/// The topics a file feeds hide when it cannot be read. They still count in the total, and the note says how many.
+fn profile_note(band: &WorkflowBand) -> String {
+    let filled = format!("{} of {} profile topics filled", band.profile_filled, band.profile_total);
+    if band.profile_hidden == 0 { filled } else { format!("{filled}, {} hidden", band.profile_hidden) }
+}
+
+/// With every topic hidden there is nothing to count, so the stage says why instead of showing 0.
+fn profile_hidden(band: &WorkflowBand) -> Option<&'static str> {
+    (band.profile_total > 0 && band.profile_hidden == band.profile_total).then_some(PROFILE_HIDDEN)
+}
+
 /// `tracker` and `jobs` say why the stages they feed are hidden, if they are.
 fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Option<&str>) {
     let text = Some(Ink::Text);
@@ -119,8 +131,8 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Optio
             label: "Profile",
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
             marks: vec![(band.profile_filled, text), (band.profile_total.saturating_sub(band.profile_filled), None)],
-            note: format!("{} of {} profile topics filled", band.profile_filled, band.profile_total),
-            hidden: None,
+            note: profile_note(band),
+            hidden: profile_hidden(band),
         },
         FlowNode {
             label: "Find",
@@ -399,5 +411,22 @@ fn priority_tone(priority: &str) -> Tone {
         "high" => Tone::Interview,
         "medium" => Tone::Active,
         _ => Tone::Plain,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn band(filled: usize, total: usize, hidden: usize) -> WorkflowBand {
+        WorkflowBand { profile_filled: filled, profile_total: total, profile_hidden: hidden, ..WorkflowBand::default() }
+    }
+
+    #[test]
+    fn hidden_topics_still_count_in_the_total_and_are_said() {
+        assert_eq!((profile_note(&band(7, 11, 0)), profile_hidden(&band(7, 11, 0))), ("7 of 11 profile topics filled".to_owned(), None));
+        assert_eq!((profile_note(&band(6, 11, 1)), profile_hidden(&band(6, 11, 1))), ("6 of 11 profile topics filled, 1 hidden".to_owned(), None));
+        assert_eq!(profile_hidden(&band(0, 11, 11)), Some(PROFILE_HIDDEN));
+        assert_eq!(profile_hidden(&band(0, 0, 0)), None);
     }
 }

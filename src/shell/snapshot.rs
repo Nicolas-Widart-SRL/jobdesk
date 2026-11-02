@@ -73,7 +73,7 @@ impl Snapshot {
         let workspace = workspace_view(&workspace::inspect(root), &board);
         let insights = search_insights(&pipeline);
         let counts = topic_counts(&profile);
-        let band = workflow_band(&insights, &board, (counts.filled, counts.total));
+        let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
         Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage: UsageReport::default(), usage_read: false, issues, today }
     }
 }

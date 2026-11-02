@@ -179,7 +179,7 @@ fn role_of(own: &str) -> Option<Role> {
     Some(Role { title: pieces(role.title), company: pieces(role.company), dates: pieces(role.dates) })
 }
 
-/// How the topics add up: `filled` of `total`, where a hidden topic is not counted in `total`.
+/// How the topics add up: `filled` of `total`, every topic. `hidden` of them could not be read, so they are neither filled nor not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopicCounts {
     pub filled: usize,
@@ -191,7 +191,7 @@ pub struct TopicCounts {
 pub fn topic_counts(view: &ProfileView) -> TopicCounts {
     let hidden = view.topics.iter().filter(|topic| topic.fill == Fill::Hidden).count();
     let filled = view.topics.iter().filter(|topic| topic.fill == Fill::Filled).count();
-    TopicCounts { filled, total: view.topics.len() - hidden, hidden, any_found: view.any_found }
+    TopicCounts { filled, total: view.topics.len(), hidden, any_found: view.any_found }
 }
 
 #[cfg(test)]
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(topic(&view, TopicId::Goals).fill, Fill::Hidden);
         assert_eq!(topic(&view, TopicId::Identity).fill, Fill::NotStarted);
         let counts = topic_counts(&view);
-        assert_eq!((counts.filled, counts.total, counts.hidden, counts.any_found), (0, 9, 2, false));
+        assert_eq!((counts.filled, counts.total, counts.hidden, counts.any_found), (0, 11, 2, false));
     }
 
     /// A role's parts and its count come from the one page of its block, heading line included.

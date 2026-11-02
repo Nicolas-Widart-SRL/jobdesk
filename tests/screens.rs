@@ -2650,6 +2650,22 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
             not_shown: &["Jobs seen"],
         },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Profile],
+            subtitle: "ai-job-search",
+            alert: "Part of your profile could not be read.",
+            shown: &["Everything else still works."],
+            not_shown: &[],
+        },
+        Case {
+            screen: Screen::Insights,
+            broken: &[Source::Profile],
+            subtitle: "The whole workflow, search health and skill gaps, read live from your files",
+            alert: "Part of your profile could not be read.",
+            shown: &["6 of 11 profile topics filled, 1 hidden"],
+            not_shown: &["7 of 11 profile topics filled", "6 of 10 profile topics filled"],
+        },
     ];
     for (index, case) in cases.iter().enumerate() {
         let mut shell = broken_shell(case.screen, &format!("failed_screen_{index}"), case.broken);

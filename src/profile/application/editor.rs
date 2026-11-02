@@ -1,4 +1,3 @@
-use crate::profile::application::view::{ProfileView, profile_view};
 use crate::profile::domain::{BlockKey, ProfileStore, SaveCheck, blocks, check, find, insert_at, replace};
 use crate::shared_kernel::LoadError;
 
@@ -11,6 +10,10 @@ pub enum SaveOutcome {
     Busy,
     /// The block changed on disk since the editor opened it. `now` is the block as the file holds it. Nothing was written.
     Changed { now: String },
+    /// The block the editor opened is no longer in the file, perhaps renamed or removed. Nothing was written.
+    Gone,
+    /// No block is open, so nothing was read or written.
+    NothingOpen,
     /// The file could not be read or written. The draft stays.
     Failed(LoadError),
 }
@@ -36,11 +39,6 @@ pub struct ProfileEditor {
 impl ProfileEditor {
     pub fn new(store: Box<dyn ProfileStore>) -> Self {
         Self { store, open: None }
-    }
-
-    /// The profile as the files hold it now. A file that cannot be read hides its topics.
-    pub fn current_view(&self) -> ProfileView {
-        profile_view(&|file| self.store.read(file)).0
     }
 
     /// Opens the block `key` names, as `text`, which is how the user saw it.
@@ -81,13 +79,13 @@ impl ProfileEditor {
     }
 
     /// Reads the file again just before writing, and replaces only the block. While `busy`, a run may be writing the
-    /// same file, so it returns before reading anything. A block that changed on disk is written over only with
-    /// `over_theirs`. A block that is gone goes to the end of its `##`, or of the file. With nothing open it does nothing.
+    /// same file, so it returns before reading anything. A block that changed on disk, or is gone from it, is written
+    /// only with `over_theirs`: over the block, or at the end of its `##`, or of the file. A new block goes in at once.
     pub fn save(&mut self, busy: bool, over_theirs: bool) -> SaveOutcome {
         if busy {
             return SaveOutcome::Busy;
         }
-        let Some(open) = self.open.as_mut() else { return SaveOutcome::Saved };
+        let Some(open) = self.open.as_mut() else { return SaveOutcome::NothingOpen };
         let text = match self.store.read(open.key.file) {
             Ok(text) => text.unwrap_or_default(),
             Err(error) => return SaveOutcome::Failed(error),
@@ -105,6 +103,10 @@ impl ProfileEditor {
                     Some(range) => replace(&text, range, &open.draft),
                     None => insert_at(&text, end_of_parent(&text, &open.key), &open.draft),
                 },
+                SaveCheck::Gone if !over_theirs => {
+                    open.theirs = None;
+                    return SaveOutcome::Gone;
+                }
                 SaveCheck::Gone => insert_at(&text, end_of_parent(&text, &open.key), &open.draft),
             }
         };
@@ -236,15 +238,25 @@ mod tests {
         editor.open(key(2, "Education", None), "## Education\nMSc".to_owned());
         editor.cancel();
         assert_eq!(editor.editing(), None);
-        assert_eq!(editor.save(false, false), SaveOutcome::Saved);
+        assert_eq!(editor.save(false, false), SaveOutcome::NothingOpen);
+        assert_eq!(editor.save(false, true), SaveOutcome::NothingOpen);
+        assert_eq!((memory.reads.get(), memory.writes.get()), (0, 0));
         assert_eq!(file(&memory), TEXT);
     }
 
+    /// A role renamed on disk is gone under its old key. Saving would add a second copy, so it asks first.
     #[test]
-    fn the_view_reads_the_store() {
-        let (_, editor) = editor(TEXT);
-        let view = editor.current_view();
-        assert!(view.any_found);
-        assert_eq!(view.topics.len(), 11);
+    fn a_gone_block_is_written_back_only_when_asked() {
+        let (memory, mut editor) = editor(TEXT);
+        editor.open(key(3, "Lead - Calder (2021 – now)", Some("Professional Experience")), "### Lead - Calder (2021 – now)\nShipped.".to_owned());
+        *editor.draft_mut().unwrap() = "### Lead - Calder (2021 – now)\nShipped twice.".to_owned();
+        let renamed = TEXT.replace("Lead - Calder", "Head - Calder");
+        memory.files.borrow_mut().insert(ProfileFile::Candidate, renamed.clone());
+        assert_eq!(editor.save(false, false), SaveOutcome::Gone);
+        assert_eq!((memory.writes.get(), file(&memory)), (0, renamed.clone()));
+        editor.use_new_version();
+        assert!(editor.is_dirty(), "there is no new version to take");
+        assert_eq!(editor.save(false, true), SaveOutcome::Saved);
+        assert_eq!(file(&memory), renamed.replace("Shipped.\n\n", "Shipped.\n\n### Lead - Calder (2021 – now)\nShipped twice.\n\n"));
     }
 }

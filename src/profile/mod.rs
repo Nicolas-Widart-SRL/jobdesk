@@ -152,14 +152,16 @@ mod tests {
     }
 
     #[test]
-    fn a_deleted_block_comes_back_at_the_end_of_its_section() {
+    fn a_deleted_block_comes_back_at_the_end_of_its_section_when_asked() {
         let dir = sample();
         let file = path(dir.path(), ProfileFile::Candidate);
         let role = role(dir.path(), "Senior Backend Engineer");
         let mut editor = edit(dir.path(), "Senior Backend Engineer", |text| format!("{text}\n- Ran the on-call rota."));
         let without = fs::read_to_string(&file).unwrap().replace(&format!("{}\n\n", role.text), "");
         fs::write(&file, &without).unwrap();
-        assert_eq!(editor.save(false, false), SaveOutcome::Saved);
+        assert_eq!(editor.save(false, false), SaveOutcome::Gone);
+        assert_eq!(fs::read_to_string(&file).unwrap(), without, "nothing was written");
+        assert_eq!(editor.save(false, true), SaveOutcome::Saved);
         let after = fs::read_to_string(&file).unwrap();
         let draft = format!("{}\n- Ran the on-call rota.\n\n## Independent Projects", role.text);
         assert!(after.contains(&draft), "{after}");

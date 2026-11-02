@@ -20,8 +20,9 @@ impl Group {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Page {
+    #[default]
     General,
     Appearance,
     Usage,
@@ -81,7 +82,7 @@ impl Page {
     /// The line under the title.
     pub fn lead(self) -> &'static str {
         match self {
-            Page::General => "Your job search folder, and what Jobdesk does on its own.",
+            Page::General => "Your job search folder, and the screen Jobdesk opens on.",
             Page::Appearance => "How Jobdesk looks on this computer.",
             Page::Usage => "What your tasks cost, counted from Jobdesk's own run logs on this computer.",
             Page::Terms => "The lines a job may not cross. Jobs checks every posting against them.",

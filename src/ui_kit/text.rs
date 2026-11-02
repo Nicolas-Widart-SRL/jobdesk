@@ -4,9 +4,9 @@ use std::sync::Arc;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::shared_kernel::placeholders::{blank_words, placeholder_spans, template_lines};
+use crate::shared_kernel::placeholders::{Place, blank_words, line_placeholders, page_placeholders};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{WebUrl, markdown};
 use crate::ui_kit::Palette;
@@ -486,7 +486,7 @@ pub(in crate::ui_kit) fn blank_line(ui: &Ui, text: &str, style: Type, ink: impl 
     let mark = blank_mark(ui, style.size);
     let mut job = LayoutJob::default();
     let mut copied = 0;
-    for span in placeholder_spans(&text) {
+    for span in line_placeholders(&text) {
         job.append(&text[copied..span.start], 0.0, plain.clone());
         job.append(&blank_words(&text[span.clone()]), 0.0, mark.clone());
         copied = span.end;
@@ -495,91 +495,26 @@ pub(in crate::ui_kit) fn blank_line(ui: &Ui, text: &str, style: Type, ink: impl 
     job
 }
 
-/// Whether the character at `at` is escaped by the backslashes before it.
-fn escaped_at(text: &str, at: usize) -> bool {
-    text[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
-}
-
-/// Ranges merged where they touch or overlap, in order.
-fn merged(mut ranges: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
-    ranges.sort_by_key(|range| range.start);
-    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
-    for range in ranges {
-        match runs.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-            _ => runs.push(range),
-        }
-    }
-    runs
-}
-
-/// Markdown with each placeholder that `placeholder_spans` finds, and that reads as text, swapped for an inline math
-/// span that names its words, and its heading level inside a heading: `$0$`, or `$0h2$`. egui_commonmark has no hook
-/// for an inline format, and inline math is the one inline it hands back, to `render`. Every dollar sign the text itself
-/// had is escaped first, wherever the viewer reads it as inline text, link text and image alt included, so no text of
-/// its own can reach that hook. A placeholder in code, HTML, an image, a link's text or after an escape stays as written,
-/// so the counter's every token still shows. A reference definition labelled with a token, such as
-/// `- [SECTOR_1]: [EXAMPLE_COMPANIES]`, is a template line: its colon is escaped so the viewer shows it as text.
+/// Profile Markdown for the viewer: the page text `page_placeholders` gives, with every `$` of its own already escaped,
+/// and each token it draws in prose swapped for an inline math span that names its words, and its heading level inside
+/// a heading: `$0$`, or `$0h2$`. egui_commonmark has no hook for an inline format, and inline math is the one inline it
+/// hands back, to `render`. The count and the blanks come from the same positions, so every counted token in prose is a
+/// blank, and every other counted token shows as written in code.
 fn with_blanks(text: &str) -> Blanked {
-    if !text.contains(['[', '$']) {
-        return Blanked { text: text.to_owned(), words: Arc::new([]) };
-    }
-    let lines = template_lines(text);
-    let (mut prose, mut inline): (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) = (Vec::new(), Vec::new());
-    let mut headings: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
-    let (mut in_code, mut in_image, mut in_link, mut in_autolink) = (false, 0, 0, false);
-    for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => in_code = true,
-            Event::End(TagEnd::CodeBlock) => in_code = false,
-            Event::Start(Tag::Heading { level, .. }) => headings.push((range, level as usize)),
-            Event::Start(Tag::Image { .. }) => in_image += 1,
-            Event::End(TagEnd::Image) => in_image -= 1,
-            Event::Start(Tag::Link { link_type, .. }) => {
-                in_link += 1;
-                // An autolink's text is its address, which no escape may change, and it holds no link of its own.
-                in_autolink = matches!(link_type, LinkType::Autolink | LinkType::Email);
-            }
-            Event::End(TagEnd::Link) => {
-                in_link -= 1;
-                in_autolink = false;
-            }
-            Event::Text(_) if !in_code && !in_autolink => {
-                if in_image == 0 && in_link == 0 {
-                    prose.push(range.clone());
-                }
-                inline.push(range);
-            }
-            _ => {}
+    let page = page_placeholders(text);
+    let (mut out, mut words) = (String::with_capacity(page.text.len()), Vec::new());
+    let mut copied = 0;
+    for token in &page.tokens {
+        let Place::Prose { heading } = token.place else { continue };
+        out.push_str(&page.text[copied..token.span.start]);
+        match heading {
+            Some(level) => out.push_str(&format!("${}h{level}$", words.len())),
+            None => out.push_str(&format!("${}$", words.len())),
         }
+        words.push(blank_words(&page.text[token.span.clone()]));
+        copied = token.span.end;
     }
-    prose.extend(lines.iter().map(|(span, _)| span.clone()));
-    inline.extend(lines.iter().map(|(span, _)| span.clone()));
-    // Brackets that form no link reach the viewer as text events of their own, so neighbours merge into one run.
-    let (prose, inline) = (merged(prose), merged(inline));
-    let within = |runs: &[std::ops::Range<usize>], span: &std::ops::Range<usize>| runs.iter().any(|run| run.start <= span.start && span.end <= run.end);
-    let mut blanks = placeholder_spans(text).into_iter().filter(|span| within(&prose, span) && !escaped_at(text, span.start)).peekable();
-    let mut colons = lines.iter().map(|(_, colon)| *colon).peekable();
-    let (mut out, mut words) = (String::with_capacity(text.len()), Vec::new());
-    let mut at = 0;
-    while let Some(c) = text[at..].chars().next() {
-        if let Some(span) = blanks.next_if(|span| span.start == at) {
-            match headings.iter().find(|(heading, _)| heading.contains(&at)) {
-                Some((_, level)) => out.push_str(&format!("${}h{level}$", words.len())),
-                None => out.push_str(&format!("${}$", words.len())),
-            }
-            words.push(blank_words(&text[span.clone()]));
-            at = span.end;
-            continue;
-        }
-        let next = at + c.len_utf8();
-        let colon = colons.next_if(|colon| *colon == at).is_some();
-        if colon || c == '$' && within(&inline, &(at..next)) && !escaped_at(text, at) {
-            out.push('\\');
-        }
-        out.push(c);
-        at = next;
-    }
+    out.push_str(&page.text[copied..]);
     Blanked { text: out, words: words.into() }
 }
 
@@ -939,7 +874,9 @@ mod tests {
     fn the_texts_own_dollar_signs_never_reach_the_blank_hook() {
         assert_eq!(rewritten("Pay $120k to $150k, or $0$.").0, "Pay \\$120k to \\$150k, or \\$0\\$.");
         assert_eq!(rewritten("Already \\$5 and \\\\$6").0, "Already \\$5 and \\\\\\$6");
-        for source in ["Use `$x$` here.", "```\n$$ 0 $$\n```", "[s](https://x.example/$a$)"] {
+        // A destination reads the escape back, so the address stays the same.
+        assert_eq!(rewritten("[s](https://x.example/$a$)").0, "[s](https://x.example/\\$a\\$)");
+        for source in ["Use `$x$` here.", "```\n$$ 0 $$\n```", "<https://x.example/$a$>", "<span title=\"$a$\">b</span>"] {
             assert_eq!(rewritten(source).0, source);
         }
     }
@@ -973,22 +910,103 @@ mod tests {
         harness.query_all_by_role(egui::accesskit::Role::Label).filter_map(|node| node.value()).collect()
     }
 
-    /// Every counted placeholder shows: as a blank where it reads as text, as written anywhere else, such as in code.
+    /// The blanks and the tokens shown as written in code that rendering `source` paints. A token in code is counted from
+    /// the painted text by the name rule alone, with no Markdown, so it checks the page's parse from outside.
+    fn drawn_tokens(render: Render, source: &'static str) -> (usize, usize) {
+        let found = Rc::new(RefCell::new((0, 0)));
+        let seen = Rc::clone(&found);
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([800.0, 800.0]).with_context_setup(setup).build_ui(move |ui| {
+            render(ui, &mut cache, source);
+            let ink = Palette::of(ui).interview;
+            let code = ui.style().text_styles.get(&TextStyle::Monospace).map(|font| font.family.clone());
+            let layer = ui.layer_id();
+            *seen.borrow_mut() = ui.ctx().graphics(|layers| {
+                let mut drawn = (0, 0);
+                let Some(list) = layers.get(layer) else { return drawn };
+                for clipped in list.all_entries() {
+                    let egui::Shape::Text(shape) = &clipped.shape else { continue };
+                    let job = &shape.galley.job;
+                    if job.sections.first().is_some_and(|section| section.format.color == ink) {
+                        drawn.0 += 1;
+                    } else if job.sections.iter().any(|section| Some(&section.format.font_id.family) == code.as_ref()) {
+                        let named = |span: &std::ops::Range<usize>| crate::shared_kernel::placeholders::token_name(&job.text[span.start + 1..]).contains(['_', ' ']);
+                        drawn.1 += crate::shared_kernel::placeholders::line_placeholders(&job.text).iter().filter(|span| named(span)).count();
+                    }
+                }
+                drawn
+            });
+        });
+        harness.run();
+        found.take()
+    }
+
+    /// Every round's inputs: what the page counts is what it draws, as blanks in prose and as written in code.
     #[test]
-    fn every_counted_placeholder_shows_on_the_paper() {
-        for (source, count, blanks, raw) in [
-            ("See `[FIRST_NAME]` and [LINK](https://x.example).", 1, 0, "[FIRST_NAME]"),
-            ("```\n[YOUR_CITY]\n```", 1, 0, "[YOUR_CITY]"),
-            ("Open [[NAME]](https://x.example) now.", 1, 0, "[NAME]"),
-            ("Pay [AMOUNT]5 and [LEVEL, e.g. \"Native\"]", 2, 2, ""),
-            ("- [SECTOR_1]: [EXAMPLE_COMPANIES]", 2, 2, ""),
-            ("[SECTOR_1]: [EXAMPLE_COMPANIES]", 1, 1, "SECTOR_1"),
-        ] {
-            assert_eq!(crate::shared_kernel::placeholders::placeholder_count(source), count, "{source}");
-            let labels = labels_with_blanks(source);
-            assert_eq!(labels.iter().filter(|label| label.starts_with("to fill")).count(), blanks, "{source}: {labels:?}");
-            assert!(raw.is_empty() || !painted(blanked, source, raw).is_empty(), "{source} hides {raw}");
+    fn the_count_is_what_the_page_draws() {
+        let sources: [&'static str; 27] = [
+            "[FIRST_NAME] [LAST_NAME]\n\n[SECTOR_1]: [EXAMPLE_COMPANIES]\n[x]: https://x.example/$1$\n\nSee [x].",
+            "- [SECTOR_1]: [EXAMPLE_COMPANIES]\n- [SECTOR_1]: [EXAMPLE_COMPANIES]\n",
+            "[r]: https://x.example\n[r]: https://y.example/[PATH]\n\nSee [r].",
+            "[SECTOR_1]: [EXAMPLE_COMPANIES]\n[Sector_1]: [OTHER_COMPANIES]\n\nSee [sector_1] and [OWNER_NAME].",
+            "See [Salary $100k].\n\n[Salary $100k]: https://x.example",
+            "See [FIRST_NAME].\n\n[FIRST_NAME]: https://x.example",
+            "See `[FIRST_NAME]` and [LINK](https://x.example).",
+            "```\n[YOUR_CITY]\n```",
+            "Open [[NAME]](https://x.example) now.",
+            "Pay [AMOUNT]5 and [LEVEL, e.g. \"Native\"]",
+            "- [SECTOR_1]: [EXAMPLE_COMPANIES]",
+            "[Salary guide $100k-$150k](https://x.example)",
+            "[FIRST_NAME] and [see $0$](https://x.example)",
+            "# Pay $1$ [DAY_RATE]\n\n| Rate |\n|---|\n| $2$ [RATE_NOTE] |\n\n> Quote $3$ [QUOTE_TEXT]\n\n- Item $4$ [ITEM_TEXT]\n\n![alt $5$ [ALT_TEXT]](https://x.example/a.png)",
+            "Term [TERM_NAME]\n: Defined $6$ [TERM_TEXT][^n]\n\n[^n]: Note $7$ [NOTE_TEXT]",
+            "Use the ` key for [FIRST_NAME].",
+            "Owner: `[NAME]",
+            "An escaped backslash, then \\\\[NAME], and an escaped bracket \\[NAME]",
+            "## Goals [GOAL_NAME]\n\n### Lead - [COMPANY] ([DATES])",
+            "Cloud [AWS, GCP], remote [EU], and [2024 UPDATE]",
+            "[LinkedIn](https://linkedin.com/in/[YOUR_HANDLE]) and ![logo](https://x.example/[LOGO_FILE].png)",
+            "Search `[YOUR_JOB_BOARD] [YOUR_CITY]` for \\name{[FIRST_NAME]}",
+            "```ini\n[DEFAULT]\n[YOUR_SECTION]\n```",
+            "<!-- all [PLACEHOLDER] tokens -->\n\nName: <b>[FIRST_NAME]</b> [LAST_NAME]",
+            "Salary: [LEVEL - about $50k] and [FLOOR - $40k at least]",
+            "| Skill | Level |\n|---|---|\n| [SKILL_1] | `[LEVEL_1]` |",
+            "Code such as `to fill` and [a link](https://tessel.example/jobs/1), then [CITY_NAME]$ and $[ROLE_NAME]",
+        ];
+        for render in [blanked as Render, blanked_document] {
+            for source in sources {
+                let (blanks, code) = drawn_tokens(render, source);
+                let page = page_placeholders(source);
+                let prose = page.tokens.iter().filter(|token| matches!(token.place, Place::Prose { .. })).count();
+                assert_eq!(blanks + code, crate::shared_kernel::placeholders::placeholder_count(source), "{source}: {blanks} blanks, {code} in code");
+                assert_eq!(blanks, prose, "{source}");
+            }
         }
+    }
+
+    #[test]
+    fn a_definition_keeps_its_target_and_draws_no_blank() {
+        let source = "[FIRST_NAME] [LAST_NAME]\n\n[SECTOR_1]: [EXAMPLE_COMPANIES]\n[x]: https://x.example/$1$\n\nSee [x].";
+        assert_eq!(drawn_tokens(blanked, source), (2, 0));
+        assert_eq!(opened_through(blanked, source, "x"), vec!["https://x.example/$1$".to_owned()]);
+    }
+
+    #[test]
+    fn a_reference_link_with_a_dollar_sign_stays_a_link() {
+        for source in ["See [Salary $100k].\n\n[Salary $100k]: https://x.example", "See [Salary $100k][].\n\n[Salary $100k]: https://x.example"] {
+            assert_eq!(opened_through(blanked, source, "Salary $100k"), vec!["https://x.example".to_owned()], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_token_that_becomes_link_text_is_no_blank() {
+        let source = "See [FIRST_NAME].\n\n[FIRST_NAME]: https://x.example";
+        assert_eq!(drawn_tokens(blanked, source), (0, 0));
+        assert_eq!(opened_through(blanked, source, "FIRST_NAME"), vec!["https://x.example".to_owned()]);
     }
 
     /// A placeholder the viewer would hide, in a link's destination, a reference link's label or a definition, is not

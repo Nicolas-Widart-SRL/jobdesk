@@ -1,122 +1,146 @@
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown;
 
-/// `/reset` restores tokens such as `[FIRST_NAME]`, and `/setup` replaces them.
+/// The setup tokens a page of profile Markdown draws, as `page_placeholders` finds them.
 pub fn placeholder_count(text: &str) -> usize {
-    placeholder_spans(text).len()
+    page_placeholders(text).tokens.len()
 }
 
-/// The byte range of each setup token in `text`, brackets included.
+/// Profile Markdown as a page shows it: `text`, with every `$` of its own escaped, and the setup tokens it draws.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub text: String,
+    /// In order, as byte ranges of `text`, brackets included.
+    pub tokens: Vec<PageToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageToken {
+    pub span: Range<usize>,
+    pub place: Place,
+}
+
+/// Where a page draws a token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// In prose, where it reads as a blank, inside a heading of `heading` from 1 to 6 or none.
+    Prose { heading: Option<usize> },
+    /// As written, in a code span or a code block.
+    Code,
+}
+
+/// `/reset` restores tokens such as `[FIRST_NAME]`, and `/setup` replaces them. A token counts only where the page draws
+/// it: in prose text, where it reads as a blank, or as written in a code span or a code block.
+///
+/// Nothing else counts, because the page draws it as no blank and no code: a link's or image's text, destination or
+/// reference label, a reference definition, duplicates included (the template's `- [SECTOR_1]: [EXAMPLE_COMPANIES]` is
+/// one), and an HTML block or tag, comments included. Text between two HTML tags is prose. The page is parsed once, with the options the viewer uses, so the count and the blanks come from the same
+/// positions. Every `$` of the text's own is escaped first, outside code, HTML and autolinks, so none of it can open
+/// inline math on the page, and a reference label keeps matching its definition because both are escaped alike.
 ///
 /// A token is an upper-case name such as `[FIRST_NAME]`, `[KEY_RESPONSIBILITY_1]`, `[YOUR RESPONSIBILITY]` or `[1-2 SENTENCE_SUMMARY]`.
 /// A name of one word has three letters or more and no digit, so `[B2]`, `[EU]` and `[AB12]` are the user's own words.
 /// The name may be followed by a hint up to the closing bracket: `[CONTEXT - what was happening]` or `[LEVEL, e.g. "Native"]`.
-/// A link or reference (`[API](url)`, `[API][ref]`, `[API]: url`), an array index or option (`a[0]`, `\usepackage[T1]`),
-/// a lower-case bracket and a one-word name in a code span or a fenced block (`[DEFAULT]`) are not tokens. Nor is a name
-/// that the viewer never shows as written: in a link's or image's destination (`[me](https://x.example/in/[HANDLE])`),
-/// in a reference link's label (`[the page][NAME]`) or in a reference definition. A definition whose own label is a token
-/// is a template line, not a definition (`template_lines`), so its tokens count.
-/// A name with `_` or spaces counts in code too, because the templates keep blanks like `[YOUR_CITY]` in their example queries and LaTeX.
-pub fn placeholder_spans(text: &str) -> Vec<Range<usize>> {
-    let code = code_ranges(text);
-    let unseen = link_syntax(text);
-    let mut spans: Vec<Range<usize>> = Vec::new();
+/// A bracket right after a letter or a digit (`a[0]`, `\usepackage[T1]`), a lower-case bracket, a bracket followed by
+/// `(` or `[`, or by `:` at the start of a line, and an escaped bracket are not tokens. In code, a one-word name
+/// (`[DEFAULT]`) is not a token, but a name with `_` or spaces is, because the templates keep blanks like `[YOUR_CITY]`
+/// in their example queries and LaTeX.
+pub fn page_placeholders(text: &str) -> Page {
+    let text = without_math(text);
+    let mut prose: Vec<(Range<usize>, Option<usize>)> = Vec::new();
+    let mut code: Vec<Range<usize>> = Vec::new();
+    let (mut heading, mut in_block, mut in_link, mut in_image) = (None, false, 0, 0);
+    for (event, range) in Parser::new_ext(&text, page_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => heading = Some(level as usize),
+            Event::End(TagEnd::Heading(_)) => heading = None,
+            Event::Start(Tag::CodeBlock(_)) => in_block = true,
+            Event::End(TagEnd::CodeBlock) => in_block = false,
+            Event::Start(Tag::Link { .. }) => in_link += 1,
+            Event::End(TagEnd::Link) => in_link -= 1,
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image -= 1,
+            Event::Text(_) if in_block => code.push(range),
+            Event::Text(_) if in_link == 0 && in_image == 0 => prose.push((range, heading)),
+            Event::Code(_) if in_image == 0 => code.push(range),
+            _ => {}
+        }
+    }
+    // Brackets that form no link reach the page as text events of their own, so neighbours merge into one run.
+    let mut runs: Vec<(Range<usize>, Option<usize>)> = Vec::new();
+    for (range, level) in prose {
+        match runs.last_mut() {
+            Some((last, last_level)) if range.start <= last.end && *last_level == level => last.end = last.end.max(range.end),
+            _ => runs.push((range, level)),
+        }
+    }
+    let mut tokens: Vec<PageToken> = Vec::new();
     for (start, _) in text.match_indices('[') {
-        if spans.last().is_some_and(|last| start < last.end) || unseen.iter().any(|range| range.contains(&start)) {
+        if tokens.last().is_some_and(|last| start < last.span.end) {
             continue;
         }
-        let in_code = code.iter().any(|range| range.contains(&start));
-        if let Some((end, plain)) = token_end(text, start)
-            && !(in_code && plain)
-        {
+        let Some((end, plain)) = token_end(&text, start) else { continue };
+        let place = if let Some((_, level)) = runs.iter().find(|(run, _)| run.start <= start && end <= run.end) {
+            (!escaped_at(&text, start)).then_some(Place::Prose { heading: *level })
+        } else {
+            code.iter().any(|range| range.start <= start && end <= range.end && !plain).then_some(Place::Code)
+        };
+        if let Some(place) = place {
+            tokens.push(PageToken { span: start..end, place });
+        }
+    }
+    Page { text, tokens }
+}
+
+/// The setup tokens in one plain line, such as a role's title, which is never Markdown.
+pub fn line_placeholders(line: &str) -> Vec<Range<usize>> {
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    for (start, _) in line.match_indices('[') {
+        if spans.last().is_some_and(|last| start < last.end) {
+            continue;
+        }
+        if let Some((end, _)) = token_end(line, start) {
             spans.push(start..end);
         }
     }
     spans
 }
 
-/// The code spans and fenced blocks of `text`.
-fn code_ranges(text: &str) -> Vec<Range<usize>> {
-    if !text.contains('`') && !text.contains("~~~") {
-        return Vec::new();
+/// The options the viewer parses a page of profile Markdown with: its blanks are inline math.
+fn page_options() -> Options {
+    markdown::options() | Options::ENABLE_MATH
+}
+
+/// Whether the character at `at` is escaped by the backslashes before it.
+fn escaped_at(text: &str, at: usize) -> bool {
+    text[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
+}
+
+/// `text` with each `$` escaped where Markdown reads escapes: everywhere but code, raw HTML and autolinks, where a
+/// backslash would show or change an address. A destination or a title reads the escape back, and a reference label
+/// matches its definition still, because both are escaped alike.
+fn without_math(text: &str) -> String {
+    if !text.contains('$') {
+        return text.to_owned();
     }
-    Parser::new_ext(text, markdown::options())
+    let kept: Vec<Range<usize>> = Parser::new_ext(text, markdown::options())
         .into_offset_iter()
         .filter_map(|(event, range)| match event {
-            Event::Code(_) | Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_))) => Some(range),
+            Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::Link { link_type: LinkType::Autolink | LinkType::Email, .. }) | Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => Some(range),
             _ => None,
         })
-        .collect()
-}
-
-/// The parts of links, images and reference definitions that the viewer does not show as written: everything after a
-/// link's or image's text, such as `](url)` or `][label]`, and each reference definition whole.
-fn link_syntax(text: &str) -> Vec<Range<usize>> {
-    if !text.contains("](") && !text.contains("][") && !text.contains("]:") {
-        return Vec::new();
-    }
-    let parser = Parser::new_ext(text, markdown::options());
-    let mut unseen: Vec<Range<usize>> = definitions(text, &parser).into_iter().filter(|definition| !definition.template).map(|definition| definition.span).collect();
-    // Each open link or image: where its text has reached so far.
-    let mut open: Vec<usize> = Vec::new();
-    for (event, range) in parser.into_offset_iter() {
-        match event {
-            Event::Start(Tag::Link { .. }) => open.push(range.start + 1),
-            Event::Start(Tag::Image { .. }) => open.push(range.start + 2),
-            Event::End(TagEnd::Link | TagEnd::Image) => {
-                if let Some(text_end) = open.pop() {
-                    unseen.push(text_end.min(range.end)..range.end);
-                    if let Some(outer) = open.last_mut() {
-                        *outer = (*outer).max(range.end);
-                    }
-                }
-            }
-            _ => {
-                if let Some(text_end) = open.last_mut() {
-                    *text_end = (*text_end).max(range.end);
-                }
-            }
-        }
-    }
-    unseen
-}
-
-/// A reference definition in `text`: its span, where the colon after its label sits, and whether it is a template line.
-struct Definition {
-    span: Range<usize>,
-    colon: usize,
-    template: bool,
-}
-
-/// Each reference definition in `text`, in order. One is a template line when its label is a token and it points at no
-/// address, such as `[SECTOR_1]: [EXAMPLE_COMPANIES]`, where `[NAME]: https://x.example` stays a definition.
-fn definitions(text: &str, parser: &Parser) -> Vec<Definition> {
-    let mut found: Vec<_> = parser
-        .reference_definitions()
-        .iter()
-        .filter_map(|(_, definition)| {
-            let span = definition.span.clone();
-            let colon = span.start + text[span.clone()].find("]:")? + 1;
-            let label = &text[text[..colon].rfind('[')? + 1..colon - 1];
-            let address = definition.dest.contains(':') || definition.dest.starts_with(['/', '#', '.']);
-            Some(Definition { span, colon, template: !label.is_empty() && name_len(label) == label.len() && !address })
-        })
         .collect();
-    found.sort_by_key(|definition| definition.span.start);
-    found
-}
-
-/// The reference definitions that are template lines, such as `- [SECTOR_1]: [EXAMPLE_COMPANIES]`, each with where its
-/// colon sits. The viewer would draw nothing for them, so a screen that shows their tokens breaks them at the colon.
-pub fn template_lines(text: &str) -> Vec<(Range<usize>, usize)> {
-    if !text.contains("]:") {
-        return Vec::new();
+    let mut out = String::with_capacity(text.len() + 8);
+    for (at, c) in text.char_indices() {
+        if c == '$' && !escaped_at(text, at) && !kept.iter().any(|range| range.contains(&at)) {
+            out.push('\\');
+        }
+        out.push(c);
     }
-    let parser = Parser::new_ext(text, markdown::options());
-    definitions(text, &parser).into_iter().filter(|definition| definition.template).map(|definition| (definition.span, definition.colon)).collect()
+    out
 }
 
 /// Where the token that opens at `start` ends, just after its closing bracket, and whether its name is a single plain word such as `DEFAULT`.
@@ -212,10 +236,11 @@ fn matching_close(text: &str, from: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{blank_words, placeholder_count, placeholder_spans, template_lines, token_name};
+    use super::{Place, blank_words, line_placeholders, page_placeholders, placeholder_count, token_name};
 
-    fn found(text: &str) -> Vec<&str> {
-        placeholder_spans(text).into_iter().map(|span| &text[span]).collect()
+    fn found(text: &str) -> Vec<String> {
+        let page = page_placeholders(text);
+        page.tokens.iter().map(|token| page.text[token.span.clone()].to_owned()).collect()
     }
 
     #[test]
@@ -289,15 +314,45 @@ mod tests {
         assert_eq!(placeholder_count("![logo](https://x.example/[LOGO_FILE].png)"), 0);
         assert_eq!(placeholder_count("See [the page][NAME].\n\n[NAME]: https://x.example/c"), 0);
         assert_eq!(placeholder_count("[r]: https://x.example/[PATH]\n\nSee [r]."), 0);
-        // The link's own text still shows, so a token there counts.
-        assert_eq!(placeholder_count("[[YOUR_NAME]](https://x.example/[YOUR_HANDLE])"), 1);
+        // Link text shows without its brackets, so a token there is no blank and does not count.
+        assert_eq!(placeholder_count("[[YOUR_NAME]](https://x.example/[YOUR_HANDLE])"), 0);
+        assert_eq!(placeholder_count("See [FIRST_NAME].\n\n[FIRST_NAME]: https://x.example"), 0);
+        assert_eq!(placeholder_count("Logo ![alt [LOGO_NAME]](https://x.example/l.png)"), 0);
     }
 
     #[test]
-    fn a_definition_labelled_with_a_token_is_a_template_line() {
-        assert_eq!(found("- [SECTOR_1]: [EXAMPLE_COMPANIES]"), ["[SECTOR_1]", "[EXAMPLE_COMPANIES]"]);
-        assert_eq!(found("[SECTOR_1]: [EXAMPLE_COMPANIES]"), ["[EXAMPLE_COMPANIES]"]);
-        assert_eq!(template_lines("- [SECTOR_1]: [EXAMPLE_COMPANIES]\n[NAME]: https://x.example\n"), [(2..33, 12)]);
+    fn a_reference_definition_draws_nothing_so_its_tokens_do_not_count() {
+        assert_eq!(found("[FIRST_NAME] [LAST_NAME]\n\n[SECTOR_1]: [EXAMPLE_COMPANIES]\n[x]: https://x.example/$1$"), ["[FIRST_NAME]", "[LAST_NAME]"]);
+        assert_eq!(placeholder_count("- [SECTOR_1]: [EXAMPLE_COMPANIES]\n- [SECTOR_1]: [EXAMPLE_COMPANIES]\n"), 0);
+        assert_eq!(placeholder_count("[r]: https://x.example\n[r]: https://y.example/[PATH]\n"), 0);
+        assert_eq!(placeholder_count("[SECTOR_1]: [EXAMPLE_COMPANIES]\n[Sector_1]: [OTHER_COMPANIES]\n"), 0);
+    }
+
+    #[test]
+    fn a_comment_draws_no_blank_so_its_tokens_do_not_count() {
+        assert_eq!(placeholder_count("<!-- all [PLACEHOLDER] tokens -->\n\nName: <b>[FIRST_NAME]</b> [LAST_NAME]"), 2);
+    }
+
+    #[test]
+    fn a_page_escapes_every_dollar_sign_of_its_own() {
+        let page = page_placeholders("Pay $1$ [AMOUNT] in `$x$` and <https://x.example/$y$> or [s](https://x.example/$z$)");
+        assert_eq!(page.text, "Pay \\$1\\$ [AMOUNT] in `$x$` and <https://x.example/$y$> or [s](https://x.example/\\$z\\$)");
+        assert_eq!(page.tokens.len(), 1);
+        assert_eq!(page_placeholders("Paid \\$5 and \\\\$6").text, "Paid \\$5 and \\\\\\$6");
+    }
+
+    #[test]
+    fn a_token_knows_where_the_page_draws_it() {
+        let page = page_placeholders("## Goals [GOAL_NAME]\n\nRun `[YOUR_CITY]` for [FIRST_NAME].\n");
+        let places: Vec<Place> = page.tokens.iter().map(|token| token.place).collect();
+        assert_eq!(places, [Place::Prose { heading: Some(2) }, Place::Code, Place::Prose { heading: None }]);
+    }
+
+    #[test]
+    fn a_plain_line_is_not_markdown() {
+        let line = "Lead - [COMPANY] (`[DATES]`)";
+        let found: Vec<&str> = line_placeholders(line).into_iter().map(|span| &line[span]).collect();
+        assert_eq!(found, ["[COMPANY]", "[DATES]"]);
     }
 
     #[test]

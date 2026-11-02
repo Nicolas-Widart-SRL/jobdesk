@@ -13,7 +13,10 @@ Design: $ARGUMENTS
 
 ## Steps
 
-1. **Start the branch.** Run `scripts/sync-main.sh`, then create the change's branch as step 1 of the `ship` skill says:
+1. **Start the branch.** Run `scripts/sync-main.sh`.
+   When it prints `main: could not fetch origin`, stop and tell the user, because `origin/main` may be stale.
+   For any other line, tell the user in one line and go on, because the branch starts from `origin/main`, not from the main checkout.
+   Then create the change's branch as step 1 of the `ship` skill says:
    name it, then `git branch <change> origin/main`.
    Every designer round starts from it: round 1 from its head, each later round from the round before.
    Each designer works in its own worktree, never in the main checkout.

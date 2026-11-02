@@ -83,11 +83,13 @@ which print one line per check. Read a subagent's report once, then keep only it
 6. **Review the change** with `reviewer`, once every step is in.
    The base is `git merge-base origin/main <change>`, and the head is the branch tip.
    Right before each review, every round included, make a head checkout at the current tip
-   with `git worktree add --detach .claude/worktrees/review <change>`.
-   When a stale `.claude/worktrees/review` exists, remove it first with `git worktree remove .claude/worktrees/review`,
+   with `git worktree add --detach .claude/worktrees/review-<change> <change>`,
+   where `<change>` in the path is the change's branch with each `/` turned into `-`, as in the plan file name.
+   Another session may review its own change at the same time, so never touch another change's `review-*` checkout.
+   When a stale `.claude/worktrees/review-<change>` exists for this change, remove it first with `git worktree remove .claude/worktrees/review-<change>`,
    but only when it is detached and clean. When it is not, or the removal fails, tell the user and never force.
-   Remove it with `git worktree remove .claude/worktrees/review` right after the review,
-   so no review reads a stale checkout.
+   Remove it with `git worktree remove .claude/worktrees/review-<change>` right after the review,
+   on the same terms, so no review reads a stale checkout.
    It must be detached, so that `merge-step.sh` still moves the change's branch with `update-ref`.
    Nothing goes into a pull request without this pass.
 7. **Open the pull request.** Push the change's branch and open a pull request against `main`.
@@ -137,7 +139,7 @@ which print one line per check. Read a subagent's report once, then keep only it
 A change with one step skips the step review: the change review is its only review.
 A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
 A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
-It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/*.md` is risky and gets its review.
+It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
 
 The planner may write only in its memory, and the reviewer has no edit tools,
 so neither can change what it plans or reviews.
@@ -157,7 +159,7 @@ When the change builds a design, add the canvas paths.
 Give the reviewer:
 
 - the range `<base>..<head>`;
-- the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review` for the change review;
+- the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review-<change>` for the change review;
 - the plan step word for word, or the whole plan for the change review;
 - the risky lens, taken from the planner's reason for marking the step risky;
 - for a visible change, the changed snapshot PNGs and the canvas paths.

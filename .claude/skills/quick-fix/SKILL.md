@@ -58,7 +58,9 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Once it reports, check the step as step 6 says, before any review.
 3. **Review.** A step on the Also reviewed list gets one `reviewer` pass, one round.
    Brief it as the Briefs section of `ship` says, with the range `<branch>..<step-branch>` and the step's worktree as the head checkout.
-   Send the builder every High and Medium finding with SendMessage. Run no re-check of a Medium fix.
+   Send the builder every High and Medium finding with SendMessage.
+   Once it has applied them, run the step 6 check again (`git diff --stat`, files, layers, areas) before the merge.
+   This is not another reviewer round.
    A High also escalates after the builder's fix (step 6), so `ship` re-reviews it.
    Every other step gets only the merge check, and CodeRabbit on the pull request.
    When snapshots change, read each changed PNG in the step's worktree with `Read` before the merge.
@@ -71,7 +73,7 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    runs `squash-msg` and step 8 once, then gives the user one message.
    From then on, step 8 and the Answer CodeRabbit section of `ship` run on this plan file.
 6. **Escalate.** Read `git diff --stat <branch>..<step-branch>` yourself for the file count and the layers.
-   Stop when the step touches more than 3 files, crosses a layer, or adds a feature, screen or public type.
+   Stop when the step touches more than 3 files, crosses a layer, adds a feature, screen or public type, or adds or changes a canvas or a design.
    Stop too when it touches a risky area from `planner.md` step 6
    (the one-value or one-sentence `.claude/` change in the criteria is not one),
    when two checks failed, when the review found a High, or when a changed snapshot is not intended and clean.

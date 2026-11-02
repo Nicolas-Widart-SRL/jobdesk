@@ -49,7 +49,7 @@ Never write a value from a real job search in it.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.
-   A change to `.claude/agents/*.md` or `.claude/skills/*.md` is always risky: those files steer the agents.
+   A change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is always risky: those files steer the agents.
    Only risky steps get a review by `reviewer` before they merge. Say in one line why a step is risky: the reviewer checks that first.
    Any other docs-only step is never risky.
 

@@ -1,0 +1,4 @@
+# Stable options only: CI checks with stable rustfmt.
+edition = "2024"
+max_width = 160
+use_small_heuristics = "Max"

@@ -3,16 +3,18 @@
 /// so untrusted output cannot restyle, reorder or hide what the screen shows.
 pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     let mut chars = line.chars();
-    std::iter::from_fn(move || loop {
-        let c = chars.next()?;
-        match c {
-            '\u{1b}' => skip_escape(&mut chars),
-            // The 8-bit forms of `ESC [`, `ESC ]` and `ESC P`, `ESC X`, `ESC ^`, `ESC _`.
-            '\u{9b}' => skip_csi(&mut chars),
-            '\u{9d}' => skip_string(&mut chars, true),
-            '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars, false),
-            _ if c.is_control() && c != '\t' || hidden(c) => {}
-            _ => return Some(c),
+    std::iter::from_fn(move || {
+        loop {
+            let c = chars.next()?;
+            match c {
+                '\u{1b}' => skip_escape(&mut chars),
+                // The 8-bit forms of `ESC [`, `ESC ]` and `ESC P`, `ESC X`, `ESC ^`, `ESC _`.
+                '\u{9b}' => skip_csi(&mut chars),
+                '\u{9d}' => skip_string(&mut chars, true),
+                '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars, false),
+                _ if c.is_control() && c != '\t' || hidden(c) => {}
+                _ => return Some(c),
+            }
         }
     })
 }

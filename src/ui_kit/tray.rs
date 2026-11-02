@@ -9,8 +9,9 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, surface};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, cut_hover, line, paint_text};
 use crate::ui_kit::tokens::{
-    AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING, DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE,
-    ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
+    AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING,
+    DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT,
+    STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
 };
 
 /// Where a card's tab sits and what fills it, so the card under it can open its top edge there.
@@ -198,7 +199,8 @@ fn agenda_line(ui: &mut Ui, day: &str, text: &str, end: AgendaEnd, first: bool) 
     let left = rect.left() + PICK_ROW_INLINE;
     let right = rect.right() - PICK_ROW_INLINE;
     // The row lights up under its end, so the end stands on a surface, never on the desk.
-    let mut end_ui = ui.new_child(surface().max_rect(Rect::from_x_y_ranges(left..=right, rect.y_range())).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let mut end_ui =
+        ui.new_child(surface().max_rect(Rect::from_x_y_ranges(left..=right, rect.y_range())).layout(egui::Layout::right_to_left(egui::Align::Center)));
     let mut pressed = AgendaPress::default();
     match end {
         AgendaEnd::Nothing => {}
@@ -355,7 +357,11 @@ mod tests {
         };
         let mut harness = Harness::builder().with_size([400.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
             ui.set_max_width(SLIP);
-            let rows = [("Sun 1", "1 comes back", AgendaEnd::Button("Bring back")), ("Tue 3", "Harbor Bank deadline", AgendaEnd::Done), ("Thu 5", "Meridian Rail closes", AgendaEnd::Now)];
+            let rows = [
+                ("Sun 1", "1 comes back", AgendaEnd::Button("Bring back")),
+                ("Tue 3", "Harbor Bank deadline", AgendaEnd::Done),
+                ("Thu 5", "Meridian Rail closes", AgendaEnd::Now),
+            ];
             for (index, (day, text, end)) in rows.into_iter().enumerate() {
                 let pressed = agenda_row(ui, day, text, end, index == 0);
                 if pressed != AgendaPress::default() {

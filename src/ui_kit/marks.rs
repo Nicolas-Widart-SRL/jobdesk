@@ -11,9 +11,9 @@ use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::on_desk;
 use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE, DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP,
-    KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT,
-    TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
+    BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE,
+    DAY_STAMP_SIZE, DAY_STAMP_TICK, HAIRLINE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD, RADIUS_STAMP, ROW_GAP, STAMP_HEIGHT,
+    STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
@@ -249,7 +249,9 @@ pub fn day_stamp(ui: &mut Ui, weekday: &str, day: &str, month: &str, total: usiz
     let scale = if full && settled < 1.0 { DAY_STAMP_SETTLE + (1.0 - DAY_STAMP_SETTLE) * settled } else { 1.0 };
     for mut shape in shapes {
         if scale != 1.0 {
-            shape.transform(TSTransform::from_translation(centre.to_vec2()) * TSTransform::from_scaling(scale) * TSTransform::from_translation(-centre.to_vec2()));
+            shape.transform(
+                TSTransform::from_translation(centre.to_vec2()) * TSTransform::from_scaling(scale) * TSTransform::from_translation(-centre.to_vec2()),
+            );
         }
         ui.painter().add(shape);
     }

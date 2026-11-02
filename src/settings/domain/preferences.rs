@@ -130,6 +130,9 @@ mod tests {
     #[test]
     fn the_defaults_are_what_the_app_did_before() {
         let preferences = Preferences::default();
-        assert_eq!((preferences.theme, preferences.text_size, preferences.reduce_motion, preferences.open_on), (ThemeChoice::System, TextSize(100), false, StartScreen::Today));
+        assert_eq!(
+            (preferences.theme, preferences.text_size, preferences.reduce_motion, preferences.open_on),
+            (ThemeChoice::System, TextSize(100), false, StartScreen::Today)
+        );
     }
 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow, Stroke, StrokeKind, Ui, UiBuilder, UiStackInfo, Vec2,
-    WidgetInfo, pos2, vec2,
+    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow,
+    Stroke, StrokeKind, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
 };
 
 use crate::shared_kernel::Source;
@@ -10,11 +10,17 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{dialog_open, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::text::{add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, table_head, wrapped};
+use crate::ui_kit::text::{
+    add_cut_text, add_galley, add_marked, add_text, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, table_head, wrapped,
+};
 use crate::ui_kit::tokens::{
-    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING, CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEADER_PADDING, HEAD_GAP, HEAD_PADDING,
-    HEAD_TITLE_MIN, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
-    ROW_PADDING, SCREEN_PADDING, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
+    CHECK_BOX, CODE_PADDING, DISABLED_OPACITY, DOC_MEASURE, EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP,
+    HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING,
+    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_PADDING, PROMPT_PADDING, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
+    ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING,
+    SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP,
+    STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -134,7 +140,8 @@ pub fn page_head(ui: &mut Ui, title: Title, subtitle: Option<Subtitle>, mut acti
         let full = ui.available_width();
         let right = ui.max_rect().right();
         let measure = Rect::from_min_size(ui.cursor().min, vec2(full, BUTTON_HEIGHT));
-        let mut sizing = ui.new_child(UiBuilder::new().id_salt("page_head_sizing").max_rect(measure).layout(Layout::right_to_left(Align::Center)).sizing_pass().invisible());
+        let mut sizing =
+            ui.new_child(UiBuilder::new().id_salt("page_head_sizing").max_rect(measure).layout(Layout::right_to_left(Align::Center)).sizing_pass().invisible());
         sizing.spacing_mut().item_spacing.x = HEAD_GAP.0;
         actions(&mut sizing);
         let used = sizing.min_rect().size();
@@ -245,7 +252,11 @@ pub fn page_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// A fixed column beside a screen's content. Planes and gutters separate it, never a line.
 pub fn side_column(id: &'static str, width: f32) -> Panel {
-    Panel::right(id).exact_size(width).resizable(false).show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: GUTTER, ..Default::default() }))
+    Panel::right(id)
+        .exact_size(width)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(Frame::new().inner_margin(Margin { left: GUTTER, ..Default::default() }))
 }
 
 /// A screen's content with a fixed column `width` wide at its right, laid out as `side_column` lays one out beside a
@@ -741,7 +752,9 @@ pub fn skeleton_table<'a>(ui: &mut Ui, columns: &[TableColumn], row_height: f32,
             let height = widths.len() as f32 * (SKELETON_LINE + SKELETON_GAP) - SKELETON_GAP;
             // A box as tall as the lines, so the row centres them as it centres text.
             table_cell_in(ui, cell_rect, rule, |ui| {
-                ui.allocate_ui_with_layout(vec2(ui.available_width(), height.max(0.0)), Layout::top_down(Align::Min), |ui| skeleton_lines(ui, widths, skeleton));
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), height.max(0.0)), Layout::top_down(Align::Min), |ui| {
+                    skeleton_lines(ui, widths, skeleton)
+                });
             });
         }
         ui.advance_cursor_after_rect(rect);
@@ -893,9 +906,11 @@ pub fn paper<R>(ui: &mut Ui, shadow: bool, add: impl FnOnce(&mut Ui) -> R) -> R 
     let p = Palette::of(ui);
     let frame = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL);
     let frame = if shadow {
-        frame
-            .shadow(Shadow { offset: [WINDOW_SHADOW, WINDOW_SHADOW], blur: 0, spread: 0, color: p.line })
-            .outer_margin(Margin { right: WINDOW_SHADOW, bottom: WINDOW_SHADOW, ..Default::default() })
+        frame.shadow(Shadow { offset: [WINDOW_SHADOW, WINDOW_SHADOW], blur: 0, spread: 0, color: p.line }).outer_margin(Margin {
+            right: WINDOW_SHADOW,
+            bottom: WINDOW_SHADOW,
+            ..Default::default()
+        })
     } else {
         frame
     };
@@ -1074,11 +1089,16 @@ pub fn index_card(ui: &mut Ui, look: CardLook, spoken: &str, add: impl FnOnce(&m
             let card = ui.response();
             let pick = pick_look(&p, look.on, pointer_over(&card), pressed(&card));
             let fill = if pick.fill == Color32::TRANSPARENT { p.card } else { pick.fill };
-            let frame = Frame::new().fill(fill).stroke(Stroke::new(HAIRLINE, pick.edge.unwrap_or(p.line))).corner_radius(RADIUS_CARD).inner_margin(margin(CARD_PADDING)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 2.0;
-                add(ui);
-            });
+            let frame = Frame::new()
+                .fill(fill)
+                .stroke(Stroke::new(HAIRLINE, pick.edge.unwrap_or(p.line)))
+                .corner_radius(RADIUS_CARD)
+                .inner_margin(margin(CARD_PADDING))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    add(ui);
+                });
             if look.waits {
                 let rect = frame.response.rect;
                 let edge = Rect::from_min_max(rect.min, pos2(rect.left() + WAITS_EDGE, rect.bottom()));
@@ -1465,7 +1485,8 @@ mod tests {
             let _ = ui.button("After");
         });
         harness.run();
-        let named: Vec<_> = harness.query_all_by(|node| node.label().as_deref() == Some("Reduce motion") || node.value().as_deref() == Some("Reduce motion")).collect();
+        let named: Vec<_> =
+            harness.query_all_by(|node| node.label().as_deref() == Some("Reduce motion") || node.value().as_deref() == Some("Reduce motion")).collect();
         assert_eq!(named.len(), 1, "one node is named by the label");
         assert_eq!(named[0].accesskit_node().role(), egui::accesskit::Role::CheckBox);
         assert_eq!(named[0].accesskit_node().description().as_deref(), Some("Cards change at once, with no slide."));

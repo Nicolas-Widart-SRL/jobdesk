@@ -24,11 +24,12 @@ use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
-    HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
+    HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING,
+    WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
-    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, command_chord, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper,
-    primary_button, prompt_box_tone, rich,
+    Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, command_chord, copyable, desk, divider, enabled_when,
+    folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_button, status_frame, status_line, status_note, status_waits, strong, take_command_request,
 };
 use crate::workspace;
@@ -624,8 +625,13 @@ impl Shell {
                 let keys = !self.confirm_quit;
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
                 // In the alert's order, so the subtitle names them as the alert does.
-                let missing: Vec<&str> =
-                    failures.iter().filter_map(|(source, _)| match source_place(*source) { (Some(screen), true) => Some(screen.title()), _ => None }).collect();
+                let missing: Vec<&str> = failures
+                    .iter()
+                    .filter_map(|(source, _)| match source_place(*source) {
+                        (Some(screen), true) => Some(screen.title()),
+                        _ => None,
+                    })
+                    .collect();
                 let missing_dates = match (jobs, applications) {
                     (true, true) => Some("Job and application dates are missing until the files are fixed."),
                     (true, false) => Some("Job closing dates are missing until the file is fixed."),
@@ -675,7 +681,9 @@ impl Shell {
             Screen::Runs => {
                 // The workspace folder as text, so the story can shorten paths without reading the disk.
                 let root = self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()).unwrap_or_default();
-                if let Some(desk) = &mut self.desk && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask) {
+                if let Some(desk) = &mut self.desk
+                    && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask)
+                {
                     self.open_launcher();
                 }
             }
@@ -699,7 +707,9 @@ impl Shell {
                 if back_pressed(ui.ctx()) {
                     self.screen = self.launcher_from;
                     ui.ctx().request_repaint();
-                } else if let Some(desk) = &mut self.desk && let Some(id) = self.launcher.show(ui, desk) {
+                } else if let Some(desk) = &mut self.desk
+                    && let Some(id) = self.launcher.show(ui, desk)
+                {
                     self.run_screen.select(id);
                     self.screen = Screen::Runs;
                 }
@@ -849,14 +859,12 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
 /// What an alert says when a source could not be read: what failed, then what still works when it fails alone.
 fn failed_words(source: Source) -> (&'static str, &'static str) {
     match source {
-        Source::Applications => (
-            "Your applications could not be read.",
-            "Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work.",
-        ),
-        Source::Jobs => (
-            "Your saved jobs could not be read.",
-            "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.",
-        ),
+        Source::Applications => {
+            ("Your applications could not be read.", "Today shows new matches and tasks until it is fixed. Jobs, Insights and Tasks still work.")
+        }
+        Source::Jobs => {
+            ("Your saved jobs could not be read.", "Today shows applications and tasks until it is fixed. Applications, Insights and Tasks still work.")
+        }
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }

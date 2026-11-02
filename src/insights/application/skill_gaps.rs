@@ -48,10 +48,7 @@ fn new_gap(bullet: &str) -> (&str, &str) {
     {
         return (skill.trim(), note.trim());
     }
-    [": ", " — ", " – ", " - "]
-        .iter()
-        .find_map(|separator| bullet.split_once(separator))
-        .map_or((bullet, ""), |(skill, note)| (skill.trim(), note.trim()))
+    [": ", " — ", " – ", " - "].iter().find_map(|separator| bullet.split_once(separator)).map_or((bullet, ""), |(skill, note)| (skill.trim(), note.trim()))
 }
 
 fn same_skill(left: &str, right: &str) -> bool {
@@ -69,15 +66,22 @@ mod tests {
 
     #[test]
     fn new_gaps_mark_their_heatmap_row_or_get_their_own() {
-        let report = SkillGapReport { gaps: vec![gap("TOGAF"), gap("Azure")], new_gaps: vec!["togaf".into(), "Kafka Streams (3 jobs)".into(), "SAFe: 1 job".into()], ..Default::default() };
+        let report = SkillGapReport {
+            gaps: vec![gap("TOGAF"), gap("Azure")],
+            new_gaps: vec!["togaf".into(), "Kafka Streams (3 jobs)".into(), "SAFe: 1 job".into()],
+            ..Default::default()
+        };
         let rows = gap_rows(&report);
         let seen: Vec<_> = rows.iter().map(|row| (row.skill.as_str(), row.priority.as_str(), row.is_new, row.source.as_str())).collect();
-        assert_eq!(seen, vec![
-            ("TOGAF", "High", true, "Hard · 4 jobs"),
-            ("Azure", "High", false, "Hard · 4 jobs"),
-            ("Kafka Streams", "", true, "3 jobs"),
-            ("SAFe", "", true, "1 job"),
-        ]);
+        assert_eq!(
+            seen,
+            vec![
+                ("TOGAF", "High", true, "Hard · 4 jobs"),
+                ("Azure", "High", false, "Hard · 4 jobs"),
+                ("Kafka Streams", "", true, "3 jobs"),
+                ("SAFe", "", true, "1 job"),
+            ]
+        );
     }
 
     #[test]

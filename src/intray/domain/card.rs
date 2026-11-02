@@ -1,8 +1,8 @@
 use chrono::NaiveDate;
 
 use crate::intray::domain::SkipReason;
-use crate::shared_kernel::{CheckState, WebUrl};
 use crate::shared_kernel::dates::days_from;
+use crate::shared_kernel::{CheckState, WebUrl};
 
 /// How far ahead a date counts as a deadline, the span of Coming up.
 pub const HORIZON_DAYS: i64 = 14;
@@ -109,7 +109,10 @@ pub struct Due {
 pub enum Subject {
     /// The job's key.
     Job(String),
-    Application { company: String, role: String },
+    Application {
+        company: String,
+        role: String,
+    },
     /// The run's id.
     Run(String),
 }
@@ -242,7 +245,8 @@ mod tests {
 
     #[test]
     fn a_deadline_ranks_first_only_inside_the_horizon() {
-        let mut cards = vec![card("fourteen", CardKind::Send, Some(14)), card("follow up", CardKind::FollowUp, None), card("thirteen", CardKind::Triage, Some(13))];
+        let mut cards =
+            vec![card("fourteen", CardKind::Send, Some(14)), card("follow up", CardKind::FollowUp, None), card("thirteen", CardKind::Triage, Some(13))];
         rank(&mut cards, today());
         let keys: Vec<_> = cards.iter().map(|card| card.key.as_str()).collect();
         assert_eq!(keys, ["thirteen", "fourteen", "follow up"], "a date 14 days out ranks with the rest, by kind");

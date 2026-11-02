@@ -34,3 +34,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 21 `src/workspace/ui.rs`: runtime_status returned an Option that was always None while the shell still matched on it. Class: dead signature.
 - PR 21 `src/shell/app.rs`: Change folder from Settings (and Setup) replaced the RunDesk while a task was live, dropping its session. Class: state over time.
 - PR 21 `src/settings/infrastructure/preferences_file.rs`: atomic replace synced the file but not the parent directory after rename. Class: state over time.
+- PR 22 tests/architecture.rs: a new scanning helper landed with no fixture proving it changes the outcome. Class: untested guard.

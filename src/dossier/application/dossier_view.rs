@@ -21,7 +21,9 @@ impl RunTranscript {
     fn belongs_to(&self, card: &ApplicationCard) -> bool {
         let is_apply = self.line.starts_with("/apply");
         let same_posting = card.source.as_ref().is_some_and(|source| self.line.contains(source.as_str()));
-        let wrote_its_files = [&card.cv_file, &card.cover_letter_file].iter().any(|file| !file.is_empty() && self.files_changed.iter().any(|changed| changed.ends_with(file.as_str())));
+        let wrote_its_files = [&card.cv_file, &card.cover_letter_file]
+            .iter()
+            .any(|file| !file.is_empty() && self.files_changed.iter().any(|changed| changed.ends_with(file.as_str())));
         is_apply && (same_posting || wrote_its_files)
     }
 }

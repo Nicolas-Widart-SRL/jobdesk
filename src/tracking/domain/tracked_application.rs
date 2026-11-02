@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 
 use crate::shared_kernel::WebUrl;
 use crate::shared_kernel::dates::{days_from, iso_dates_in};
-use crate::tracking::domain::{AppliedOn, ApplicationStatus, OutcomeRecord};
+use crate::tracking::domain::{ApplicationStatus, AppliedOn, OutcomeRecord};
 
 const CLOSING_SOON_DAYS: i64 = 7;
 pub const MAX_FOLLOW_UPS: usize = 2;
@@ -54,10 +54,7 @@ impl TrackedApplication {
     }
 
     fn follow_up_dates(&self) -> Vec<NaiveDate> {
-        self.notes
-            .match_indices(FOLLOW_UP_MARKER)
-            .flat_map(|(at, marker)| iso_dates_in(&self.notes[at + marker.len()..]).into_iter().take(1))
-            .collect()
+        self.notes.match_indices(FOLLOW_UP_MARKER).flat_map(|(at, marker)| iso_dates_in(&self.notes[at + marker.len()..]).into_iter().take(1)).collect()
     }
 
     pub fn follow_ups_sent(&self) -> usize {
@@ -96,8 +93,7 @@ impl TrackedApplication {
     }
 
     pub fn is_stale(&self, today: NaiveDate, threshold_days: i64) -> bool {
-        matches!(self.status, ApplicationStatus::Applied | ApplicationStatus::Interview)
-            && self.days_quiet(today).is_some_and(|days| days >= threshold_days)
+        matches!(self.status, ApplicationStatus::Applied | ApplicationStatus::Interview) && self.days_quiet(today).is_some_and(|days| days >= threshold_days)
     }
 
     pub fn deadline_state(&self, today: NaiveDate) -> Option<DeadlineState> {

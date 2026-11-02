@@ -36,17 +36,43 @@ pub struct Usage {
 /// What the CLI reported, in this feature's terms.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentEvent {
-    SessionStarted { session_id: String, model: String, api_key_source: String },
+    SessionStarted {
+        session_id: String,
+        model: String,
+        api_key_source: String,
+    },
     TextDelta(String),
-    AssistantText { text: String, nested: bool },
-    ToolStarted { id: String, name: String, summary: String, nested: bool },
+    AssistantText {
+        text: String,
+        nested: bool,
+    },
+    ToolStarted {
+        id: String,
+        name: String,
+        summary: String,
+        nested: bool,
+    },
     /// `Err` means the tool failed, and holds the reason when its output said why.
-    ToolFinished { id: String, outcome: Result<(), Option<String>> },
+    ToolFinished {
+        id: String,
+        outcome: Result<(), Option<String>>,
+    },
     PromptRaised(Prompt),
-    PromptWithdrawn { request_id: String },
+    PromptWithdrawn {
+        request_id: String,
+    },
     UsageChanged(Usage),
     /// How many subagents still work in the background. They can outlive the turn that started them.
-    BackgroundTasksChanged { count: usize },
-    TurnEnded { failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64 },
-    ProcessExited { failure: Option<String> },
+    BackgroundTasksChanged {
+        count: usize,
+    },
+    TurnEnded {
+        failed: bool,
+        message: Option<String>,
+        cost_usd: f64,
+        duration_ms: u64,
+    },
+    ProcessExited {
+        failure: Option<String>,
+    },
 }

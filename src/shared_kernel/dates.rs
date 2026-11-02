@@ -36,9 +36,6 @@ mod tests {
     #[test]
     fn finds_dates_in_notes() {
         let found = iso_dates_in("followed up 2026-10-01; é call 2026-10-09, id 12026-10-091");
-        assert_eq!(found, vec![
-            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
-            NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
-        ]);
+        assert_eq!(found, vec![NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),]);
     }
 }

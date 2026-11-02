@@ -4,7 +4,10 @@ use egui::{ComboBox, Frame, Key, Margin, Modifiers, ScrollArea, TextEdit, Ui, ve
 
 use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
-use crate::ui_kit::{Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head, panel, panel_body, primary_shortcut_button, rich, slip, split, strong};
+use crate::ui_kit::{
+    Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head,
+    panel, panel_body, primary_shortcut_button, rich, slip, split, strong,
+};
 
 /// The keys that start the run.
 const RUN_KEYS: [&str; 2] = command_chord("Enter");
@@ -111,7 +114,12 @@ impl Launcher {
                 labelled(model, "Model", |ui, label| {
                     ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
                     let width = ui.available_width();
-                    let combo = ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(ui, &mut self.model, MODELS.len(), |index| MODELS[index].0);
+                    let combo = ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(
+                        ui,
+                        &mut self.model,
+                        MODELS.len(),
+                        |index| MODELS[index].0,
+                    );
                     hand(combo).labelled_by(label);
                 });
                 labelled(budget, "Spend at most, USD", |ui, label| {

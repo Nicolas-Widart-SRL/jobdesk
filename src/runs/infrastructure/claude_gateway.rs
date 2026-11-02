@@ -109,7 +109,15 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     command
 }
 
-fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSink, inbox: &Receiver<Outgoing>, to_self: Sender<Outgoing>, process: &Mutex<Process>) {
+fn supervise(
+    workspace: &Path,
+    logs: &Path,
+    request: &RunRequest,
+    sink: EventSink,
+    inbox: &Receiver<Outgoing>,
+    to_self: Sender<Outgoing>,
+    process: &Mutex<Process>,
+) {
     let sink = Arc::new(Mutex::new(sink));
     let emit = {
         let sink = Arc::clone(&sink);
@@ -147,7 +155,9 @@ fn supervise(workspace: &Path, logs: &Path, request: &RunRequest, sink: EventSin
     loop {
         match inbox.recv() {
             Ok(Outgoing::Message(text)) => {
-                if let Some(log) = &log && let Ok(mut log) = log.lock() {
+                if let Some(log) = &log
+                    && let Ok(mut log) = log.lock()
+                {
                     log.append_user(&text);
                 }
                 write_line(&mut stdin, &user_message(&text));
@@ -189,7 +199,9 @@ fn kill_tree(pid: u32) {
 }
 
 fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
-    if let Some(pipe) = stdin && writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_err() {
+    if let Some(pipe) = stdin
+        && writeln!(pipe, "{line}").and_then(|()| pipe.flush()).is_err()
+    {
         *stdin = None;
     }
 }
@@ -198,7 +210,9 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some(log) = &log && let Ok(mut log) = log.lock() {
+            if let Some(log) = &log
+                && let Ok(mut log) = log.lock()
+            {
                 log.append(&line);
             }
             parse_line(&line).into_iter().for_each(&emit);

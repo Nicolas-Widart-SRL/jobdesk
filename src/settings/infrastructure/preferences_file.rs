@@ -107,7 +107,12 @@ fn record_from(preferences: &Preferences) -> Record {
         StartScreen::Insights => "insights",
         StartScreen::Tasks => "tasks",
     };
-    Record { theme: theme.to_owned(), text_size: i64::from(preferences.text_size.percent()), reduce_motion: preferences.reduce_motion, open_on: open_on.to_owned() }
+    Record {
+        theme: theme.to_owned(),
+        text_size: i64::from(preferences.text_size.percent()),
+        reduce_motion: preferences.reduce_motion,
+        open_on: open_on.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -127,7 +132,8 @@ mod tests {
     fn preferences_round_trip() {
         let folder = tempfile::tempdir().unwrap();
         let file = file_in(&folder);
-        let preferences = Preferences { theme: ThemeChoice::Dark, text_size: TextSize::from_percent(125), reduce_motion: true, open_on: StartScreen::Applications };
+        let preferences =
+            Preferences { theme: ThemeChoice::Dark, text_size: TextSize::from_percent(125), reduce_motion: true, open_on: StartScreen::Applications };
         file.save(&preferences).unwrap();
         assert_eq!(file.load().unwrap(), Some(preferences));
         assert!(!file.path.with_extension("json.tmp").exists());

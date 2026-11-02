@@ -258,7 +258,8 @@ type PartsCache = egui::cache::FrameCache<Arc<[Part]>, Parts>;
 fn parts(text: &str) -> Vec<Part> {
     let whole = || vec![Part { text: text.to_owned(), table: false, spaced: false }];
     let parser = Parser::new_ext(text, markdown::options());
-    let mut definitions: Vec<_> = parser.reference_definitions().iter().map(|(label, link)| (link.span.start, reference(label, &link.dest, link.title.as_deref()))).collect();
+    let mut definitions: Vec<_> =
+        parser.reference_definitions().iter().map(|(label, link)| (link.span.start, reference(label, &link.dest, link.title.as_deref()))).collect();
     let (mut tables, mut headings, mut blocks, mut notes, mut depth) = (Vec::new(), Vec::new(), Vec::new(), 0, 0);
     for (event, range) in parser.into_offset_iter() {
         if depth == 0 && matches!(event, Event::Start(_) | Event::Rule) {
@@ -303,7 +304,8 @@ fn parts(text: &str) -> Vec<Part> {
     if drawn(&(from..text.len())) {
         out.push(part(from..text.len(), false));
     }
-    let kept: usize = out.iter().map(|part| Parser::new_ext(&part.text, markdown::options()).filter(|event| matches!(event, Event::FootnoteReference(_))).count()).sum();
+    let kept: usize =
+        out.iter().map(|part| Parser::new_ext(&part.text, markdown::options()).filter(|event| matches!(event, Event::FootnoteReference(_))).count()).sum();
     if kept != notes {
         return whole();
     }

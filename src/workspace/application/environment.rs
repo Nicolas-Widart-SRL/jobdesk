@@ -79,10 +79,8 @@ mod tests {
     fn version_of_reads_the_first_word_of_a_found_tool() {
         let mut checks = EnvironmentChecks::new(Arc::new(NoTools), Arc::new(|| {}));
         assert_eq!(checks.version_of("claude"), None);
-        checks.results = Some(vec![
-            ToolCheck { spec: TOOLS[0], version: Some("2.1.308 (Claude Code)".to_owned()) },
-            ToolCheck { spec: TOOLS[1], version: None },
-        ]);
+        checks.results =
+            Some(vec![ToolCheck { spec: TOOLS[0], version: Some("2.1.308 (Claude Code)".to_owned()) }, ToolCheck { spec: TOOLS[1], version: None }]);
         assert_eq!(checks.version_of("claude"), Some("2.1.308"));
         assert_eq!(checks.version_of("python3"), None);
         assert_eq!(checks.version_of("bun"), None);

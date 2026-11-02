@@ -61,7 +61,8 @@ fn split_posting(text: &str) -> PostingText {
 /// `<prefix>*.md` in one folder, newest name first.
 fn texts_named(folder: &Path, prefix: &str) -> Vec<NamedText> {
     let Ok(entries) = fs::read_dir(folder) else { return Vec::new() };
-    let mut names: Vec<String> = entries.flatten().filter_map(|entry| entry.file_name().into_string().ok()).filter(|name| name.starts_with(prefix) && name.ends_with(".md")).collect();
+    let mut names: Vec<String> =
+        entries.flatten().filter_map(|entry| entry.file_name().into_string().ok()).filter(|name| name.starts_with(prefix) && name.ends_with(".md")).collect();
     names.sort();
     names.reverse();
     names

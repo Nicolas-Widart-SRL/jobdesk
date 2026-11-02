@@ -58,6 +58,33 @@ jobs:
               - '**'
               - '!**/*.md'
 
+  # Fails on a RustSec vulnerability in Cargo.lock. It runs on every change, Markdown too,
+  # because new advisories arrive without a change here.
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
+  # rustfmt.toml holds the style. Run `cargo fmt` before you commit.
+  fmt:
+    name: Check formatting
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
   # Screen snapshots are macOS baselines, so the full suite runs on macOS only.
   # The Installers workflow runs clippy and the platform-neutral tests on Windows before a release.
   test:
@@ -100,3 +127,25 @@ jobs:
           name: coverage
           path: target/llvm-cov/html
           if-no-files-found: error
+
+  # Miri looks for undefined behavior in the domain, application and shared_kernel tests. host_path is skipped: it uses files, env and a shell.
+  miri:
+    name: Miri (domain, application and shared_kernel tests)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      # Only main saves: each new nightly would add a large cache entry and evict the test job's.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo miri setup
+      - run: |
+          cargo miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path

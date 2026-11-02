@@ -162,7 +162,10 @@ fn tray_waiting_apply_run() -> RunDesk {
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
         tool("1", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
         done("1"),
-        AgentEvent::AssistantText { text: "**Fit 78, Strong Fit.** Event sourcing and Kafka match. Card schemes are a gap.\n\nShall I proceed with drafting?".into(), nested: false },
+        AgentEvent::AssistantText {
+            text: "**Fit 78, Strong Fit.** Event sourcing and Kafka match. Card schemes are a gap.\n\nShall I proceed with drafting?".into(),
+            nested: false,
+        },
         AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.94, duration_ms: 401_000 },
     ];
     let guard = sink.lock().unwrap();
@@ -261,13 +264,16 @@ fn apply_drafting() -> (RunDesk, SharedSink) {
     desk.poll();
     let id = desk.runs()[0].id.clone();
     desk.reply(&id, GO_AHEAD).unwrap();
-    emit_all(&sink, [
-        tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
-        done("6"),
-        tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
-        done("7"),
-        tool("8", "Write", "cover_letters/cover_kestrel_solution_architect.tex", false),
-    ]);
+    emit_all(
+        &sink,
+        [
+            tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
+            done("6"),
+            tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
+            done("7"),
+            tool("8", "Write", "cover_letters/cover_kestrel_solution_architect.tex", false),
+        ],
+    );
     (desk, sink)
 }
 
@@ -276,24 +282,27 @@ const SUMMARY: &str = "# Application ready: Kestrel Payments, Solution Architect
 /// /apply through Finish, its closing summary, and the process gone.
 fn apply_finished() -> RunDesk {
     let (desk, sink) = apply_drafting();
-    emit_all(&sink, [
-        done("8"),
-        tool("9", "Agent", "application-reviewer: Research and critique", false),
-        done("9"),
-        tool("10", "Edit", "cv/main_kestrel_solution_architect.tex", false),
-        done("10"),
-        tool("11", "Edit", "cover_letters/cover_kestrel_solution_architect.tex", false),
-        done("11"),
-        tool("12", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
-        done("12"),
-        tool("13", "Bash", "python3 tools/verify_pdf.py cv/main_kestrel_solution_architect.pdf", false),
-        done("13"),
-        tool("14", "Edit", "job_search_tracker.csv", false),
-        done("14"),
-        AgentEvent::AssistantText { text: SUMMARY.into(), nested: false },
-        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 2.41, duration_ms: 557_000 },
-        AgentEvent::ProcessExited { failure: None },
-    ]);
+    emit_all(
+        &sink,
+        [
+            done("8"),
+            tool("9", "Agent", "application-reviewer: Research and critique", false),
+            done("9"),
+            tool("10", "Edit", "cv/main_kestrel_solution_architect.tex", false),
+            done("10"),
+            tool("11", "Edit", "cover_letters/cover_kestrel_solution_architect.tex", false),
+            done("11"),
+            tool("12", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
+            done("12"),
+            tool("13", "Bash", "python3 tools/verify_pdf.py cv/main_kestrel_solution_architect.pdf", false),
+            done("13"),
+            tool("14", "Edit", "job_search_tracker.csv", false),
+            done("14"),
+            AgentEvent::AssistantText { text: SUMMARY.into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 2.41, duration_ms: 557_000 },
+            AgentEvent::ProcessExited { failure: None },
+        ],
+    );
     desk
 }
 
@@ -344,10 +353,7 @@ fn a_command_button_leads_to_a_started_run() {
     let mut shell = shell(Screen::Insights, "click_through");
     let gateway = ScriptedGateway(SharedSink::default());
     *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
     harness.get_by_label("Tune scoring…").click();
@@ -397,10 +403,7 @@ fn assert_in_window(harness: &Harness, size: [f32; 2], labels: &[&str]) {
 fn smallest_window(desk: RunDesk, name: &str) -> Harness<'static> {
     let mut shell = shell(Screen::Runs, name);
     *shell.desk_slot() = Some(desk);
-    let mut harness = Harness::builder()
-        .with_size([1040.0, 640.0])
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
 }
@@ -446,10 +449,13 @@ fn a_quick_reply_is_sent_as_a_reply() {
     drop(calls);
 
     // Claude ends its next turn with a question, and the field comes back empty.
-    emit_all(&sink, [
-        AgentEvent::AssistantText { text: "Before I draft: shall I lead with the Kafka migration?".into(), nested: false },
-        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.3, duration_ms: 20_000 },
-    ]);
+    emit_all(
+        &sink,
+        [
+            AgentEvent::AssistantText { text: "Before I draft: shall I lead with the Kafka migration?".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.3, duration_ms: 20_000 },
+        ],
+    );
     harness.run_steps(3);
     assert!(is_shown(&harness, "Send"));
     let field = harness.get_by_role(egui::accesskit::Role::TextInput);
@@ -563,10 +569,13 @@ fn stop_here_ends_your_turn() {
     let mut harness = tray_harness(shell);
     harness.get_by_label("Stop here").click();
     harness.run_steps(3);
-    emit_all(&sink, [
-        AgentEvent::AssistantText { text: "Understood, stopping. The evaluation stays in the tracker.".into(), nested: false },
-        AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.2, duration_ms: 4_000 },
-    ]);
+    emit_all(
+        &sink,
+        [
+            AgentEvent::AssistantText { text: "Understood, stopping. The evaluation stays in the tracker.".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.2, duration_ms: 4_000 },
+        ],
+    );
     harness.run_steps(3);
 
     assert!(harness.query_all_by_label("Your turn").count() == 0, "no run is tagged Your turn");
@@ -585,12 +594,15 @@ fn allowances_stay_folded_in_a_step_without_actions() {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
-    emit_all(&sink, [
-        AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
-        permission_prompt(),
-        tool("1", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
-        done("1"),
-    ]);
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            permission_prompt(),
+            tool("1", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
+            done("1"),
+        ],
+    );
     *shell.desk_slot() = Some(desk);
     let mut harness = tray_harness(shell);
     let allowed = "Allowed Bash without asking.";
@@ -714,7 +726,10 @@ fn a_click_on_a_step_name_opens_its_actions() {
 #[test]
 fn a_stop_opens_on_the_newest_message() {
     let long = format!("{STOP_EVALUATION}\n\n{}", "The gaps are small and either can be closed in the letter.\n\n".repeat(24));
-    let harnesses = [smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message"), tray_harness_with(stop_with(SharedCalls::default(), &long).0, "long_stop_opens_on_message")];
+    let harnesses = [
+        smallest_window(apply_stop_after_evaluate(), "stop_opens_on_message"),
+        tray_harness_with(stop_with(SharedCalls::default(), &long).0, "long_stop_opens_on_message"),
+    ];
     for harness in harnesses {
         let story = harness.get_by_label("The run so far").rect();
         // Where the story's rows start: under its heading's padding, its rule and the body's padding.
@@ -816,11 +831,14 @@ fn a_resumed_run_is_followed_again() {
     let mut harness = smallest_window(desk, "resumed_follow");
     harness.get_by_label("Go ahead with the draft").click();
     harness.run_steps(3);
-    emit_all(&sink, [
-        tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
-        done("6"),
-        tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
-    ]);
+    emit_all(
+        &sink,
+        [
+            tool("6", "Read", ".claude/skills/job-application-assistant/05-cv-tailoring.md", false),
+            done("6"),
+            tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
+        ],
+    );
     harness.run_steps(3);
     let draft = harness.get_by_label("Draft").rect();
     let status = harness.get_by_label(STATUS_LINE).rect();
@@ -871,12 +889,15 @@ fn a_turn_claude_begins_alone_does_not_move_the_story() {
     let mut harness = smallest_window(desk, "self_started_turn");
     let offset = |harness: &Harness| harness.get_by_label_contains("Job fit evaluation").rect().top() - harness.get_by_label("The run so far").rect().bottom();
     let before = offset(&harness);
-    emit_all(&sink, [
-        AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
-        tool("6", "Read", "notes/kestrel.md", false),
-        done("6"),
-        tool("7", "Bash", "ls cv", false),
-    ]);
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            tool("6", "Read", "notes/kestrel.md", false),
+            done("6"),
+            tool("7", "Bash", "ls cv", false),
+        ],
+    );
     harness.run_steps(3);
     assert!((offset(&harness) - before).abs() <= 1.0, "the story moved from {before} to {}", offset(&harness));
 }
@@ -947,7 +968,8 @@ fn esc_in_the_quit_dialog_keeps_working() {
 }
 
 /// The command key as the platform sends it: Cmd on macOS and Ctrl elsewhere, each with `command` set.
-const COMMAND: egui::Modifiers = egui::Modifiers { alt: false, ctrl: !cfg!(target_os = "macos"), shift: false, mac_cmd: cfg!(target_os = "macos"), command: true };
+const COMMAND: egui::Modifiers =
+    egui::Modifiers { alt: false, ctrl: !cfg!(target_os = "macos"), shift: false, mac_cmd: cfg!(target_os = "macos"), command: true };
 
 fn cmd_enter(harness: &mut Harness) {
     harness.key_press_modifiers(COMMAND, Key::Enter);
@@ -1254,8 +1276,18 @@ fn end_session_asks_first() {
 
 fn many_choices(request_id: &str) -> AgentEvent {
     let choices = (1..=8).map(|index| QuestionOption { label: format!("Choice {index}"), description: "Keeps the CV on two pages.".into() }).collect();
-    let question = Question { text: "Layout check found a hole on page 1. How should the CV be fixed?".into(), header: "Layout".into(), options: choices, multi_select: false };
-    AgentEvent::PromptRaised(Prompt { request_id: request_id.into(), kind: PromptKind::Questions(vec![question]), input_json: "{}".into(), suggestions_json: None })
+    let question = Question {
+        text: "Layout check found a hole on page 1. How should the CV be fixed?".into(),
+        header: "Layout".into(),
+        options: choices,
+        multi_select: false,
+    };
+    AgentEvent::PromptRaised(Prompt {
+        request_id: request_id.into(),
+        kind: PromptKind::Questions(vec![question]),
+        input_json: "{}".into(),
+        suggestions_json: None,
+    })
 }
 
 /// Claude's replies are untrusted: an image in one shows as its alt text and loads nothing.
@@ -1473,11 +1505,8 @@ fn unbuilt_sections_are_disabled() {
 fn reduce_motion_drops_the_slide() {
     let mut shell = shell(Screen::InTray, "settings_reduce_motion");
     shell.open_settings(Page::Appearance);
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_step_dt(1.0 / 60.0)
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        Harness::builder().with_size([1280.0, 820.0]).with_step_dt(1.0 / 60.0).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness.get_by_role(egui::accesskit::Role::CheckBox).click();
     harness.run_steps(3);
@@ -1666,10 +1695,7 @@ fn the_first_frame_shows_the_prompt_in_one_pass() {
 }
 
 fn tray_harness(mut shell: Shell) -> Harness<'static> {
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
 }
@@ -1988,11 +2014,7 @@ fn the_head_counts_what_needs_you() {
 fn a_decision_settles_within_the_animation_time() {
     let mut shell = shell(Screen::InTray, "tray_motion");
     let frame = 1.0 / 60.0;
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_step_dt(frame)
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_step_dt(frame).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
 
     harness.key_press(Key::L);
@@ -2245,10 +2267,7 @@ fn a_footer_button_leaves_the_card_in_place() {
 fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {
     let mut shell = shell(Screen::InTray, name);
     *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
-    let mut harness = Harness::builder()
-        .with_size([1040.0, 640.0])
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
 }
@@ -2303,10 +2322,7 @@ fn show_the_command_reveals_the_line_and_starts_nothing() {
 #[test]
 fn the_undo_row_stays_in_view_in_the_smallest_window() {
     let mut shell = shell(Screen::InTray, "tray_undo_smallest");
-    let mut harness = Harness::builder()
-        .with_size([1040.0, 640.0])
-        .with_context_setup(install_look)
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
 
     press(&mut harness, Key::L);
@@ -2499,7 +2515,10 @@ fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
         *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
         let mut harness = tray_harness(shell);
         assert!(is_shown(&harness, "No tasks yet"));
-        assert!(is_shown(&harness, "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends."));
+        assert!(is_shown(
+            &harness,
+            "A task runs one command through Claude Code in your job search folder. You start each one, and it shows here while it works and after it ends."
+        ));
         assert!(!is_shown(&harness, LAUNCHER));
 
         harness.get_by_label(button).click();
@@ -2796,7 +2815,8 @@ fn intray_overdue_dark() {
 }
 
 const FINDINGS: &str = "## Verification Checklist\n- [x] All claims match the profile\n- [x] CV is exactly 2 pages\n- [ ] Addressed to a named person\n\n| Keyword | Priority | Status | Note |\n|---|---|---|---|\n| event sourcing | required | covered | Skills |\n| Azure | preferred | missing (gap) | Named in letter |\n";
-const EVALUATION: &str = "**Overall fit: 78, Strong Fit.**\n\n**Skills match:** Java, Kafka and event sourcing match.\n\n**Experience match:** Public sector work maps well.";
+const EVALUATION: &str =
+    "**Overall fit: 78, Strong Fit.**\n\n**Skills match:** Java, Kafka and event sourcing match.\n\n**Experience match:** Public sector work maps well.";
 
 fn dossier_shell(name: &str) -> Shell {
     let mut shell = shell(Screen::Tracker, name);
@@ -2931,11 +2951,16 @@ fn loading_on(screen: Screen, name: &str) -> Shell {
 /// Until the first read, no screen says it has nothing: each says it is reading, and its head actions stay.
 #[test]
 fn loading_screens_promise_nothing() {
-    let empty = ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
+    let empty =
+        ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
     let cases: [(Screen, &str, &[&str]); 4] = [
         (Screen::Jobs, "Reading your saved jobs…", &["Find new jobs…", "Score", "Worth knowing"]),
         (Screen::Tracker, "Reading your applications…", &["Record a result…", "Check mail for replies…", "Not sent yet", "Applied", "Closed"]),
-        (Screen::Insights, "Reading your jobs, applications and reports…", &["Find skill gaps…", "Rebuild dashboard…", "Profile", "Result", "Funnel", "By sector"]),
+        (
+            Screen::Insights,
+            "Reading your jobs, applications and reports…",
+            &["Find skill gaps…", "Rebuild dashboard…", "Profile", "Result", "Funnel", "By sector"],
+        ),
         (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Profile", "Environment", "Portals"]),
     ];
     for (screen, subtitle, shown) in cases {

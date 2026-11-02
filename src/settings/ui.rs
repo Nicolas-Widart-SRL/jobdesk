@@ -3,8 +3,8 @@ use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup,
 use crate::settings::application::{Group, IssueKind, Page, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, index, search};
 use crate::ui_kit::tokens::{BODY_PADDING, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING};
 use crate::ui_kit::{
-    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, pick_row, rail_title, rich, set_reduced_motion, setting_check, setting_row, setting_section, settings_page, search_field, shortcut_button, slip,
-    small_button, toggle_group,
+    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, pick_row, rail_title, rich, search_field, set_reduced_motion, setting_check,
+    setting_row, setting_section, settings_page, shortcut_button, slip, small_button, toggle_group,
 };
 
 /// How wide Open on's combo box is.
@@ -79,7 +79,8 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
     let page = screen.page;
     match page {
         Page::General => {
-            let (_, asked) = settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| general(ui, view.settings, view.folder, view.folder_wait, &query));
+            let (_, asked) =
+                settings_page(&mut page_ui, page.title(), page.lead(), |_| {}, |ui| general(ui, view.settings, view.folder, view.folder_wait, &query));
             request = asked.or(request);
         }
         Page::Appearance => {
@@ -286,7 +287,12 @@ fn general(ui: &mut Ui, settings: &mut Settings, folder: Option<&str>, folder_wa
         ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
         let current = settings.preferences().open_on;
         let mut at = StartScreen::ALL.iter().position(|&screen| screen == current).unwrap_or(0);
-        let combo = ComboBox::from_id_salt("settings_open_on").width(OPEN_ON_WIDTH).selected_text(current.label()).show_index(ui, &mut at, StartScreen::ALL.len(), |index| StartScreen::ALL[index].label());
+        let combo = ComboBox::from_id_salt("settings_open_on").width(OPEN_ON_WIDTH).selected_text(current.label()).show_index(
+            ui,
+            &mut at,
+            StartScreen::ALL.len(),
+            |index| StartScreen::ALL[index].label(),
+        );
         // Its label is the row's own text, so the box is named here.
         ui.ctx().accesskit_node_builder(combo.id, |node| node.set_label(open_on));
         if hand(combo).changed() {
@@ -350,7 +356,13 @@ mod tests {
     fn harness(state: Rc<RefCell<State>>) -> Harness<'static> {
         Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = &mut *state.borrow_mut();
-            let view = SettingsView { settings: &mut state.settings, folder: Some("~/Documents/ai-job-search"), folder_read: true, runtime: RuntimeWord::Missing(1), folder_wait: None };
+            let view = SettingsView {
+                settings: &mut state.settings,
+                folder: Some("~/Documents/ai-job-search"),
+                folder_read: true,
+                runtime: RuntimeWord::Missing(1),
+                folder_wait: None,
+            };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
             });

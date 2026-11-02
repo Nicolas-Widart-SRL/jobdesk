@@ -1,12 +1,15 @@
 use egui::{Align, Frame, Layout, Margin, ScrollArea, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 
-use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_PADDING, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT};
-use crate::ui_kit::{
-    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, hit_mark, list_row, muted, page_body, page_head, panel, panel_body, panel_header,
-    panel_header_tone, hidden_note, rich, setting_row, setting_section, settings_page, skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
-};
 use crate::shared_kernel::Source;
+use crate::ui_kit::tokens::{
+    INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_PADDING, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT,
+};
+use crate::ui_kit::{
+    CellRule, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, hidden_note,
+    hit_mark, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich, setting_row, setting_section, settings_page,
+    skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+};
 use crate::workspace::application::{AuthMode, EnvironmentChecks, PortalRow, ProfileState, ToolCheck, WorkspaceView};
 
 /// Environment rows sit closer than other list rows.
@@ -89,7 +92,14 @@ pub enum WorkspaceAction {
 /// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
 /// so a failed one hides those counts. Until the first read, the slips show their names over grey lines.
 /// `folder_wait` says why Change folder waits, if it does, as the shell words it.
-pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, environment: &mut EnvironmentChecks, folder_wait: Option<&str>) -> Option<WorkspaceAction> {
+pub fn show(
+    ui: &mut Ui,
+    state: &ScreenState,
+    name: &str,
+    view: &WorkspaceView,
+    environment: &mut EnvironmentChecks,
+    folder_wait: Option<&str>,
+) -> Option<WorkspaceAction> {
     environment.ensure_started();
     let mut action = None;
     let has_documents = view.profile.iter().any(|file| matches!(file.state, ProfileState::Filled));
@@ -133,7 +143,15 @@ pub fn show(ui: &mut Ui, state: &ScreenState, name: &str, view: &WorkspaceView, 
 /// Settings › Runtime status: Setup's content in one column, under Claude Code's version and sign-in.
 /// `sign_in` is what the last task reported. Without `folder_open`, only Claude Code and the tools show.
 /// Headings and labels mark the hits of the search `query`.
-pub fn runtime_status(ui: &mut Ui, state: &ScreenState, view: &WorkspaceView, environment: &mut EnvironmentChecks, sign_in: AuthMode, folder_open: bool, query: &str) {
+pub fn runtime_status(
+    ui: &mut Ui,
+    state: &ScreenState,
+    view: &WorkspaceView,
+    environment: &mut EnvironmentChecks,
+    sign_in: AuthMode,
+    folder_open: bool,
+    query: &str,
+) {
     environment.ensure_started();
     let running = environment.is_running();
     let read = folder_open && !state.reading();
@@ -275,23 +293,25 @@ fn profile(ui: &mut Ui, view: &WorkspaceView) {
 
 fn profile_rows(ui: &mut Ui, view: &WorkspaceView, rows: Rows) {
     for (index, file) in view.profile.iter().enumerate() {
-        rows.row(ui, index == 0, |ui| line(ui, PROFILE_ROW_HEIGHT, |ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(profile_title(file.name.as_str()));
-                faint_mono(ui, file.name.as_str());
-            });
-            right(ui, |ui| {
-                if !matches!(file.state, ProfileState::Filled) {
-                    small_command_action(ui, "Update", "/setup");
-                }
-                match file.state {
-                    ProfileState::Filled => tag(ui, "Filled", Tone::Hired),
-                    ProfileState::NeedsSetup { placeholders } => tag(ui, format!("{placeholders} to fill"), Tone::Interview),
-                    ProfileState::Missing => tag(ui, "Missing", Tone::Closed),
-                };
-            });
-        }));
+        rows.row(ui, index == 0, |ui| {
+            line(ui, PROFILE_ROW_HEIGHT, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(profile_title(file.name.as_str()));
+                    faint_mono(ui, file.name.as_str());
+                });
+                right(ui, |ui| {
+                    if !matches!(file.state, ProfileState::Filled) {
+                        small_command_action(ui, "Update", "/setup");
+                    }
+                    match file.state {
+                        ProfileState::Filled => tag(ui, "Filled", Tone::Hired),
+                        ProfileState::NeedsSetup { placeholders } => tag(ui, format!("{placeholders} to fill"), Tone::Interview),
+                        ProfileState::Missing => tag(ui, "Missing", Tone::Closed),
+                    };
+                });
+            })
+        });
     }
 }
 
@@ -442,7 +462,8 @@ fn tools(ui: &mut Ui, environment: &mut EnvironmentChecks, has_salary_data: bool
         panel_body(ui, |ui| {
             ui.horizontal(|ui| {
                 // A running check is its own reason: the label says so, and no hover is needed.
-                recheck = enabled_when(ui, !running, "Checking the tools now.", |ui| small_button(ui, if running { "Checking…" } else { "Check again" })).clicked();
+                recheck =
+                    enabled_when(ui, !running, "Checking the tools now.", |ui| small_button(ui, if running { "Checking…" } else { "Check again" })).clicked();
             });
         });
     });
@@ -558,7 +579,8 @@ mod tests {
 
     #[test]
     fn only_required_tools_count_towards_ready() {
-        let checks: Vec<ToolCheck> = TOOLS.iter().map(|spec| ToolCheck { spec: *spec, version: (spec.name != "bun" && spec.required).then(|| "1.0".to_owned()) }).collect();
+        let checks: Vec<ToolCheck> =
+            TOOLS.iter().map(|spec| ToolCheck { spec: *spec, version: (spec.name != "bun" && spec.required).then(|| "1.0".to_owned()) }).collect();
         assert_eq!(ready_note(&checks, true), "4 of 5 ready", "pdftotext is optional and missing");
         assert_eq!(ready_note(&checks, false), "3 of 4 ready", "Claude Code's row is left out, so its count is too");
     }
@@ -630,7 +652,15 @@ mod tests {
             runtime_status(ui, &state, &view, &mut checks, AuthMode::ClaudeLogin, true, "");
         });
         wait_for(&mut harness, "3 of 4 ready");
-        for label in ["On this computer", "Signed in with", "Claude sign-in", "Job site search: missing bun", "3 of 4 ready", "Check again", "Look for more in your documents…"] {
+        for label in [
+            "On this computer",
+            "Signed in with",
+            "Claude sign-in",
+            "Job site search: missing bun",
+            "3 of 4 ready",
+            "Check again",
+            "Look for more in your documents…",
+        ] {
             assert!(harness.query_by_label(label).is_some(), "{label} is missing");
         }
         // Profile comes before Environment, as on the canvas.

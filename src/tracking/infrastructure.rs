@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::shared_kernel::dates::{iso_dates_in, parse_iso_date};
 use crate::shared_kernel::{LoadError, WebUrl};
-use crate::tracking::domain::{
-    AppliedOn, ApplicationRepository, ApplicationStatus, OutcomeRecord, Stage, TrackedApplication, archive_folder,
-};
+use crate::tracking::domain::{ApplicationRepository, ApplicationStatus, AppliedOn, OutcomeRecord, Stage, TrackedApplication, archive_folder};
 
 const TRACKER: &str = "job_search_tracker.csv";
 

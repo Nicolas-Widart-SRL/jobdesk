@@ -118,7 +118,8 @@ fn basename(token: &str) -> &str {
 /// A runner starts a script rather than naming it.
 fn is_interpreter(token: &str) -> bool {
     let file = basename(token).to_ascii_lowercase();
-    matches!(file.as_str(), "python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm") || file.starts_with("python3.")
+    matches!(file.as_str(), "python" | "python3" | "py" | "node" | "bun" | "deno" | "bash" | "sh" | "uv" | "uvx" | "npx" | "bunx" | "pnpm")
+        || file.starts_with("python3.")
 }
 
 const APPLY_LABELS: &[&str] = &["Fetch", "Evaluate", "Draft", "Review", "Revise", "Compile", "Finish"];
@@ -137,7 +138,8 @@ const RANK_LABELS: &[&str] = &["Load", "Score", "Store"];
 const RANK_RULES: &[Rule] = &[rule(1, Match::Agent(&["posting-scorer"])), rule(2, Match::Program { names: &["rank_state.py"], args: &["apply", "sweep"] })];
 
 const SCRAPE_LABELS: &[&str] = &["Prepare", "Search", "Store"];
-const SCRAPE_RULES: &[Rule] = &[rule(1, Match::Program { names: &["cli.ts"], args: &[] }), rule(2, Match::Program { names: &["scrape_state.py"], args: &["store"] })];
+const SCRAPE_RULES: &[Rule] =
+    &[rule(1, Match::Program { names: &["cli.ts"], args: &[] }), rule(2, Match::Program { names: &["scrape_state.py"], args: &["store"] })];
 
 impl StepRail {
     pub fn for_line(line: &str) -> Option<Self> {

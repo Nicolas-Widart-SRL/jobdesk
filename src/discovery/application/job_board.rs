@@ -76,9 +76,7 @@ impl<R: JobRepository> JobBoardService<R> {
             .into_iter()
             .map(|lane| {
                 let mut in_lane: Vec<&Job> = jobs.iter().filter(|job| job.lane() == lane).collect();
-                in_lane.sort_by_key(|job| {
-                    (Reverse(job.score()), Reverse(job.is_closing_soon(today)), Reverse(job.scraper_fit), job.company.to_lowercase())
-                });
+                in_lane.sort_by_key(|job| (Reverse(job.score()), Reverse(job.is_closing_soon(today)), Reverse(job.scraper_fit), job.company.to_lowercase()));
                 LaneView { lane, jobs: in_lane.into_iter().map(|job| view_of(job, today, terms)).collect() }
             })
             .collect();
@@ -88,10 +86,8 @@ impl<R: JobRepository> JobBoardService<R> {
 
 fn view_of(job: &Job, today: NaiveDate, terms: &FreelanceTerms) -> JobView {
     let assessment = job.assessment.as_ref();
-    let (fetch_attempts, fetch_error) = job
-        .fetch_failure
-        .as_ref()
-        .map_or((None, None), |FetchFailure { attempts, last_error }| (Some(*attempts), last_error.clone()));
+    let (fetch_attempts, fetch_error) =
+        job.fetch_failure.as_ref().map_or((None, None), |FetchFailure { attempts, last_error }| (Some(*attempts), last_error.clone()));
     JobView {
         key: job.key.clone(),
         title: job.title.clone(),
@@ -135,12 +131,7 @@ mod tests {
     }
 
     fn ranked(company: &str, score: u8, deadline: Option<NaiveDate>) -> Job {
-        Job {
-            company: company.into(),
-            deadline,
-            assessment: Some(assessed(score, Gate::Pass, Gate::Pass)),
-            ..job(JobStatus::Ranked)
-        }
+        Job { company: company.into(), deadline, assessment: Some(assessed(score, Gate::Pass, Gate::Pass)), ..job(JobStatus::Ranked) }
     }
 
     #[test]

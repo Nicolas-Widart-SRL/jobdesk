@@ -2,26 +2,47 @@ use std::collections::HashMap;
 
 use egui::{ComboBox, Frame, Key, Margin, Modifiers, ScrollArea, TextEdit, Ui, vec2};
 
-use crate::runs::application::{CATALOG, CommandGroup, CommandSpec, FieldSpec, RunDesk, StartOptions, compose_line, spec_for_line};
+use crate::runs::application::{
+    CAP_READING, CATALOG, CapCheck, CommandGroup, CommandSpec, FieldSpec, RunDefaults, RunDesk, StartOptions, cap_line, cap_reason, compose_line,
+    spec_for_line, start_values,
+};
+use crate::shared_kernel::ModelChoice;
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, muted, page_body, page_head,
+    Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, link, muted, page_body, page_head,
     panel, panel_body, primary_shortcut_button, rich, slip, split, strong,
 };
 
 /// The keys that start the run.
 const RUN_KEYS: [&str; 2] = command_chord("Enter");
 
-const MODELS: [(&str, Option<&str>); 4] = [("Claude default", None), ("Opus", Some("opus")), ("Sonnet", Some("sonnet")), ("Haiku", Some("haiku"))];
-
 /// The form's width, as on the canvas.
 const FORM_WIDTH: f32 = 400.0;
 
+const NO_BUDGET: &str = "Enter a budget above zero.";
+const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
+const TICK_FIRST: &str = "Tick \"I understand\" first.";
+
+/// What a new task starts with, and whether the monthly cap lets one start.
+pub struct LaunchRules<'a> {
+    pub defaults: &'a RunDefaults,
+    pub cap: &'a CapCheck,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LauncherRequest {
+    /// The id of the run the user just started.
+    Started(String),
+    /// Open Settings on Run defaults, where the cap is.
+    OpenRunDefaults,
+}
+
+/// The model and the budget hold only what the user changed. Untouched, they show what the run defaults give the command.
 pub struct Launcher {
     command: &'static CommandSpec,
     values: HashMap<&'static str, String>,
-    budget: String,
-    model: usize,
+    budget: Option<String>,
+    model: Option<ModelChoice>,
     reset_confirmed: bool,
 }
 
@@ -33,7 +54,7 @@ impl Default for Launcher {
 
 impl Launcher {
     fn for_command(command: &'static CommandSpec) -> Self {
-        Self { command, values: HashMap::new(), budget: format!("{}.00", command.budget_usd), model: 0, reset_confirmed: false }
+        Self { command, values: HashMap::new(), budget: None, model: None, reset_confirmed: false }
     }
 
     /// Fills the form from a line such as `/outcome followup acme`.
@@ -54,19 +75,19 @@ impl Launcher {
         compose_line(self.command, |field| self.value_of(field))
     }
 
-    /// Returns the id of a run the user just started.
-    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk) -> Option<String> {
+    /// Returns the run the user just started, or the way to the cap.
+    pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, rules: &LaunchRules) -> Option<LauncherRequest> {
         // Taken before any field runs, so a multiline field never reads the keys as a new line, even while Run waits.
         let run_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
         let subtitle = Subtitle::Text("Pick a command. Nothing runs until you press Run.");
         page_head(ui, Title::Slab("New task"), Some(subtitle), |_| {});
-        page_body(ui, |ui| self.body(ui, desk, run_keys))
+        page_body(ui, |ui| self.body(ui, desk, rules, run_keys))
     }
 
-    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, run_keys: bool) -> Option<String> {
+    fn body(&mut self, ui: &mut Ui, desk: &mut RunDesk, rules: &LaunchRules, run_keys: bool) -> Option<LauncherRequest> {
         split(ui, FORM_WIDTH, |main, side| {
             ScrollArea::vertical().auto_shrink([false, false]).show(main, |ui| panel(ui, |ui| self.list(ui)));
-            slip(side, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.form(ui, desk, run_keys)).inner)
+            slip(side, |ui| ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.form(ui, desk, rules, run_keys)).inner)
         })
     }
 
@@ -84,8 +105,10 @@ impl Launcher {
     }
 
     /// `run_keys` is Cmd or Ctrl Enter, which starts the run only when the button could.
-    fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk, run_keys: bool) -> Option<String> {
-        let mut started = None;
+    /// A reached cap holds back only a new task: a running one, and replies to a live session, go on elsewhere.
+    fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk, rules: &LaunchRules, run_keys: bool) -> Option<LauncherRequest> {
+        let mut asked = None;
+        let start = start_values(rules.defaults, self.command);
         Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(rich(ui, self.command.name, Type::COMMAND, Ink::Text));
@@ -110,21 +133,29 @@ impl Launcher {
                     self.values.insert(field.key, value);
                 }
             }
-            ui.columns_const(|[model, budget]| {
-                labelled(model, "Model", |ui, label| {
+            let mut model = self.model.unwrap_or(start.model);
+            let mut budget_text = self.budget.clone().unwrap_or_else(|| start.budget.field_text());
+            ui.columns_const(|[model_column, budget_column]| {
+                labelled(model_column, "Model", |ui, label| {
                     ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
                     let width = ui.available_width();
-                    let combo = ComboBox::from_id_salt("run_model").width(width).selected_text(MODELS[self.model].0).show_index(
+                    let mut at = ModelChoice::ALL.iter().position(|&choice| choice == model).unwrap_or(0);
+                    let combo = ComboBox::from_id_salt("run_model").width(width).selected_text(model.label()).show_index(
                         ui,
-                        &mut self.model,
-                        MODELS.len(),
-                        |index| MODELS[index].0,
+                        &mut at,
+                        ModelChoice::ALL.len(),
+                        |index| ModelChoice::ALL[index].label(),
                     );
-                    hand(combo).labelled_by(label);
+                    if hand(combo).labelled_by(label).changed() {
+                        model = ModelChoice::ALL[at];
+                        self.model = Some(model);
+                    }
                 });
-                labelled(budget, "Spend at most, USD", |ui, label| {
-                    let edit = TextEdit::singleline(&mut self.budget).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
-                    ui.add(edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY)).labelled_by(label);
+                labelled(budget_column, "Spend at most, USD", |ui, label| {
+                    let edit = TextEdit::singleline(&mut budget_text).min_size(vec2(0.0, FIELD_HEIGHT)).align(egui::Align2::LEFT_CENTER);
+                    if ui.add(edit.margin(Margin::symmetric(FIELD_PADDING as i8, 4)).desired_width(f32::INFINITY)).labelled_by(label).changed() {
+                        self.budget = Some(budget_text.clone());
+                    }
                 });
             });
             let line = self.line();
@@ -139,31 +170,53 @@ impl Launcher {
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");
                 hand(ui.checkbox(&mut self.reset_confirmed, "I understand"));
             }
-            let budget = self.budget.trim().parse::<f64>().ok().filter(|budget| *budget > 0.0);
-            let ready = budget.is_some() && (!self.command.destructive || self.reset_confirmed) && !desk.is_busy();
-            if budget.is_none() {
-                alert(ui, "Enter a budget above zero.");
-            }
-            if desk.is_busy() {
-                strong(ui, "Another run is active. One run at a time keeps your files safe.");
-            }
-            let why = if budget.is_none() {
-                "Enter a budget above zero."
-            } else if desk.is_busy() {
-                "Another run is active. One run at a time keeps your files safe."
-            } else {
-                "Tick \"I understand\" first."
+            let budget = budget_text.trim().parse::<f64>().ok().filter(|budget| *budget > 0.0);
+            let busy = desk.is_busy();
+            let reached = match rules.cap {
+                CapCheck::Reached(reached) => Some(reached),
+                CapCheck::Open | CapCheck::Reading => None,
             };
-            enabled_when(ui, ready, why, |ui| {
-                let run = primary_shortcut_button(ui, "Run", &RUN_KEYS);
-                if run.clicked() || (ready && run_keys) {
-                    let options = StartOptions { model: MODELS[self.model].1.map(str::to_owned), budget_usd: budget.unwrap_or_default() };
-                    started = desk.start(&line, &options, chrono::Local::now().naive_local()).ok();
-                }
-                run
-            });
+            let ready = budget.is_some() && !busy && *rules.cap == CapCheck::Open && (!self.command.destructive || self.reset_confirmed);
+            if budget.is_none() {
+                alert(ui, NO_BUDGET);
+            }
+            if busy {
+                strong(ui, BUSY);
+            }
+            if let Some(reached) = reached {
+                strong(ui, cap_line(reached));
+            }
+            let why = match rules.cap {
+                _ if budget.is_none() => NO_BUDGET.to_owned(),
+                _ if busy => BUSY.to_owned(),
+                CapCheck::Reached(reached) => cap_reason(reached),
+                CapCheck::Reading => CAP_READING.to_owned(),
+                CapCheck::Open => TICK_FIRST.to_owned(),
+            };
+            let mut run = |ui: &mut Ui| {
+                let mut started = None;
+                enabled_when(ui, ready, &why, |ui| {
+                    let run = primary_shortcut_button(ui, "Run", &RUN_KEYS);
+                    if run.clicked() || (ready && run_keys) {
+                        let options = StartOptions { model: model.alias().map(str::to_owned), budget_usd: budget.unwrap_or_default() };
+                        started = desk.start(&line, &options, chrono::Local::now().naive_local()).ok();
+                    }
+                    run
+                });
+                started.map(LauncherRequest::Started)
+            };
+            // The way to the cap stands beside Run only while the cap holds it back, so the usual form keeps its look.
+            asked = if reached.is_some() {
+                ui.horizontal(|ui| {
+                    let started = run(ui);
+                    if link(ui, "Change the cap in Settings").clicked() { Some(LauncherRequest::OpenRunDefaults) } else { started }
+                })
+                .inner
+            } else {
+                run(ui)
+            };
         });
-        started
+        asked
     }
 }
 

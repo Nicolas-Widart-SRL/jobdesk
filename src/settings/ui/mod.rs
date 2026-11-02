@@ -105,12 +105,13 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             let lead = if matches!(view.usage, UsageState::Reading) { usage::READING } else { page.lead() };
             // The toggles run first, so the body counts the period picked this frame.
             let period = Cell::new(screen.period);
+            let cap = view.settings.preferences().cap;
             let (_, asked) = settings_page(
                 &mut page_ui,
                 page.title(),
                 lead,
                 |ui| usage::period_toggles(ui, &period, view.today),
-                |ui| usage::body(ui, view.usage, period.get(), view.today, &query),
+                |ui| usage::body(ui, view.usage, period.get(), view.today, &cap, &query),
             );
             screen.period = period.get();
             request = asked.or(request);
@@ -705,6 +706,29 @@ mod tests {
         harness.get_by_label("$50.20");
         assert_eq!(state.borrow().screen.period, Period::All);
         assert!(harness.query_by_label("$41.20").is_none());
+    }
+
+    /// October's $41.20 fills a bar against a $60 cap, and only the month's figure has one.
+    #[test]
+    fn the_months_spend_measures_against_the_cap() {
+        const CAP_NOTE: &str = "of your $60.00 monthly cap";
+        let state = state();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert!(harness.query_by_label(CAP_NOTE).is_none(), "no cap, no bar");
+        harness.get_by_label("in October");
+
+        state.borrow_mut().settings.set_cap_on(true);
+        state.borrow_mut().settings.set_cap_amount(crate::settings::application::Dollars::parse("60"));
+        harness.run();
+        harness.get_by_label(CAP_NOTE);
+        assert!(harness.query_by_label("in October").is_none());
+        for period in ["90 days", "This year", "All time"] {
+            harness.get_by_label(period).click();
+            harness.run();
+            assert!(harness.query_by_label(CAP_NOTE).is_none(), "{period}");
+        }
     }
 
     #[test]

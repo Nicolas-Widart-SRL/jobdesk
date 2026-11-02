@@ -4,13 +4,13 @@ use chrono::NaiveDate;
 use egui::{Align, Label, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    Page, Period, UsagePage, UsageReport, UsageState, YearOfDays, active_days_note, command_name, day_tip, heat_step, index, model_name, money, month_marks,
-    percent, period_label, period_words, sent_note, tasks_note, tokens, usage_page,
+    Page, Period, SpendCap, UsagePage, UsageReport, UsageState, YearOfDays, active_days_note, command_name, day_tip, heat_step, index, model_name, money,
+    month_marks, percent, period_label, period_words, sent_note, tasks_note, tokens, usage_page,
 };
 use crate::settings::ui::SettingsRequest;
 use crate::ui_kit::tokens::{BAR_HEIGHT, EMPTY_GAP, EMPTY_WIDTH, FADED_OPACITY, SKELETON_LINE, TABLE_HEAD_HEIGHT};
 use crate::ui_kit::{
-    CellRule, DayHeatmap, Figure, HeatDay, Ink, Type, bar, button, card_skeleton, day_heatmap, day_heatmap_loading, divider, enabled_when, figure_band,
+    CellRule, DayHeatmap, Figure, HeatDay, Ink, Tone, Type, bar, button, card_skeleton, day_heatmap, day_heatmap_loading, divider, enabled_when, figure_band,
     figure_band_loading, hit_mark, link, primary_command_action, rich, score, skeleton_lines, table_cell, table_head, toggle_group,
 };
 
@@ -52,7 +52,7 @@ pub fn period_toggles(ui: &mut Ui, period: &Cell<Period>, today: NaiveDate) {
 }
 
 /// The body of Usage statistics as things stand. Returns what the user asked of the shell.
-pub fn body(ui: &mut Ui, state: UsageState, period: Period, today: NaiveDate, query: &str) -> Option<SettingsRequest> {
+pub fn body(ui: &mut Ui, state: UsageState, period: Period, today: NaiveDate, cap: &SpendCap, query: &str) -> Option<SettingsRequest> {
     match state {
         UsageState::NoFolder => empty(ui, false, &UsageReport::default(), today),
         UsageState::Reading => {
@@ -60,17 +60,25 @@ pub fn body(ui: &mut Ui, state: UsageState, period: Period, today: NaiveDate, qu
             None
         }
         UsageState::Read { report, today, .. } if report.is_empty() => empty(ui, true, report, today),
-        UsageState::Read { report, pipeline, today } => full(ui, &usage_page(report, pipeline, period, today), period, today, query),
+        UsageState::Read { report, pipeline, today } => full(ui, &usage_page(report, pipeline, period, today), period, today, cap, query),
     }
 }
 
 /// The figures, the cost per application sent, the year of days, then By command beside By model.
-fn full(ui: &mut Ui, page: &UsagePage, period: Period, today: NaiveDate, query: &str) -> Option<SettingsRequest> {
+fn full(ui: &mut Ui, page: &UsagePage, period: Period, today: NaiveDate, cap: &SpendCap, query: &str) -> Option<SettingsRequest> {
     let &[spent, tokens_label, cache, tasks, per_sent, every_day, by_command, by_model] = index(Page::Usage) else { return None };
     let totals = &page.totals;
+    // The month's Spent fills a bar against the cap in force, in the closed tone once it is reached, as the launcher counts it.
+    let (spent_note, spent_bar) = match cap.active() {
+        Some(amount) if period == Period::Month => {
+            let ink = if cap.reached(totals.spent_usd, today).is_some() { Tone::Closed.into() } else { Ink::Text };
+            let filled = (totals.spent_usd / amount.usd()).clamp(0.0, 1.0) as f32;
+            (format!("of your {} monthly cap", money(amount.usd())), Some((filled, ink)))
+        }
+        _ => (period_words(period, today), None),
+    };
     let figures = [
-        // The monthly cap goes here once it is a setting: a `slip_bar` of Spent against it, with the cap in the note.
-        Figure { label: spent, figure: money(totals.spent_usd), note: period_words(period, today), bar: None },
+        Figure { label: spent, figure: money(totals.spent_usd), note: spent_note, bar: spent_bar },
         Figure { label: tokens_label, figure: tokens(totals.tokens_in), note: format!("in, and {} out", tokens(totals.tokens_out)), bar: None },
         Figure { label: cache, figure: percent(totals.cache_share().unwrap_or(0.0)), note: CACHE_NOTE.to_owned(), bar: None },
         Figure { label: tasks, figure: totals.tasks.to_string(), note: tasks_note(totals), bar: None },

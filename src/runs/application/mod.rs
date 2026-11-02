@@ -15,3 +15,5 @@ pub use crate::runs::domain::{
     Prompt, PromptKind, Question, QuestionOption, QuickReply, Run, RunHistory, RunRequest, RunStatus, StopPoint, TaskCost, TaskOutcome, ToolState, Usage,
     UsageLogs, compose_line, heat_step, model_family, spec_for_line, stop_points,
 };
+/// What a new task starts with and whether the monthly cap lets it start, as Settings keeps them.
+pub use crate::settings::application::{CAP_READING, CapCheck, CapReached, RunDefaults, StartValues, cap_line, cap_reason, start_values};

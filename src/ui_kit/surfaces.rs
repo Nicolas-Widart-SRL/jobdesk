@@ -1480,14 +1480,11 @@ pub fn role_entry(ui: &mut Ui, cache: &mut CommonMarkCache, role: &RoleEntry, bl
     edit
 }
 
-/// What a `block_editor` shows besides the draft.
+/// A run works: Save is off and says `why` on hover, and `line` says the same beside Cancel.
 #[derive(Debug, Clone, Copy)]
-pub enum EditorMode<'a> {
-    Rest,
-    /// A run works: Save is off and says `why` on hover, and `line` says the same beside Cancel.
-    Busy { why: &'a str, line: &'a str },
-    /// The block changed on disk since the editor opened.
-    Changed(&'a ChangedOnDisk<'a>),
+pub struct EditorBusy<'a> {
+    pub why: &'a str,
+    pub line: &'a str,
 }
 
 /// The warning box at the top of a block editor whose block changed on disk.
@@ -1517,7 +1514,10 @@ pub struct BlockEditor<'a> {
     pub note: &'a str,
     /// Shown at the right of the footer, such as "Unsaved changes".
     pub unsaved: Option<&'a str>,
-    pub mode: EditorMode<'a>,
+    /// While a run works. It holds over a change on disk too: no Save of either kind writes while a run works.
+    pub busy: Option<EditorBusy<'a>>,
+    /// The block changed on disk since the editor opened.
+    pub changed: Option<&'a ChangedOnDisk<'a>>,
 }
 
 /// What the user asked of a `block_editor` this frame.
@@ -1531,10 +1531,11 @@ pub enum EditorAction {
 
 /// A slip in place of a block, to edit its raw Markdown: a title row with Preview, then the draft in a field in the body
 /// face, then Save (the command key and Enter) and Cancel (Esc). The field renders nothing. With Preview on, `preview`
-/// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save is off.
+/// shows the draft as the view would. Over a change on disk, Save is a danger button. While busy, Save of either kind is
+/// off and the command key and Enter do nothing, and a change on disk still shows.
 pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, preview: &mut bool, show_preview: impl FnOnce(&mut Ui, &str)) -> Option<EditorAction> {
     let p = Palette::of(ui);
-    let busy = matches!(editor.mode, EditorMode::Busy { .. });
+    let busy = editor.busy.is_some();
     // Taken before the field sees it, so the chord never types a line break.
     let mut action = None;
     if !busy && ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter)) {
@@ -1561,7 +1562,7 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
                 title.id
             })
             .inner;
-        if let EditorMode::Changed(changed) = editor.mode
+        if let Some(changed) = editor.changed
             && changed_box(ui, changed)
         {
             action = Some(EditorAction::TakeTheirs);
@@ -1578,11 +1579,10 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = BUTTON_GAP;
             let chord = crate::ui_kit::command_chord("Enter");
-            let save = match editor.mode {
-                EditorMode::Rest => crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord),
-                EditorMode::Busy { why, .. } => enabled_when(ui, false, why, |ui| crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord)),
-                EditorMode::Changed(_) => crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord),
-            };
+            let why = editor.busy.map_or("", |busy| busy.why);
+            let save = enabled_when(ui, !busy, why, |ui| {
+                if editor.changed.is_some() { crate::ui_kit::danger_shortcut_button(ui, editor.save, &chord) } else { crate::ui_kit::primary_shortcut_button(ui, editor.save, &chord) }
+            });
             if save.clicked() {
                 action = Some(EditorAction::Save);
             }
@@ -1594,14 +1594,14 @@ pub fn block_editor(ui: &mut Ui, editor: &BlockEditor, draft: &mut String, previ
                 if let Some(unsaved) = editor.unsaved {
                     add_text(ui, unsaved, Type::NOTE, Ink::Muted);
                 }
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| match editor.mode {
-                    EditorMode::Busy { line, .. } => {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| match editor.busy {
+                    Some(busy) => {
                         ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
                         let (square, _) = ui.allocate_exact_size(Vec2::splat(STATUS_DOT), Sense::hover());
                         ui.painter().rect_filled(square, 0.0, p.active);
-                        add_text(ui, line, Type::NOTE, Ink::Text);
+                        add_text(ui, busy.line, Type::NOTE, Ink::Text);
                     }
-                    _ => {
+                    None => {
                         add_text(ui, editor.note, Type::NOTE, Ink::Muted);
                     }
                 });
@@ -1647,7 +1647,7 @@ fn changed_box(ui: &mut Ui, changed: &ChangedOnDisk) -> bool {
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
 
@@ -1796,5 +1796,116 @@ mod tests {
         harness.key_press(egui::Key::Tab);
         harness.run();
         assert!(harness.get_by_label("After").is_focused(), "the next Tab leaves the row");
+    }
+
+    const CHANGED_LINES: [(&str, bool); 2] = [("- Budget you owned: [PLACEHOLDER]", false), ("- Introduced a weekly planning review.", true)];
+
+    const CHANGED: ChangedOnDisk = ChangedOnDisk {
+        title: "This role changed while you were editing.",
+        detail: "A task added a line to it.",
+        caption: "Now in the file",
+        lines: Some(&CHANGED_LINES),
+        take: "Use the new version",
+        take_note: "Replaces your text with the file's.",
+    };
+
+    /// An editor on the bench: whether a run works, whether the block changed on disk, and what it asked for so far.
+    struct Bench {
+        busy: bool,
+        changed: bool,
+        draft: String,
+        actions: Vec<EditorAction>,
+    }
+
+    fn bench(busy: bool, changed: bool) -> Harness<'static, Bench> {
+        let state = Bench { busy, changed, draft: "### Lead Engineer - Calder Freight (2021 – present)".to_owned(), actions: Vec::new() };
+        Harness::builder().with_size([800.0, 600.0]).with_context_setup(setup).build_ui_state(
+            |ui, bench: &mut Bench| {
+                let editor = BlockEditor {
+                    title: "Edit this role",
+                    hint: "Markdown.",
+                    save: if bench.changed { "Save mine over it" } else { "Save" },
+                    note: "Only this role changes.",
+                    unsaved: None,
+                    busy: bench.busy.then_some(EditorBusy { why: "A task is running.", line: "Save waits until it ends." }),
+                    changed: bench.changed.then_some(&CHANGED),
+                };
+                if let Some(action) = block_editor(ui, &editor, &mut bench.draft, &mut false, |_, _| {}) {
+                    bench.actions.push(action);
+                }
+                crate::ui_kit::note_focus(ui.ctx());
+            },
+            state,
+        )
+    }
+
+    fn save_button<'h>(harness: &'h Harness<'static, Bench>) -> egui_kittest::Node<'h> {
+        let label = if harness.state().changed { "Save mine over it" } else { "Save" };
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, label)
+    }
+
+    #[test]
+    fn the_command_key_and_enter_saves_only_while_no_run_works() {
+        for changed in [false, true] {
+            let mut harness = bench(false, changed);
+            harness.run();
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+            assert_eq!(harness.state().actions, vec![EditorAction::Save], "changed: {changed}");
+
+            let mut harness = bench(true, changed);
+            harness.run();
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+            harness.run();
+            save_button(&harness).click();
+            harness.run();
+            assert_eq!(harness.state().actions, Vec::new(), "changed: {changed}");
+            assert!(save_button(&harness).accesskit_node().is_disabled());
+        }
+    }
+
+    #[test]
+    fn a_change_on_disk_still_shows_while_a_run_works() {
+        let mut harness = bench(true, true);
+        harness.run();
+        assert!(harness.query_by_label_contains("This role changed").is_some());
+        harness.get_by_label("Use the new version").click();
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::TakeTheirs]);
+    }
+
+    #[test]
+    fn the_first_esc_leaves_the_field_and_the_second_cancels() {
+        let mut harness = bench(false, false);
+        harness.run();
+        harness.query_all_by_role(egui::accesskit::Role::MultilineTextInput).next().expect("the field").focus();
+        harness.run();
+        harness.key_press(Key::Escape);
+        harness.run();
+        assert_eq!(harness.state().actions, Vec::new());
+        harness.key_press(Key::Escape);
+        harness.run();
+        assert_eq!(harness.state().actions, vec![EditorAction::Cancel]);
+    }
+
+    #[test]
+    fn a_blocked_role_offers_no_edit() {
+        const ROLE: RoleEntry = RoleEntry { dates: "2021 – present", title: "Lead Engineer", company: "Calder Freight", body: "- Leads a team of six.", first: true };
+        for (blocked, clicks) in [(None, 1), (Some("Save or cancel the open edit first."), 0)] {
+            let mut cache = CommonMarkCache::default();
+            let mut harness = Harness::builder().with_size([800.0, 300.0]).with_context_setup(setup).build_ui_state(
+                move |ui, clicked: &mut usize| {
+                    if role_entry(ui, &mut cache, &ROLE, blocked).clicked() {
+                        *clicked += 1;
+                    }
+                },
+                0,
+            );
+            harness.run();
+            assert_eq!(harness.get_by_label("Edit").accesskit_node().is_disabled(), blocked.is_some());
+            harness.get_by_label("Edit").click();
+            harness.run();
+            assert_eq!(*harness.state(), clicks, "blocked: {blocked:?}");
+        }
     }
 }

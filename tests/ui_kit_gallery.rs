@@ -7,7 +7,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorMode, Figure, FlowNode, HeatDay, Ink,
+    AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
     KnotState, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, block_editor,
     brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button, day_heatmap,
     day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, document_with_blanks, doughnut, empty_state, enabled_when, faint_mono, fat_tally,
@@ -648,15 +648,17 @@ const CHANGED: ChangedOnDisk = ChangedOnDisk {
     take_note: "Replaces your text with the file's. To keep both, copy the new line into your text, then save.",
 };
 
-fn editor(mode: EditorMode, unsaved: bool) -> BlockEditor {
-    let changed = matches!(mode, EditorMode::Changed(_));
+const BUSY: EditorBusy = EditorBusy { why: "A task is running and may change this file. Save once it ends.", line: "A task is running, so Save waits until it ends. Your text stays here." };
+
+fn editor(busy: bool, changed: bool, unsaved: bool) -> BlockEditor<'static> {
     BlockEditor {
         title: "Edit this role",
         hint: "Markdown. Placeholders read [PLACEHOLDER].",
         save: if changed { "Save mine over it" } else { "Save" },
         note: if changed { "Your text replaces the role as it is now in the file." } else { "Only this role changes. The rest of the file stays as it is." },
         unsaved: unsaved.then_some("Unsaved changes"),
-        mode,
+        busy: busy.then_some(BUSY),
+        changed: changed.then_some(&CHANGED),
     }
 }
 
@@ -678,17 +680,17 @@ fn profile(ui: &mut Ui) {
             ui.add_space(12.0);
             markdown_with_blanks(ui, &mut cache, "Career goals: [ROLE_YOU_WANT_NEXT]. Code such as `cargo test` keeps its own look, and [a link](https://tessel.example/jobs/1) its own.");
             ui.add_space(12.0);
-            let busy = EditorMode::Busy { why: "A task is running and may change this file. Save once it ends.", line: "A task is running, so Save waits until it ends. Your text stays here." };
-            for (id, mode, unsaved) in [("rest", EditorMode::Rest, true), ("busy", busy, false), ("changed", EditorMode::Changed(&CHANGED), true)] {
+            // Busy holds over a change on disk: the box stays, and Save mine over it waits too.
+            for (id, busy, changed, unsaved) in [("rest", false, false, true), ("busy", true, false, false), ("changed", false, true, true), ("changed while busy", true, true, true)] {
                 ui.push_id(id, |ui| {
                     let mut draft = DRAFT.to_owned();
-                    block_editor(ui, &editor(mode, unsaved), &mut draft, &mut false, |_, _| {});
+                    block_editor(ui, &editor(busy, changed, unsaved), &mut draft, &mut false, |_, _| {});
                 });
                 ui.add_space(12.0);
             }
             ui.push_id("preview", |ui| {
                 let mut draft = DRAFT.replace("EUR 1.2M a year, eight people at the peak", "[PLACEHOLDER]");
-                block_editor(ui, &editor(EditorMode::Rest, false), &mut draft, &mut true, |ui, draft| document_with_blanks(ui, &mut CommonMarkCache::default(), draft));
+                block_editor(ui, &editor(false, false, false), &mut draft, &mut true, |ui, draft| document_with_blanks(ui, &mut CommonMarkCache::default(), draft));
             });
             ui.add_space(12.0);
         });
@@ -733,7 +735,7 @@ fn profile_gallery(ui: &mut Ui) {
 }
 
 /// The height of the Profile sheet. The main sheet is near the 8192px a texture holds, so these parts take a sheet of their own.
-const PROFILE_HEIGHT: f32 = 1700.0;
+const PROFILE_HEIGHT: f32 = 2200.0;
 
 fn render_profile(theme: Theme, name: &str) {
     let mut harness = Harness::builder()
@@ -911,7 +913,7 @@ fn ui_kit_gallery_light() {
 /// Every clickable kit widget in the galleries shows the pointing hand under the pointer, and a disabled one keeps the arrow.
 #[test]
 fn every_clickable_widget_shows_the_hand() {
-    for (sheet, height) in [(gallery as fn(&mut Ui), SHEET[1]), (profile_gallery, PROFILE_HEIGHT)] {
+    for (sheet, height, least) in [(gallery as fn(&mut Ui), SHEET[1], 20), (profile_gallery, PROFILE_HEIGHT, 10)] {
         let mut harness = Harness::builder().with_size([1000.0, height]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(move |ui| {
             jobdesk::ui_kit::desk(ui, |ui| {
                 jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
@@ -929,7 +931,7 @@ fn every_clickable_widget_shows_the_hand() {
                 }
             }
         }
-        assert!(clickable.len() > 5, "the sheet shows {} clickable widgets", clickable.len());
+        assert!(clickable.len() > least, "the sheet shows {} clickable widgets", clickable.len());
         for at in clickable {
             harness.hover_at(at);
             harness.step();

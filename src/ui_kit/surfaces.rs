@@ -1669,7 +1669,9 @@ pub fn block_editor(
         if *preview {
             show_preview(ui, draft);
         } else {
+            // A named field keeps its focus and cursor when the warning box opens above it.
             let field = egui::TextEdit::multiline(draft)
+                .id_salt("block_editor_draft")
                 .font(Type::BODY.font())
                 .margin(Margin::same(FIELD_PADDING as i8))
                 .desired_width(f32::INFINITY)

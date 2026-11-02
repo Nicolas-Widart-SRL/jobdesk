@@ -64,6 +64,30 @@ impl ProfileEditor {
         self.open.as_ref().is_some_and(|open| open.draft != open.opened_with)
     }
 
+    /// Whether the open block is a new one, which a save adds instead of replacing a block.
+    pub fn is_new(&self) -> bool {
+        self.open.as_ref().is_some_and(|open| open.new)
+    }
+
+    /// The block as the last save found it changed on disk, line by line, each with whether it is new: a line the text
+    /// the editor opened with does not have as many times. `None` until a save finds the block changed.
+    pub fn theirs_lines(&self) -> Option<Vec<(String, bool)>> {
+        let open = self.open.as_ref()?;
+        let theirs = open.theirs.as_ref()?;
+        let mut before: Vec<&str> = open.opened_with.lines().collect();
+        let lines = theirs
+            .lines()
+            .map(|line| match before.iter().position(|old| *old == line) {
+                Some(at) => {
+                    before.remove(at);
+                    (line.to_owned(), false)
+                }
+                None => (line.to_owned(), true),
+            })
+            .collect();
+        Some(lines)
+    }
+
     /// Drops the draft for the block as the last save found it on disk, which the next save then compares against.
     pub fn use_new_version(&mut self) {
         if let Some(open) = self.open.as_mut()
@@ -246,6 +270,23 @@ mod tests {
         *editor.draft_mut().unwrap() = "## Education\nMSc, Porto, 2011".to_owned();
         assert_eq!(editor.save(false, false), SaveOutcome::Saved);
         assert!(file(&memory).ends_with("## Education\nMSc, Porto, 2011\n"));
+    }
+
+    #[test]
+    fn the_lines_on_disk_mark_what_is_new() {
+        let (memory, mut editor) = editor(TEXT);
+        editor.open(key(3, "Lead - Calder (2021 – now)", Some("Professional Experience")), "### Lead - Calder (2021 – now)\nShipped.".to_owned());
+        assert_eq!(editor.theirs_lines(), None);
+        assert!(!editor.is_new());
+        memory.files.borrow_mut().insert(ProfileFile::Candidate, TEXT.replace("Shipped.\n", "Shipped.\nShipped.\nPlanned.\n"));
+        assert!(matches!(editor.save(false, false), SaveOutcome::Changed { .. }));
+        let lines = editor.theirs_lines().unwrap();
+        let line = |text: &str, new| (text.to_owned(), new);
+        assert_eq!(lines, [line("### Lead - Calder (2021 – now)", false), line("Shipped.", false), line("Shipped.", true), line("Planned.", true)]);
+        editor.use_new_version();
+        assert_eq!(editor.theirs_lines(), None, "the new version is the draft now");
+        editor.open_new(key(2, "Education", None), "### Course".to_owned());
+        assert!(editor.is_new());
     }
 
     #[test]

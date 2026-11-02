@@ -18,7 +18,8 @@ const TOOL_ROW_PADDING: i8 = 6;
 const PORTAL_COLUMNS: [f32; 3] = [0.5, 0.3, 0.2];
 
 /// What Jobdesk promises about the folder, on Setup and on Runtime status.
-const PROMISE: &str = "Jobdesk reads your folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
+const PROMISE: &str =
+    "Jobdesk reads your folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
 
 /// Runtime status's title and lead, as Settings indexes them for search.
 const RUNTIME_TITLE: &str = "Runtime status";

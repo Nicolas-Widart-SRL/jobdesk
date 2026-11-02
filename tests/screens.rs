@@ -1620,25 +1620,23 @@ fn cmd_k_in_settings_opens_the_launcher() {
     assert_eq!(calls.lock().unwrap().starts, 0, "the launcher starts nothing by itself");
 }
 
-/// The welcome's second step names a place that stays once the folder is chosen and every tool answers,
-/// when the Setup tab has left the menu.
+/// The welcome's second step names Profile, whose tab stays once the folder is chosen and every tool answers, when the
+/// Setup tab has left the menu. Its promise says when Jobdesk changes the folder.
 #[test]
 fn the_welcome_points_at_a_place_that_stays() {
     let harness = tray_harness(probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), AllTools));
-    let step = harness.get_by_label_contains("shows which parts are filled in and what is missing.");
-    let words = step.accesskit_node().value().unwrap_or_default();
-    assert!(words.starts_with("Settings › Runtime status"), "{words}");
-    assert!(!words.contains("Setup"), "{words}");
+    assert!(is_shown(&harness, "Profile shows each topic, what is filled in and what is missing."));
+    assert!(is_shown(
+        &harness,
+        "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer."
+    ));
 
     let mut harness = tray_harness(probed(shell(Screen::InTray, "welcome_step_reachable"), AllTools));
     settle(&mut harness);
     assert!(harness.query_by_role_and_label(egui::accesskit::Role::Tab, "Setup").is_none(), "the Setup tab has gone");
-    settings_button(&harness).click();
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Profile").click();
     harness.run_steps(3);
-    harness.get_by_label("Runtime status").click();
-    harness.run_steps(3);
-    assert!(is_shown(&harness, "Whether Claude Code, your profile, tools, portals, templates and sync are ready."));
-    assert!(harness.query_all_by_label("Profile").next().is_some(), "and the profile shows there");
+    assert!(is_shown(&harness, PROFILE_SUBTITLE), "and Profile shows the topics");
 }
 
 /// A square marks each job with a card in Today, and the legend under the table says what it means.
@@ -3797,4 +3795,388 @@ fn profile_updated_light() {
     feed.send(Snapshot::load(&root, day())).unwrap();
     harness.run_steps(3);
     harness.snapshot_options("profile_updated_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The last line of the sample's first role, and the same with its blank filled in.
+const BUDGET: &str = "- Budget or headcount you owned: [PLACEHOLDER]";
+const BUDGET_FILLED: &str = "- Budget or headcount you owned: EUR 1.2M a year, eight people at the peak";
+const SAVE_WAITS: &str = "A task is running and may change this file. Save once it ends.";
+const SAVE_WAITS_LINE: &str = "A task is running, so Save waits until it ends. Your text stays here.";
+const DISCARD_ASK: &str = "Discard your changes?";
+const SAVE_OVER: &str = "Save mine over it";
+
+fn field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::MultilineTextInput)
+}
+
+fn editing(harness: &Harness) -> bool {
+    harness.query_by_role(egui::accesskit::Role::MultilineTextInput).is_some()
+}
+
+fn button<'a>(harness: &'a Harness<'static>, label: &'a str) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, label)
+}
+
+/// Scrolls the paper to the button, then clicks it.
+fn press_button(harness: &mut Harness<'static>, label: &str) {
+    button(harness, label).scroll_to_me();
+    harness.run_steps(3);
+    button(harness, label).click();
+    harness.run_steps(3);
+}
+
+/// Opens the first role, Lead Software Engineer, in the editor.
+fn edit_first_role(harness: &mut Harness<'static>) {
+    harness.get_all_by_label("Edit").next().expect("the first role's Edit").click();
+    harness.run_steps(3);
+    assert!(editing(harness), "the role opened in the editor");
+}
+
+/// Opens the first role and types its budget over the blank at the end of the draft.
+fn fill_the_budget(harness: &mut Harness<'static>) {
+    edit_first_role(harness);
+    field(harness).focus();
+    harness.run_steps(1);
+    for _ in 0.."[PLACEHOLDER]".len() {
+        harness.key_press(Key::Backspace);
+    }
+    field(harness).type_text("EUR 1.2M a year, eight people at the peak");
+    harness.run_steps(3);
+    assert!(field(harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "{:?}", field(harness).value());
+}
+
+fn candidate(root: &Path) -> String {
+    fs::read_to_string(root.join(CANDIDATE)).unwrap()
+}
+
+/// The sample on Profile with no run, at a fixed place whose files a test can read.
+fn profile_at(name: &str) -> (Shell, std::path::PathBuf) {
+    let root = sample_root(name);
+    (Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day())), root)
+}
+
+/// The first role as the sample holds it, with its budget filled in.
+fn first_role_filled(text: &str) -> String {
+    let start = text.find("### Lead Software Engineer").unwrap();
+    let end = text.find(BUDGET).unwrap() + BUDGET.len();
+    text[start..end].replace(BUDGET, BUDGET_FILLED)
+}
+
+/// Save replaces the role's lines, keeps every other byte, and the saved text shows at once.
+#[test]
+fn a_saved_role_changes_only_its_lines() {
+    let (shell, root) = profile_at("profile_edit_save");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    assert!(is_shown(&harness, "Unsaved changes"));
+    assert!(harness.get_all_by_label("Edit").all(|edit| edit.accesskit_node().is_disabled()), "one edit at a time");
+    assert!(button(&harness, "Add a role").accesskit_node().is_disabled());
+
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED));
+    assert!(!editing(&harness), "the editor closed");
+    assert!(harness.query_by_label_contains("EUR 1.2M a year").is_some(), "the saved text shows without waiting for the folder watcher");
+    assert!(harness.get_all_by_label("Edit").all(|edit| !edit.accesskit_node().is_disabled()));
+}
+
+/// A snapshot the folder watcher read before the save never shows the old text again.
+#[test]
+fn a_snapshot_read_before_a_save_keeps_the_saved_text() {
+    let (mut shell, root) = profile_at("profile_edit_stale");
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    let early = Snapshot::load(&root, day());
+    fill_the_budget(&mut harness);
+    cmd_enter(&mut harness);
+    feed.send(early).unwrap();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("EUR 1.2M a year").is_some(), "the early snapshot keeps the text read back");
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("EUR 1.2M a year").is_some());
+}
+
+/// While a run works, Save waits and says why. The draft outlives the run, and Save writes once the run's last load is in.
+#[test]
+fn save_waits_while_a_run_works_and_the_draft_survives_it() {
+    let (shell, root, sink, feed) = profile_with_run("profile_edit_busy");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    assert!(is_shown(&harness, SAVE_WAITS_LINE));
+    let save = button(&harness, "Save");
+    assert!(save.accesskit_node().is_disabled());
+    save.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, SAVE_WAITS));
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before, "nothing was written");
+
+    end_run(&sink);
+    harness.run_steps(3);
+    assert!(button(&harness, "Save").accesskit_node().is_disabled(), "the run's changes are not in yet");
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
+    assert!(!is_shown(&harness, SAVE_WAITS_LINE));
+    press_button(&mut harness, "Save");
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED));
+}
+
+/// A reply that starts a turn while the editor is open turns Save off again, and the draft waits for the turn.
+#[test]
+fn a_reply_that_starts_a_turn_holds_the_save() {
+    let (shell, root, sink, feed) = profile_with_run("profile_edit_reply");
+    let before = candidate(&root);
+    let (mut harness, shell) = shared_harness(shell);
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: Some("Anything else?".into()), cost_usd: 0.4, duration_ms: 40_000 }]);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    fill_the_budget(&mut harness);
+    assert!(!button(&harness, "Save").accesskit_node().is_disabled(), "the run waits for a reply");
+
+    let id = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].id.clone();
+    shell.borrow_mut().desk_slot().as_mut().unwrap().reply(&id, "Add my certifications too.").unwrap();
+    harness.run_steps(3);
+    assert!(button(&harness, "Save").accesskit_node().is_disabled());
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before, "nothing was written");
+
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED));
+}
+
+/// A role changed on disk shows its new lines, and Save becomes Save mine over it, which writes the draft over them.
+#[test]
+fn a_role_changed_on_disk_is_written_over_only_when_asked() {
+    let (shell, root) = profile_at("profile_edit_conflict");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
+    let theirs = candidate(&root);
+    cmd_enter(&mut harness);
+
+    assert_eq!(candidate(&root), theirs, "nothing was written");
+    assert!(harness.query_by_label_contains("This role changed while you were editing.").is_some());
+    assert!(is_shown(&harness, "- Introduced a weekly planning review with depot managers."), "the new line shows");
+    assert!(is_shown(&harness, "Changed on disk just now"));
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Button, "Save").is_none());
+    press_button(&mut harness, SAVE_OVER);
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED), "the draft replaced the role as the file held it");
+    assert!(!editing(&harness));
+}
+
+/// Use the new version takes the file's text, and the next Save compares with it.
+#[test]
+fn use_the_new_version_takes_the_files_text() {
+    let (shell, root) = profile_at("profile_edit_theirs");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
+    cmd_enter(&mut harness);
+    press_button(&mut harness, "Use the new version");
+    let draft = field(&harness).value().unwrap_or_default();
+    assert!(draft.contains("- Introduced a weekly planning review with depot managers.") && draft.ends_with(BUDGET), "{draft}");
+    assert!(!button(&harness, "Save").accesskit_node().is_disabled(), "Save is plain Save again");
+    assert!(harness.query_by_label_contains("changed while you were editing").is_none());
+}
+
+/// A role renamed on disk is gone under its old name. The box says so, offers no new version, and Save mine over it
+/// writes the draft back at the end of its section.
+#[test]
+fn a_role_gone_from_the_file_is_written_back_only_when_asked() {
+    let (shell, root) = profile_at("profile_edit_gone");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    rewrite(&root, CANDIDATE, "### Lead Software Engineer - Calder Freight", "### Staff Engineer - Calder Freight");
+    let renamed = candidate(&root);
+    cmd_enter(&mut harness);
+
+    assert_eq!(candidate(&root), renamed, "nothing was written");
+    assert!(harness.query_by_label_contains("This role is no longer in the file.").is_some());
+    assert!(harness.query_by_label("Use the new version").is_none(), "there is no new version to take");
+    press_button(&mut harness, SAVE_OVER);
+    let after = candidate(&root);
+    let role = first_role_filled(&before);
+    assert!(after.contains(&format!("{role}\n\n## Independent Projects")), "{after}");
+    assert_eq!(after.replace(&format!("{role}\n\n"), ""), renamed);
+}
+
+/// Picking another tab with unsaved text asks first. Keep editing is the default and stays on Profile.
+#[test]
+fn leaving_the_tab_with_a_draft_asks_first() {
+    let mut harness = tray_harness(probed(shell(Screen::Profile, "profile_edit_leave_tab"), FixedTools));
+    settle(&mut harness);
+    fill_the_budget(&mut harness);
+    let setup = |harness: &Harness<'static>| harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Setup").click();
+    setup(&harness);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, DISCARD_ASK));
+    assert!(button(&harness, "Keep editing").is_focused(), "Keep editing is the default");
+    button(&harness, "Keep editing").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, DISCARD_ASK));
+    assert!(is_shown(&harness, PROFILE_SUBTITLE), "Profile stays");
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
+
+    setup(&harness);
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, DISCARD_ASK) && editing(&harness), "Esc keeps editing");
+
+    setup(&harness);
+    harness.run_steps(3);
+    button(&harness, "Discard changes").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, PROFILE_SUBTITLE), "Setup is on show");
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Profile").click();
+    harness.run_steps(3);
+    assert!(!editing(&harness), "the draft was dropped");
+}
+
+/// Picking another topic with unsaved text asks first too.
+#[test]
+fn leaving_the_topic_with_a_draft_asks_first() {
+    let (shell, _root) = profile_at("profile_edit_leave_topic");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    pick_topic(&mut harness, "Education");
+    assert!(is_shown(&harness, DISCARD_ASK));
+    button(&harness, "Keep editing").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "5 roles. Claude picks from these for each CV."), "Experience stays");
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED));
+
+    pick_topic(&mut harness, "Education");
+    button(&harness, "Discard changes").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Your degrees and courses. Claude lists them on each CV."));
+    assert!(!editing(&harness));
+}
+
+/// The first Esc leaves the field, and the second closes the editor. With unsaved text the second asks first.
+#[test]
+fn esc_leaves_the_field_then_closes_the_editor() {
+    let (shell, _root) = profile_at("profile_edit_esc");
+    let mut harness = tray_harness(shell);
+    edit_first_role(&mut harness);
+    field(&harness).focus();
+    harness.run_steps(1);
+    press(&mut harness, Key::Escape);
+    assert!(editing(&harness) && !field(&harness).is_focused(), "the field let go and the editor stays");
+    press(&mut harness, Key::Escape);
+    assert!(!editing(&harness), "the second Esc closed it");
+
+    fill_the_budget(&mut harness);
+    press(&mut harness, Key::Escape);
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, DISCARD_ASK), "unsaved text asks first");
+    button(&harness, "Discard changes").click();
+    harness.run_steps(3);
+    assert!(!editing(&harness));
+}
+
+/// A save is the user's own, so it never puts Updated on a topic, even when a run starts and ends right after it.
+#[test]
+fn a_save_never_marks_a_topic() {
+    let (shell, root, sink, feed) = profile_with_run("profile_edit_marks");
+    let (mut harness, shell) = shared_harness(shell);
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    fill_the_budget(&mut harness);
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root).matches(BUDGET_FILLED).count(), 1, "saved");
+
+    let options = StartOptions { model: None, budget_usd: 2.0 };
+    shell.borrow_mut().desk_slot().as_mut().unwrap().start("/setup --section skills", &options, run_started()).unwrap();
+    harness.run_steps(3);
+    end_run(&sink);
+    harness.run_steps(3);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Updated"), "a save marks nothing");
+}
+
+/// Add a role opens a new role after the last one, and Save puts it there.
+#[test]
+fn add_a_role_goes_after_the_last_role() {
+    let (shell, root) = profile_at("profile_edit_add_role");
+    let before = candidate(&root);
+    let mut harness = tray_harness(shell);
+    press_button(&mut harness, "Add a role");
+    assert_eq!(field(&harness).value().as_deref(), Some("### Title - Company (dates)"));
+    field(&harness).focus();
+    harness.run_steps(1);
+    field(&harness).type_text(" and more");
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    let after = candidate(&root);
+    let added = "### Title - Company (dates) and more";
+    assert_eq!(after, before.replace("cultural venues.\n\n## Independent Projects", &format!("cultural venues.\n\n{added}\n\n## Independent Projects")));
+}
+
+/// A topic of one section edits it from its head, and a topic of several from each section's sub-heading.
+#[test]
+fn edit_section_sits_where_the_sections_are() {
+    let (shell, _root) = profile_at("profile_edit_sections");
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Edit section").count(), 2, "Roles and the summary in CLAUDE.md");
+    pick_topic(&mut harness, "References");
+    assert_eq!(harness.query_all_by_label("Edit section").count(), 1, "one section, in the head");
+    harness.get_by_label("Edit section").click();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().starts_with("## References"));
+    assert!(harness.get_by_label("Edit section").accesskit_node().is_disabled());
+}
+
+/// Write it myself opens an empty topic's first section.
+#[test]
+fn write_it_myself_opens_the_first_section() {
+    let (shell, _root) = profile_at("profile_edit_write");
+    let mut harness = tray_harness(shell);
+    pick_topic(&mut harness, "Goals and deal-breakers");
+    button(&harness, "Write it myself").click();
+    harness.run_steps(3);
+    assert!(editing(&harness));
+    assert!(!is_shown(&harness, "Not filled in yet"), "the editor takes the empty state's place");
+}
+
+#[test]
+fn profile_edit_light() {
+    let mut harness = probed_wgpu(probed(shell(Screen::Profile, "profile_edit_light"), FixedTools), Theme::Light);
+    fill_the_budget(&mut harness);
+    harness.snapshot_options("profile_edit_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// A run works, so Save waits and says why on hover.
+#[test]
+fn profile_busy_light() {
+    let (shell, _root, _sink, _feed) = profile_with_run("profile_busy_light");
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    fill_the_budget(&mut harness);
+    button(&harness, "Save").hover();
+    harness.run_steps(8);
+    harness.snapshot_options("profile_busy_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// A task added a line to the role while it was open.
+#[test]
+fn profile_conflict_light() {
+    let (shell, root) = profile_at("profile_conflict_light");
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    fill_the_budget(&mut harness);
+    rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
+    cmd_enter(&mut harness);
+    harness.snapshot_options("profile_conflict_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }

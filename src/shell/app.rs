@@ -16,8 +16,8 @@ use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::profile;
-use crate::profile::application::UpdatedMarks;
-use crate::profile::ui::ProfileScreen;
+use crate::profile::application::{ProfileEditor, UpdatedMarks};
+use crate::profile::ui::{Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
@@ -25,7 +25,7 @@ use crate::settings;
 use crate::settings::application::{Page, RuntimeWord, Settings, StartScreen, UsageState};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
-use crate::shell::{Snapshot, Source, live_snapshot};
+use crate::shell::{Issue, Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING,
@@ -132,6 +132,12 @@ pub struct Shell {
     marks: UpdatedMarks,
     /// When the last run ended, until a snapshot read after it shows what the run changed.
     run_ended: Option<Instant>,
+    /// Saves one profile block at a time into the open folder.
+    profile_editor: Option<ProfileEditor>,
+    /// The tab the user picked while Profile asks whether to drop their draft.
+    leave_to: Option<Screen>,
+    /// When the last profile save was read back, so a snapshot read before it cannot show the old text again.
+    profile_saved: Option<Instant>,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -174,18 +180,23 @@ impl Shell {
             profile_screen: ProfileScreen::default(),
             marks: UpdatedMarks::default(),
             run_ended: None,
+            profile_editor: None,
+            leave_to: None,
+            profile_saved: None,
         }
     }
 
     /// A shell with fixed data, for tests and previews.
     pub fn with_snapshot(screen: Screen, workspace: WorkspaceRoot, snapshot: Snapshot) -> Self {
         let today = snapshot.today;
-        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+        let profile_editor = Some(profile::open_editor(workspace.path()));
+        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
     }
 
     /// A shell whose folder is open but not read yet, for tests and previews.
     pub fn loading(screen: Screen, workspace: WorkspaceRoot, today: NaiveDate) -> Self {
-        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), ..Self::empty(screen, today) }
+        let profile_editor = Some(profile::open_editor(workspace.path()));
+        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
     }
 
     /// The first run: no folder is open yet.
@@ -311,8 +322,9 @@ impl Shell {
                 let repaint = ctx.clone();
                 self.pages = Some(dossier::page_store(Arc::new(move || repaint.request_repaint())));
                 self.open_dossier = None;
-                // The last folder's marks and picked topic mean nothing here.
+                // The last folder's marks, picked topic and edit mean nothing here.
                 (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
+                (self.profile_editor, self.leave_to, self.profile_saved) = (Some(profile::open_editor(root.path())), None, None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
                 // The last folder's data stays off screen while this one is read.
@@ -345,7 +357,12 @@ impl Shell {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        if let Some(latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
+        if let Some(mut latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
+            // A snapshot read before the last save would show the saved block as it was, so the profile read back stays.
+            match self.profile_saved {
+                Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
+                _ => self.profile_saved = None,
+            }
             // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
             if let Some(ended) = self.run_ended
                 && latest.read_at.is_some_and(|read| read >= ended)
@@ -559,7 +576,15 @@ impl Shell {
             });
         });
         if let Some(screen) = picked {
-            self.screen = screen;
+            // Unsaved profile text asks first, and the tab changes only once the user drops it.
+            let asks = self.screen == Screen::Profile
+                && screen != Screen::Profile
+                && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
+            if asks {
+                self.leave_to = Some(screen);
+            } else {
+                self.screen = screen;
+            }
         }
     }
 
@@ -754,8 +779,25 @@ impl Shell {
             }
             Screen::Profile => {
                 // A file that fails hides only the topics it feeds, so the screen as a whole never fails.
-                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
-                profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, &mut self.marks, busy, Local::now().naive_local());
+                // A run that just ended may still be writing, and its changes are not marked until the load after its end
+                // arrives. A save in between would be marked as the run's, so Save waits for that load too.
+                let settling = self.run_ended.is_some() && self.updates.is_some();
+                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy) || settling;
+                let moment = Moment { busy, now: Local::now().naive_local() };
+                let asked = match self.profile_editor.as_mut() {
+                    Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
+                    None => None,
+                };
+                match asked {
+                    Some(ProfileRequest::Saved) => self.read_back_profile(),
+                    Some(ProfileRequest::Leave) => {
+                        if let Some(screen) = self.leave_to.take() {
+                            self.screen = screen;
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    None => {}
+                }
             }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
@@ -794,6 +836,20 @@ impl Shell {
         } else if open_setup.get() {
             self.open_settings(Page::Runtime);
         }
+        if self.screen != Screen::Profile {
+            self.profile_screen.put_away();
+        }
+    }
+
+    /// Reads the profile back after a save, so the saved block shows at once instead of after the folder watcher's next
+    /// load. Only the profile files are read, as a snapshot reads them, and the next snapshot replaces the result.
+    fn read_back_profile(&mut self) {
+        let Some(root) = self.workspace.as_ref() else { return };
+        let (view, errors) = profile::load(root.path());
+        self.snapshot.profile = view;
+        self.snapshot.issues.retain(|issue| issue.source != Source::Profile);
+        self.snapshot.issues.extend(errors.into_iter().map(|error| Issue { source: Source::Profile, error }));
+        self.profile_saved = Some(Instant::now());
     }
 
     /// Every source that could not be read. The tray reports its own file.
@@ -907,16 +963,15 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
     });
     ui.add_space(WELCOME_STEP_PADDING);
     let choose = welcome_step(ui, 1, "Choose your job search folder", "The ai-job-search folder you set up with Claude Code.", true);
-    // Setup can leave the menu once the folder is chosen, so the step names the place that always stays.
-    let profile = format!("Settings › Runtime status shows which parts are filled in and what is missing. {} opens Settings.", SETTINGS_KEYS.join(" "));
-    welcome_step(ui, 2, "Check your profile", &profile, false);
+    // Setup can leave the menu once the folder is chosen, so the step names Profile, whose tab always stays.
+    welcome_step(ui, 2, "Check your profile", "Profile shows each topic, what is filled in and what is missing.", false);
     welcome_step(ui, 3, "Find your first jobs", "Opens the search task. You start it, and Today fills in as it works.", false);
     ui.add_space(WELCOME_STEP_PADDING / 2.0);
     if let Some(error) = error {
         alert(ui, error);
         ui.add_space(WELCOME_STEP_PADDING / 2.0);
     }
-    let promise = "Jobdesk reads this folder and never changes it. Only a task you start can change it, through Claude Code on this computer.";
+    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
     ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
     choose
 }

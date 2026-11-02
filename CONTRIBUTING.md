@@ -59,7 +59,7 @@ Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPD
 Miri runs in CI over the domain, application and shared_kernel tests. To run it locally:
 
 ```bash
-rustup +nightly component add miri rust-src
+rustup toolchain install nightly --component miri,rust-src
 cargo +nightly miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path
 ```
 
@@ -69,6 +69,8 @@ cargo-audit checks `Cargo.lock` in CI. To run it locally:
 cargo install cargo-audit --locked
 cargo audit
 ```
+
+When the audit job fails on an advisory with no fixed release yet, update the dependency if a fix exists. Otherwise add the advisory id and a reason to `ignore` in `.cargo/audit.toml`: `[advisories]` then `ignore = ["RUSTSEC-…"]`.
 
 ## Before you commit
 

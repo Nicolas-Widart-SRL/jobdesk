@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs the CI checks in a checkout and prints one line per check.
+# Runs the fmt, test and clippy checks in a checkout and prints one line per check.
+# Miri, cargo-audit and the commit-subject check run only in CI.
 # On a failure it prints the shortest useful part of the output, not all of it.
 # fmt runs in check mode: run cargo fmt to fix a failure.
 #

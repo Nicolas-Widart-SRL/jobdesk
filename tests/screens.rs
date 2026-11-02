@@ -1,7 +1,9 @@
 //! Renders every screen in both themes from a sample workspace.
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime};
@@ -11,6 +13,7 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions, Usage,
 };
+use jobdesk::settings::application::{Page, drawn_index, index};
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, SCREEN_PADDING, STATUS_PADDING};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
@@ -803,8 +806,8 @@ fn only_a_whole_question_can_be_copied() {
     assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Text, "a whole question can be selected");
 }
 
-/// The theme switch, which sits in the status line.
-const STATUS_LINE: &str = "System";
+/// The Settings button, which sits in the status line.
+const STATUS_LINE: &str = "Settings";
 
 /// A reply takes a stop's story back to following the run: its newest row comes into view.
 #[test]
@@ -1291,11 +1294,319 @@ fn the_launcher_shortcut_works_while_typing() {
 
 #[test]
 fn the_tabs_use_plain_names() {
-    let harness = tray_harness(shell(Screen::InTray, "plain_tabs"));
+    let mut harness = tray_harness(probed(shell(Screen::InTray, "plain_tabs"), FixedTools));
+    settle(&mut harness);
     for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Setup"] {
         harness.get_by_label_contains(name);
     }
     assert!(harness.query_by_label_contains("In-tray").is_none());
+}
+
+/// Every tool answers, so nothing required is missing.
+struct AllTools;
+
+impl ToolProber for AllTools {
+    fn probe(&self, _: &ToolSpec) -> Option<String> {
+        Some("1.0".to_owned())
+    }
+}
+
+/// `shell` with its tool check started on `prober`, as the app starts it at launch.
+fn probed(mut shell: Shell, prober: impl ToolProber + 'static) -> Shell {
+    let mut checks = EnvironmentChecks::new(Arc::new(prober), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    shell
+}
+
+/// Steps until the tool check is back, as `render_probed` does.
+fn settle(harness: &mut Harness) {
+    for _ in 0..20 {
+        harness.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// A harness that keeps the shell within reach, so a test can ask it what is open.
+fn shared_harness(shell: Shell) -> (Harness<'static>, Rc<RefCell<Shell>>) {
+    let shared = Rc::new(RefCell::new(shell));
+    let inner = Rc::clone(&shared);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+    harness.run_steps(3);
+    (harness, shared)
+}
+
+fn cmd_comma(harness: &mut Harness) {
+    harness.key_press_modifiers(COMMAND, Key::Comma);
+    harness.run_steps(3);
+}
+
+fn search<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::TextInput)
+}
+
+/// Cmd , opens Settings while a field has focus, and the field keeps what it holds.
+#[test]
+fn cmd_comma_opens_settings_even_from_a_field() {
+    let mut shell = shell(Screen::Runs, "settings_from_field");
+    *shell.desk_slot() = Some(apply_stop_after_evaluate());
+    let (mut harness, shell) = shared_harness(shell);
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("keep this");
+    harness.run_steps(2);
+
+    cmd_comma(&mut harness);
+    assert!(shell.borrow().settings_open());
+    assert!(harness.query_by_label_contains("Back to app").is_some());
+    assert!(!is_shown(&harness, "Tasks, 1 need you"), "the menu is gone");
+
+    press(&mut harness, Key::Escape);
+    assert!(!shell.borrow().settings_open());
+    assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("keep this"));
+}
+
+/// Esc first clears the search, then leaves the field, then closes Settings on the screen that was open.
+#[test]
+fn esc_clears_the_search_then_leaves_the_field_then_closes_settings() {
+    let (mut harness, shell) = shared_harness(shell(Screen::Insights, "settings_esc"));
+    cmd_comma(&mut harness);
+    search(&harness).focus();
+    search(&harness).type_text("folder");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "4 settings match. Esc clears the search."));
+    assert!(search(&harness).is_focused(), "the field keeps the focus once Clear shows beside it");
+
+    press(&mut harness, Key::Escape);
+    assert_eq!(search(&harness).value().as_deref(), Some(""), "the search is cleared");
+    assert!(shell.borrow().settings_open(), "and Settings stays");
+
+    search(&harness).focus();
+    harness.run_steps(2);
+    press(&mut harness, Key::Escape);
+    assert!(!search(&harness).is_focused(), "the field let go");
+    assert!(shell.borrow().settings_open());
+
+    press(&mut harness, Key::Escape);
+    assert!(!shell.borrow().settings_open());
+    harness.get_by_label("Tune scoring…");
+}
+
+#[test]
+fn settings_reopens_on_the_last_page() {
+    let (mut harness, _) = shared_harness(shell(Screen::InTray, "settings_last_page"));
+    cmd_comma(&mut harness);
+    assert!(is_shown(&harness, "Your job search folder, and the screen Jobdesk opens on."));
+    harness.get_by_label("Appearance").click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, "How Jobdesk looks on this computer."));
+
+    cmd_comma(&mut harness);
+    assert!(is_shown(&harness, "How Jobdesk looks on this computer."));
+}
+
+fn settings_button<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Settings")
+}
+
+#[test]
+fn the_status_button_shows_settings_as_on() {
+    let (mut harness, shell) = shared_harness(shell(Screen::InTray, "settings_button"));
+    assert_eq!(settings_button(&harness).accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    settings_button(&harness).click();
+    harness.run_steps(3);
+    assert!(shell.borrow().settings_open());
+    assert_eq!(settings_button(&harness).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+}
+
+/// A running task keeps its folder: Change folder waits on Settings › General and on Setup, and the task stays live.
+#[test]
+fn change_folder_waits_while_a_task_runs() {
+    let mut settings = shell(Screen::InTray, "change_folder_settings");
+    *settings.desk_slot() = Some(apply_run(permission_prompt()));
+    settings.open_settings(Page::General);
+    let (harness, settings) = shared_harness(settings);
+    assert!(harness.get_by_label("Change folder").accesskit_node().is_disabled(), "General waits");
+    let show = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
+    assert!(!harness.get_by_label(show).accesskit_node().is_disabled(), "the folder can still be shown");
+    assert!(settings.borrow_mut().desk_slot().as_ref().unwrap().has_live_process());
+
+    let mut setup = shell(Screen::Workspace, "change_folder_setup");
+    *setup.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *setup.environment_slot() = Some(checks);
+    let harness = tray_harness(setup);
+    assert!(harness.get_by_label("Change folder").accesskit_node().is_disabled(), "Setup waits");
+}
+
+/// With no task running, Change folder answers on both.
+#[test]
+fn change_folder_is_open_with_no_task() {
+    let mut settings = shell(Screen::InTray, "change_folder_idle");
+    settings.open_settings(Page::General);
+    let harness = tray_harness(settings);
+    assert!(!harness.get_by_label("Change folder").accesskit_node().is_disabled());
+
+    let mut setup = shell(Screen::Workspace, "change_folder_setup_idle");
+    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
+    checks.ensure_started();
+    *setup.environment_slot() = Some(checks);
+    let harness = tray_harness(setup);
+    assert!(!harness.get_by_label("Change folder").accesskit_node().is_disabled());
+}
+
+#[test]
+fn unbuilt_sections_are_disabled() {
+    let mut shell = shell(Screen::InTray, "settings_unbuilt");
+    shell.open_settings(Page::General);
+    let harness = tray_harness(shell);
+    for page in Page::ALL {
+        let row = harness.query_all_by_label(page.title()).next().unwrap_or_else(|| panic!("{} is listed", page.title()));
+        assert_eq!(row.accesskit_node().is_disabled(), !page.built(), "{}", page.title());
+    }
+}
+
+/// With Reduce motion ticked, a decided card is gone on the next frame, with no slide.
+#[test]
+fn reduce_motion_drops_the_slide() {
+    let mut shell = shell(Screen::InTray, "settings_reduce_motion");
+    shell.open_settings(Page::Appearance);
+    let mut harness = Harness::builder()
+        .with_size([1280.0, 820.0])
+        .with_step_dt(1.0 / 60.0)
+        .with_context_setup(install_look)
+        .build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness.get_by_role(egui::accesskit::Role::CheckBox).click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, HARBOR));
+
+    harness.key_press(Key::L);
+    harness.run_steps(1);
+    assert!(!is_shown(&harness, HARBOR));
+    assert!(is_shown(&harness, &format!("1 of {}", TRAY_CARDS - 1)));
+}
+
+/// Cmd + zooms the window, and Appearance shows the new size as the one chosen.
+#[test]
+fn cmd_plus_follows_in_text_size() {
+    let mut harness = tray_harness(shell(Screen::InTray, "settings_zoom"));
+    harness.key_press_modifiers(COMMAND, Key::Plus);
+    harness.run_steps(3);
+    cmd_comma(&mut harness);
+    harness.get_by_label("Appearance").click();
+    harness.run_steps(3);
+    assert_eq!(harness.get_by_label("110%").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(harness.get_by_label("100%").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+}
+
+/// Only a missing folder or a missing required tool keeps the Setup tab. Profile placeholders never do.
+#[test]
+fn the_setup_tab_shows_only_while_something_required_is_not_ready() {
+    let setup_tab = |harness: &Harness| harness.query_by_role_and_label(egui::accesskit::Role::Tab, "Setup").is_some();
+    let mut harness = tray_harness(probed(shell(Screen::InTray, "setup_tab_ready"), AllTools));
+    settle(&mut harness);
+    assert!(!setup_tab(&harness), "every tool answers");
+    cmd_comma(&mut harness);
+    assert!(harness.query_by_label_contains(" to fill").is_some(), "though the sample profile still has placeholders");
+
+    let mut harness = tray_harness(probed(shell(Screen::Workspace, "setup_tab_open"), AllTools));
+    settle(&mut harness);
+    assert!(setup_tab(&harness), "Setup on show keeps its tab");
+
+    let mut harness = tray_harness(probed(shell(Screen::InTray, "setup_tab_bun"), FixedTools));
+    settle(&mut harness);
+    assert!(setup_tab(&harness), "bun is missing");
+
+    let harness = tray_harness(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()));
+    assert!(setup_tab(&harness), "no folder is chosen yet");
+}
+
+/// Settings hides the tabs, so a task that waits says so in the status line.
+#[test]
+fn a_waiting_task_shows_in_the_status_line_while_settings_is_open() {
+    let mut harness = tray_harness_with(apply_stop_after_evaluate(), "settings_waits");
+    assert!(!is_shown(&harness, "A task waits for you"), "the Tasks tab counts it");
+    cmd_comma(&mut harness);
+    assert!(is_shown(&harness, "A task waits for you"));
+    assert!(!is_shown(&harness, "Claude is ready"));
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, "A task waits for you"));
+}
+
+/// Search looks through the index, so each of its lines must be on Runtime status.
+#[test]
+fn every_runtime_index_line_is_on_its_page() {
+    let mut shell = probed(shell(Screen::InTray, "settings_runtime_index"), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    for line in drawn_index(Page::Runtime, true) {
+        assert!(harness.query_all_by_label(line).next().is_some(), "{line}");
+    }
+    assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime), "with the folder read, every line is drawn");
+
+    // With no folder, the lines a search can match are the ones drawn, and nothing more.
+    let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    for &line in index(Page::Runtime) {
+        let drawn = harness.query_all_by_label(line).next().is_some();
+        assert_eq!(drawn, drawn_index(Page::Runtime, false).contains(&line), "{line}");
+    }
+}
+
+/// With no folder, Sync is not drawn on Runtime status, so a search for it finds nothing there.
+#[test]
+fn with_no_folder_a_search_for_sync_has_no_runtime_hit() {
+    let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    search(&harness).focus();
+    search(&harness).type_text("sync");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "No setting matches"));
+    assert!(harness.query_by_label("1 match").is_none());
+}
+
+/// Cmd K in Settings closes it and opens the launcher, which keeps Settings' page for next time.
+#[test]
+fn cmd_k_in_settings_opens_the_launcher() {
+    let calls = SharedCalls::default();
+    let (mut harness, shell) = shared_harness(recording_shell(Screen::Insights, "settings_cmd_k", &calls));
+    cmd_comma(&mut harness);
+    assert!(shell.borrow().settings_open());
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER));
+    assert_eq!(calls.lock().unwrap().starts, 0, "the launcher starts nothing by itself");
+}
+
+/// The welcome's second step names a place that stays once the folder is chosen and every tool answers,
+/// when the Setup tab has left the menu.
+#[test]
+fn the_welcome_points_at_a_place_that_stays() {
+    let harness = tray_harness(probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), AllTools));
+    let step = harness.get_by_label_contains("shows which parts are filled in and what is missing.");
+    let words = step.accesskit_node().value().unwrap_or_default();
+    assert!(words.starts_with("Settings › Runtime status"), "{words}");
+    assert!(!words.contains("Setup"), "{words}");
+
+    let mut harness = tray_harness(probed(shell(Screen::InTray, "welcome_step_reachable"), AllTools));
+    settle(&mut harness);
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Tab, "Setup").is_none(), "the Setup tab has gone");
+    settings_button(&harness).click();
+    harness.run_steps(3);
+    harness.get_by_label("Runtime status").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Whether Claude Code, your profile, tools, portals, templates and sync are ready."));
+    assert!(harness.query_all_by_label("Profile").next().is_some(), "and the profile shows there");
 }
 
 /// A square marks each job with a card in Today, and the legend under the table says what it means.
@@ -2385,9 +2696,19 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(is_shown(&harness, MERIDIAN), "the job cards still deal");
     assert!(harness.query_by_label_contains("source could not be read").is_none(), "the count left the status bar");
 
+    // Nothing required is missing, so the Setup tab is gone and the alert leads to Runtime status.
+    assert!(!is_shown(&harness, "Open Setup"));
+    harness.get_by_label("Open Runtime status").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Runtime status is on show");
+    assert!(is_shown(&harness, "Your applications could not be read."), "the alert shows there too");
+    assert!(!is_shown(&harness, "Open Runtime status"), "Runtime status has no button to itself");
+
+    // While a required tool is missing, the alert leads to Setup, which has no button to itself.
+    let mut harness = tray_harness(probed(failed_tracker_shell("failed_tracker_setup"), FixedTools));
+    settle(&mut harness);
     harness.get_by_label("Open Setup").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Setup is on show");
     assert!(is_shown(&harness, "Your applications could not be read."), "the alert stays over every screen");
     assert!(!is_shown(&harness, "Open Setup"), "Setup has no button to itself");
 }
@@ -2449,7 +2770,7 @@ fn two_failed_sources_share_one_alert_and_promise_nothing() {
     assert!(is_shown(&harness, "Your applications could not be read."));
     assert!(is_shown(&harness, "Your saved jobs could not be read."));
     assert!(harness.query_by_label_contains("still work").is_none());
-    assert_eq!(harness.query_all_by_label("Open Setup").count(), 1);
+    assert_eq!(harness.query_all_by_label("Open Runtime status").count(), 1);
     assert!(harness.query_by_label_contains("Jobs and Applications are missing from this list.").is_some(), "in the alert's order");
     assert!(is_shown(&harness, "Job and application dates are missing until the files are fixed."));
 }
@@ -2527,10 +2848,12 @@ fn render_workspace(theme: Theme, name: &str) {
 }
 
 /// Renders once the tool check is back, so the status bar says whether Claude is installed. It starts as the app's does, at launch.
-fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
-    let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
-    checks.ensure_started();
-    *shell.environment_slot() = Some(checks);
+fn render_probed(shell: Shell, theme: Theme, name: &str) {
+    probed_wgpu(probed(shell, FixedTools), theme).snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// A rendering harness on `shell`, stepped until its tool check is back.
+fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
     let mut harness = Harness::builder()
         .with_size([1280.0, 820.0])
         .with_pixels_per_point(1.5)
@@ -2538,11 +2861,58 @@ fn render_probed(mut shell: Shell, theme: Theme, name: &str) {
         .with_context_setup(install_look)
         .wgpu()
         .build_ui(move |ui| shell.show(ui));
-    for _ in 0..20 {
-        harness.run_steps(1);
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    settle(&mut harness);
+    harness
+}
+
+/// Settings over Today, on `page`, with bun missing so Runtime status says "1 missing". `query` is typed into the search.
+fn render_settings(page: Page, query: Option<&str>, theme: Theme, name: &str) {
+    let mut shell = shell(Screen::InTray, name).with_folder_label("~/Documents/ai-job-search");
+    shell.open_settings(page);
+    let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
+    if let Some(query) = query {
+        search(&harness).focus();
+        search(&harness).type_text(query);
+        harness.run_steps(3);
     }
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_general_light() {
+    render_settings(Page::General, None, Theme::Light, "settings_general_light");
+}
+
+#[test]
+fn settings_general_dark() {
+    render_settings(Page::General, None, Theme::Dark, "settings_general_dark");
+}
+
+#[test]
+fn settings_appearance_light() {
+    render_settings(Page::Appearance, None, Theme::Light, "settings_appearance_light");
+}
+
+#[test]
+fn settings_runtime_light() {
+    render_settings(Page::Runtime, None, Theme::Light, "settings_runtime_light");
+}
+
+#[test]
+fn settings_runtime_dark() {
+    render_settings(Page::Runtime, None, Theme::Dark, "settings_runtime_dark");
+}
+
+#[test]
+fn settings_search_light() {
+    render_settings(Page::General, Some("folder"), Theme::Light, "settings_search_light");
+}
+
+/// Every required tool answers, so the menu has no Setup tab.
+#[test]
+fn menu_without_setup_light() {
+    let mut harness = probed_wgpu(probed(shell(Screen::InTray, "menu_without_setup_light"), AllTools), Theme::Light);
+    harness.snapshot_options("menu_without_setup_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 
 /// The sample folder, open but not read yet.

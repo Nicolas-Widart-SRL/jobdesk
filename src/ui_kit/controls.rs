@@ -11,7 +11,7 @@ use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
 use crate::ui_kit::text::{add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FOCUS_OFFSET, FOCUS_RING, HAIRLINE, KEYS_GAP, KEY_SIZE, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, PICK_EDGE, NAV_TAB_PADDING, PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP,
-    SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, Type,
+    FIELD_HEIGHT, FIELD_PADDING, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TOGGLE_GAP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -57,6 +57,12 @@ pub(in crate::ui_kit) fn pressed(response: &Response) -> bool {
 /// What every clickable kit widget calls last: the pointing hand while the pointer is over it, then the focus ring around it.
 pub(in crate::ui_kit) fn interactive(ui: &Ui, response: &Response, radius: impl Into<CornerRadius>) {
     hand_and_ring(ui, response, radius, response.rect.expand(FOCUS_OFFSET), StrokeKind::Outside);
+}
+
+/// The same for a control whose hit area is wider than the part that shows it, such as a checkbox with its words:
+/// the ring goes round `shown`.
+pub(in crate::ui_kit) fn interactive_part(ui: &Ui, response: &Response, shown: Rect, radius: impl Into<CornerRadius>) {
+    hand_and_ring(ui, response, radius, shown.expand(FOCUS_OFFSET), StrokeKind::Outside);
 }
 
 /// The same for a row or a card that touches its neighbours or the edge of its column: the focus ring sits inside it,
@@ -154,8 +160,8 @@ fn press(ui: &mut Ui, text: &str, look: Look, fit: Fit, key: Option<&str>) -> Re
     press_as(ui, text, look, fit, key.map_or(Hint::None, Hint::Key), None)
 }
 
-/// `selected` makes a screen reader hear the button as a toggle that is on or off.
-fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected: Option<bool>) -> Response {
+/// `selected` makes a screen reader hear the button as a toggle in `role` that is on or off.
+fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected: Option<(Role, bool)>) -> Response {
     let p = Palette::of(ui);
     let ink = match look {
         Look::Plain => p.text,
@@ -187,7 +193,7 @@ fn press_as(ui: &mut Ui, text: &str, look: Look, fit: Fit, hint: Hint, selected:
     chord.paint(ui, text_rect.right(), rect.center().y, ink, fill);
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| match selected {
-        Some(on) => WidgetInfo::selected(Role::Button, ui.is_enabled(), on, text),
+        Some((role, on)) => WidgetInfo::selected(role, ui.is_enabled(), on, text),
         None => WidgetInfo::labeled(Role::Button, ui.is_enabled(), text),
     });
     response
@@ -213,7 +219,30 @@ pub fn small_key_button(ui: &mut Ui, text: &str, key: &str) -> Response {
 
 /// A small button that stays pressed while `on`.
 pub fn small_toggle(ui: &mut Ui, text: &str, on: bool) -> Response {
-    press_as(ui, text, if on { Look::On } else { Look::Plain }, SMALL, Hint::None, Some(on))
+    press_as(ui, text, if on { Look::On } else { Look::Plain }, SMALL, Hint::None, Some((Role::Button, on)))
+}
+
+/// A choice of two to five values: a row of small toggles, one on, that a screen reader hears as one radio group.
+/// `current` is `None` when the value matches no option, so none is on. Returns the option picked this frame.
+pub fn toggle_group<T: Copy + PartialEq>(ui: &mut Ui, current: Option<T>, options: &[(T, &str)]) -> Option<T> {
+    let mut picked = None;
+    // Measured first, so the row takes only its own width and reads left to right in any layout, such as a setting's
+    // control at the right of its row.
+    let ink = Palette::of(ui).text;
+    let labels: f32 = options.iter().map(|(_, label)| line(ui, label, SMALL.font, ink, f32::INFINITY).size().x + SMALL.padding * 2.0).sum();
+    let width = labels + TOGGLE_GAP * options.len().saturating_sub(1) as f32;
+    ui.allocate_ui_with_layout(vec2(width, SMALL.height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().layout(egui::Layout::left_to_right(egui::Align::Center)).accessibility_role(Role::RadioGroup), |ui| {
+            ui.spacing_mut().item_spacing.x = TOGGLE_GAP;
+            for &(value, label) in options {
+                let on = current == Some(value);
+                if press_as(ui, label, if on { Look::On } else { Look::Plain }, SMALL, Hint::None, Some((Role::RadioButton, on))).clicked() {
+                    picked = Some(value);
+                }
+            }
+        });
+    });
+    picked
 }
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
@@ -340,6 +369,25 @@ pub fn note_dialog(ctx: &egui::Context) {
 pub(in crate::ui_kit) fn dialog_open(ctx: &egui::Context) -> bool {
     let frame = ctx.cumulative_frame_nr();
     ctx.data(|data| data.get_temp::<u64>(dialog_note_id())) == Some(frame)
+}
+
+/// How long a decision moves for, in seconds, while motion is on.
+const MOTION_SECONDS: f32 = 0.15;
+
+fn reduced_motion_id() -> egui::Id {
+    egui::Id::NULL.with("reduced_motion")
+}
+
+/// Turns motion off or back on for the whole window. Motion is decoration only: off, every change shows at once.
+/// Kept apart from egui's own animation time, which the test harness zeroes.
+pub fn set_reduced_motion(ctx: &egui::Context, reduced: bool) {
+    ctx.data_mut(|data| data.insert_temp(reduced_motion_id(), reduced));
+}
+
+/// How long a decision moves for, in seconds: none while motion is reduced.
+pub fn motion_time(ctx: &egui::Context) -> f32 {
+    let reduced = ctx.data(|data| data.get_temp::<bool>(reduced_motion_id())).unwrap_or(false);
+    if reduced { 0.0 } else { MOTION_SECONDS }
 }
 
 fn command_request_id() -> egui::Id {
@@ -576,21 +624,40 @@ pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, St
     picked
 }
 
-/// The small switch that lives in the status strip.
-pub fn status_segmented<T: Copy + PartialEq>(ui: &mut Ui, current: T, options: &[(T, String)]) -> Option<T> {
+/// A button in the status strip that opens a screen, such as Settings, and names its chord after the text.
+/// Clear at rest, `raised` with `text` ink while `on`. It is as wide as its text in the heavier face, so it never moves.
+/// A screen reader hears the text alone, selected while `on`.
+pub fn status_button(ui: &mut Ui, text: &str, keys: &[&str], on: bool) -> Response {
     let p = Palette::of(ui);
-    let look = SegmentLook { height: STATUS_SEGMENT_HEIGHT, padding: STATUS_SEGMENT_PADDING, radius: CornerRadius::same(RADIUS_BUTTON), font: Type::SMALL, font_on: Type::TAG };
-    let inks = SegmentInks { on: (p.raised, p.text), off: p.muted, hover: p.panel, pressed: p.raised };
-    let mut picked = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = SEGMENT_GAP;
-        for (value, label) in options {
-            if segment(ui, label, *value == current, look, inks).clicked() {
-                picked = Some(*value);
-            }
-        }
-    });
-    picked
+    let enabled = ui.is_enabled();
+    let (font, ink) = if on { (Type::TAG, p.text) } else { (Type::SMALL, p.muted) };
+    let ink = if enabled { ink } else { dimmed(ink) };
+    let key_ink = if enabled { p.muted } else { dimmed(p.muted) };
+    let label = line(ui, text, font, ink, f32::INFINITY);
+    let widest = line(ui, text, Type::TAG, ink, f32::INFINITY).size().x.max(label.size().x);
+    let glyphs: Vec<_> = keys.iter().map(|key| line(ui, key, Type::SMALL, key_ink, f32::INFINITY)).collect();
+    let chord = glyphs.iter().map(|glyph| glyph.size().x).sum::<f32>() + KEYS_GAP * glyphs.len().saturating_sub(1) as f32;
+    let lead = if glyphs.is_empty() { 0.0 } else { Chord::LEAD };
+    let size = vec2(STATUS_SEGMENT_PADDING * 2.0 + widest + lead + chord, STATUS_SEGMENT_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let fill = match (on, pointer_over(&response), pressed(&response)) {
+        (_, _, true) => p.line,
+        (true, _, false) => p.raised,
+        (false, true, false) => p.panel,
+        (false, false, false) => Color32::TRANSPARENT,
+    };
+    ui.painter().rect_filled(rect, RADIUS_BUTTON, fill);
+    let centre_y = rect.center().y;
+    paint_text(ui, egui::pos2(rect.left() + STATUS_SEGMENT_PADDING, centre_y - label.size().y / 2.0), label, ink, fill);
+    let mut x = rect.left() + STATUS_SEGMENT_PADDING + widest + lead;
+    for glyph in glyphs {
+        let at = egui::pos2(x, centre_y - glyph.size().y / 2.0);
+        x += glyph.size().x + KEYS_GAP;
+        paint_text(ui, at, glyph, key_ink, fill);
+    }
+    interactive(ui, &response, RADIUS_BUTTON);
+    response.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, text));
+    response
 }
 
 /// A pickable row in a list. `text` is cut to one line.
@@ -661,6 +728,56 @@ pub fn link(ui: &mut Ui, text: &str) -> Response {
     response
 }
 
+/// A field that filters what is listed under it: the `hint` in `faint` while it is empty, and a Clear link inside its right
+/// edge while it holds text. Esc in it clears it too. The response is the field's, changed when the text changed either way.
+pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    // The field's id is its place in `ui`, taken before anything is added, so Clear coming and going never moves it
+    // and the field keeps the focus, and two fields in one `ui` never share it.
+    let id = ui.next_auto_id().with("search_field");
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
+    // The field's box is painted last, when its focus is known, under what it holds.
+    let under = ui.painter().add(egui::Shape::Noop);
+    let inner = rect.shrink2(vec2(FIELD_PADDING, 0.0));
+    let mut room = inner;
+    let mut cleared = false;
+    if !text.is_empty() {
+        let mut side = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        if link(&mut side, "Clear").clicked() {
+            text.clear();
+            cleared = true;
+        }
+        room.max.x = side.min_rect().left() - ROW_ITEM_GAP;
+    }
+    let ink = if enabled { p.text } else { dimmed(p.text) };
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::ZERO)
+        .font(Type::BODY.font())
+        .text_color(ink)
+        .hint_text(egui::RichText::new(hint).font(Type::BODY.font()).color(if enabled { p.faint } else { dimmed(p.faint) }))
+        .desired_width(room.width().max(0.0))
+        .align(egui::Align2::LEFT_CENTER);
+    let mut response = ui.put(room, edit);
+    if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) && !text.is_empty() {
+        text.clear();
+        cleared = true;
+    }
+    if cleared {
+        response.mark_changed();
+    }
+    let border = match (enabled, response.has_focus()) {
+        (false, _) => dimmed(p.line),
+        (true, true) => p.text,
+        (true, false) => p.line,
+    };
+    ui.painter().set(under, egui::Shape::rect_filled(rect, RADIUS_BUTTON, p.field));
+    ui.painter().rect_stroke(rect, RADIUS_BUTTON, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    response
+}
+
 /// How long a Copy button reads Copied, in seconds.
 const COPIED_FOR: f64 = 2.0;
 
@@ -696,7 +813,7 @@ pub fn copy_button(ui: &mut Ui, text: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
 
@@ -791,6 +908,118 @@ mod tests {
         harness.get_by_label("Add portal…").click();
         harness.run();
         assert_eq!(take_command_request(&harness.ctx).as_deref(), Some("/add-portal"));
+    }
+
+    fn kit_setup(ctx: &egui::Context) {
+        crate::ui_kit::install_fonts(ctx);
+        crate::ui_kit::install_theme(ctx);
+    }
+
+    #[test]
+    fn a_toggle_group_is_one_radio_group_with_one_on() {
+        let mut current = Some(1);
+        let mut harness = Harness::builder().with_size([400.0, 80.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            if let Some(picked) = toggle_group(ui, current, &[(0, "System"), (1, "Light"), (2, "Dark")]) {
+                current = Some(picked);
+            }
+        });
+        harness.run();
+        let on = |harness: &Harness| -> Vec<String> {
+            harness
+                .query_all_by_role(egui::accesskit::Role::RadioButton)
+                .filter(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True))
+                .filter_map(|node| node.accesskit_node().label())
+                .collect()
+        };
+        assert_eq!(harness.query_all_by_role(egui::accesskit::Role::RadioGroup).count(), 1);
+        assert_eq!(harness.query_all_by_role(egui::accesskit::Role::RadioButton).count(), 3);
+        assert_eq!(on(&harness), ["Light"]);
+        harness.get_by_label("Dark").click();
+        harness.run();
+        assert_eq!(on(&harness), ["Dark"]);
+    }
+
+    #[test]
+    fn an_off_step_value_turns_no_toggle_on() {
+        let mut harness = Harness::builder().with_size([400.0, 80.0]).with_context_setup(kit_setup).build_ui(|ui| {
+            toggle_group(ui, None::<u8>, &[(90, "90%"), (100, "100%")]);
+        });
+        harness.run();
+        assert!(harness.query_all_by_role(egui::accesskit::Role::RadioButton).all(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::False)));
+    }
+
+    #[test]
+    fn a_status_button_is_named_by_its_text_and_clicks() {
+        let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&clicked);
+        let mut harness = Harness::builder().with_size([300.0, 60.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            if status_button(ui, "Settings", &command_chord(","), true).clicked() {
+                seen.set(true);
+            }
+        });
+        harness.run();
+        let button = harness.get_by_label("Settings");
+        assert_eq!(button.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        button.click();
+        harness.run();
+        assert!(clicked.get());
+    }
+
+    #[test]
+    fn clear_shows_only_with_text_and_empties_the_search() {
+        let text = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let field = std::rc::Rc::clone(&text);
+        let mut harness = Harness::builder().with_size([300.0, 60.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            search_field(ui, &mut field.borrow_mut(), "Search settings");
+        });
+        harness.run();
+        assert!(harness.query_by_label("Clear").is_none(), "an empty search offers Clear");
+        text.borrow_mut().push_str("spend");
+        harness.run();
+        harness.get_by_label("Clear").click();
+        harness.run();
+        assert_eq!(text.borrow().as_str(), "");
+        harness.run();
+        assert!(harness.query_by_label("Clear").is_none());
+    }
+
+    #[test]
+    fn two_fields_with_one_hint_keep_their_own_text_and_the_focus() {
+        use egui_kittest::kittest::NodeT;
+
+        let texts = std::rc::Rc::new(std::cell::RefCell::new([String::new(), String::new()]));
+        let fields = std::rc::Rc::clone(&texts);
+        let mut harness = Harness::builder().with_size([300.0, 120.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            let [first, second] = &mut *fields.borrow_mut();
+            search_field(ui, first, "Search settings");
+            search_field(ui, second, "Search settings");
+        });
+        harness.run();
+        let field = |harness: &Harness, at: usize| harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(at).unwrap().accesskit_node().id();
+        let first = field(&harness, 0);
+        harness.get_by(|node| node.id() == first).focus();
+        harness.run();
+        harness.get_by(|node| node.id() == first).type_text("spend");
+        harness.run();
+        // Clear now shows in the first field, and the next keys still reach it.
+        harness.get_by(|node| node.id() == first).type_text("ing");
+        harness.run();
+        let second = field(&harness, 1);
+        harness.get_by(|node| node.id() == second).focus();
+        harness.run();
+        harness.get_by(|node| node.id() == second).type_text("motion");
+        harness.run();
+        assert_eq!(*texts.borrow(), ["spending".to_owned(), "motion".to_owned()]);
+    }
+
+    #[test]
+    fn reduced_motion_takes_no_time() {
+        let ctx = egui::Context::default();
+        assert!(motion_time(&ctx) > 0.0);
+        set_reduced_motion(&ctx, true);
+        assert_eq!(motion_time(&ctx), 0.0);
+        set_reduced_motion(&ctx, false);
+        assert!(motion_time(&ctx) > 0.0);
     }
 
     #[test]

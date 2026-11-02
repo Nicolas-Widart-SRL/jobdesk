@@ -3,6 +3,7 @@ pub mod dossier;
 pub mod insights;
 pub mod intray;
 pub mod runs;
+pub mod settings;
 pub mod shared_kernel;
 pub mod shell;
 pub mod tracking;

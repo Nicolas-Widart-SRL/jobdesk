@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use chrono::{Local, NaiveDate};
-use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, ThemePreference, Ui, UiBuilder, pos2, vec2};
+use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
@@ -17,27 +17,34 @@ use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
 use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
+use crate::settings;
+use crate::settings::application::{Page, RuntimeWord, Settings, StartScreen};
+use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
 use crate::shell::{Snapshot, Source, live_snapshot};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
-    HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SHELL_GAP, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
+    HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING, WELCOME_TOP, WELCOME_WIDTH, WINDOW_SHADOW,
 };
 use crate::ui_kit::{
     Ink, KnotState, Load, ScreenState, TabMark, Tone, Type, alert, back_pressed, brand, button, command_chord, copyable, desk, divider, enabled_when, folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper,
     primary_button, prompt_box_tone, rich,
-    sheet_frame, shell_top_frame, shortcut_button, status_frame, status_line, status_note, status_segmented, strong, take_command_request,
+    sheet_frame, shell_top_frame, shortcut_button, status_button, status_frame, status_line, status_note, status_waits, strong, take_command_request,
 };
 use crate::workspace;
-use crate::workspace::application::{AuthMode, EnvironmentChecks, WorkspaceRoot, auth_mode};
+use crate::workspace::application::{AuthMode, EnvironmentChecks, Readiness, WorkspaceRoot, auth_mode, readiness};
 use crate::workspace::ui::WorkspaceAction;
 
 const WORKSPACE_KEY: &str = "workspace";
 
 /// What the tabs and New task say while they wait for a folder.
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
+/// Why Change folder waits: a session stays open after its turn ends, until its process exits or the user ends it.
+const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Tasks to change the folder.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
+/// The keys that open Settings.
+const SETTINGS_KEYS: [&str; 2] = command_chord(",");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -103,6 +110,12 @@ pub struct Shell {
     pages: Option<PageStore>,
     open_dossier: Option<OpenDossier>,
     environment: Option<EnvironmentChecks>,
+    settings: Settings,
+    settings_screen: SettingsScreen,
+    /// Settings covers the menu and the screen, which stays as it was underneath.
+    settings_open: bool,
+    /// The folder as Settings shows it, in place of its path. Snapshots set it, so no temporary path shows.
+    folder_label: Option<String>,
 }
 
 /// The dossier on screen. It is rebuilt when its files or saved runs change.
@@ -136,6 +149,10 @@ impl Shell {
             pages: None,
             open_dossier: None,
             environment: None,
+            settings: Settings::unsaved(),
+            settings_screen: SettingsScreen::default(),
+            settings_open: false,
+            folder_label: None,
         }
     }
 
@@ -165,6 +182,21 @@ impl Shell {
 
     pub fn environment_slot(&mut self) -> &mut Option<EnvironmentChecks> {
         &mut self.environment
+    }
+
+    /// Opens Settings on `page`, as Cmd , does once that page was last open.
+    pub fn open_settings(&mut self, page: Page) {
+        self.settings_screen.open_on(page);
+        self.settings_open = true;
+    }
+
+    pub fn settings_open(&self) -> bool {
+        self.settings_open
+    }
+
+    /// Shows `label` as the folder in Settings, for snapshots.
+    pub fn with_folder_label(self, label: &str) -> Self {
+        Self { folder_label: Some(label.to_owned()), ..self }
     }
 
     /// Hands the shell snapshots as the folder watcher does, for tests.
@@ -201,18 +233,42 @@ impl Shell {
 
     /// The tool check starts at launch, so the first run can say whether Claude Code is installed.
     /// It only asks each tool for its version, on a worker thread.
+    /// The preferences reach the window here, before the first frame, and after that only when one changes.
     fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
         let repaint = ctx.clone();
-        let mut environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+        let environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
+        Self::launch(ctx, path, data, environment)
+    }
+
+    /// `start` with the tool check given, so tests can launch without asking real tools.
+    /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
+    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, mut environment: EnvironmentChecks) -> Self {
         environment.ensure_started();
-        let mut shell = Self { data, environment: Some(environment), ..Self::empty(Screen::InTray, Local::now().date_naive()) };
+        let restored = settings::ui::restored(ctx);
+        let settings = data.as_deref().map_or_else(Settings::unsaved, |data| settings::open_settings(data, restored));
+        settings::ui::apply(ctx, settings.preferences());
+        let first = start_screen(settings.preferences().open_on);
+        let mut shell = Self { data, environment: Some(environment), settings, ..Self::empty(first, Local::now().date_naive()) };
         if let Some(path) = path {
             shell.open(ctx, &path);
+        }
+        // Without a folder only Today answers, and the welcome shows there.
+        if shell.workspace.is_none() {
+            shell.screen = Screen::InTray;
+            shell.launcher_from = Screen::InTray;
         }
         shell
     }
 
+    /// A running task keeps its folder: a new one would replace the desk and drop the task's live session.
+    fn folder_locked(&self) -> bool {
+        self.desk.as_ref().is_some_and(RunDesk::has_live_process)
+    }
+
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        if self.folder_locked() {
+            return;
+        }
         match workspace::open(path) {
             Some(root) => {
                 let repaint = ctx.clone();
@@ -238,9 +294,22 @@ impl Shell {
     }
 
     fn choose_folder(&mut self, ctx: &egui::Context) {
-        if let Some(path) = rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder() {
+        self.choose_folder_with(ctx, || rfd::FileDialog::new().set_title("Choose your ai-job-search folder").pick_folder());
+    }
+
+    /// The dialog opens only when the folder may change.
+    fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
+        if self.folder_locked() {
+            return;
+        }
+        if let Some(path) = pick() {
             self.open(ctx, &path);
         }
+    }
+
+    /// Why Change folder waits, if it does.
+    fn folder_wait(&self) -> Option<&'static str> {
+        self.folder_locked().then_some(FOLDER_BUSY)
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
@@ -260,15 +329,22 @@ impl Shell {
         if let Some(environment) = &mut self.environment {
             environment.poll();
         }
+        // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
+        settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
         let queue = self.queue();
         // The desk goes down first, under every panel, so the grid holds still behind the menu and the screens.
         desk(ui, |ui| {
-            Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame()).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
+            // Settings takes the menu's place too, so its page keeps the most height.
+            if !self.settings_open {
+                Panel::top("desk_top").show_separator_line(false).frame(shell_top_frame()).show(ui, |ui| self.desk_top(ui, queue.cards.len()));
+            }
             // Its separator is the strip's top hairline, in `line`.
             Panel::bottom("status_bar").show_separator_line(true).frame(status_frame(ui)).show(ui, |ui| self.status_bar(ui));
             egui::CentralPanel::default().frame(sheet_frame()).show(ui, |ui| {
-                if self.workspace.is_some() {
+                if self.settings_open {
+                    self.settings(ui);
+                } else if self.workspace.is_some() {
                     self.content(ui, &queue);
                 } else {
                     self.welcome(ui);
@@ -312,8 +388,9 @@ impl Shell {
         }
     }
 
-    /// Opens the launcher and keeps where it came from, for Esc.
+    /// Opens the launcher and keeps where it came from, for Esc. It closes Settings, which keeps its page for next time.
     fn open_launcher(&mut self) {
+        self.settings_open = false;
         if self.screen != Screen::Launcher {
             self.launcher_from = self.screen;
         }
@@ -339,11 +416,17 @@ impl Shell {
             self.confirm_quit = true;
         }
         // Taken before any widget runs, even while typing: a text field reads Ctrl K as delete to the end of the line.
-        let ask = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K));
+        // Cmd , is taken the same way, so Settings opens from a field too.
+        let (ask, open_settings) =
+            ctx.input_mut(|input| (input.consume_key(egui::Modifiers::COMMAND, egui::Key::K), input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)));
         // While the quit dialog asks, no shortcut reaches the screens behind it.
         if self.confirm_quit {
             note_dialog(ctx);
             return;
+        }
+        // Settings opens on the page last open, with or without a folder.
+        if open_settings {
+            self.settings_open = true;
         }
         if ask && self.workspace.is_some() {
             self.open_launcher();
@@ -379,12 +462,13 @@ impl Shell {
         let open = self.workspace.is_some();
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         let lit = self.screen.tab();
+        let setup_tab = self.setup_tab();
         let mut picked = None;
         ui.allocate_ui_with_layout(vec2(ui.available_width(), NAV_TAB_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
             brand(ui);
             ui.add_space(SHELL_GAP.0);
             ui.spacing_mut().item_spacing.x = NAV_TAB_GAP;
-            for screen in Screen::NAV {
+            for screen in Screen::NAV.into_iter().filter(|&screen| screen != Screen::Workspace || setup_tab) {
                 let failed = self.snapshot.issues.iter().find(|issue| source_place(issue.source).0 == Some(screen)).map(|issue| issue.source);
                 let mark = match screen {
                     _ if failed.is_some() => TabMark::Failed,
@@ -413,15 +497,30 @@ impl Shell {
         }
     }
 
-    /// What the status bar says about the screen on show.
+    /// What still stands between the user and a working setup. Tools not checked yet count as nothing.
+    fn readiness(&self) -> Readiness {
+        readiness(&self.snapshot.workspace, self.environment.as_ref().and_then(EnvironmentChecks::results))
+    }
+
+    /// The Setup tab shows until a folder is chosen and every required tool answers, so through first onboarding.
+    /// Profile files never keep it. While Setup is open it stays, so the screen on show is never pulled away.
+    fn setup_tab(&self) -> bool {
+        self.workspace.is_none() || !self.readiness().ready() || self.screen == Screen::Workspace
+    }
+
+    /// What the status bar says about the screen on show. In Settings only Runtime status has a note.
     fn screen_note(&self) -> Option<String> {
+        let sign_in = || match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
+            AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),
+            AuthMode::ApiKey => "Tasks use an API key or provider. Jobdesk stores no credentials.".to_owned(),
+            AuthMode::NoRunYet => "You will see which account Claude uses after the first task. Jobdesk stores no credentials.".to_owned(),
+        };
+        if self.settings_open {
+            return (self.settings_screen.page() == Page::Runtime).then(sign_in);
+        }
         match self.screen {
             Screen::Dossier => Some("Source: tracker row and application archive".to_owned()),
-            Screen::Workspace => Some(match auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source)) {
-                AuthMode::ClaudeLogin => "Tasks use your Claude login. Jobdesk stores no credentials.".to_owned(),
-                AuthMode::ApiKey => "Tasks use an API key or provider. Jobdesk stores no credentials.".to_owned(),
-                AuthMode::NoRunYet => "You will see which account Claude uses after the first task. Jobdesk stores no credentials.".to_owned(),
-            }),
+            Screen::Workspace => Some(sign_in()),
             _ => None,
         }
     }
@@ -430,8 +529,12 @@ impl Shell {
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = STATUS_GAP.0;
-            // Nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
-            if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
+            let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
+            // Settings hides the tabs and their counts, so a task that waits says so here instead.
+            // Otherwise nothing while the probe runs. Once it has, a missing or broken `claude` shows as such.
+            if self.settings_open && waiting > 0 {
+                status_waits(ui, "A task waits for you");
+            } else if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let ready = environment.version_of("claude").is_some();
                 // Before a folder is open, the line also says how Jobdesk signs in: through Claude Code alone.
                 let text = match (ready, self.workspace.is_some()) {
@@ -441,19 +544,13 @@ impl Shell {
                 };
                 status_line(ui, ready, text);
             }
-            // Setup always says how tasks sign in, as docs/auth-review.md promises.
+            // Setup and Runtime status always say how tasks sign in, as docs/auth-review.md promises.
             if let Some(note) = self.screen_note() {
                 status_note(ui, &note, false);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let current = ui.ctx().options(|options| options.theme_preference);
-                let options = [
-                    (ThemePreference::Dark, "Dark".to_owned()),
-                    (ThemePreference::Light, "Light".to_owned()),
-                    (ThemePreference::System, "System".to_owned()),
-                ];
-                if let Some(theme) = status_segmented(ui, current, &options) {
-                    ui.ctx().set_theme(theme);
+                if status_button(ui, "Settings", &SETTINGS_KEYS, self.settings_open).clicked() {
+                    self.settings_open = true;
                 }
             });
         });
@@ -483,14 +580,17 @@ impl Shell {
     /// A source that could not be read frames an alert on every screen. The screens with a head of their own draw it under the head,
     /// and a screen whose source failed hides its content instead of showing it empty.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
-        // The tray reports its own file. It is copied only while it fails, so the tray stays free to take decisions.
-        let decisions = self.tray.as_ref().and_then(InTray::issue).cloned();
-        let failures: Vec<(Source, &LoadError)> =
-            self.snapshot.issues.iter().map(|issue| (issue.source, &issue.error)).chain(decisions.iter().map(|error| (Source::Decisions, error))).collect();
+        let failures = self.failures();
         let open_setup = Cell::new(false);
-        let on_setup = self.screen == Screen::Workspace;
+        // The alert leads to the tools: Setup while its tab shows, else Settings' Runtime status. Setup has no button to itself.
+        let setup_tab = self.setup_tab();
+        let leads_to = match self.screen {
+            Screen::Workspace => None,
+            _ if setup_tab => Some("Open Setup"),
+            _ => Some("Open Runtime status"),
+        };
         let alerts = |ui: &mut Ui| {
-            if !failures.is_empty() && source_alert(ui, &failures, on_setup) {
+            if !failures.is_empty() && source_alert(ui, &failures, leads_to) {
                 open_setup.set(true);
             }
         };
@@ -582,8 +682,9 @@ impl Shell {
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
+                let folder_wait = self.folder_wait();
                 let action = match self.environment.as_mut() {
-                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment),
+                    Some(environment) => workspace::ui::show(ui, &state(whole), &name, &snapshot.workspace, environment, folder_wait),
                     None => {
                         page_body(ui, alerts);
                         None
@@ -604,9 +705,83 @@ impl Shell {
                 }
             }
         }
-        if open_setup.get() {
+        if open_setup.get() && setup_tab {
             self.screen = Screen::Workspace;
+        } else if open_setup.get() {
+            self.open_settings(Page::Runtime);
         }
+    }
+
+    /// Every source that could not be read. The tray reports its own file.
+    /// It is copied only while it fails, so the tray stays free to take decisions.
+    fn failures(&self) -> Vec<(Source, LoadError)> {
+        let decisions = self.tray.as_ref().and_then(InTray::issue).cloned();
+        self.snapshot.issues.iter().map(|issue| (issue.source, issue.error.clone())).chain(decisions.map(|error| (Source::Decisions, error))).collect()
+    }
+
+    /// Settings in place of the menu and the screen, which waits underneath. A running task keeps running.
+    /// Runtime status is the workspace's page, and the only one that shows the alert.
+    fn settings(&mut self, ui: &mut Ui) {
+        let failures = self.failures();
+        let unread: Vec<Source> = failures.iter().map(|(source, _)| *source).collect();
+        let alerts = |ui: &mut Ui| {
+            if !failures.is_empty() {
+                source_alert(ui, &failures, None);
+            }
+        };
+        let state = ScreenState { load: if self.loaded { Load::Ready } else { Load::Reading }, unread: &unread, alerts: &alerts };
+        let found = self.readiness();
+        let runtime = match found {
+            Readiness { missing, .. } if missing > 0 => RuntimeWord::Missing(missing),
+            Readiness { to_fill, .. } if to_fill > 0 => RuntimeWord::ToFill(to_fill),
+            _ => RuntimeWord::None,
+        };
+        let folder_open = self.workspace.is_some();
+        // Runtime status draws the folder's sections only once it is read, and a search matches only what it draws.
+        let folder_read = folder_open && self.loaded;
+        let folder = self.folder_label.clone().or_else(|| self.workspace.as_ref().map(|workspace| workspace.path().display().to_string()));
+        let sign_in = auth_mode(self.desk.as_ref().and_then(RunDesk::latest_auth_source));
+        let folder_wait = self.folder_wait();
+        let (environment, view) = (&mut self.environment, &self.snapshot.workspace);
+        let (x, top, _) = SHELL_PADDING;
+        let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
+        let asked = Frame::new()
+            .inner_margin(margin)
+            .show(ui, |ui| {
+                let page_view = SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait };
+                settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
+                    (Page::Runtime, Some(environment)) => workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query),
+                    // Only previews lack the tool check. They draw no tools, but still the alert.
+                    (Page::Runtime, None) => alerts(ui),
+                    _ => {}
+                })
+            })
+            .inner;
+        let ctx = ui.ctx().clone();
+        match asked {
+            Some(SettingsRequest::Back) => {
+                self.settings_open = false;
+                ctx.request_repaint();
+            }
+            Some(SettingsRequest::ChangeFolder) => self.choose_folder(&ctx),
+            Some(SettingsRequest::ShowFolder) => {
+                if let Some(workspace) = &self.workspace {
+                    settings::reveal_folder(workspace.path());
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+/// The screen Jobdesk opens on, as General's Open on names it.
+fn start_screen(open_on: StartScreen) -> Screen {
+    match open_on {
+        StartScreen::Today => Screen::InTray,
+        StartScreen::Jobs => Screen::Jobs,
+        StartScreen::Applications => Screen::Tracker,
+        StartScreen::Insights => Screen::Insights,
+        StartScreen::Tasks => Screen::Runs,
     }
 }
 
@@ -626,7 +801,9 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
     });
     ui.add_space(WELCOME_STEP_PADDING);
     let choose = welcome_step(ui, 1, "Choose your job search folder", "The ai-job-search folder you set up with Claude Code.", true);
-    welcome_step(ui, 2, "Check your profile", "Setup shows which parts are filled in and what is missing.", false);
+    // Setup can leave the menu once the folder is chosen, so the step names the place that always stays.
+    let profile = format!("Settings › Runtime status shows which parts are filled in and what is missing. {} opens Settings.", SETTINGS_KEYS.join(" "));
+    welcome_step(ui, 2, "Check your profile", &profile, false);
     welcome_step(ui, 3, "Find your first jobs", "Opens the search task. You start it, and Today fills in as it works.", false);
     ui.add_space(WELCOME_STEP_PADDING / 2.0);
     if let Some(error) = error {
@@ -687,12 +864,12 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
 
 /// Every source that could not be read, in one frame: what failed and why, then what still works.
 /// Each sentence on what still works assumes its source failed alone, so with more than one failure none shows.
-/// A reason quotes a file, so it shows as plain text only. Returns whether Open Setup was pressed. Setup itself has no button.
-fn source_alert(ui: &mut Ui, failures: &[(Source, &LoadError)], on_setup: bool) -> bool {
+/// A reason quotes a file, so it shows as plain text only. `leads_to` is the button to the tools, if any, and the return says whether it was pressed.
+fn source_alert(ui: &mut Ui, failures: &[(Source, LoadError)], leads_to: Option<&str>) -> bool {
     prompt_box_tone(ui, Tone::Closed, |ui| {
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                let open = !on_setup && button(ui, "Open Setup").clicked();
+                let open = leads_to.is_some_and(|text| button(ui, text).clicked());
                 ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
@@ -752,4 +929,154 @@ pub fn run() -> eframe::Result {
             Ok(Box::new(Shell::start(&creation.egui_ctx, requested_workspace().or(saved), data)))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::*;
+    use crate::runs::application::{AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest, StartOptions};
+    use crate::settings::application::{Preferences, ThemeChoice};
+    use crate::workspace::application::{ToolProber, ToolSpec};
+
+    /// Every tool answers, so launching asks no real program.
+    struct AllTools;
+
+    impl ToolProber for AllTools {
+        fn probe(&self, _: &ToolSpec) -> Option<String> {
+            Some("1.0".to_owned())
+        }
+    }
+
+    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: &Path) -> Shell {
+        Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})))
+    }
+
+    /// A session that stays up until the test ends.
+    struct Idle;
+
+    impl AgentGateway for Idle {
+        fn start(&self, _: &RunRequest, _: EventSink) -> Box<dyn AgentSession> {
+            Box::new(Idle)
+        }
+    }
+
+    impl AgentSession for Idle {
+        fn send_message(&mut self, _: &str) {}
+        fn respond(&mut self, _: &Prompt, _: &Decision) {}
+        fn interrupt(&mut self) {}
+    }
+
+    /// An empty folder that opens as a checkout.
+    fn checkout(folder: &tempfile::TempDir) -> PathBuf {
+        checkout_named(folder, "ai-job-search")
+    }
+
+    fn checkout_named(folder: &tempfile::TempDir, name: &str) -> PathBuf {
+        let root = folder.path().join(name);
+        fs::create_dir_all(root.join(".claude/commands")).unwrap();
+        fs::write(root.join(".claude/commands/apply.md"), "").unwrap();
+        root
+    }
+
+    /// The first launch after the upgrade has no settings file: the theme and zoom eframe restored stay, and are saved.
+    #[test]
+    fn a_first_launch_keeps_the_restored_theme_and_zoom() {
+        let data = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.theme_preference = egui::ThemePreference::Dark;
+            options.zoom_factor = 1.25;
+        });
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!((shell.settings.preferences().theme, shell.settings.preferences().text_size.percent()), (ThemeChoice::Dark, 125));
+        assert_eq!(ctx.options(|options| options.theme_preference), egui::ThemePreference::Dark);
+        assert_eq!(ctx.zoom_factor(), 1.25);
+        let saved = settings::open_settings(data.path(), Preferences::default());
+        assert_eq!((saved.preferences().theme, saved.preferences().text_size.percent()), (ThemeChoice::Dark, 125), "the file holds them");
+    }
+
+    /// A file that cannot be read is not a missing one: the defaults apply, and the file is left for the next change.
+    #[test]
+    fn an_unreadable_file_takes_nothing_from_the_window() {
+        let data = tempfile::tempdir().unwrap();
+        fs::write(data.path().join("settings.json"), "{not json").unwrap();
+        let ctx = egui::Context::default();
+        ctx.options_mut(|options| options.theme_preference = egui::ThemePreference::Dark);
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!(shell.settings.preferences().theme, ThemeChoice::System);
+        assert_eq!(fs::read_to_string(data.path().join("settings.json")).unwrap(), "{not json");
+    }
+
+    #[test]
+    fn open_on_chooses_the_launch_screen() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_open_on(StartScreen::Jobs);
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        assert_eq!(shell.screen, Screen::Jobs);
+    }
+
+    /// Without a folder only Today answers, so the welcome shows there whatever Open on says.
+    #[test]
+    fn with_no_folder_the_launch_screen_is_today() {
+        let data = tempfile::tempdir().unwrap();
+        settings::open_settings(data.path(), Preferences::default()).set_open_on(StartScreen::Insights);
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, None, data.path());
+        assert_eq!((shell.screen, shell.launcher_from), (Screen::InTray, Screen::InTray));
+    }
+
+    /// A running task keeps its folder: a new one would replace the desk and drop the live session.
+    #[test]
+    fn a_running_task_keeps_its_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let first = checkout(&folder);
+        let mut shell = launch(&ctx, Some(first.clone()), data.path());
+        let mut desk = RunDesk::new(Box::new(Idle), Arc::new(|| {}));
+        let id = desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(first.as_path()), "the folder stays");
+        assert!(shell.desk.as_ref().is_some_and(|desk| desk.has_session(&id)), "the task keeps its session");
+
+        shell.desk = None;
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+        assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
+    }
+
+    /// While a session is open, Change folder opens no dialog at all.
+    #[test]
+    fn a_running_task_opens_no_folder_dialog() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let mut desk = RunDesk::new(Box::new(Idle), Arc::new(|| {}));
+        desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+        let asked = Cell::new(false);
+
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(!asked.get(), "no dialog while the session is open");
+        assert_eq!(shell.folder_wait(), Some(FOLDER_BUSY));
+
+        shell.desk = None;
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(asked.get(), "with no session, the dialog opens");
+        assert_eq!(shell.folder_wait(), None);
+    }
 }

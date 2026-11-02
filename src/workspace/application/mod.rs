@@ -4,6 +4,6 @@ mod overview;
 
 pub use environment::EnvironmentChecks;
 pub use open::{WorkspaceRoot, open_workspace};
-pub use overview::{AuthMode, PortalRow, WorkspaceView, auth_mode, workspace_view};
+pub use overview::{AuthMode, PortalRow, Readiness, WorkspaceView, auth_mode, readiness, workspace_view};
 
 pub use crate::workspace::domain::{ProfileFile, ProfileState, SyncState, TOOLS, TemplateState, ToolCheck, ToolProber, ToolSpec, WorkspaceInspector, WorkspaceStatus};

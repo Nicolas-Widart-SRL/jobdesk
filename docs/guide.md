@@ -12,7 +12,7 @@ Y opens the suggested task, L sets the card aside until tomorrow (Coming up show
 
 The card's actions stay pinned under it, and Show the command reveals the command line a task would run. Y opens the slash command in the launcher, and nothing runs until you start it. Permission, question, guard and Your turn cards have no Y action. Skip reasons stay in the app's data folder.
 
-When nothing is left to decide, Today offers Find new jobs…. It shows a loading view while your files first load, and a welcome with three steps until you choose a folder.
+When nothing is left to decide, Today offers Find new jobs…. It shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Settings › Runtime status, which shows your profile even once the Setup tab has left the menu.
 
 ## Jobs, Applications and Insights
 
@@ -40,11 +40,21 @@ Only one run works at a time, because two commands could overwrite each other's 
 
 ## Copying text
 
-Text in Claude's messages and questions, your replies, error alerts, command lines, company research, archived postings and follow-up drafts can be selected and copied. A question cut to fit is not, and shows in full under the pointer. Copy says Copied.
+Text in Claude's messages and questions, your replies, error alerts, command lines, company research, archived postings, follow-up drafts and the folder path in Settings › General can be selected and copied. A question cut to fit is not, and shows in full under the pointer. Copy says Copied.
+
+## Settings
+
+Settings (Cmd+, , Ctrl+, on Windows, or Settings at the right of the status bar) replaces the menu and the screen until you press Back to app or Esc. A task keeps running meanwhile, and the status bar says when one waits for you. The rail groups the sections. A word beside a section says its state where it has one: the theme beside Appearance, what is missing or still to fill beside Runtime status, and Later beside the sections still to come. Search keeps only the sections with a match and marks the matched words. Esc clears the search first. Changes apply at once and stay on this computer. If the settings file cannot be read, the rail's foot says so: the defaults are in use, and your next change replaces the file. If a change cannot be saved, it says the change lasts until Jobdesk closes. On the first launch after the theme moved into Settings, the theme and text size you had are kept.
+
+- General: your job search folder, with Show in Finder (Show in Explorer on Windows) and Change folder, and the screen Jobdesk opens on. Without a folder, Jobdesk opens on Today. While a Claude session is open, even one waiting on your reply, Change folder waits here and on Setup, so the task keeps its folder. In Tasks, stop it (Stop run) if it is working, then end it (End session).
+- Appearance: the theme (System, Light or Dark), the text size from 90 to 150 percent (Cmd + and Cmd −, Ctrl + and Ctrl − on Windows, change it too), and Reduce motion, which drops the card slide and the day stamp's fill.
+- Runtime status: Claude Code's version and the sign-in the last task used, then your profile, tools, portals, templates and sync, as Setup shows them. The tools' ready count leaves out Claude Code, which has its own row above. Until a folder is chosen and read, only Claude Code and the tools show, and a search matches only those.
+
+The other sections show in the rail and open in later versions.
 
 ## Setup and the status bar
 
-Setup shows whether your profile, tools, portals, templates and sync are ready. Optional tools never count against the ready total. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says that Claude is installed, and that Jobdesk uses its sign-in and stores no passwords.
+Setup shows whether your profile, tools, portals, templates and sync are ready. Its tab stays in the menu only while a required item is not ready, so through your first setup too, and comes back if one goes missing later. A required item is your job search folder or a required tool. Your profile files show their state but never keep the tab. Optional tools never keep it either, and never count against the ready total. Settings › Runtime status always shows the same. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says that Claude is installed, and that Jobdesk uses its sign-in and stores no passwords. The theme is set in Settings › Appearance.
 
 ## Privacy and trust
 

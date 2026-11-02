@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FEATURES: [&str; 7] = ["discovery", "dossier", "insights", "intray", "runs", "tracking", "workspace"];
+const FEATURES: [&str; 8] = ["discovery", "dossier", "insights", "intray", "runs", "settings", "tracking", "workspace"];
 const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
 const APPEARANCE: [&str; 15] = [
     "Color32", "Palette", "Stroke", "Shadow", "CornerRadius", "RichText", "Button::new", "ui.button", ".fill(", ".corner_radius(", ".color(", ".size(", ".family(", "CursorIcon", "on_hover_cursor",

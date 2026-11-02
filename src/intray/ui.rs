@@ -4,10 +4,10 @@ use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer};
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box, command_action, day_stamp, departing,
-    deal, divider, fat_tally, desk_label, key_button, lead_line, link, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
+    deal, divider, fat_tally, desk_label, key_button, lead_line, link, motion_time, muted, page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton,
     skeleton_lines, slip, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
-use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, MOTION, MOTION_TIME, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL};
+use crate::ui_kit::tokens::{BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL};
 
 const GATE_COLUMNS: usize = 3;
 const GATE_CELL_GAP: f32 = 7.0;
@@ -111,7 +111,7 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     let mut pressed = if keys { pressed_key(ui, top) } else { None };
     let now = ui.input(|input| input.time);
     // Undo, or an action that leaves the card on top, drops the copy at once.
-    if screen.departing.as_ref().is_some_and(|gone| now - gone.since >= f64::from(MOTION_TIME) || top.is_some_and(|card| card.key == gone.card.key)) {
+    if screen.departing.as_ref().is_some_and(|gone| now - gone.since >= f64::from(motion_time(ui.ctx())) || top.is_some_and(|card| card.key == gone.card.key)) {
         screen.departing = None;
     }
 
@@ -138,7 +138,8 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     }
     let pressed = pressed?;
     ui.ctx().request_repaint();
-    if let (true, Some(card), Pressed::Act(_) | Pressed::Later | Pressed::Skip) = (MOTION, top, &pressed) {
+    // With reduced motion, the next card shows at once and no copy slides off.
+    if let (true, Some(card), Pressed::Act(_) | Pressed::Later | Pressed::Skip) = (motion_time(ui.ctx()) > 0.0, top, &pressed) {
         screen.departing = Some(Departing { card: card.clone(), pending: queue.cards.len(), since: now });
     }
     apply(tray, pressed, top, queue)
@@ -260,7 +261,8 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
 
 /// The decided card, drawn from its copy over the next one. Its actions go nowhere.
 fn departed(ui: &Ui, gone: &Departing, room: Rect, now: f64) {
-    let part = ((now - gone.since) as f32 / MOTION_TIME).clamp(0.0, 1.0);
+    let time = motion_time(ui.ctx());
+    let part = if time > 0.0 { ((now - gone.since) as f32 / time).clamp(0.0, 1.0) } else { 1.0 };
     departing(ui, room, part, |ui| stack(ui, &gone.card, gone.pending, &mut None, &mut None));
 }
 

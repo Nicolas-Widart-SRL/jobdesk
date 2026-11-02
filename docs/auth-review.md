@@ -4,7 +4,7 @@ Reviewed 31 October 2026 against Anthropic's published documentation. This is an
 
 ## How Jobdesk authenticates
 
-Jobdesk starts the user's installed, unmodified `claude` binary as a child process with `-p`. The CLI uses whatever authentication the user already set up. Jobdesk offers no login and never reads, stores or passes a credential. The Setup screen's status bar shows whether the last run used a Claude login or an API key, using the CLI's own `apiKeySource` field.
+Jobdesk starts the user's installed, unmodified `claude` binary as a child process with `-p`. The CLI uses whatever authentication the user already set up. Jobdesk offers no login and never reads, stores or passes a credential. The Setup screen's status bar, or Settings › Runtime status, shows whether the last run used a Claude login or an API key, using the CLI's own `apiKeySource` field.
 
 ## What the documentation says
 

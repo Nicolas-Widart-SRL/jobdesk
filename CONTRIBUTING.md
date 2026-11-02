@@ -70,7 +70,12 @@ cargo install cargo-audit --locked
 cargo audit
 ```
 
-When the audit job fails on an advisory with no fixed release yet, update the dependency if a fix exists. Otherwise add the advisory id and a reason to `ignore` in `.cargo/audit.toml`: `[advisories]` then `ignore = ["RUSTSEC-…"]`.
+When the audit job fails on an advisory, update the dependency if a fixed release exists. Otherwise add the advisory id to `ignore` under `[advisories]` in `.cargo/audit.toml`. Put the reason in a comment beside it:
+
+```toml
+[advisories]
+ignore = ["RUSTSEC-…"]  # why it does not apply
+```
 
 ## Before you commit
 

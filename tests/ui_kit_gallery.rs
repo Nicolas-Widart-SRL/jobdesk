@@ -4,6 +4,7 @@ use egui::{CursorIcon, Grid, Role, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
+use jobdesk::shared_kernel::placeholders::{self, Page};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
@@ -624,16 +625,29 @@ fn postmark(ui: &mut Ui) {
     });
 }
 
-const ROLES: [RoleEntry; 2] = [
-    RoleEntry {
-        dates: "2021 – present",
-        title: "Lead Software Engineer",
-        company: "Calder Freight, Antwerp. Freelance.",
-        body: "- Leads a team of six building the route-planning platform for 40 depots.\n- Moved nightly batch planning to event streams, so plans now update within a minute.\n- Budget or headcount you owned: [PLACEHOLDER]",
-        first: true,
-    },
-    RoleEntry { dates: "2017 – 2021", title: "Senior Backend Engineer", company: "[COMPANY], Ghent", body: "- Built the appointment service used by 120 clinics, at 99.95% uptime over three years.", first: false },
+/// Two roles as their `###` blocks, the way a profile file holds them.
+const ROLE_BLOCKS: [&str; 2] = [
+    "### Lead Software Engineer - Calder Freight, Antwerp. Freelance. (2021 – present)\n- Leads a team of six building the route-planning platform for 40 depots.\n- Moved nightly batch planning to event streams, so plans now update within a minute.\n- Budget or headcount you owned: [PLACEHOLDER]",
+    "### Senior Backend Engineer - [COMPANY], Ghent (2017 – 2021)\n- Built the appointment service used by 120 clinics, at 99.95% uptime over three years.",
 ];
+
+/// A role as the Profile screen shows one: the page of its block, with its heading split into title, company and dates.
+struct ShownRole {
+    page: Page,
+    title: String,
+    company: String,
+    dates: String,
+    body: String,
+}
+
+fn shown_role(block: &str) -> ShownRole {
+    let page = placeholders::page(block);
+    let heading = placeholders::heading_text(&page).expect("a role heading");
+    let (name, dates) = heading.rsplit_once(" (").expect("dates");
+    let (title, company) = name.split_once(" - ").expect("a company");
+    let body = page.text.split_once('\n').map_or("", |(_, body)| body).to_owned();
+    ShownRole { title: title.to_owned(), company: company.to_owned(), dates: dates.trim_end_matches(')').to_owned(), body, page }
+}
 
 const DRAFT: &str = "### Lead Software Engineer - Calder Freight (2021 – present)\n\nAntwerp. Freelance.\n\n- Leads a team of six building the route-planning platform for 40 depots.\n- Budget or headcount you owned: EUR 1.2M a year, eight people at the peak";
 
@@ -674,8 +688,10 @@ fn profile(ui: &mut Ui) {
     ui.add_space(10.0);
     paper(ui, false, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 0)).show(ui, |ui| {
-            role_entry(ui, &mut cache, &ROLES[0], None);
-            role_entry(ui, &mut cache, &ROLES[1], Some("Save or cancel the open edit first."));
+            for (index, role) in ROLE_BLOCKS.map(shown_role).iter().enumerate() {
+                let entry = RoleEntry { dates: &role.dates, title: &role.title, company: &role.company, body: &role.body, blanks: &role.page.blanks, first: index == 0 };
+                role_entry(ui, &mut cache, &entry, (index > 0).then_some("Save or cancel the open edit first."));
+            }
             divider(ui);
             ui.add_space(12.0);
             markdown_with_blanks(ui, &mut cache, "Career goals: [ROLE_YOU_WANT_NEXT]. Code such as `cargo test` keeps its own look, and [a link](https://tessel.example/jobs/1) its own.");

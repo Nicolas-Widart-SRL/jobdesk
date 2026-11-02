@@ -1,108 +1,263 @@
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::ops::Range;
+use std::sync::{Arc, OnceLock};
 
-use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown;
 
-/// The setup tokens a page of profile Markdown draws, as `page_placeholders` finds them.
+/// The setup tokens a page of profile Markdown draws, as `page` counts them.
 pub fn placeholder_count(text: &str) -> usize {
-    page_placeholders(text).tokens.len()
+    page(text).count
 }
 
-/// Profile Markdown as a page shows it: `text`, with every `$` of its own escaped, and the setup tokens it draws.
+/// Profile Markdown as a page shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
+    /// The text the viewer renders: the text as given, with each token it draws in prose swapped for a blank, an inline
+    /// math span whose content `blank_index` reads. Nothing else in it changes.
     pub text: String,
-    /// In order, as byte ranges of `text`, brackets included.
-    pub tokens: Vec<PageToken>,
+    /// Each blank, by index.
+    pub blanks: Arc<[Blank]>,
+    /// The tokens the page draws: its blanks, and the tokens shown as written in code.
+    pub count: usize,
 }
 
+/// One blank on a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageToken {
-    pub span: Range<usize>,
-    pub place: Place,
-}
-
-/// Where a page draws a token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Place {
-    /// In prose, where it reads as a blank, inside a heading of `heading` from 1 to 6 or none.
-    Prose { heading: Option<usize> },
-    /// As written, in a code span or a code block.
-    Code,
+pub struct Blank {
+    pub words: String,
+    /// The level of the heading it sits in, from 1 to 6, or none.
+    pub heading: Option<usize>,
 }
 
 /// `/reset` restores tokens such as `[FIRST_NAME]`, and `/setup` replaces them. A token counts only where the page draws
-/// it: in prose text, where it reads as a blank, or as written in a code span or a code block.
+/// it, as the viewer parses the page with its own options:
 ///
-/// Nothing else counts, because the page draws it as no blank and no code: a link's or image's text, destination or
-/// reference label, a reference definition, duplicates included (the template's `- [SECTOR_1]: [EXAMPLE_COMPANIES]` is
-/// one), and an HTML block or tag, comments included. Text between two HTML tags is prose. The page is parsed once, with the options the viewer uses, so the count and the blanks come from the same
-/// positions. Every `$` of the text's own is escaped first, outside code, HTML and autolinks, so none of it can open
-/// inline math on the page, and a reference label keeps matching its definition because both are escaped alike.
+/// - as a blank, when it reads as prose text: each such token is swapped for an inline math span holding this process's
+///   nonce and the blank's index, and it counts only if that span survives as one in the parse of the swapped text;
+/// - as written, in a code span or a code block, where a one-word name (`[DEFAULT]`) does not count but a name with `_`
+///   or spaces does, because the templates keep blanks like `[YOUR_CITY]` in their example queries and LaTeX.
+///
+/// Nothing else counts: link or image text, destinations and reference labels, reference definitions, raw HTML, a
+/// token inside a math span of the text's own, an escaped bracket or an entity. The count and the blanks come from the
+/// same parse of the same text, so they cannot disagree.
 ///
 /// A token is an upper-case name such as `[FIRST_NAME]`, `[KEY_RESPONSIBILITY_1]`, `[YOUR RESPONSIBILITY]` or `[1-2 SENTENCE_SUMMARY]`.
 /// A name of one word has three letters or more and no digit, so `[B2]`, `[EU]` and `[AB12]` are the user's own words.
 /// The name may be followed by a hint up to the closing bracket: `[CONTEXT - what was happening]` or `[LEVEL, e.g. "Native"]`.
-/// A bracket right after a letter or a digit (`a[0]`, `\usepackage[T1]`), a lower-case bracket, a bracket followed by
-/// `(` or `[`, or by `:` at the start of a line, and an escaped bracket are not tokens. In code, a one-word name
-/// (`[DEFAULT]`) is not a token, but a name with `_` or spaces is, because the templates keep blanks like `[YOUR_CITY]`
-/// in their example queries and LaTeX.
-pub fn page_placeholders(text: &str) -> Page {
-    let text = without_math(text);
-    let mut prose: Vec<(Range<usize>, Option<usize>)> = Vec::new();
-    let mut code: Vec<Range<usize>> = Vec::new();
-    let (mut heading, mut in_block, mut in_link, mut in_image) = (None, false, 0, 0);
-    for (event, range) in Parser::new_ext(&text, page_options()).into_offset_iter() {
+/// A bracket right after a letter or a digit (`a[0]`, `\usepackage[T1]`) and a lower-case bracket are not tokens.
+pub fn page(text: &str) -> Page {
+    let found = prose_tokens(text);
+    let mut marked = vec![true; found.len()];
+    loop {
+        // `owners[i]` is the token blank `i` stands for.
+        let owners: Vec<usize> = (0..found.len()).filter(|&index| marked[index]).collect();
+        let swapped = swapped(text, &found, &owners);
+        let drawn = drawn(&swapped, owners.len());
+        let failed: Vec<usize> = (0..owners.len()).filter(|&blank| drawn.seen[blank] != 1).collect();
+        if failed.is_empty() {
+            let blanks = owners.iter().zip(drawn.headings).map(|(&owner, heading)| Blank { words: blank_words(&text[found[owner].clone()]), heading }).collect();
+            return Page { text: swapped, blanks, count: owners.len() + drawn.code };
+        }
+        // A swap that did not come out as one blank, such as one that paired with a `$` of the text's own, stays as written.
+        for blank in failed {
+            marked[owners[blank]] = false;
+        }
+    }
+}
+
+/// What a parse of a swapped page draws: how often each blank's span came out, the heading each sits in, and the
+/// tokens shown as written in code.
+struct Drawn {
+    seen: Vec<usize>,
+    headings: Vec<Option<usize>>,
+    code: usize,
+}
+
+fn drawn(text: &str, blanks: usize) -> Drawn {
+    let mut drawn = Drawn { seen: vec![0; blanks], headings: vec![None; blanks], code: 0 };
+    let (mut heading, mut in_block, mut in_image) = (None, false, 0);
+    for (event, range) in Parser::new_ext(text, page_options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. }) => heading = Some(level as usize),
             Event::End(TagEnd::Heading(_)) => heading = None,
+            Event::Start(Tag::CodeBlock(_)) => in_block = true,
+            Event::End(TagEnd::CodeBlock) => in_block = false,
+            // An image shows its alt text as plain text, so nothing in it is a blank or code.
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image -= 1,
+            Event::InlineMath(content) if in_image == 0 => {
+                if let Some(blank) = blank_index(&content).filter(|&blank| blank < blanks) {
+                    drawn.seen[blank] += 1;
+                    drawn.headings[blank] = heading;
+                }
+            }
+            Event::Text(_) if in_block => drawn.code += code_tokens(&text[range]),
+            Event::Code(_) if in_image == 0 => drawn.code += code_tokens(&text[range]),
+            _ => {}
+        }
+    }
+    drawn
+}
+
+/// The tokens in prose text, where the page would draw them as blanks: text outside links and images, unescaped.
+fn prose_tokens(text: &str) -> Vec<Range<usize>> {
+    let mut prose: Vec<Range<usize>> = Vec::new();
+    let (mut in_block, mut in_link, mut in_image) = (false, 0, 0);
+    for (event, range) in Parser::new_ext(text, page_options()).into_offset_iter() {
+        match event {
             Event::Start(Tag::CodeBlock(_)) => in_block = true,
             Event::End(TagEnd::CodeBlock) => in_block = false,
             Event::Start(Tag::Link { .. }) => in_link += 1,
             Event::End(TagEnd::Link) => in_link -= 1,
             Event::Start(Tag::Image { .. }) => in_image += 1,
             Event::End(TagEnd::Image) => in_image -= 1,
-            Event::Text(_) if in_block => code.push(range),
-            Event::Text(_) if in_link == 0 && in_image == 0 => prose.push((range, heading)),
-            Event::Code(_) if in_image == 0 => code.push(range),
+            Event::Text(_) if !in_block && in_link == 0 && in_image == 0 => prose.push(range),
             _ => {}
         }
     }
     // Brackets that form no link reach the page as text events of their own, so neighbours merge into one run.
-    let mut runs: Vec<(Range<usize>, Option<usize>)> = Vec::new();
-    for (range, level) in prose {
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    for range in prose {
         match runs.last_mut() {
-            Some((last, last_level)) if range.start <= last.end && *last_level == level => last.end = last.end.max(range.end),
-            _ => runs.push((range, level)),
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => runs.push(range),
         }
     }
-    let mut tokens: Vec<PageToken> = Vec::new();
-    for (start, _) in text.match_indices('[') {
-        if tokens.last().is_some_and(|last| start < last.span.end) {
-            continue;
-        }
-        let Some((end, plain)) = token_end(&text, start) else { continue };
-        let place = if let Some((_, level)) = runs.iter().find(|(run, _)| run.start <= start && end <= run.end) {
-            (!escaped_at(&text, start)).then_some(Place::Prose { heading: *level })
-        } else {
-            code.iter().any(|range| range.start <= start && end <= range.end && !plain).then_some(Place::Code)
-        };
-        if let Some(place) = place {
-            tokens.push(PageToken { span: start..end, place });
+    let mut tokens: Vec<Range<usize>> = Vec::new();
+    for run in runs {
+        for span in line_placeholders(&text[run.clone()]) {
+            let span = run.start + span.start..run.start + span.end;
+            if !escaped_at(text, span.start) && !(span.start > 0 && text[..span.start].chars().next_back().is_some_and(char::is_alphanumeric)) {
+                tokens.push(span);
+            }
         }
     }
-    Page { text, tokens }
+    tokens
 }
 
-/// The setup tokens in one plain line, such as a role's title, which is never Markdown.
+/// `text` with the tokens in `found` that `owners` names swapped for their blanks, in order.
+fn swapped(text: &str, found: &[Range<usize>], owners: &[usize]) -> String {
+    let mut out = String::with_capacity(text.len() + owners.len() * 40);
+    let mut copied = 0;
+    for (blank, &owner) in owners.iter().enumerate() {
+        let span = &found[owner];
+        out.push_str(&text[copied..span.start]);
+        out.push_str(&format!("${}{blank}$", nonce()));
+        copied = span.end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// The tokens a code span or a code block shows as written: names with `_` or spaces.
+fn code_tokens(code: &str) -> usize {
+    line_placeholders(code).into_iter().filter(|span| token_name(&code[span.start + 1..]).contains(['_', ' '])).count()
+}
+
+/// The blank an inline math span on a page stands for, when its content is this process's nonce and an index. Untrusted
+/// text cannot guess the nonce, so no math of its own reads as a blank.
+pub fn blank_index(content: &str) -> Option<usize> {
+    let index = content.strip_prefix(nonce())?;
+    if index.is_empty() || !index.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    index.parse().ok()
+}
+
+/// A random alphanumeric string, made once per process.
+pub(crate) fn nonce() -> &'static str {
+    static NONCE: OnceLock<String> = OnceLock::new();
+    NONCE.get_or_init(|| {
+        let mut nonce = String::from("blank");
+        for salt in 0..2u8 {
+            let mut hasher = RandomState::new().build_hasher();
+            hasher.write_u8(salt);
+            nonce.push_str(&format!("{:016x}", hasher.finish()));
+        }
+        nonce.push('n');
+        nonce
+    })
+}
+
+/// The first heading of a page as it shows, for a role line that is drawn outside Markdown: each blank is the character
+/// `blank_char` gives, and a character of the text's own in that range shows as U+FFFD, so the text cannot forge one.
+pub fn heading_text(page: &Page) -> Option<String> {
+    let mut shown: Option<String> = None;
+    for event in Parser::new_ext(&page.text, page_options()) {
+        let Some(out) = shown.as_mut() else {
+            if let Event::Start(Tag::Heading { .. }) = event {
+                shown = Some(String::new());
+            }
+            continue;
+        };
+        match event {
+            Event::End(TagEnd::Heading(_)) => break,
+            Event::Text(text) | Event::Code(text) => out.extend(text.chars().map(|c| if blank_of(c).is_some() { '\u{FFFD}' } else { c })),
+            Event::InlineMath(content) => match blank_index(&content).filter(|&blank| blank < page.blanks.len()) {
+                Some(blank) => out.push(blank_char(blank)),
+                None => out.push_str(&format!("${content}$")),
+            },
+            Event::DisplayMath(content) => out.push_str(&format!("$${content}$$")),
+            Event::InlineHtml(html) | Event::Html(html) => out.push_str(&html),
+            Event::SoftBreak | Event::HardBreak => out.push(' '),
+            _ => {}
+        }
+    }
+    shown
+}
+
+/// The first of the private-use characters that stand for blanks in a `heading_text`.
+const BLANK_CHARS: u32 = 0xF0000;
+
+/// The character that stands for blank `index` in a `heading_text`.
+pub fn blank_char(index: usize) -> char {
+    u32::try_from(index).ok().and_then(|index| char::from_u32(BLANK_CHARS + index.min(0xFFFD))).unwrap_or('\u{FFFD}')
+}
+
+/// The blank a character of a `heading_text` stands for, if any.
+pub fn blank_of(c: char) -> Option<usize> {
+    let code = u32::from(c);
+    (BLANK_CHARS..=BLANK_CHARS + 0xFFFD).contains(&code).then(|| (code - BLANK_CHARS) as usize)
+}
+
+/// The text a profile page shows for a block: the block with its HTML comments removed, so no `<!-- … -->` reaches the
+/// paper. A comment inside code is code, and stays.
+pub fn shown_text(block: &str) -> String {
+    if !block.contains("<!--") {
+        return block.to_owned();
+    }
+    let mut comments: Vec<Range<usize>> = Vec::new();
+    for (event, range) in Parser::new_ext(block, page_options()).into_offset_iter() {
+        if let Event::Html(html) | Event::InlineHtml(html) = event
+            && html.trim_start().starts_with("<!--")
+            && comments.last().is_none_or(|last| range.start >= last.end)
+        {
+            let start = range.start + block[range.start..].find("<!--").unwrap_or(0);
+            let end = block[start..].find("-->").map_or(block.len(), |end| start + end + 3);
+            comments.push(start..end);
+        }
+    }
+    let mut shown = String::with_capacity(block.len());
+    let mut copied = 0;
+    for comment in comments {
+        shown.push_str(&block[copied..comment.start]);
+        copied = comment.end;
+    }
+    shown.push_str(&block[copied..]);
+    shown
+}
+
+/// The setup tokens in plain text, by the name rule alone, with no Markdown, such as for text a screen paints itself.
 pub fn line_placeholders(line: &str) -> Vec<Range<usize>> {
     let mut spans: Vec<Range<usize>> = Vec::new();
     for (start, _) in line.match_indices('[') {
         if spans.last().is_some_and(|last| start < last.end) {
             continue;
         }
-        if let Some((end, _)) = token_end(line, start) {
+        if let Some(end) = token_end(line, start) {
             spans.push(start..end);
         }
     }
@@ -119,32 +274,8 @@ fn escaped_at(text: &str, at: usize) -> bool {
     text[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
 }
 
-/// `text` with each `$` escaped where Markdown reads escapes: everywhere but code, raw HTML and autolinks, where a
-/// backslash would show or change an address. A destination or a title reads the escape back, and a reference label
-/// matches its definition still, because both are escaped alike.
-fn without_math(text: &str) -> String {
-    if !text.contains('$') {
-        return text.to_owned();
-    }
-    let kept: Vec<Range<usize>> = Parser::new_ext(text, markdown::options())
-        .into_offset_iter()
-        .filter_map(|(event, range)| match event {
-            Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::Link { link_type: LinkType::Autolink | LinkType::Email, .. }) | Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => Some(range),
-            _ => None,
-        })
-        .collect();
-    let mut out = String::with_capacity(text.len() + 8);
-    for (at, c) in text.char_indices() {
-        if c == '$' && !escaped_at(text, at) && !kept.iter().any(|range| range.contains(&at)) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// Where the token that opens at `start` ends, just after its closing bracket, and whether its name is a single plain word such as `DEFAULT`.
-fn token_end(text: &str, start: usize) -> Option<(usize, bool)> {
+/// Where the token that opens at `start` ends, just after its closing bracket. A bracket right after a letter or a digit opens none.
+fn token_end(text: &str, start: usize) -> Option<usize> {
     if text[..start].chars().next_back().is_some_and(char::is_alphanumeric) {
         return None;
     }
@@ -161,10 +292,7 @@ fn token_end(text: &str, start: usize) -> Option<(usize, bool)> {
     } else {
         return None;
     };
-    let next = text[close + 1..].chars().next();
-    let line_start = text[..start].rsplit(['\n', '\r']).next().is_some_and(|line| line.trim().is_empty());
-    let link = matches!(next, Some('(' | '[')) || (next == Some(':') && line_start);
-    (!link).then_some((close + 1, !text[after..after + name].contains(['_', ' '])))
+    Some(close + 1)
 }
 
 /// The name of a token, such as `FIRST_NAME` for `FIRST_NAME` or `LEVEL` for `LEVEL, e.g. "Native"`. The brackets are not part of `token`.
@@ -236,11 +364,19 @@ fn matching_close(text: &str, from: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Place, blank_words, line_placeholders, page_placeholders, placeholder_count, token_name};
+    use super::{Blank, blank_char, blank_index, blank_of, blank_words, heading_text, line_placeholders, nonce, page, placeholder_count, shown_text, token_name};
 
+    /// The tokens a page swaps for blanks, as written.
     fn found(text: &str) -> Vec<String> {
-        let page = page_placeholders(text);
-        page.tokens.iter().map(|token| page.text[token.span.clone()].to_owned()).collect()
+        let page = page(text);
+        let tokens: Vec<String> = super::prose_tokens(text).into_iter().map(|span| text[span].to_owned()).collect();
+        assert_eq!(tokens.len(), page.blanks.len(), "{text}: every token found in prose comes out as a blank");
+        tokens
+    }
+
+    /// The words of each blank the page draws.
+    fn words_of(text: &str) -> Vec<String> {
+        page(text).blanks.iter().map(|blank| blank.words.clone()).collect()
     }
 
     #[test]
@@ -301,9 +437,12 @@ mod tests {
 
     #[test]
     fn links_references_checkboxes_and_options_are_not_tokens() {
-        assert_eq!(placeholder_count("[Jobdesk](https://x.example) [API][ref] [API](url)"), 0);
+        assert_eq!(placeholder_count("[Jobdesk](https://x.example) [API](url) [ROLE][ref]\n\n[ref]: https://x.example"), 0);
+        // With no definition, `[API][ref]` is text on the page, so its token is a blank.
+        assert_eq!(placeholder_count("[API][ref]"), 1);
         assert_eq!(placeholder_count("[REF]: https://x.example"), 0);
         assert_eq!(placeholder_count("see [REF]: later"), 1);
+        assert_eq!(placeholder_count("[API]: not a definition"), 1);
         assert_eq!(placeholder_count("- [ ] task\n- [x] done\n- [X] done"), 0);
         assert_eq!(placeholder_count(r"\usepackage[T1]{fontenc} a[BC]"), 0);
     }
@@ -334,18 +473,86 @@ mod tests {
     }
 
     #[test]
-    fn a_page_escapes_every_dollar_sign_of_its_own() {
-        let page = page_placeholders("Pay $1$ [AMOUNT] in `$x$` and <https://x.example/$y$> or [s](https://x.example/$z$)");
-        assert_eq!(page.text, "Pay \\$1\\$ [AMOUNT] in `$x$` and <https://x.example/$y$> or [s](https://x.example/\\$z\\$)");
-        assert_eq!(page.tokens.len(), 1);
-        assert_eq!(page_placeholders("Paid \\$5 and \\\\$6").text, "Paid \\$5 and \\\\\\$6");
+    fn a_page_changes_only_its_blanks() {
+        let text = "Pay $1$ [AMOUNT] in `$x$` and <https://x.example/$y$> or [s](https://x.example/$z$) and [r]\n\n[r]: https://x.example/$q$";
+        let swapped = page(text).text;
+        assert_eq!(swapped, text.replace("[AMOUNT]", &format!("${}0$", nonce())));
+        assert_eq!(page("Paid \\$5 and \\\\$6 [CITY]").text, format!("Paid \\$5 and \\\\$6 ${}0$", nonce()));
     }
 
     #[test]
-    fn a_token_knows_where_the_page_draws_it() {
-        let page = page_placeholders("## Goals [GOAL_NAME]\n\nRun `[YOUR_CITY]` for [FIRST_NAME].\n");
-        let places: Vec<Place> = page.tokens.iter().map(|token| token.place).collect();
-        assert_eq!(places, [Place::Prose { heading: Some(2) }, Place::Code, Place::Prose { heading: None }]);
+    fn a_blank_knows_its_heading() {
+        let page = page("## Goals [GOAL_NAME]\n\nRun `[YOUR_CITY]` for [FIRST_NAME].\n");
+        let headings: Vec<Option<usize>> = page.blanks.iter().map(|blank| blank.heading).collect();
+        assert_eq!(headings, [Some(2), None]);
+        assert_eq!(page.count, 3);
+    }
+
+    #[test]
+    fn only_the_nonce_names_a_blank() {
+        assert_eq!(blank_index(&format!("{}12", nonce())), Some(12));
+        for content in ["12", "blank12", "", nonce(), &format!("{}1a", nonce()), &format!("x{}1", nonce())] {
+            assert_eq!(blank_index(content), None, "{content}");
+        }
+        assert!(nonce().len() > 30 && nonce().bytes().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn a_math_span_of_the_texts_own_holds_no_blank() {
+        // `$5 [UNIT]$` pairs as math in the page, so its token is the text's own math, drawn as written.
+        assert_eq!(placeholder_count("Costs $5 [UNIT_NAME]$ a day"), 0);
+        // A `$` that pairs with a blank's swap leaves that token as written, and uncounted.
+        let page = page("Pay $5 for[x] and $[ROLE_NAME] now [CITY]");
+        assert_eq!(page.count, page.blanks.len());
+    }
+
+    #[test]
+    fn a_hint_with_a_dollar_sign_is_one_blank() {
+        assert_eq!(words_of("Salary: [LEVEL - about $50k]"), ["to fill: level - about $50k"]);
+        assert_eq!(placeholder_count("Salary: [LEVEL - about $50k] and [FLOOR - $40k at least]"), 2);
+    }
+
+    #[test]
+    fn a_bracket_the_page_shows_as_text_is_a_blank_whatever_follows() {
+        assert_eq!(words_of("[ROLE_TITLE]: Led the platform team"), ["to fill: role title"]);
+        assert_eq!(words_of("[FIRST_NAME][LAST_NAME]"), ["to fill: first name", "to fill: last name"]);
+        assert_eq!(words_of("[LAST_NAME](pronouns: she/her)"), ["to fill: last name"]);
+    }
+
+    #[test]
+    fn a_reference_label_with_code_or_html_stays_a_link() {
+        assert_eq!(page("See [run `$x`].\n\n[run `$x`]: https://x.example").text, "See [run `$x`].\n\n[run `$x`]: https://x.example");
+        let html = "See [a <b>x</b>] about [CITY].\n\n[a <b>x</b>]: https://x.example";
+        assert_eq!(page(html).text, html.replace("[CITY]", &format!("${}0$", nonce())));
+    }
+
+    #[test]
+    fn an_escaped_or_encoded_bracket_is_no_blank() {
+        for text in ["### Lead \\[TEAM_NAME] - Acme (2020)\nShipped.", "### Lead &#91;TEAM_NAME&#93; - Acme (2020)\nShipped."] {
+            let page = page(text);
+            assert_eq!(page.count, 0, "{text}");
+            assert_eq!(heading_text(&page).as_deref(), Some("Lead [TEAM_NAME] - Acme (2020)"));
+        }
+        let page = page("### [JOB_TITLE] - Acme (2020)\nShipped.");
+        assert_eq!(page.count, 1);
+        assert_eq!(heading_text(&page), Some(format!("{} - Acme (2020)", blank_char(0))));
+        assert_eq!(page.blanks[..], [Blank { words: "to fill: job title".to_owned(), heading: Some(3) }]);
+    }
+
+    #[test]
+    fn a_heading_cannot_forge_a_blank() {
+        let page = page(&format!("### Lead {} - Acme (2020)", blank_char(0)));
+        assert_eq!(page.count, 0);
+        assert!(heading_text(&page).is_some_and(|shown| shown.chars().all(|c| blank_of(c).is_none())));
+    }
+
+    #[test]
+    fn the_page_shows_no_comment() {
+        assert_eq!(shown_text("### Identity\n<!-- e.g. Ada --> [FIRST_NAME]\n"), "### Identity\n [FIRST_NAME]\n");
+        assert_eq!(shown_text("a <!-- x --> b\n<!--\n[X_Y]\n-->\nc"), "a  b\n\nc");
+        assert_eq!(shown_text("Run `<!-- [YOUR_CITY] -->`"), "Run `<!-- [YOUR_CITY] -->`");
+        assert_eq!(placeholder_count(&shown_text("### Identity\n<!-- e.g. Ada --> [FIRST_NAME]\n")), 1);
+        assert_eq!(placeholder_count(&shown_text("Run `<!-- [YOUR_CITY] -->`")), 1);
     }
 
     #[test]

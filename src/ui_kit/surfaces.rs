@@ -7,6 +7,7 @@ use egui::{
 use egui_commonmark::CommonMarkCache;
 
 use crate::shared_kernel::Source;
+use crate::shared_kernel::placeholders::Blank;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
     dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
@@ -14,7 +15,7 @@ use crate::ui_kit::controls::{
 use crate::ui_kit::marks::KnotState;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
-    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, markdown_with_blanks, paint_centred, paint_marked,
+    add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, page_markdown, paint_centred, paint_marked,
     paint_text, table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
@@ -1427,15 +1428,18 @@ pub fn step_line(ui: &mut Ui, knot: Option<(&str, KnotState)>, name: &str, sente
     Some(line.union(toggled))
 }
 
-/// One role from a profile, as a CV line. Every part is the profile's own text, so it is untrusted.
+/// One role from a profile, as a CV line, all from the one page its block makes (`placeholders::page`). Every part is the
+/// profile's own text, so it is untrusted.
 #[derive(Debug, Clone, Copy)]
 pub struct RoleEntry<'a> {
-    /// As written, such as "2021 – present".
+    /// Parts of the page's `heading_text`, such as "2021 – present", where each blank stands as its `blank_char`.
     pub dates: &'a str,
     pub title: &'a str,
     pub company: &'a str,
-    /// Markdown under the role's heading, such as its bullets.
+    /// The page's swapped text under the role's heading, such as its bullets.
     pub body: &'a str,
+    /// The page's blanks, which the other parts name.
+    pub blanks: &'a Arc<[Blank]>,
     /// The first role on the paper takes no rule above it.
     pub first: bool,
 }
@@ -1455,14 +1459,14 @@ pub fn role_entry(ui: &mut Ui, cache: &mut CommonMarkCache, role: &RoleEntry, bl
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.allocate_ui_with_layout(vec2(ROLE_DATES, 0.0), Layout::top_down(Align::Min), |ui| {
                     ui.set_width(ROLE_DATES);
-                    let dates = blank_line(ui, role.dates, Type::NOTE, Ink::Muted);
+                    let dates = blank_line(ui, role.dates, Type::NOTE, Ink::Muted, role.blanks);
                     copyable(ui, |ui| add_job(ui, dates, TextWrapMode::Wrap));
                 });
                 let width = (ui.available_width() - ITEM_GAP).clamp(0.0, DOC_MEASURE);
                 ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
                     ui.set_width(width);
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    let (title, company) = (blank_line(ui, role.title, Type::SECTION, Ink::Text), blank_line(ui, role.company, Type::BODY, Ink::Muted));
+                    let (title, company) = (blank_line(ui, role.title, Type::SECTION, Ink::Text, role.blanks), blank_line(ui, role.company, Type::BODY, Ink::Muted, role.blanks));
                     copyable(ui, |ui| {
                         add_job(ui, title, TextWrapMode::Wrap);
                         add_job(ui, company, TextWrapMode::Wrap);
@@ -1470,7 +1474,7 @@ pub fn role_entry(ui: &mut Ui, cache: &mut CommonMarkCache, role: &RoleEntry, bl
                     ui.add_space(ITEM_GAP);
                     ui.spacing_mut().item_spacing.y = ITEM_GAP;
                     ui.style_mut().text_styles.insert(egui::TextStyle::Body, Type::TAKE.font());
-                    markdown_with_blanks(ui, cache, role.body);
+                    page_markdown(ui, cache, role.body, role.blanks);
                 });
             });
             edit
@@ -1890,12 +1894,13 @@ mod tests {
 
     #[test]
     fn a_blocked_role_offers_no_edit() {
-        const ROLE: RoleEntry = RoleEntry { dates: "2021 – present", title: "Lead Engineer", company: "Calder Freight", body: "- Leads a team of six.", first: true };
         for (blocked, clicks) in [(None, 1), (Some("Save or cancel the open edit first."), 0)] {
             let mut cache = CommonMarkCache::default();
+            let blanks: Arc<[Blank]> = Arc::new([]);
             let mut harness = Harness::builder().with_size([800.0, 300.0]).with_context_setup(setup).build_ui_state(
                 move |ui, clicked: &mut usize| {
-                    if role_entry(ui, &mut cache, &ROLE, blocked).clicked() {
+                    let role = RoleEntry { dates: "2021 – present", title: "Lead Engineer", company: "Calder Freight", body: "- Leads a team of six.", blanks: &blanks, first: true };
+                    if role_entry(ui, &mut cache, &role, blocked).clicked() {
                         *clicked += 1;
                     }
                 },

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::profile::domain::document::{BlockKey, find, heading_len, is_atx, lines_with_endings};
-use crate::shared_kernel::placeholders::placeholder_count;
+use crate::shared_kernel::placeholders::{placeholder_count, shown_text};
 
 /// How much of a topic the user has written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,29 +29,16 @@ pub fn topic_fill(blocks: &[&str], readable: bool) -> Fill {
     }
 }
 
-/// The setup tokens left in a block. A token in a comment is a hint, so it does not count.
-pub fn open_placeholders(block: &str) -> usize {
-    placeholder_count(&without_comments(block))
+/// The setup tokens left in a block: the tokens its page draws, from the text the page shows (`shown_text`), where a
+/// comment is gone.
+fn open_placeholders(block: &str) -> usize {
+    placeholder_count(&shown_text(block))
 }
 
 /// Under its heading a block holds nothing but blank lines, comments and the headings of its children.
 fn body_is_empty(block: &str) -> bool {
-    let body = without_comments(&block[heading_len(block).min(block.len())..]);
+    let body = shown_text(&block[heading_len(block).min(block.len())..]);
     lines_with_endings(&body).iter().all(|line| line.trim().is_empty() || is_atx(line))
-}
-
-fn without_comments(text: &str) -> String {
-    let mut kept = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<!--") {
-        kept.push_str(&rest[..start]);
-        match rest[start..].find("-->") {
-            Some(end) => rest = &rest[start + end + 3..],
-            None => return kept,
-        }
-    }
-    kept.push_str(rest);
-    kept
 }
 
 /// What a save finds in the file compared with what the user opened.

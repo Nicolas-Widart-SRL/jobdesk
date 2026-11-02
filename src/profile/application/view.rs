@@ -1,5 +1,6 @@
-use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, open_placeholders, role_heading, select, topic_fill};
+use crate::profile::domain::{Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill};
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::placeholders::{Page, heading_text, page, shown_text};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileView {
@@ -42,10 +43,17 @@ pub struct BlockView {
     /// The block without its heading line. For a `##` with children it stops before the first child.
     pub body: String,
     pub role: Option<Role>,
-    /// The open tokens in the heading line and `body`. A child counts its own, so the blocks of a topic add up to its fill.
+    /// The block's own words as the page shows them: the heading line and `body`, comments removed and placeholders
+    /// swapped for blanks. The paper renders this, and its count is `placeholders`.
+    pub page: Page,
+    /// The part of `page.text` under the heading line.
+    pub shown_body: String,
+    /// The open tokens the page draws, in the heading line and `body`. A child counts its own, so the blocks of a topic
+    /// add up to its fill.
     pub placeholders: usize,
 }
 
+/// A role's parts, from the page's `heading_text`: a blank stands as its `blank_char`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Role {
     pub title: String,
@@ -143,15 +151,20 @@ fn section_view(text: &str, all: &[Block], file: ProfileFile, block: &Block) -> 
 fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> BlockView {
     let full = text[block.range.clone()].trim_end();
     let body_start = (block.range.start + heading_len(full)).min(own_end);
-    let role = if block.level == 3 { role_heading(&block.heading).map(|role| Role { title: role.title.to_owned(), company: role.company.to_owned(), dates: role.dates.to_owned() }) } else { None };
+    let page = page(&shown_text(&text[block.range.start..own_end]));
+    let heading = if block.level == 3 { heading_text(&page) } else { None };
+    let role = heading.as_deref().and_then(role_heading).map(|role| Role { title: role.title.to_owned(), company: role.company.to_owned(), dates: role.dates.to_owned() });
+    let shown_body = page.text.split_once('\n').map_or("", |(_, body)| body).trim().to_owned();
     let body = text[body_start..own_end].trim().to_owned();
     BlockView {
         key: BlockKey { file, level: block.level, heading: block.heading.clone(), parent: block.parent.clone(), nth: block.nth },
         heading: block.heading.clone(),
         text: full.to_owned(),
-        placeholders: open_placeholders(&text[block.range.start..own_end]),
+        placeholders: page.count,
         body,
         role,
+        page,
+        shown_body,
     }
 }
 
@@ -277,5 +290,31 @@ mod tests {
         assert_eq!(topic(&view, TopicId::Identity).fill, Fill::NotStarted);
         let counts = topic_counts(&view);
         assert_eq!((counts.filled, counts.total, counts.hidden, counts.any_found), (0, 9, 2, false));
+    }
+
+    /// A role's parts and its count come from the one page of its block, heading line included.
+    #[test]
+    fn a_role_draws_and_counts_from_its_page() {
+        let text = "## Professional Experience\n\n### Lead \\[TEAM_NAME] - Acme (2020)\nShipped.\n\n### Lead &#91;TEAM_NAME&#93; - Acme (2020)\nShipped.\n\n### [JOB_TITLE] - Acme (2020)\nShipped.\n";
+        let view = view_of(&[(ProfileFile::Candidate, text)]);
+        let roles = &topic(&view, TopicId::Experience).sections[0].children;
+        let shown: Vec<(&str, usize)> = roles.iter().map(|role| (role.role.as_ref().unwrap().title.as_str(), role.placeholders)).collect();
+        let blank = crate::shared_kernel::placeholders::blank_char(0).to_string();
+        assert_eq!(shown, [("Lead [TEAM_NAME]", 0), ("Lead [TEAM_NAME]", 0), (blank.as_str(), 1)]);
+        assert_eq!(roles[2].page.blanks[0].words, "to fill: job title");
+        assert_eq!(roles[2].shown_body, "Shipped.");
+    }
+
+    /// The paper shows a block without its comments, and counts what it shows.
+    #[test]
+    fn a_block_counts_what_it_shows_without_comments() {
+        let text = "## Identity\n<!-- e.g. Ada --> [FIRST_NAME]\nRun `<!-- [YOUR_CITY] -->`\n";
+        let view = view_of(&[(ProfileFile::Candidate, text)]);
+        let identity = &topic(&view, TopicId::Identity).sections[0].block;
+        assert_eq!(identity.placeholders, 2);
+        assert_eq!(identity.page.blanks.len(), 1);
+        assert!(!identity.page.text.contains("e.g. Ada"));
+        assert!(identity.text.contains("<!-- e.g. Ada -->"), "the editor keeps the raw text");
+        assert_eq!(topic(&view, TopicId::Identity).fill, Fill::ToFill(2));
     }
 }

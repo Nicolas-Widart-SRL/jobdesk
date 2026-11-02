@@ -58,6 +58,18 @@ jobs:
               - '**'
               - '!**/*.md'
 
+  # Fails on a RustSec vulnerability in Cargo.lock. It runs on every change, Markdown too,
+  # because new advisories arrive without a change here.
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
   # Screen snapshots are macOS baselines, so the full suite runs on macOS only.
   # The Installers workflow runs clippy and the platform-neutral tests on Windows before a release.
   test:

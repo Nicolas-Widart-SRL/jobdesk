@@ -16,7 +16,7 @@ if cargo fmt --check >"$log" 2>&1; then
   echo "fmt: ok"
 else
   echo "fmt: FAIL, run cargo fmt"
-  grep -E '^Diff in' "$log" | head -10
+  grep -E '^(Diff in|error)' "$log" | head -10
   failed=1
 fi
 

@@ -128,9 +128,9 @@ jobs:
           path: target/llvm-cov/html
           if-no-files-found: error
 
-  # Miri looks for undefined behavior in the pure layers. host_path is skipped: it uses files, env and a shell.
+  # Miri looks for undefined behavior in the domain, application and shared_kernel tests. host_path is skipped: it uses files, env and a shell.
   miri:
-    name: Miri (domain and application tests)
+    name: Miri (domain, application and shared_kernel tests)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest

@@ -54,7 +54,9 @@ Screen tests render every screen in both themes from `tests/sample_workspace`, w
 UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery
 ```
 
-Miri runs in CI over the domain and application tests. To run it locally:
+Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
+
+Miri runs in CI over the domain, application and shared_kernel tests. To run it locally:
 
 ```bash
 rustup +nightly component add miri rust-src
@@ -67,8 +69,6 @@ cargo-audit checks `Cargo.lock` in CI. To run it locally:
 cargo install cargo-audit --locked
 cargo audit
 ```
-
-Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 
 ## Before you commit
 

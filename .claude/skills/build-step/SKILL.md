@@ -56,7 +56,7 @@ Keep it short: the lead reads every word.
 
 - **Branch** and **worktree path**.
 - **Commits**: SHA and subject.
-- **Checks**: the line `scripts/check.sh` printed.
+- **Checks**: the lines `scripts/check.sh` printed (fmt, test, clippy).
 - **Notes**: anything you did not do, and why.
 
 Leave trail's "tokens saved" lines out of the report.

@@ -13,7 +13,7 @@ pub mod source;
 pub mod visible_text;
 pub mod web_url;
 
-pub use api_key::{ApiKey, BASE_URL_VARIABLE, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, PLAIN_HTTP_REFUSED, inherited_env, plain_http_endpoint};
+pub use api_key::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, inherited_env, key_route_refusal};
 pub use check_state::CheckState;
 pub use key_mask::{KeyMask, redacted};
 pub use load_error::LoadError;

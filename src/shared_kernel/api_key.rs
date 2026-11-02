@@ -52,6 +52,12 @@ pub const BASE_URL_VARIABLE: &str = "ANTHROPIC_BASE_URL";
 pub const PLAIN_HTTP_REFUSED: &str =
     "ANTHROPIC_BASE_URL is set to a plain http address, so Jobdesk will not send your API key there. Use https, or pick the Claude sign-in.";
 
+/// Why a process that would get the key does not start when a proxy would carry it in the clear. It names no value.
+pub const PROXY_REFUSED: &str = "ANTHROPIC_BASE_URL is a plain http address on this machine, and HTTP_PROXY or ALL_PROXY is set, so your API key could go through that proxy in the clear. Jobdesk will not send it. Use https, unset the proxy variable, or pick the Claude sign-in.";
+
+/// Variables that can send a plain http request through a proxy, even one to this machine.
+pub const PROXY_VARIABLES: &[&str] = &["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+
 /// Reads one variable of the environment Jobdesk started with. Tests pass their own, so none changes the process environment.
 pub type EnvReader = dyn Fn(&str) -> Option<String>;
 
@@ -60,23 +66,50 @@ pub fn inherited_env(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
 }
 
-/// Whether `url` sends requests in the clear to a host other than this machine: an `http` scheme, in any case,
-/// with a host that is not `localhost`, an address in `127.0.0.0/8` or `::1`. An `http` address with no host is flagged too.
-/// Text with no scheme, garbage or an empty string is not flagged: the CLI rejects it itself and sends nothing.
-/// It reads the address as a browser would: tabs and line breaks anywhere and spaces at the ends are dropped,
-/// any run of slashes or backslashes may follow the scheme, and the host follows the last `@`. A loopback host
-/// written some other way, such as `127.1` or `localhost.`, is flagged, so a doubt refuses the key rather than sends it.
-pub fn plain_http_endpoint(url: &str) -> bool {
+/// Why the key must not go to a process started under `env`, or None when its requests stay encrypted or on this machine.
+/// No base URL, or a blank one, leaves the CLI on its own `https` address. An `http` base URL on this machine is refused
+/// when a proxy variable is set and not empty, whatever `NO_PROXY` says.
+pub fn key_route_refusal(env: &EnvReader) -> Option<&'static str> {
+    let url = env(BASE_URL_VARIABLE)?;
+    match base_url_kind(&url) {
+        BaseUrl::Blank | BaseUrl::Https => None,
+        BaseUrl::Other => Some(PLAIN_HTTP_REFUSED),
+        BaseUrl::LocalHttp => PROXY_VARIABLES.iter().any(|name| env(name).is_some_and(|value| !value.is_empty())).then_some(PROXY_REFUSED),
+    }
+}
+
+/// What a base URL is, as far as the key is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaseUrl {
+    /// Nothing but blanks.
+    Blank,
+    Https,
+    /// `http` to `localhost`, an address in `127.0.0.0/8` or `::1`.
+    LocalHttp,
+    /// Anything else: `http` to another host, another scheme, or text that is no URL. A doubt refuses the key rather than sends it.
+    Other,
+}
+
+/// Reads the address as a browser would: tabs and line breaks anywhere, and blanks, byte order marks and controls at the ends,
+/// are dropped, the scheme is in any case, any run of slashes or backslashes may follow it, and the host follows the last `@`.
+/// A loopback host written some other way, such as `127.1` or `localhost.`, is `Other`.
+fn base_url_kind(url: &str) -> BaseUrl {
     let url: String = url.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect();
-    let url = url.trim_matches(|c: char| c <= ' ');
-    let Some((scheme, rest)) = url.split_once(':') else { return false };
+    let url = url.trim_matches(|c: char| c.is_whitespace() || c.is_control() || c == '\u{FEFF}');
+    if url.is_empty() {
+        return BaseUrl::Blank;
+    }
+    let Some((scheme, rest)) = url.split_once(':') else { return BaseUrl::Other };
+    if scheme.eq_ignore_ascii_case("https") {
+        return BaseUrl::Https;
+    }
     if !scheme.eq_ignore_ascii_case("http") {
-        return false;
+        return BaseUrl::Other;
     }
     let rest = rest.trim_start_matches(['/', '\\']);
     let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
-    !is_loopback(host)
+    if is_loopback(host) { BaseUrl::LocalHttp } else { BaseUrl::Other }
 }
 
 /// Whether a URL's host, with its port, names this machine.
@@ -131,10 +164,15 @@ mod tests {
     }
 
     #[test]
-    fn https_and_loopback_addresses_are_not_plain_http() {
+    fn https_is_https() {
+        for url in ["https://api.anthropic.com", "HTTPS://Proxy.Example.com:8443/v1", "  https://proxy.example.com\n", "\u{a0}https://proxy.example.com"] {
+            assert_eq!(base_url_kind(url), BaseUrl::Https, "{url:?}");
+        }
+    }
+
+    #[test]
+    fn http_to_this_machine_is_local() {
         for url in [
-            "https://api.anthropic.com",
-            "HTTPS://Proxy.Example.com:8443/v1",
             "http://localhost",
             "http://LOCALHOST:4000/",
             "http://127.0.0.1:8080",
@@ -145,12 +183,12 @@ mod tests {
             "http://user@localhost:3000?x=1",
             "  http://localhost  ",
         ] {
-            assert!(!plain_http_endpoint(url), "{url}");
+            assert_eq!(base_url_kind(url), BaseUrl::LocalHttp, "{url:?}");
         }
     }
 
     #[test]
-    fn http_to_another_host_is_plain_http() {
+    fn http_to_another_host_is_refused() {
         for url in [
             "http://example.com",
             "HTTP://Example.com",
@@ -160,6 +198,7 @@ mod tests {
             "http://127.0.0.1@evil.com",
             "http://localhost:80@evil.com/",
             "http://10.0.0.5:8080",
+            "http://127.1",
             "http://[2001:db8::1]",
             "http://[::1].evil.com",
             "http:evil.com",
@@ -170,21 +209,69 @@ mod tests {
             "http://evil.com\\@localhost",
             "http://",
         ] {
-            assert!(plain_http_endpoint(url), "{url}");
+            assert_eq!(base_url_kind(url), BaseUrl::Other, "{url:?}");
         }
     }
 
-    /// The CLI rejects these itself and sends nothing, so they are not this check's to refuse.
+    /// JavaScript's `trim` drops these too, so each could hide the scheme from a narrower trim.
     #[test]
-    fn no_scheme_or_garbage_is_not_flagged() {
-        for url in ["", "   ", "example.com", "localhost:8080", "not a url", "ftp://example.com", "httpx://example.com"] {
-            assert!(!plain_http_endpoint(url), "{url:?}");
+    fn a_blank_or_mark_before_the_scheme_hides_nothing() {
+        for blank in ['\u{a0}', '\u{feff}', '\u{2028}', '\u{2029}', '\u{3000}', '\u{1680}', '\u{85}', '\u{b}', '\u{c}'] {
+            assert_eq!(base_url_kind(&format!("{blank}http://example.com{blank}")), BaseUrl::Other, "{blank:?}");
+            assert_eq!(base_url_kind(&format!("{blank}http://localhost{blank}")), BaseUrl::LocalHttp, "{blank:?}");
         }
     }
 
     #[test]
-    fn the_refusal_names_no_address() {
-        assert!(!PLAIN_HTTP_REFUSED.contains("http://") && PLAIN_HTTP_REFUSED.contains("https"));
+    fn anything_but_https_or_local_http_is_refused() {
+        for url in ["proxy.corp:8080", "example.com", "localhost:8080", "not a url", "ftp://x", "httpx://example.com", "\u{200b}https://example.com"] {
+            assert_eq!(base_url_kind(url), BaseUrl::Other, "{url:?}");
+        }
+        for url in ["", "   ", "\u{a0}\u{feff}\n"] {
+            assert_eq!(base_url_kind(url), BaseUrl::Blank, "{url:?}");
+        }
+    }
+
+    fn env_of(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| vars.iter().find(|(var, _)| *var == name).map(|(_, value)| (*value).to_owned())
+    }
+
+    #[test]
+    fn the_key_route_is_refused_only_where_it_could_go_in_the_clear() {
+        assert_eq!(key_route_refusal(&env_of(&[])), None, "no base URL");
+        assert_eq!(key_route_refusal(&env_of(&[("ANTHROPIC_BASE_URL", "")])), None, "an empty one");
+        assert_eq!(key_route_refusal(&env_of(&[("ANTHROPIC_BASE_URL", "https://proxy.example.com"), ("HTTP_PROXY", "http://p.example.com")])), None);
+        assert_eq!(key_route_refusal(&env_of(&[("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")])), None);
+        assert_eq!(key_route_refusal(&env_of(&[("ANTHROPIC_BASE_URL", "http://example.com")])), Some(PLAIN_HTTP_REFUSED));
+        assert_eq!(key_route_refusal(&env_of(&[("ANTHROPIC_BASE_URL", "proxy.corp:8080")])), Some(PLAIN_HTTP_REFUSED));
+        assert_eq!(key_route_refusal(&env_of(&[("HTTP_PROXY", "http://p.example.com")])), None, "a proxy alone keeps https encrypted");
+    }
+
+    #[test]
+    fn a_proxy_variable_refuses_a_local_http_base_url() {
+        for name in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+            assert!(PROXY_VARIABLES.contains(&name), "{name}");
+        }
+        for name in PROXY_VARIABLES {
+            let local = |var: &str| (var == BASE_URL_VARIABLE).then(|| "http://localhost:4000".to_owned());
+            let set = move |var: &str| if var == *name { Some("http://p.example.com:3128".to_owned()) } else { local(var) };
+            assert_eq!(key_route_refusal(&set), Some(PROXY_REFUSED), "{name}");
+            let empty = move |var: &str| if var == *name { Some(String::new()) } else { local(var) };
+            assert_eq!(key_route_refusal(&empty), None, "an empty {name}");
+        }
+    }
+
+    #[test]
+    fn the_refusals_name_no_address() {
+        for notice in [PLAIN_HTTP_REFUSED, PROXY_REFUSED] {
+            assert!(!notice.contains("http://") && notice.contains("https"), "{notice}");
+        }
+    }
+
+    #[test]
+    fn the_inherited_environment_is_the_process_environment() {
+        assert_eq!(inherited_env("PATH"), std::env::var_os("PATH").map(|path| path.to_string_lossy().into_owned()));
+        assert!(inherited_env("PATH").is_some());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::settings::domain::{ConnectionTester, Outcome, TestDone, TestReport};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, own_group};
-use crate::shared_kernel::{ApiKey, BASE_URL_VARIABLE, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, PLAIN_HTTP_REFUSED, inherited_env, plain_http_endpoint, redacted};
+use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, inherited_env, key_route_refusal, redacted};
 
 const PROMPT: &str = "Reply with the single word: ready";
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -88,10 +88,12 @@ fn unreached(said: String) -> TestReport {
     TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said, source: None }
 }
 
-/// A key test whose inherited base URL would carry the key in the clear starts no process.
+/// A key test whose inherited base URL or proxy could carry the key in the clear starts no process.
 fn test(key: Option<&ApiKey>, env: &EnvReader) -> TestReport {
-    if key.is_some() && env(BASE_URL_VARIABLE).is_some_and(|url| plain_http_endpoint(&url)) {
-        return unreached(PLAIN_HTTP_REFUSED.to_owned());
+    if key.is_some()
+        && let Some(refusal) = key_route_refusal(env)
+    {
+        return unreached(refusal.to_owned());
     }
     let folder = match tempfile::TempDir::new() {
         Ok(folder) => folder,
@@ -258,6 +260,7 @@ mod tests {
     use std::ffi::OsStr;
 
     use super::*;
+    use crate::shared_kernel::api_key::{BASE_URL_VARIABLE, PLAIN_HTTP_REFUSED, PROXY_REFUSED};
 
     const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
 
@@ -481,6 +484,18 @@ mod tests {
         // It returns before it looks for `claude`, so no process starts.
         let report = test(Some(&key), &env);
         assert_eq!(report, TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said: PLAIN_HTTP_REFUSED.to_owned(), source: None });
+    }
+
+    #[test]
+    fn a_key_test_never_goes_through_a_proxy_to_a_local_http_base_url() {
+        let key = ApiKey::parse(FAKE).unwrap();
+        let env = |name: &str| match name {
+            BASE_URL_VARIABLE => Some("http://127.0.0.1:4000".to_owned()),
+            "HTTP_PROXY" => Some("http://p.example.com:3128".to_owned()),
+            _ => None,
+        };
+        let report = test(Some(&key), &env);
+        assert_eq!(report, TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said: PROXY_REFUSED.to_owned(), source: None });
     }
 
     #[test]

@@ -11,9 +11,7 @@ use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, own_group};
-use crate::shared_kernel::{
-    ApiKey, BASE_URL_VARIABLE, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, PLAIN_HTTP_REFUSED, SignIn, inherited_env, plain_http_endpoint, redacted,
-};
+use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, SignIn, inherited_env, key_route_refusal, redacted};
 
 const STDERR_LINES_KEPT: usize = 12;
 
@@ -165,11 +163,13 @@ impl KeyMasker {
 }
 
 /// Starts the process. A key that cannot be had ends it before any process exists, and never falls back to the Claude plan.
-/// So does an inherited base URL that would carry the key in the clear, checked before the key is read.
+/// So does an inherited base URL or proxy that could carry the key in the clear, checked before the key is read.
 /// The key comes back with the process, kept only to mask it in what the process says.
 fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader, env: &EnvReader) -> Result<(Child, KeyMasker), String> {
-    if request.sign_in == SignIn::ApiKey && env(BASE_URL_VARIABLE).is_some_and(|url| plain_http_endpoint(&url)) {
-        return Err(PLAIN_HTTP_REFUSED.to_owned());
+    if request.sign_in == SignIn::ApiKey
+        && let Some(refusal) = key_route_refusal(env)
+    {
+        return Err(refusal.to_owned());
     }
     let key = task_key(request.sign_in, keys)?;
     // The command holds the key only until it is spawned.
@@ -303,6 +303,7 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
 mod key_tests {
     use super::*;
     use crate::shared_kernel::KeyMask;
+    use crate::shared_kernel::api_key::{PLAIN_HTTP_REFUSED, PROXY_REFUSED};
 
     const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
 
@@ -413,6 +414,24 @@ mod key_tests {
         }
         request.sign_in = SignIn::ClaudeSignIn;
         let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &base_url("http://proxy.example.com")).unwrap_err();
+        assert!(failure.starts_with("Could not start Claude"), "the Claude sign-in passes no key, so it is not checked");
+    }
+
+    #[test]
+    fn a_key_never_goes_through_a_proxy_to_a_local_http_base_url() {
+        let nowhere = Path::new("/nonexistent/claude");
+        let mut request = request();
+        let keys: KeyReader = Arc::new(|| panic!("the key must not be read"));
+        let env = |name: &str| match name {
+            "ANTHROPIC_BASE_URL" => Some("http://localhost:4000".to_owned()),
+            "all_proxy" => Some("socks5://p.example.com:1080".to_owned()),
+            _ => None,
+        };
+        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &env).unwrap_err();
+        assert_eq!(failure, PROXY_REFUSED);
+        assert!(!failure.contains("example") && !failure.contains("socks5"), "the notice names no value");
+        request.sign_in = SignIn::ClaudeSignIn;
+        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &env).unwrap_err();
         assert!(failure.starts_with("Could not start Claude"), "the Claude sign-in passes no key, so it is not checked");
     }
 

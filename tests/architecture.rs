@@ -36,8 +36,11 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 
 /// Production code only: unit tests may build fixtures from any layer.
 fn production_code(path: &Path) -> String {
-    let text = fs::read_to_string(path).unwrap();
-    text.split("#[cfg(test)]").next().unwrap_or_default().to_owned()
+    production_source(&fs::read_to_string(path).unwrap()).to_owned()
+}
+
+fn production_source(text: &str) -> &str {
+    text.split("#[cfg(test)]").next().unwrap_or_default()
 }
 
 /// Drops the whitespace before each `.`, so a method chain that rustfmt broke after its receiver matches like one line.
@@ -115,6 +118,12 @@ fn features_respect_layer_rules() {
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
 
+/// The appearance words a source file uses outside its test module, split chains included.
+fn appearance_hits(source: &str) -> Vec<&'static str> {
+    let code = joined_chains(production_source(source));
+    APPEARANCE.into_iter().filter(|word| code.contains(word)).collect()
+}
+
 /// `ui_kit` owns every colour, stroke and type style. Screens only arrange its widgets.
 #[test]
 fn appearance_lives_in_ui_kit() {
@@ -124,14 +133,19 @@ fn appearance_lives_in_ui_kit() {
     }
     let mut violations = Vec::new();
     for file in files {
-        let code = joined_chains(&production_code(&file));
-        for word in APPEARANCE {
-            if code.contains(word) {
-                violations.push(format!("{}: {word} belongs in ui_kit", file.display()));
-            }
+        for word in appearance_hits(&fs::read_to_string(&file).unwrap()) {
+            violations.push(format!("{}: {word} belongs in ui_kit", file.display()));
         }
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn appearance_check_sees_chains_that_rustfmt_split() {
+    let split = "fn show(ui: &mut Ui) {\n    ui\n        .button(\"x\");\n}\n";
+    assert_eq!(appearance_hits(split), ["ui.button"]);
+    let in_tests = format!("fn show() {{}}\n#[cfg(test)]\nmod tests {{\n{split}}}\n");
+    assert!(appearance_hits(&in_tests).is_empty());
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::settings::domain::run_defaults::{PermissionMode, Retention, RunDefaults, SpendCap};
 use crate::shared_kernel::LoadError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -86,12 +87,16 @@ impl StartScreen {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Preferences {
     pub theme: ThemeChoice,
     pub text_size: TextSize,
     pub reduce_motion: bool,
     pub open_on: StartScreen,
+    pub run_defaults: RunDefaults,
+    pub cap: SpendCap,
+    pub permissions: PermissionMode,
+    pub retention: Retention,
 }
 
 pub trait PreferencesStore {
@@ -134,5 +139,9 @@ mod tests {
             (preferences.theme, preferences.text_size, preferences.reduce_motion, preferences.open_on),
             (ThemeChoice::System, TextSize(100), false, StartScreen::Today)
         );
+        assert_eq!(preferences.run_defaults, RunDefaults::default());
+        assert_eq!(preferences.cap.active(), None);
+        assert_eq!(preferences.permissions, PermissionMode::AllowAndNote);
+        assert_eq!(preferences.retention, Retention::Forever, "nothing is deleted until the user says so");
     }
 }

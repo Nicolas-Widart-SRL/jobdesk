@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Pos2, Rect, Response, Role, Sense, Shadow,
-    Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
+    Align, Color32, CornerRadius, EventFilter, Frame, Galley, Key, Layout, Margin, Modifiers, Painter, Panel, Popup, PopupCloseBehavior, Pos2, Rect, RectAlign,
+    Response, Role, Sense, Shadow, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, UiStackInfo, Vec2, WidgetInfo, pos2, vec2,
 };
 use egui_commonmark::CommonMarkCache;
 
@@ -11,25 +11,26 @@ use crate::shared_kernel::placeholders::Piece;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
-    dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button, pointer_over, pressed,
-    reveal_command,
+    amount_in, danger_button, dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button,
+    pointer_over, pressed, primary_button, reveal_command,
 };
 use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
     add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
-    table_head, wrapped,
+    rich, strong, table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
     CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
-    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES,
-    FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP,
-    LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING,
-    PROMPT_PADDING, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING,
-    SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP,
-    SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING,
-    STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
+    FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN,
+    HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN,
+    NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
+    ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP,
+    SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING,
+    SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
+    TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -620,11 +621,57 @@ pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: i
     .inner
 }
 
-/// A setting that is on or off: a checkbox at `CHECK_BOX` first, painted as egui paints its own, then `label` over its
-/// `help`. The box and its words are one control: a click on either flips it, Tab stops on it once with the focus ring
-/// round the box, and a screen reader hears one checkbox named `label`, with `help` as its description.
-/// A hairline sits above. Hits of the search `query` are highlighted.
-pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query: &str) -> Response {
+/// What marks a setting that is picked: a checkbox, or a radio button's dot.
+#[derive(Clone, Copy)]
+enum Choice {
+    Check,
+    Radio,
+}
+
+impl Choice {
+    fn size(self) -> f32 {
+        match self {
+            Self::Check => CHECK_BOX,
+            Self::Radio => RADIO,
+        }
+    }
+}
+
+/// Paints `choice` in `boxed` as egui paints its own checkbox and radio button, lit by `response`'s hover, press and
+/// focus, then the hand and the focus ring round it.
+fn paint_choice(ui: &Ui, response: &Response, choice: Choice, boxed: Rect, on: bool) {
+    let visuals = *ui.style().interact(response);
+    let mut painter = ui.painter().clone();
+    if !ui.is_enabled() {
+        painter.multiply_opacity(DISABLED_OPACITY);
+    }
+    match choice {
+        Choice::Check => {
+            let radius = visuals.corner_radius.at_most((0.3 * CHECK_BOX).round() as u8);
+            painter.rect(boxed, radius, visuals.bg_fill, visuals.bg_stroke, StrokeKind::Inside);
+            if on {
+                let tick = Rect::from_center_size(boxed.center(), Vec2::splat(CHECK_BOX * 2.0 / 3.0));
+                painter.line(vec![pos2(tick.left(), tick.center().y), pos2(tick.center().x, tick.bottom()), pos2(tick.right(), tick.top())], visuals.fg_stroke);
+            }
+            interactive_part(ui, response, boxed, radius);
+        }
+        Choice::Radio => {
+            // The ring's hairline sits inside its circle, as a checkbox's border sits inside its box.
+            painter.circle(boxed.center(), (RADIO - HAIRLINE) / 2.0, visuals.bg_fill, visuals.bg_stroke);
+            if on {
+                painter.circle_filled(boxed.center(), RADIO_DOT / 2.0, visuals.fg_stroke.color);
+            }
+            // The focus ring round a circle is a circle too.
+            interactive_part(ui, response, boxed, CornerRadius::same((RADIO / 2.0 + FOCUS_OFFSET).ceil() as u8));
+        }
+    }
+}
+
+/// A setting picked by a mark at the start of its row: `choice`'s mark, then `label` over its `help`. The mark and its
+/// words are one control: a click on either takes it, Tab stops on it once with the focus ring round the mark, and a
+/// screen reader hears one control named `label`, with `help` as its description. `picked` reads the click and says
+/// whether the mark shows on. A hairline sits above. Hits of the search `query` are highlighted.
+fn setting_choice(ui: &mut Ui, choice: Choice, label: &str, help: &str, query: &str, picked: impl FnOnce(&mut Response) -> bool) -> Response {
     let enabled = ui.is_enabled();
     let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
     let id = ui.next_auto_id();
@@ -634,49 +681,187 @@ pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query:
         let full = ui.available_width();
         let origin = ui.cursor().min;
         let top = origin.y + SETTING_ROW_PADDING;
-        let lead = CHECK_BOX + SETTING_CHECK_GAP;
+        let mark = choice.size();
+        let lead = mark + SETTING_CHECK_GAP;
         let room = (full - lead).clamp(0.0, DOC_MEASURE);
         let label_lines = wrapped(ui, label, Type::STRONG, text, room);
         let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
         let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
         let wide = help_lines.as_ref().map_or(label_lines.size().x, |help| label_lines.size().x.max(help.size().x));
-        // The box sits on the label's first line.
-        let first_line = label_lines.rows.first().map_or(CHECK_BOX, |row| row.rect().height());
-        let boxed = Rect::from_min_size(pos2(origin.x, top + ((first_line - CHECK_BOX) / 2.0).max(0.0)), vec2(CHECK_BOX, CHECK_BOX));
+        // The mark sits on the label's first line.
+        let first_line = label_lines.rows.first().map_or(mark, |row| row.rect().height());
+        let boxed = Rect::from_min_size(pos2(origin.x, top + ((first_line - mark) / 2.0).max(0.0)), vec2(mark, mark));
         let place = Rect::from_min_size(pos2(origin.x + lead, top), vec2(wide, words));
-        let mut response = ui.interact(boxed.union(place), id.with("setting_check"), Sense::click());
-        if response.clicked() {
-            *on = !*on;
-            response.mark_changed();
-        }
-        let checked = *on;
-        response.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, checked, label));
+        let (salt, role) = match choice {
+            Choice::Check => ("setting_check", Role::CheckBox),
+            Choice::Radio => ("setting_radio", Role::RadioButton),
+        };
+        let mut response = ui.interact(boxed.union(place), id.with(salt), Sense::click());
+        let on = picked(&mut response);
+        response.widget_info(|| WidgetInfo::selected(role, enabled, on, label));
         if !help.is_empty() {
             ui.ctx().accesskit_node_builder(response.id, |node| node.set_description(help));
         }
-        // egui's own checkbox look, lit by the whole control's hover, press and focus.
-        let visuals = *ui.style().interact(&response);
-        let mut painter = ui.painter().clone();
-        if !enabled {
-            painter.multiply_opacity(DISABLED_OPACITY);
-        }
-        let radius = visuals.corner_radius.at_most((0.3 * CHECK_BOX).round() as u8);
-        painter.rect(boxed, radius, visuals.bg_fill, visuals.bg_stroke, StrokeKind::Inside);
-        if checked {
-            let tick = Rect::from_center_size(boxed.center(), Vec2::splat(CHECK_BOX * 2.0 / 3.0));
-            painter.line(vec![pos2(tick.left(), tick.center().y), pos2(tick.center().x, tick.bottom()), pos2(tick.right(), tick.top())], visuals.fg_stroke);
-        }
-        interactive_part(ui, &response, boxed, radius);
+        paint_choice(ui, &response, choice, boxed, on);
         let label_height = label_lines.size().y;
         paint_marked(ui, place.min, label_lines, label, query);
         if let Some(help_lines) = help_lines {
             paint_marked(ui, pos2(place.left(), place.top() + label_height + SETTING_HELP_GAP), help_lines, help, query);
         }
-        let height = words.max(CHECK_BOX).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
+        let height = words.max(mark).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
         ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover());
         response
     })
     .inner
+}
+
+/// A setting that is on or off: a checkbox at `CHECK_BOX` first, painted as egui paints its own, then `label` over its
+/// `help`. The box and its words are one control: a click on either flips it, Tab stops on it once with the focus ring
+/// round the box, and a screen reader hears one checkbox named `label`, with `help` as its description.
+/// A hairline sits above. Hits of the search `query` are highlighted.
+pub fn setting_check(ui: &mut Ui, on: &mut bool, label: &str, help: &str, query: &str) -> Response {
+    setting_choice(ui, Choice::Check, label, help, query, |response| {
+        if response.clicked() {
+            *on = !*on;
+            response.mark_changed();
+        }
+        *on
+    })
+}
+
+/// One of a few settings that exclude each other, such as how tool permissions go: a radio button at `RADIO` first,
+/// then `label` over its `help`, laid out as `setting_check` lays out a checkbox. The dot and its words are one control,
+/// which a screen reader hears as one radio button named `label`. The caller picks the value when the response is
+/// clicked, and the dot shows on from that frame.
+pub fn setting_radio(ui: &mut Ui, on: bool, label: &str, help: &str, query: &str) -> Response {
+    setting_choice(ui, Choice::Radio, label, help, query, |response| {
+        if response.clicked() && !on {
+            response.mark_changed();
+        }
+        on || response.clicked()
+    })
+}
+
+/// A setting that is on or off with an amount in its words, such as "Stop at [$ 60.00] a month": a checkbox, then
+/// `before`, an amount field holding `text`, `after`, and the `help` under them. The box and the words are one control,
+/// as in `setting_check`, and the field is a control of its own. A screen reader hears the checkbox named by the whole
+/// sentence, and the field named by `before`. A hairline sits above. Hits of the search `query` are highlighted.
+/// Returns the checkbox's response, then the field's.
+pub fn setting_check_amount(ui: &mut Ui, on: &mut bool, text: &mut String, before: &str, after: &str, help: &str, query: &str) -> (Response, Response) {
+    let enabled = ui.is_enabled();
+    let (ink, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    let id = ui.next_auto_id();
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        setting_rule(ui);
+        let full = ui.available_width();
+        let origin = ui.cursor().min;
+        let top = origin.y + SETTING_ROW_PADDING;
+        let lead = CHECK_BOX + SETTING_CHECK_GAP;
+        let room = (full - lead).clamp(0.0, DOC_MEASURE);
+        let (field_width, field_height) = FIELD_INLINE;
+        let before_line = line(ui, before, Type::STRONG, ink, room);
+        let after_line = line(ui, after, Type::STRONG, ink, room);
+        let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
+        // The words and the field share one line, centred on it, and the box sits on that line too.
+        let first_line = field_height.max(before_line.size().y).max(after_line.size().y);
+        let centre = top + first_line / 2.0;
+        let left = origin.x + lead;
+        let before_at = pos2(left, centre - before_line.size().y / 2.0);
+        let field = Rect::from_min_size(pos2(left + before_line.size().x + FIELD_INLINE_MARGIN, centre - field_height / 2.0), vec2(field_width, field_height));
+        let after_at = pos2(field.right() + FIELD_INLINE_MARGIN, centre - after_line.size().y / 2.0);
+        let words = first_line + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        let sentence = after_at.x + after_line.size().x - left;
+        let wide = help_lines.as_ref().map_or(sentence, |help| sentence.max(help.size().x));
+        let boxed = Rect::from_min_size(pos2(origin.x, centre - CHECK_BOX / 2.0), vec2(CHECK_BOX, CHECK_BOX));
+        let place = Rect::from_min_size(pos2(left, top), vec2(wide, words));
+        // The box and the words before the field are the control a screen reader and Tab find, so its rect stays off
+        // the field. The rest of the words take a click too, through a part Tab skips. The field is added after both,
+        // so it lies over them and takes its own clicks.
+        let named = boxed.union(Rect::from_min_size(pos2(left, top), vec2(before_line.size().x, first_line)));
+        let named = ui.interact(named, id.with("setting_check_amount"), Sense::click());
+        let rest = ui.interact(place, id.with("setting_check_amount_words"), Sense::CLICK);
+        let clicked = named.clicked() || rest.clicked();
+        if clicked {
+            *on = !*on;
+        }
+        let checked = *on;
+        let amount = text.trim();
+        let spoken = if amount.is_empty() { format!("{before} {after}") } else { format!("{before} ${amount} {after}") };
+        // Told to the named part alone, so a screen reader's bounds stay off the field.
+        named.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, checked, &spoken));
+        if !help.is_empty() {
+            ui.ctx().accesskit_node_builder(named.id, |node| node.set_description(help));
+        }
+        let mut check = named.union(rest);
+        if clicked {
+            check.mark_changed();
+        }
+        paint_choice(ui, &check, Choice::Check, boxed, checked);
+        paint_marked(ui, before_at, before_line, before, query);
+        paint_marked(ui, after_at, after_line, after, query);
+        if let Some(help_lines) = help_lines {
+            paint_marked(ui, pos2(left, top + first_line + SETTING_HELP_GAP), help_lines, help, query);
+        }
+        let field = amount_in(ui, id.with("setting_amount"), field, text, "");
+        ui.ctx().accesskit_node_builder(field.id, |node| node.set_label(before));
+        let height = words.max(CHECK_BOX).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
+        ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover());
+        (check, field)
+    })
+    .inner
+}
+
+/// What a `confirm_popover` says.
+#[derive(Debug, Clone, Copy)]
+pub struct Confirm<'a> {
+    /// The question, in strong type, such as "End this session?".
+    pub question: &'a str,
+    /// One `muted` line on what acting does.
+    pub note: &'a str,
+    /// The safe primary button, such as "Keep it open".
+    pub keep: &'a str,
+    /// The danger button that acts, such as "End session".
+    pub act: &'a str,
+    /// The `faint` line on what Esc does, such as "Esc keeps it open."
+    pub esc_note: &'a str,
+}
+
+/// Asks before something that cannot be taken back, in a popover under `button`, `width` wide: the question, its note,
+/// the safe primary and the danger button that acts, then the Esc note.
+/// `state` is `None` while it is closed. The caller opens it with `Some(true)` when `button` is clicked. While it is
+/// open, it holds whether the safe button still has to take the focus, which it does once, so Enter keeps too.
+/// The safe button, a click outside and Esc close it and keep. Returns true on the frame the danger button is clicked,
+/// which closes it too.
+pub fn confirm_popover(button: &Response, state: &mut Option<bool>, words: &Confirm, width: f32) -> bool {
+    let mut open = state.is_some();
+    let mut focus = state.unwrap_or(false);
+    let (mut keep, mut act) = (false, false);
+    Popup::from_response(button)
+        .open_bool(&mut open)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .align(RectAlign::BOTTOM_END)
+        .gap(ITEM_GAP)
+        .width(width)
+        .accessible_name(words.question)
+        .show(|ui| {
+            ui.set_max_width(width);
+            strong(ui, words.question);
+            ui.add(egui::Label::new(rich(ui, words.note, Type::BODY, Ink::Muted)).wrap());
+            ui.add_space(ITEM_GAP);
+            ui.horizontal(|ui| {
+                let kept = primary_button(ui, words.keep);
+                if focus && !ui.is_sizing_pass() {
+                    kept.request_focus();
+                    focus = false;
+                }
+                keep = kept.clicked();
+                act = danger_button(ui, words.act).clicked();
+            });
+            ui.label(rich(ui, words.esc_note, Type::NOTE, Ink::Faint));
+        });
+    *state = (open && !keep && !act).then_some(focus);
+    act
 }
 
 /// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -25,21 +27,45 @@ fn next_wait(today: NaiveDate, now: NaiveDateTime) -> Option<Duration> {
     (now.date() == today).then(|| wait(now))
 }
 
+/// Asks the snapshot worker to read again. Each ask is numbered, so the shell can tell a snapshot that read the logs after
+/// its ask from one already under way.
+#[derive(Clone)]
+pub struct Reload {
+    nudge: Sender<()>,
+    asked: Arc<AtomicU64>,
+}
+
+impl Reload {
+    pub fn new(nudge: Sender<()>) -> Self {
+        Self { nudge, asked: Arc::default() }
+    }
+
+    /// Nudges the worker and returns the ask's number. A snapshot whose `usage_asked` reaches it read the logs after the ask.
+    pub fn ask(&self) -> u64 {
+        let asked = self.asked.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.nudge.send(());
+        asked
+    }
+}
+
 /// Rebuilds the snapshot on a worker when the workspace changes. Stops when the receiver drops.
 /// `usage` is read on each load. The first read parses every log, so the checkout's snapshot goes out before it, with
 /// its usage unread, then again with it. Later reads parse only the logs that changed.
-/// A send on the returned `Sender` asks for a load as a change would, such as once a run ends, so the next snapshot
-/// begins after the ask. Run logs sit outside the checkout, so a finished run's cost comes in only with that send.
-pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint: impl Fn() + Send + 'static) -> (Receiver<Snapshot>, Sender<()>) {
+/// An ask on the returned `Reload` asks for a load as a change would, such as once a run ends, so the next snapshot
+/// begins after the ask. Run logs sit outside the checkout, so a finished run's cost comes in only with that ask.
+pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint: impl Fn() + Send + 'static) -> (Receiver<Snapshot>, Reload) {
     let (snapshots, received) = mpsc::channel();
     let (changed, changes) = mpsc::channel();
-    let nudge = changed.clone();
+    let reload = Reload::new(changed.clone());
+    let asked = Arc::clone(&reload.asked);
     thread::spawn(move || {
         let _watcher = ChangeWatcher::start(root.path(), changed);
         let mut logs_read = false;
         loop {
+            // Taken before the logs are read, so a snapshot never claims an ask made while it was read.
+            let usage_asked = asked.load(Ordering::SeqCst);
             let today = Local::now().date_naive();
-            let mut snapshot = Snapshot::load(root.path(), today);
+            let mut snapshot = Snapshot { usage_asked, ..Snapshot::load(root.path(), today) };
             if let Some(logs) = usage.as_mut() {
                 if !logs_read {
                     if snapshots.send(snapshot.clone()).is_err() {
@@ -67,7 +93,7 @@ pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint
             while changes.try_recv().is_ok() {}
         }
     });
-    (received, nudge)
+    (received, reload)
 }
 
 #[cfg(test)]
@@ -115,7 +141,7 @@ mod tests {
         let logs = tempfile::tempdir().unwrap();
         let root = workspace::open(checkout.path()).unwrap();
         let reader = crate::runs::usage_logs(logs.path().to_owned(), root.path());
-        let (updates, nudge) = spawn(root.clone(), Some(reader), || {});
+        let (updates, reload) = spawn(root.clone(), Some(reader), || {});
         let timeout = Duration::from_secs(10);
         let first = updates.recv_timeout(timeout).unwrap();
         assert!(!first.usage_read, "the checkout shows before the logs are read");
@@ -129,14 +155,17 @@ mod tests {
         });
         let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
         fs::write(logs.path().join("a.jsonl"), format!("{meta}\n{result}\n")).unwrap();
-        nudge.send(()).unwrap();
+        let ask = reload.ask();
+        assert_eq!(ask, 1);
 
-        // The runs folder is not watched, so only the nudge brings the log in. A load already under way may come first.
-        let shown = std::iter::from_fn(|| updates.recv_timeout(timeout).ok())
+        // The runs folder is not watched, so only the nudge brings the log in. A load already under way may come first,
+        // but every snapshot that carries the ask has read the log.
+        let answered = std::iter::from_fn(|| updates.recv_timeout(timeout).ok())
             .take(3)
             .inspect(|snapshot| assert!(snapshot.usage_read, "only the first load goes out unread"))
-            .any(|snapshot| !snapshot.usage.is_empty());
-        assert!(shown);
+            .find(|snapshot| snapshot.usage_asked >= ask)
+            .expect("a snapshot answers the ask");
+        assert!(!answered.usage.is_empty(), "the snapshot that carries the ask holds the run's cost");
     }
 
     #[test]
@@ -158,7 +187,7 @@ mod tests {
         let timeout = Duration::from_secs(10);
         let first = updates.recv_timeout(timeout).unwrap();
         let asked = std::time::Instant::now();
-        reload.send(()).unwrap();
+        reload.ask();
         let next = updates.recv_timeout(timeout).unwrap();
         assert!(first.read_at.unwrap() < asked);
         assert!(next.read_at.unwrap() >= asked, "the answer was read after the ask");

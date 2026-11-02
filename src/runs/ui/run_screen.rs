@@ -18,10 +18,10 @@ use crate::ui_kit::tokens::{
     PROMPT_PADDING, ROW_GAP, RUN_SIDE, SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, copyable, danger_button, divider, document,
-    empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel, panel_body, panel_header, path_label, pick_row, primary_button,
-    primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line, strong, tag, turn_band,
-    wrapped_height,
+    BandCell, CellLook, Confirm, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, confirm_popover, copyable,
+    danger_button, divider, document, empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel, panel_body, panel_header, path_label,
+    pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line,
+    strong, tag, turn_band, wrapped_height,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
@@ -32,6 +32,13 @@ const STORY_MIN_HEIGHT: f32 = 160.0;
 const QUESTION_ROWS: usize = 3;
 const END_POPOVER_WIDTH: f32 = 320.0;
 const END_SESSION: &str = "End session…";
+const END_CONFIRM: Confirm = Confirm {
+    question: "End this session?",
+    note: "Ending stops the Claude process. A reply sent later resumes the session.",
+    keep: "Keep it open",
+    act: "End session",
+    esc_note: "Esc keeps it open.",
+};
 const RUN_DETAILS: &str = "Run details";
 /// Below this window width, the side column moves into the Run details popup.
 const DETAILS_BELOW_WIDTH: f32 = 1100.0;
@@ -328,39 +335,14 @@ impl RunScreen {
 
     /// Asks before the session ends. Keep it open is the default, and Esc keeps it open too.
     fn end_popover(&mut self, desk: &mut RunDesk, run: &Run, button: &Response) {
-        let (mut open, mut focus) = match &self.ending {
-            Some((id, focus)) if *id == run.id => (true, *focus),
-            _ => (false, false),
+        let mut state = match &self.ending {
+            Some((id, focus)) if *id == run.id => Some(*focus),
+            _ => None,
         };
-        let (mut keep, mut end) = (false, false);
-        Popup::from_response(button)
-            .open_bool(&mut open)
-            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-            .align(RectAlign::BOTTOM_END)
-            .gap(ITEM_GAP)
-            .width(END_POPOVER_WIDTH)
-            .accessible_name("End this session?")
-            .show(|ui| {
-                ui.set_max_width(END_POPOVER_WIDTH);
-                strong(ui, "End this session?");
-                let note = "Ending stops the Claude process. A reply sent later resumes the session.";
-                ui.add(egui::Label::new(rich(ui, note, Type::BODY, Ink::Muted)).wrap());
-                ui.add_space(ITEM_GAP);
-                ui.horizontal(|ui| {
-                    let kept = primary_button(ui, "Keep it open");
-                    if focus && !ui.is_sizing_pass() {
-                        kept.request_focus();
-                        focus = false;
-                    }
-                    keep = kept.clicked();
-                    end = danger_button(ui, "End session").clicked();
-                });
-                ui.label(rich(ui, "Esc keeps it open.", Type::NOTE, Ink::Faint));
-            });
-        if end {
+        if confirm_popover(button, &mut state, &END_CONFIRM, END_POPOVER_WIDTH) {
             desk.close(&run.id);
         }
-        self.ending = (open && !keep && !end).then(|| (run.id.clone(), focus));
+        self.ending = state.map(|focus| (run.id.clone(), focus));
     }
 
     /// The side column, in a popup under Run details when the window is narrow.

@@ -11,10 +11,11 @@ use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::runs::application::{
-    AgentEvent, AgentGateway, AgentSession, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk, RunRequest, StartOptions,
-    TaskCost, TaskOutcome, Usage, UsageReport,
+    AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
+    RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
-use jobdesk::settings::application::{Page, drawn_index, index};
+use jobdesk::settings::application::{DataSizes, Dollars, Page, PermissionMode, Settings, drawn_index, index};
+use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
@@ -73,10 +74,11 @@ impl AgentSession for ScriptedSession {
     fn interrupt(&mut self) {}
 }
 
-/// What a recording gateway saw: each process it started, and each message sent to a live one.
+/// What a recording gateway saw: each process it started, with the model and budget it asked for, and each message sent to a live one.
 #[derive(Default)]
 struct Calls {
     starts: usize,
+    asked: Vec<(Option<String>, f64)>,
     sent: Vec<String>,
 }
 
@@ -87,8 +89,11 @@ struct RecordingGateway(SharedSink, SharedCalls);
 struct RecordingSession(SharedCalls);
 
 impl AgentGateway for RecordingGateway {
-    fn start(&self, _: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
-        self.1.lock().unwrap().starts += 1;
+    fn start(&self, request: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
+        let mut calls = self.1.lock().unwrap();
+        calls.starts += 1;
+        calls.asked.push((request.model.clone(), request.budget_usd));
+        drop(calls);
         *self.0.lock().unwrap() = Some(sink);
         Box::new(RecordingSession(Arc::clone(&self.1)))
     }
@@ -126,8 +131,8 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
 fn apply_run_ending(final_events: impl IntoIterator<Item = AgentEvent>) -> RunDesk {
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
-    // Permission prompts, as the coming setting will show them.
-    desk.ask_permission();
+    // Permission prompts, as Ask me before each tool shows them.
+    desk.set_asks_permission(true);
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
@@ -377,8 +382,8 @@ fn a_long_activity_keeps_the_prompt_visible() {
     let mut shell = shell(Screen::Runs, "long_activity");
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
-    // Permission prompts, as the coming setting will show them.
-    desk.ask_permission();
+    // Permission prompts, as Ask me before each tool shows them.
+    desk.set_asks_permission(true);
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
@@ -1409,7 +1414,7 @@ fn esc_clears_the_search_then_leaves_the_field_then_closes_settings() {
     search(&harness).focus();
     search(&harness).type_text("folder");
     harness.run_steps(3);
-    assert!(is_shown(&harness, "4 settings match. Esc clears the search."));
+    assert!(is_shown(&harness, "11 settings match. Esc clears the search."));
     assert!(search(&harness).is_focused(), "the field keeps the focus once Clear shows beside it");
 
     press(&mut harness, Key::Escape);
@@ -1661,7 +1666,7 @@ fn the_first_frame_shows_the_prompt_in_one_pass() {
     let mut shell = shell(Screen::Runs, "first_frame");
     let sink = SharedSink::default();
     let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
-    desk.ask_permission();
+    desk.set_asks_permission(true);
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let session = AgentEvent::SessionStarted { session_id: "b7d2e410-93c1".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() };
     sink.lock().unwrap().as_ref().unwrap()(session);
@@ -2905,9 +2910,17 @@ fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
     harness
 }
 
+/// The fictional data folder's sizes, as the canvas shows them: 212 MB in all.
+const DATA_SIZES: DataSizes = DataSizes { run_logs: 211_800_000, decisions: 18_000 };
+
+/// A shell as Settings' snapshots show it: fictional folders and a fixed version, so no temporary path or release shows.
+fn labelled(shell: Shell) -> Shell {
+    shell.with_folder_label("~/Documents/ai-job-search").with_data_label("~/Library/Application Support/Jobdesk", DATA_SIZES).with_version_label("0.1.0")
+}
+
 /// Settings over Today, on `page`, with bun missing so Runtime status says "1 missing". `query` is typed into the search.
 fn render_settings(page: Page, query: Option<&str>, theme: Theme, name: &str) {
-    let mut shell = shell(Screen::InTray, name).with_folder_label("~/Documents/ai-job-search");
+    let mut shell = labelled(shell(Screen::InTray, name));
     shell.open_settings(page);
     let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
     if let Some(query) = query {
@@ -3043,10 +3056,14 @@ fn usage_tasks() -> Vec<TaskCost> {
 
 /// The sample folder over Today, with `tasks` as the run logs read.
 fn shell_with_usage(name: &str, tasks: Vec<TaskCost>) -> Shell {
+    usage_shell_on(Screen::InTray, name, tasks)
+}
+
+fn usage_shell_on(screen: Screen, name: &str, tasks: Vec<TaskCost>) -> Shell {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
     let _ = fs::remove_dir_all(&root);
     sample_workspace(&root);
-    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), usage_snapshot(&root, tasks)).with_folder_label("~/Documents/ai-job-search")
+    labelled(Shell::with_snapshot(screen, jobdesk::workspace::open(&root).unwrap(), usage_snapshot(&root, tasks)))
 }
 
 /// The sample folder at `root` as read on 31 October, with `tasks` as the run logs read.
@@ -3138,7 +3155,7 @@ fn settings_usage_empty_light() {
 
 #[test]
 fn settings_loading_light() {
-    let shell = loading_on(Screen::InTray, "settings_loading_light").with_folder_label("~/Documents/ai-job-search");
+    let shell = labelled(loading_on(Screen::InTray, "settings_loading_light"));
     render_usage(shell, None, Theme::Light, "settings_loading_light");
 }
 
@@ -3183,6 +3200,449 @@ fn usage_links_leave_settings() {
     harness.run_steps(3);
     assert!(!shell.borrow().settings_open());
     assert!(is_shown(&harness, LAUNCHER), "the launcher is open");
+}
+
+const CAP_LINE: &str = "This month's tasks reached your $60.00 cap.";
+const CAP_REASON: &str = "This month's tasks cost $60.40, over your $60.00 cap. Run opens again on 1\u{a0}November.";
+const CAP_LINK: &str = "Change the cap in Settings";
+
+/// October's fixture with one more fictional /apply on the 30th, so the month comes to $60.40.
+fn over_the_cap() -> Vec<TaskCost> {
+    let mut tasks = usage_tasks();
+    tasks.push(usage_task(NaiveDate::from_ymd_opt(2026, 10, 30).unwrap(), ("/apply", "claude-opus-4-5", 19.20, TaskOutcome::Finished)));
+    tasks
+}
+
+/// The sample folder on `screen` on 31 October, with `tasks` as the run logs read and a $60 monthly cap.
+/// Its desk records what it starts and sends into `calls`.
+fn capped_shell(screen: Screen, name: &str, tasks: Vec<TaskCost>, calls: &SharedCalls) -> Shell {
+    let mut shell = usage_shell_on(screen, name, tasks);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(calls))), Arc::new(|| {})));
+    shell.settings_mut().set_cap_on(true);
+    shell.settings_mut().set_cap_amount(Dollars::parse("60"));
+    shell
+}
+
+fn catalog(name: &str) -> &'static CommandSpec {
+    CATALOG.iter().find(|spec| spec.name == name).unwrap()
+}
+
+/// A command's own row in Run defaults.
+fn command_row(settings: &mut Settings, command: &str, model: ModelChoice, budget: &str) {
+    settings.add_command(catalog(command));
+    settings.set_command_model(command, model);
+    settings.set_command_budget(command, Dollars::parse(budget).unwrap());
+}
+
+fn budget_field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("Spend at most, USD"))
+}
+
+fn model_box<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by(|node| node.role() == egui::accesskit::Role::ComboBox && node.label().as_deref() == Some("Model"))
+}
+
+/// Clicks the command's row in the list, whose label is its name, a space and its summary.
+fn pick_command(harness: &mut Harness, command: &str) {
+    let prefix = format!("{command} ");
+    harness.get_by(|node| node.role() == egui::accesskit::Role::Button && node.label().is_some_and(|label| label.starts_with(&prefix))).click();
+    harness.run_steps(3);
+}
+
+/// At the cap, Run is disabled and says why, Cmd Enter starts nothing, and the strong line and the link show.
+/// Under it, the same keys start the task.
+#[test]
+fn cmd_enter_starts_nothing_over_the_cap() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(capped_shell(Screen::Launcher, "launcher_over_cap", over_the_cap(), &calls));
+    assert!(is_shown(&harness, CAP_LINE));
+    assert!(is_shown(&harness, CAP_LINK));
+    let run = harness.get_by_label("Run");
+    assert!(run.accesskit_node().is_disabled());
+    run.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, CAP_REASON), "the pointer on Run says why");
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "the cap holds the task back");
+    assert!(is_shown(&harness, LAUNCHER));
+
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(capped_shell(Screen::Launcher, "launcher_under_cap", usage_tasks(), &calls));
+    assert!(!is_shown(&harness, CAP_LINE) && !is_shown(&harness, CAP_LINK), "$41.20 is under the cap");
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1);
+}
+
+/// While the run logs are read, the month's spend is unknown, so Run waits without claiming the cap is reached.
+#[test]
+fn run_waits_while_the_months_spend_is_read() {
+    let name = "launcher_cap_reading";
+    let calls = SharedCalls::default();
+    let mut shell = capped_shell(Screen::Launcher, name, over_the_cap(), &calls);
+    let feed = shell.snapshot_feed();
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    feed.send(Snapshot { usage_read: false, usage: UsageReport::default(), ..usage_snapshot(&root, Vec::new()) }).unwrap();
+    let mut harness = tray_harness(shell);
+    assert!(!is_shown(&harness, CAP_LINE) && !is_shown(&harness, CAP_LINK));
+    let run = harness.get_by_label("Run");
+    assert!(run.accesskit_node().is_disabled());
+    run.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Run waits while this month's spend is read."));
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0);
+
+    feed.send(usage_snapshot(&root, usage_tasks())).unwrap();
+    harness.run_steps(3);
+    assert!(!harness.get_by_label("Run").accesskit_node().is_disabled(), "under the cap once read");
+}
+
+/// A task that ends leaves its cost in a log the snapshot has not read yet. Until a snapshot read after its end arrives,
+/// the month's spend is unknown, so Run waits and Cmd Enter starts nothing, even when the old totals are under the cap.
+#[test]
+fn run_waits_for_the_spend_of_a_task_that_ended() {
+    let name = "launcher_cap_after_a_task";
+    let calls = SharedCalls::default();
+    let sink = SharedSink::default();
+    let mut shell = usage_shell_on(Screen::Launcher, name, usage_tasks());
+    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    *shell.desk_slot() = Some(desk);
+    shell.settings_mut().set_cap_on(true);
+    shell.settings_mut().set_cap_amount(Dollars::parse("60"));
+    let reloads = shell.reload_feed();
+    let feed = shell.snapshot_feed();
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let mut harness = tray_harness(shell);
+
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 19.20, duration_ms: 9_000 }]);
+    harness.run_steps(4);
+    assert!(reloads.try_recv().is_ok(), "the end of the task asks for a reload");
+    let held = |harness: &mut Harness<'static>| {
+        let run = harness.get_by_label("Run");
+        assert!(run.accesskit_node().is_disabled(), "the $41.20 read before the task no longer holds");
+        run.hover();
+        harness.run_steps(8);
+        assert!(is_shown(harness, "Run waits while this month's spend is read."));
+        assert!(!is_shown(harness, CAP_LINE), "nothing claims the cap is reached yet");
+        cmd_enter(harness);
+        assert_eq!(calls.lock().unwrap().starts, 1, "only the task that ended ever started");
+    };
+    held(&mut harness);
+
+    // A load already under way when the task ended still holds the old totals.
+    feed.send(usage_snapshot(&root, usage_tasks())).unwrap();
+    harness.run_steps(3);
+    held(&mut harness);
+
+    feed.send(Snapshot { usage_asked: 1, ..usage_snapshot(&root, over_the_cap()) }).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, CAP_LINE), "the read after the task shows the cap reached");
+    assert!(harness.get_by_label("Run").accesskit_node().is_disabled());
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1);
+}
+
+/// The cap holds back only new tasks: a reply to a live session continues a task already paid for.
+#[test]
+fn a_reached_cap_leaves_a_live_session_answering() {
+    let calls = SharedCalls::default();
+    let mut shell = capped_shell(Screen::Runs, "quick_reply_over_cap", over_the_cap(), &calls);
+    *shell.desk_slot() = Some(stop_with(Arc::clone(&calls), STOP_EVALUATION).0);
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Go ahead with the draft").click();
+    harness.run_steps(3);
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.sent, [GO_AHEAD], "the reply reached the live session");
+    assert_eq!(calls.starts, 1, "and started no other process");
+}
+
+/// The launcher fills the model and budget from Run defaults: a command's row first, then every task's, then the catalog.
+/// What the user changes stays until another command is picked.
+#[test]
+fn the_launcher_starts_from_run_defaults() {
+    let start = |name: &str, command: &str, set: &dyn Fn(&mut Settings)| {
+        let calls = SharedCalls::default();
+        let mut shell = recording_shell(Screen::Launcher, name, &calls);
+        set(shell.settings_mut());
+        let mut harness = tray_harness(shell);
+        pick_command(&mut harness, command);
+        harness.get_by_label("Run").click();
+        harness.run_steps(3);
+        calls.lock().unwrap().asked.pop().unwrap()
+    };
+    let defaults = |settings: &mut Settings| {
+        settings.set_model(ModelChoice::Opus);
+        settings.set_budget(Dollars::parse("4.00"));
+        command_row(settings, "/rank", ModelChoice::Haiku, "1.00");
+    };
+    assert_eq!(start("launcher_defaults_rank", "/rank", &defaults), (Some("haiku".to_owned()), 1.0));
+    assert_eq!(start("launcher_defaults_scrape", "/scrape", &defaults), (Some("opus".to_owned()), 4.0));
+    let suggested = f64::from(catalog("/rank").budget_usd);
+    assert_eq!(start("launcher_no_defaults", "/rank", &|_| {}), (None, suggested));
+
+    let mut shell = recording_shell(Screen::Launcher, "launcher_defaults_edit", &SharedCalls::default());
+    defaults(shell.settings_mut());
+    let mut harness = tray_harness(shell);
+    pick_command(&mut harness, "/rank");
+    assert_eq!((budget_field(&harness).value().as_deref(), model_box(&harness).value().as_deref()), (Some("1.00"), Some("Haiku")));
+    budget_field(&harness).focus();
+    harness.run_steps(2);
+    harness.key_press_modifiers(COMMAND, Key::A);
+    budget_field(&harness).type_text("7");
+    harness.run_steps(2);
+    assert_eq!(budget_field(&harness).value().as_deref(), Some("7"), "an edit stays");
+    pick_command(&mut harness, "/scrape");
+    assert_eq!(budget_field(&harness).value().as_deref(), Some("4.00"), "a new command starts from its defaults");
+}
+
+/// The link beside a held Run opens Settings on Run defaults, which keeps the launcher underneath for Back to app.
+#[test]
+fn the_cap_link_opens_run_defaults() {
+    let (mut harness, shell) = shared_harness(capped_shell(Screen::Launcher, "launcher_cap_link", over_the_cap(), &SharedCalls::default()));
+    harness.get_by_label(CAP_LINK).click();
+    harness.run_steps(3);
+    assert!(shell.borrow().settings_open());
+    assert!(is_shown(&harness, Page::Defaults.lead()), "on Run defaults");
+    assert!(is_shown(&harness, "Cap reached"), "and the rail says why Run stopped");
+    press(&mut harness, Key::Escape);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER), "back on the launcher");
+}
+
+/// The launcher at the cap, on /rank with its own Sonnet and $3.00, with the pointer on Run.
+#[test]
+fn launcher_cap_light() {
+    let name = "launcher_cap_light";
+    let mut shell = capped_shell(Screen::Launcher, name, over_the_cap(), &SharedCalls::default());
+    command_row(shell.settings_mut(), "/rank", ModelChoice::Sonnet, "3.00");
+    let mut harness = wgpu_tray(shell, Theme::Light);
+    pick_command(&mut harness, "/rank");
+    harness.get_by_label("Run").hover();
+    harness.run_steps(8);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// A fictional decisions file in `folder`: `count` skips for the folder at `root`, and one for a folder elsewhere.
+fn decisions_file(folder: &Path, root: &Path, count: usize) {
+    let record = |at: usize| serde_json::json!({ "key": format!("triage:fictional-{at}"), "name": "Kestrel Labs", "outcome": "skipped", "reason": null, "on": "2026-10-30" });
+    let mut file = serde_json::Map::new();
+    file.insert(root.display().to_string(), (0..count).map(record).collect());
+    file.insert(ELSEWHERE.to_owned(), serde_json::Value::Array(vec![record(0)]));
+    fs::create_dir_all(folder).unwrap();
+    fs::write(folder.join("decisions.json"), serde_json::Value::Object(file).to_string()).unwrap();
+}
+
+/// Another job search folder, whose decisions a clear must keep.
+const ELSEWHERE: &str = "/elsewhere/ai-job-search";
+
+/// The sample folder on Settings › Data and privacy, its tray read from a fictional decisions file in `data` with `count`
+/// decisions of its own.
+fn shell_with_decisions(name: &str, data: &Path, count: usize) -> Shell {
+    let mut shell = labelled(shell(Screen::InTray, name));
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let workspace = jobdesk::workspace::open(&root).unwrap();
+    decisions_file(&data.join("intray"), workspace.path(), count);
+    *shell.tray_slot() = Some(jobdesk::intray::open_tray(data.join("intray"), workspace.path()));
+    shell.open_settings(Page::Data);
+    shell
+}
+
+fn clear_decisions_button<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Clear tray decisions")
+}
+
+/// Clear tray decisions asks first. Esc, Keep them and a click elsewhere each keep them, and Settings stays open.
+/// Clear decisions forgets the open folder's only, so another folder keeps its own.
+#[test]
+fn clearing_tray_decisions_asks_first() {
+    let data = tempfile::tempdir().unwrap();
+    let (mut harness, shell) = shared_harness(shell_with_decisions("settings_clear_decisions", data.path(), 2));
+    let count = |shell: &Rc<RefCell<Shell>>| shell.borrow_mut().tray_slot().as_ref().unwrap().decision_count();
+    let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 2 tray decisions?").next().is_some();
+    let open = |harness: &mut Harness<'static>| {
+        clear_decisions_button(harness).click();
+        harness.run_steps(3);
+        assert!(asking(harness), "it asks first");
+    };
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them is the default");
+    press(&mut harness, Key::Escape);
+    assert!(!asking(&harness));
+    assert!(shell.borrow().settings_open(), "Esc keeps them, and Settings stays");
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label("Keep them").click();
+    harness.run_steps(3);
+    assert!(!asking(&harness));
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label(Page::Data.lead()).click();
+    harness.run_steps(3);
+    assert!(!asking(&harness), "a click elsewhere keeps them");
+    assert_eq!(count(&shell), 2);
+
+    open(&mut harness);
+    harness.get_by_label("Clear decisions").click();
+    harness.run_steps(3);
+    assert_eq!(count(&shell), 0);
+    assert!(shell.borrow().settings_open());
+    assert!(clear_decisions_button(&harness).accesskit_node().is_disabled(), "nothing is left to clear");
+    let file: serde_json::Value = serde_json::from_str(&fs::read_to_string(data.path().join("intray/decisions.json")).unwrap()).unwrap();
+    assert_eq!(file[ELSEWHERE].as_array().map(Vec::len), Some(1), "the other folder keeps its decisions");
+}
+
+/// Settings left by Cmd K, not Back, closes the popover too, so Cmd , reopens Data and privacy with nothing asking.
+#[test]
+fn leaving_settings_any_way_closes_the_clear_popover() {
+    let data = tempfile::tempdir().unwrap();
+    let mut shell = shell_with_decisions("settings_clear_cmd_k", data.path(), 2);
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let (mut harness, shell) = shared_harness(shell);
+    let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 2 tray decisions?").next().is_some();
+    clear_decisions_button(&harness).click();
+    harness.run_steps(3);
+    assert!(asking(&harness));
+
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER));
+
+    cmd_comma(&mut harness);
+    assert!(shell.borrow().settings_open());
+    assert!(is_shown(&harness, Page::Data.lead()), "Settings reopens on Data and privacy");
+    assert!(!asking(&harness), "with the popover closed");
+    assert_eq!(shell.borrow_mut().tray_slot().as_ref().unwrap().decision_count(), 2);
+}
+
+/// Ask me before each tool saves the setting, and the open desk then waits on a permission instead of allowing it.
+#[test]
+fn ask_me_turns_prompts_on() {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
+    let mut shell = shell(Screen::InTray, "settings_ask_me");
+    *shell.desk_slot() = Some(desk);
+    shell.open_settings(Page::Permissions);
+    let (mut harness, shell) = shared_harness(shell);
+    assert!(!shell.borrow_mut().desk_slot().as_ref().unwrap().asks_permission(), "allowed and noted by default");
+
+    harness.get_by_label("Ask me before each tool").click();
+    harness.run_steps(3);
+    assert_eq!(shell.borrow_mut().settings_mut().preferences().permissions, PermissionMode::Ask);
+    assert!(shell.borrow_mut().desk_slot().as_ref().unwrap().asks_permission());
+    assert!(is_shown(&harness, "Ask first"), "the rail says so");
+
+    emit_all(&sink, [permission_prompt()]);
+    harness.run_steps(3);
+    assert_eq!(shell.borrow_mut().desk_slot().as_ref().unwrap().waiting_count(), 1, "the task waits on the permission");
+    assert!(is_shown(&harness, "A task waits for you"));
+}
+
+/// Every tool but bun and pdftotext answers, and Claude Code says a fictional version.
+struct VersionedTools;
+
+impl ToolProber for VersionedTools {
+    fn probe(&self, tool: &ToolSpec) -> Option<String> {
+        if tool.name == "claude" { Some("2.1.4 (Claude Code)".to_owned()) } else { FixedTools.probe(tool) }
+    }
+}
+
+/// Copy details puts both versions and the system on the clipboard, for a bug report.
+#[test]
+fn copy_details_copies_the_versions() {
+    let mut shell = labelled(probed(shell(Screen::InTray, "settings_copy_details"), VersionedTools));
+    shell.open_settings(Page::About);
+    let copied = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&copied);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| {
+        shell.show(ui);
+        let texts: Vec<String> = ui.ctx().output(|output| {
+            output.commands.iter().filter_map(|command| if let egui::OutputCommand::CopyText(text) = command { Some(text.clone()) } else { None }).collect()
+        });
+        seen.borrow_mut().extend(texts);
+    });
+    settle(&mut harness);
+    assert!(is_shown(&harness, "2.1.4"));
+    harness.get_by_label("Copy details").click();
+    harness.run_steps(3);
+    let system = if cfg!(target_os = "macos") { "macOS" } else { "Windows" };
+    assert_eq!(*copied.borrow(), [format!("Jobdesk 0.1.0\n{system} ({})\nClaude Code 2.1.4", std::env::consts::ARCH)]);
+}
+
+/// While the first tool check runs, About says Claude Code is being checked, never that it is missing.
+#[test]
+fn about_says_checking_until_the_tools_answer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let release = Arc::new(AtomicBool::new(false));
+    let mut shell = labelled(shell(Screen::InTray, "settings_about_checking"));
+    let mut checks = EnvironmentChecks::new(Arc::new(GatedTools(Arc::clone(&release))), Arc::new(|| {}));
+    checks.ensure_started();
+    *shell.environment_slot() = Some(checks);
+    shell.open_settings(Page::About);
+    let mut harness = tray_harness(shell);
+    assert!(is_shown(&harness, "Checking…"));
+    assert!(!is_shown(&harness, "Not found"), "a check still running never reads as a missing program");
+
+    release.store(true, Ordering::SeqCst);
+    settle(&mut harness);
+    assert!(!is_shown(&harness, "Checking…"), "the answer replaces it");
+    assert!(!is_shown(&harness, "Not found"));
+}
+
+/// Settings on `page` over the usage fixture, with bun missing so Runtime status says "1 missing".
+fn render_settings_shell(mut shell: Shell, page: Page) -> Harness<'static> {
+    shell.open_settings(page);
+    probed_wgpu(probed(shell, VersionedTools), Theme::Light)
+}
+
+/// Run defaults as the canvas draws it: a $60 cap, three commands with their own model and budget, and October's $41.20.
+#[test]
+fn settings_defaults_light() {
+    let name = "settings_defaults_light";
+    let mut shell = shell_with_usage(name, usage_tasks());
+    let settings = shell.settings_mut();
+    settings.set_cap_on(true);
+    settings.set_cap_amount(Dollars::parse("60"));
+    command_row(settings, "/scrape", ModelChoice::Haiku, "1.00");
+    command_row(settings, "/rank", ModelChoice::Sonnet, "3.00");
+    command_row(settings, "/apply", ModelChoice::Opus, "5.00");
+    let mut harness = render_settings_shell(shell, Page::Defaults);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_permissions_light() {
+    let name = "settings_permissions_light";
+    let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::Permissions);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// Data and privacy at the default Forever, with Clear tray decisions asking about 214 fictional decisions.
+#[test]
+fn settings_data_light() {
+    let name = "settings_data_light";
+    let data = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("data");
+    let _ = fs::remove_dir_all(&data);
+    let mut harness = render_settings_shell(shell_with_decisions(name, &data, 214), Page::Data);
+    clear_decisions_button(&harness).click();
+    harness.run_steps(3);
+    // The pointer leaves the button, so it shows at rest under the popover.
+    harness.hover_at(egui::pos2(700.0, 700.0));
+    harness.run_steps(3);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_about_light() {
+    let name = "settings_about_light";
+    let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::About);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 
 /// Every required tool answers, so the menu has no Setup tab.

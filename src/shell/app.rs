@@ -1,10 +1,10 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::ui::JobsScreen;
@@ -20,12 +20,15 @@ use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
 use crate::runs::application::RunDesk;
-use crate::runs::ui::{Launcher, RunScreen, RunScreenRequest};
+use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
-use crate::settings::application::{Page, RuntimeWord, Settings, StartScreen, UsageState};
+use crate::settings::application::{
+    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Retention, RuntimeWord, Settings, StartScreen, UsageState, cap_check,
+};
 use crate::settings::ui::{SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
-use crate::shell::{Issue, Snapshot, Source, live_snapshot};
+use crate::shell::live_snapshot::{self, Reload};
+use crate::shell::{Issue, Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
 use crate::ui_kit::tokens::{
     HEAD_GAP, KNOT_GAP, KNOT_SIZE, NAV_TAB_GAP, NAV_TAB_HEIGHT, SCREEN_PADDING, SHELL_GAP, SHELL_PADDING, STATUS_GAP, WELCOME_PADDING, WELCOME_STEP_PADDING,
@@ -104,7 +107,9 @@ pub struct Shell {
     loaded: bool,
     updates: Option<Receiver<Snapshot>>,
     /// Asks the snapshot worker to read again, because run logs change outside the checkout.
-    reload: Option<Sender<()>>,
+    reload: Option<Reload>,
+    /// The reload the last task's end asked for. Until a snapshot carries it, the month's spend misses that task's cost.
+    usage_due: u64,
     /// Whether a run was working on the last frame, so its start and end can be seen. A run that stops asks for a reload.
     was_busy: bool,
     jobs: JobsScreen,
@@ -126,11 +131,19 @@ pub struct Shell {
     open_dossier: Option<OpenDossier>,
     environment: Option<EnvironmentChecks>,
     settings: Settings,
+    /// The Permissions setting the desk last took. A change reaches the desk once, on the frame after it is made.
+    permissions: PermissionMode,
     settings_screen: SettingsScreen,
     /// Settings covers the menu and the screen, which stays as it was underneath.
     settings_open: bool,
     /// The folder as Settings shows it, in place of its path. Snapshots set it, so no temporary path shows.
     folder_label: Option<String>,
+    /// The data folder as Settings shows it, in place of its path, for snapshots.
+    data_label: Option<String>,
+    /// What the data folder holds: measured at launch, when a task ends and after a clear, never every frame.
+    data_sizes: Option<DataSizes>,
+    /// This copy's version as About shows it. Snapshots set their own, so a release moves none.
+    version: String,
     profile_screen: ProfileScreen,
     /// The topics the last run changed, kept in memory only.
     marks: UpdatedMarks,
@@ -176,6 +189,7 @@ impl Shell {
             loaded: false,
             updates: None,
             reload: None,
+            usage_due: 0,
             was_busy: false,
             jobs: JobsScreen::default(),
             tracker: TrackerScreen::default(),
@@ -194,9 +208,13 @@ impl Shell {
             open_dossier: None,
             environment: None,
             settings: Settings::unsaved(),
+            permissions: PermissionMode::default(),
             settings_screen: SettingsScreen::default(),
             settings_open: false,
             folder_label: None,
+            data_label: None,
+            data_sizes: None,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             profile_screen: ProfileScreen::default(),
             marks: UpdatedMarks::default(),
             run_ended: None,
@@ -249,9 +267,31 @@ impl Shell {
         self.settings_open
     }
 
+    /// The preferences, for tests that set one as Settings would.
+    pub fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
+    }
+
     /// Shows `label` as the folder in Settings, for snapshots.
     pub fn with_folder_label(self, label: &str) -> Self {
         Self { folder_label: Some(label.to_owned()), ..self }
+    }
+
+    /// Shows `label` as the data folder in Settings, holding `sizes`, for snapshots.
+    pub fn with_data_label(self, label: &str, sizes: DataSizes) -> Self {
+        Self { data_label: Some(label.to_owned()), data_sizes: Some(sizes), ..self }
+    }
+
+    /// Shows `label` as this copy's version in Settings, for snapshots.
+    pub fn with_version_label(self, label: &str) -> Self {
+        Self { version: label.to_owned(), ..self }
+    }
+
+    /// Measures what the data folder holds, if there is one. A shell without one keeps what it was given.
+    fn measure_data(&mut self) {
+        if let Some(data) = &self.data {
+            self.data_sizes = Some(settings::measure_data(data));
+        }
     }
 
     /// Hands the shell snapshots as the folder watcher does, for tests.
@@ -264,7 +304,7 @@ impl Shell {
     /// Takes the reload requests the shell would send to the snapshot worker, for tests.
     pub fn reload_feed(&mut self) -> Receiver<()> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.reload = Some(sender);
+        self.reload = Some(Reload::new(sender));
         receiver
     }
 
@@ -309,8 +349,15 @@ impl Shell {
         let restored = settings::ui::restored(ctx);
         let settings = data.as_deref().map_or_else(Settings::unsaved, |data| settings::open_settings(data, restored));
         settings::ui::apply(ctx, settings.preferences());
+        // Before any desk reads the logs, so a deleted one never shows in Tasks or counts in Usage.
+        if let Some(data) = &data {
+            prune_run_logs(data, settings.preferences().retention, Local::now().naive_local());
+        }
         let first = start_screen(settings.preferences().open_on);
-        let mut shell = Self { data, environment: Some(environment), settings, ..Self::empty(first, Local::now().date_naive()) };
+        let permissions = settings.preferences().permissions;
+        let mut shell = Self { data, environment: Some(environment), settings, permissions, ..Self::empty(first, Local::now().date_naive()) };
+        // After the pruning, so the size is what stays.
+        shell.measure_data();
         if let Some(path) = path {
             shell.open(ctx, &path);
         }
@@ -337,9 +384,14 @@ impl Shell {
                 let usage = self.data.as_ref().map(|data| runs::usage_logs(data.join("runs"), root.path()));
                 let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
                 (self.updates, self.reload) = (Some(updates), Some(reload));
+                // The new worker numbers its own asks, and reads every log first.
+                self.usage_due = 0;
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
-                    self.desk = Some(runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint())));
+                    let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()));
+                    self.permissions = self.settings.preferences().permissions;
+                    desk.set_asks_permission(self.permissions.asks());
+                    self.desk = Some(desk);
                 }
                 self.tray = Some(self.data.as_ref().map_or_else(InTray::unsaved, |data| intray::open_tray(data.join("intray"), root.path())));
                 let repaint = ctx.clone();
@@ -427,6 +479,7 @@ impl Shell {
 
     pub fn show(&mut self, ui: &mut Ui) {
         self.take_snapshot();
+        self.follow_permissions();
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
@@ -441,6 +494,10 @@ impl Shell {
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
+        // However Settings closed, Back, Cmd K or a link out, what it was asking closes too, before Cmd , can reopen it.
+        if !self.settings_open {
+            self.settings_screen.closed();
+        }
         // Drawn before the screens, so it takes Esc before any of them.
         self.away_ask(&ui.ctx().clone());
         let queue = self.queue();
@@ -470,6 +527,19 @@ impl Shell {
             self.quit_dialog(ui.ctx());
         }
         note_focus(ui.ctx());
+    }
+
+    /// Hands a changed Permissions setting to the desk, before it polls the prompts that wait. An unchanged one is left alone,
+    /// so a desk set up some other way, as previews do, keeps its own.
+    fn follow_permissions(&mut self) {
+        let permissions = self.settings.preferences().permissions;
+        if permissions == self.permissions {
+            return;
+        }
+        self.permissions = permissions;
+        if let Some(desk) = &mut self.desk {
+            desk.set_asks_permission(permissions.asks());
+        }
     }
 
     /// Takes the newest snapshot the worker sent, if any.
@@ -534,8 +604,10 @@ impl Shell {
             self.run_ended = Some(Instant::now());
             // The run that ended left its cost in its log. A closed worker has nothing to reload.
             if let Some(reload) = &self.reload {
-                let _ = reload.send(());
+                self.usage_due = reload.ask();
             }
+            // And its log grew, so Data and privacy measures again.
+            self.measure_data();
         }
         self.was_busy = busy;
     }
@@ -933,14 +1005,23 @@ impl Shell {
                 }
             }
             Screen::Launcher => {
+                // The cap sums the month as Usage statistics does, and waits while the run logs are read.
+                let cap = self.cap();
                 if back_pressed(ui.ctx()) {
                     self.screen = self.launcher_from;
                     ui.ctx().request_repaint();
-                } else if let Some(desk) = &mut self.desk
-                    && let Some(id) = self.launcher.show(ui, desk)
-                {
-                    self.run_screen.select(id);
-                    self.screen = Screen::Runs;
+                } else if let Some(desk) = &mut self.desk {
+                    let preferences = self.settings.preferences();
+                    let rules = LaunchRules { defaults: &preferences.run_defaults, cap: &cap };
+                    match self.launcher.show(ui, desk, &rules) {
+                        Some(LauncherRequest::Started(id)) => {
+                            self.run_screen.select(id);
+                            self.screen = Screen::Runs;
+                        }
+                        // Settings keeps the launcher underneath, so Back to app returns to it.
+                        Some(LauncherRequest::OpenRunDefaults) => self.open_settings(Page::Defaults),
+                        None => {}
+                    }
                 }
             }
         }
@@ -964,6 +1045,14 @@ impl Shell {
         self.snapshot.issues.retain(|issue| issue.source != Source::Profile);
         self.snapshot.issues.extend(errors.into_iter().map(|error| Issue { source: Source::Profile, error }));
         self.profile_saved = Some(Instant::now());
+    }
+
+    /// The monthly cap against this month's spend. The spend is unknown until the run logs are read, and again from a task's
+    /// end until a snapshot read after it arrives, so a new task cannot start over the cap in between.
+    fn cap(&self) -> CapCheck {
+        let snapshot = &self.snapshot;
+        let usage = (snapshot.usage_read && snapshot.usage_asked >= self.usage_due).then_some(&snapshot.usage);
+        cap_check(&self.settings.preferences().cap, usage, snapshot.today)
     }
 
     /// Every source that could not be read. The tray reports its own file.
@@ -1003,6 +1092,19 @@ impl Shell {
             (Some(_), false) => UsageState::Reading,
             (Some(_), true) => UsageState::Read { report: &snapshot.usage, pipeline: &snapshot.pipeline, today: snapshot.today },
         };
+        // The cap as the launcher checks it, so the rail says it is reached exactly when Run stops.
+        let cap = self.cap();
+        let data = self.data_label.clone().or_else(|| self.data.as_ref().map(|data| data.display().to_string()));
+        // Only the open folder's decisions can be cleared, and none from a tray that could not be read or saved.
+        let decisions = self.tray.as_ref().filter(|tray| folder_open && tray.issue().is_none()).map(InTray::decision_count);
+        // Until the first tool check answers, About says it is checking, as Runtime status does, never that Claude Code is missing.
+        let checking = self.environment.as_ref().is_some_and(|environment| environment.results().is_none());
+        let claude_version = self.environment.as_ref().and_then(|environment| environment.version_of("claude")).map(str::to_owned);
+        let claude = match claude_version.as_deref() {
+            Some(version) => ClaudeVersion::Found(version),
+            None if checking => ClaudeVersion::Checking,
+            None => ClaudeVersion::NotFound,
+        };
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1010,8 +1112,21 @@ impl Shell {
         let asked = Frame::new()
             .inner_margin(margin)
             .show(ui, |ui| {
-                let page_view =
-                    SettingsView { settings: &mut self.settings, folder: folder.as_deref(), folder_read, runtime, folder_wait, usage, today: snapshot.today };
+                let page_view = SettingsView {
+                    settings: &mut self.settings,
+                    folder: folder.as_deref(),
+                    folder_read,
+                    runtime,
+                    folder_wait,
+                    usage,
+                    today: snapshot.today,
+                    cap,
+                    data: data.as_deref(),
+                    sizes: self.data_sizes,
+                    decisions,
+                    version: &self.version,
+                    claude,
+                };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
                         runtime_asked = workspace::ui::runtime_status(ui, &state, view, environment, sign_in, folder_open, query);
@@ -1045,6 +1160,21 @@ impl Shell {
                 ctx.request_repaint();
             }
             Some(SettingsRequest::NewTask) => self.open_launcher(),
+            // Only Jobdesk's own data folder, never the checkout.
+            Some(SettingsRequest::ShowDataFolder) => {
+                if let Some(data) = &self.data {
+                    settings::reveal_folder(data);
+                }
+            }
+            // The tray belongs to the open folder, so other folders keep their decisions. A tray that could not be read clears nothing.
+            Some(SettingsRequest::ClearDecisions) => {
+                if self.workspace.is_some()
+                    && let Some(tray) = &mut self.tray
+                {
+                    tray.clear_decisions();
+                }
+                self.measure_data();
+            }
             None => {}
         }
     }
@@ -1059,6 +1189,14 @@ fn start_screen(open_on: StartScreen) -> Screen {
         StartScreen::Insights => Screen::Insights,
         StartScreen::Tasks => Screen::Runs,
     }
+}
+
+/// Deletes the run logs `retention` no longer keeps, judged by when each was last written. Forever deletes nothing.
+/// It reads only `runs/` in the data folder, so the settings file and the tray's decisions beside it stay.
+fn prune_run_logs(data: &std::path::Path, retention: Retention, now: NaiveDateTime) -> usize {
+    // A moment the clock repeats takes its earlier reading, which deletes the fewer logs. One it skips has none, so nothing is deleted.
+    let Some(keep_after) = retention.keep_after(now).and_then(|cutoff| Local.from_local_datetime(&cutoff).earliest()) else { return 0 };
+    runs::prune_logs(&data.join("runs"), SystemTime::from(keep_after))
 }
 
 /// The welcome's stamp and title, its steps, then the folder promise. Returns whether Choose folder was pressed.
@@ -1387,6 +1525,66 @@ mod tests {
         });
         assert!(asked.get(), "with no session, the dialog opens");
         assert_eq!(shell.folder_wait(), None);
+    }
+
+    /// A data folder with an old run log and a fresh one, and the settings and tray files beside `runs/`, all as old as the old log.
+    /// Returns the old log's path and the fresh one's.
+    fn aged_data(data: &Path, retention: Retention) -> (PathBuf, PathBuf) {
+        settings::open_settings(data, Preferences::default()).set_retention(retention);
+        let runs = data.join("runs");
+        fs::create_dir_all(&runs).unwrap();
+        fs::create_dir_all(data.join("intray")).unwrap();
+        let (old, fresh) = (runs.join("20250102-091500-1.jsonl"), runs.join("20261031-091500-1.jsonl"));
+        let long_ago = SystemTime::now() - std::time::Duration::from_secs(400 * 24 * 60 * 60);
+        fs::write(data.join("intray/decisions.json"), "{}").unwrap();
+        for path in [&old, &fresh] {
+            fs::write(path, "{\"type\":\"jobdesk_meta\"}\n").unwrap();
+        }
+        for path in [old.clone(), data.join("settings.json"), data.join("intray/decisions.json")] {
+            fs::File::options().write(true).open(path).unwrap().set_modified(long_ago).unwrap();
+        }
+        (old, fresh)
+    }
+
+    /// A shorter time deletes the old run logs at launch, and only those: the settings and the tray's decisions stay.
+    #[test]
+    fn a_launch_deletes_the_run_logs_past_the_kept_time() {
+        let data = tempfile::tempdir().unwrap();
+        let (old, fresh) = aged_data(data.path(), Retention::Days30);
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, None, data.path());
+        assert!(!old.exists(), "the old log went");
+        assert!(fresh.exists(), "the fresh log stays");
+        assert!(data.path().join("settings.json").exists() && data.path().join("intray/decisions.json").exists());
+        assert_eq!(shell.settings.preferences().retention, Retention::Days30, "the settings file still reads");
+    }
+
+    #[test]
+    fn forever_deletes_no_run_log() {
+        let data = tempfile::tempdir().unwrap();
+        let (old, fresh) = aged_data(data.path(), Retention::Forever);
+        let ctx = egui::Context::default();
+        launch(&ctx, None, data.path());
+        assert!(old.exists() && fresh.exists());
+    }
+
+    /// Ask me before each tool reaches a desk as it opens, and the desk that is open on the frame the setting changes.
+    #[test]
+    fn the_permissions_setting_reaches_the_desk() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        assert!(!shell.desk.as_ref().unwrap().asks_permission(), "allowed and noted by default");
+        shell.settings.set_permissions(PermissionMode::Ask);
+        shell.follow_permissions();
+        assert!(shell.desk.as_ref().unwrap().asks_permission(), "the change reaches the open desk");
+
+        let mut shell = launch(&ctx, Some(checkout_named(&folder, "other-search")), data.path());
+        assert!(shell.desk.as_ref().unwrap().asks_permission(), "a newly opened desk asks");
+        shell.desk.as_mut().unwrap().set_asks_permission(false);
+        shell.follow_permissions();
+        assert!(!shell.desk.as_ref().unwrap().asks_permission(), "an unchanged setting leaves the desk alone");
     }
 
     fn copy_tree(from: &Path, to: &Path) {

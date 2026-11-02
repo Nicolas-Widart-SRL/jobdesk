@@ -3,4 +3,4 @@ mod run_logs;
 mod stream_json;
 
 pub use claude_gateway::ClaudeGateway;
-pub use run_logs::{RunLogUsage, RunLogs};
+pub use run_logs::{RunLogUsage, RunLogs, prune};

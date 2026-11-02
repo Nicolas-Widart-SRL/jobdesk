@@ -8,16 +8,17 @@ use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card,
-    block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button, danger_button, danger_shortcut_button,
-    day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure,
-    figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure,
-    muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button,
-    profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score, search_field, segmented, select_row, setting_check,
-    setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button,
-    small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits,
-    step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
+    AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
+    KnotState, NodeMarks, Palette, RoleEntry, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field, attention_count, bar,
+    blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, confirm_popover, copy_button,
+    danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state,
+    enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane,
+    lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
+    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score,
+    search_field, segmented, select_row, setting_check, setting_check_amount, setting_radio, setting_row, setting_section, settings_page, shell_top_frame,
+    shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp,
+    stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip,
+    toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -921,6 +922,103 @@ fn usage_sheet(theme: Theme, name: &str) {
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
 }
 
+/// The settings sheet's size: room for every row and the open popover under the last one.
+const SETTINGS_SHEET: [f32; 2] = [1000.0, 1180.0];
+const CONFIRM_WIDTH: f32 = 340.0;
+const CLEAR: Confirm = Confirm {
+    question: "Clear 214 tray decisions?",
+    note: "Today deals every card again, the ones you skipped too. This cannot be undone.",
+    keep: "Keep them",
+    act: "Clear decisions",
+    esc_note: "Esc keeps them.",
+};
+
+/// The Settings controls that pick, hold an amount or ask first, on paper as Settings shows them. `confirm` is the
+/// popover's state: `Some(true)` opens it with Keep them about to take the focus.
+fn settings_widgets(ui: &mut Ui, confirm: &mut Option<bool>) {
+    setting_section(ui, "Tool permissions", Some("What happens when Claude wants to read, write or run something during a task."), "");
+    let allow = "Tasks never stop for a permission. Each tool Claude used is listed in the task's activity, under its step.";
+    setting_radio(ui, true, "Allow and note in the activity", allow, "");
+    let ask = "The task waits for you each time, with what Claude wants to do. Safer with postings you do not trust, and slower.";
+    setting_radio(ui, false, "Ask me before each tool", ask, "tool");
+    ui.add_enabled_ui(false, |ui| {
+        setting_radio(ui, false, "Ask a second reader", "Disabled: nothing to pick yet.", "");
+    });
+    setting_section(ui, "Monthly cap", None, "");
+    let cap = "Once this month's tasks cost that much, Run in the launcher is disabled until the 1st and says why. A task that is running finishes.";
+    setting_check_amount(ui, &mut true, &mut "60.00".to_owned(), "Stop at", "a month", cap, "");
+    setting_check_amount(ui, &mut false, &mut String::new(), "Stop at", "a month", "Off, an empty amount.", "month");
+    setting_section(ui, "Amount fields", None, "");
+    setting_row(ui, "Spend at most, USD", "Empty starts each command at its suggested budget.", "", |ui| {
+        amount_field(ui, &mut String::new(), 120.0, "Suggested");
+    });
+    setting_row(ui, "Filled", "An amount typed in.", "", |ui| {
+        amount_field(ui, &mut "3.00".to_owned(), 110.0, "Suggested");
+    });
+    ui.add_enabled_ui(false, |ui| {
+        setting_row(ui, "Disabled", "Waits for the task that runs.", "", |ui| {
+            amount_field(ui, &mut "5.00".to_owned(), 110.0, "Suggested");
+        });
+    });
+    setting_section(ui, "Either way", None, "");
+    setting_row(ui, "Questions from Claude", "A question Claude asks you always reaches you, as Your turn on Today and Tasks.", "", |ui| {
+        tag(ui, "Always on", Tone::Plain);
+    });
+    setting_row(ui, "Remembered rules", "A tool you allow for the rest of a task stays allowed only until that task ends.", "", |ui| {
+        tag(ui, "This task only", Tone::Plain);
+    });
+    setting_section(ui, "Tray decisions", None, "");
+    let mut button = None;
+    setting_row(ui, "Clear tray decisions", "Forgets every decision and skip reason on Today, so Today deals those cards again.", "", |ui| {
+        button = Some(small_danger_button(ui, "Clear tray decisions"));
+    });
+    if let Some(button) = button {
+        if button.clicked() {
+            *confirm = Some(true);
+        }
+        confirm_popover(&button, confirm, &CLEAR, CONFIRM_WIDTH);
+    }
+}
+
+/// The settings sheet's page, `confirm` as `settings_widgets` takes it.
+fn settings_page_of(ui: &mut Ui, confirm: &mut Option<bool>) {
+    jobdesk::ui_kit::desk(ui, |ui| {
+        jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
+            paper(ui, false, |ui| {
+                egui::Frame::new().inner_margin(22).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    settings_widgets(ui, confirm);
+                });
+            });
+        });
+    });
+}
+
+fn settings_sheet(theme: Theme, name: &str) {
+    let mut confirm = Some(true);
+    let mut harness = Harness::builder()
+        .with_size(SETTINGS_SHEET)
+        .with_pixels_per_point(1.0)
+        .with_theme(theme)
+        .with_context_setup(install_look)
+        .wgpu()
+        .build_ui(move |ui| settings_page_of(ui, &mut confirm));
+    harness.run_steps(4);
+    assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them takes the focus first");
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn ui_kit_gallery_settings_dark() {
+    settings_sheet(Theme::Dark, "ui_kit_gallery_settings_dark");
+}
+
+#[test]
+fn ui_kit_gallery_settings_light() {
+    settings_sheet(Theme::Light, "ui_kit_gallery_settings_light");
+}
+
 #[test]
 fn ui_kit_gallery_usage_dark() {
     usage_sheet(Theme::Dark, "ui_kit_gallery_usage_dark");
@@ -954,22 +1052,156 @@ fn every_clickable_widget_shows_the_hand() {
             });
         });
         harness.run();
-        let mut clickable = Vec::new();
-        for role in [Role::Button, Role::Tab, Role::RadioButton, Role::Link] {
-            for node in harness.query_all_by_role(role) {
-                if !node.accesskit_node().is_disabled() {
-                    clickable.push(node.rect().center());
-                }
-            }
-        }
-        assert!(clickable.len() > least, "the sheet shows {} clickable widgets", clickable.len());
-        for at in clickable {
-            harness.hover_at(at);
-            harness.step();
-            assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
-        }
+        let shown = hands(&mut harness);
+        assert!(shown > least, "the sheet shows {shown} clickable widgets");
         harness.get_by_label("Switched off").hover();
         harness.step();
         assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default);
     }
+
+    // The settings sheet, with its popover open, so its buttons are hovered too.
+    let mut confirm = Some(false);
+    let mut harness = Harness::builder()
+        .with_size(SETTINGS_SHEET)
+        .with_pixels_per_point(1.0)
+        .with_context_setup(install_look)
+        .build_ui(move |ui| settings_page_of(ui, &mut confirm));
+    harness.run();
+    // Two radios, two cap checkboxes, Clear tray decisions, and the popover's Keep them and Clear decisions.
+    assert_eq!(hands(&mut harness), 7, "the settings sheet's clickable widgets");
+    harness.get_by_label("Ask a second reader").hover();
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default, "a disabled radio keeps the arrow");
+}
+
+/// Hovers every enabled clickable widget and checks each shows the pointing hand. Returns how many it hovered.
+fn hands(harness: &mut Harness) -> usize {
+    let mut clickable = Vec::new();
+    for role in [Role::Button, Role::Tab, Role::RadioButton, Role::CheckBox, Role::Link] {
+        for node in harness.query_all_by_role(role) {
+            if !node.accesskit_node().is_disabled() {
+                clickable.push(node.rect().center());
+            }
+        }
+    }
+    for at in &clickable {
+        harness.hover_at(*at);
+        harness.step();
+        assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the pointer at {at:?}");
+    }
+    clickable.len()
+}
+
+/// A click on a setting radio's words picks it, a click in the cap's field types there and leaves the box as it was,
+/// and a click on the cap's words flips the box.
+#[test]
+fn settings_controls_take_their_own_clicks() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct Shown {
+        permission: usize,
+        cap_on: bool,
+        cap: String,
+    }
+    let shown = Rc::new(RefCell::new(Shown::default()));
+    let state = Rc::clone(&shown);
+    let mut harness = Harness::builder().with_size([800.0, 400.0]).with_context_setup(install_look).build_ui(move |ui| {
+        let mut state = state.borrow_mut();
+        for (at, label) in ["Allow and note", "Ask first"].into_iter().enumerate() {
+            if setting_radio(ui, state.permission == at, label, "", "").clicked() {
+                state.permission = at;
+            }
+        }
+        let Shown { cap_on, cap, .. } = &mut *state;
+        setting_check_amount(ui, cap_on, cap, "Stop at", "a month", "Run waits at the cap.", "");
+    });
+    harness.run();
+    let on = |harness: &Harness, label: &str| harness.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(on(&harness, "Allow and note") && !on(&harness, "Ask first"));
+    harness.get_by_label("Ask first").click();
+    harness.run();
+    assert_eq!(shown.borrow().permission, 1);
+    assert!(on(&harness, "Ask first") && !on(&harness, "Allow and note"));
+
+    harness.get_by_label("Stop at a month");
+    let field = harness.get_by_role(Role::TextInput);
+    assert_eq!(field.accesskit_node().label().as_deref(), Some("Stop at"));
+    field.click();
+    harness.run();
+    harness.get_by_role(Role::TextInput).type_text("60");
+    harness.run();
+    assert!(!shown.borrow().cap_on, "a click in the field flipped the box");
+    assert_eq!(shown.borrow().cap, "60");
+    harness.get_by_label("Stop at $60 a month").click();
+    harness.run();
+    assert!(shown.borrow().cap_on);
+    // The words after the field and the help take a click too.
+    let help = harness.get_by_label("Stop at $60 a month").rect().left_bottom() + egui::vec2(40.0, 12.0);
+    harness.hover_at(help);
+    harness.step();
+    assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::PointingHand, "the help shows the hand");
+    for pressed in [true, false] {
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: help,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+    }
+    assert!(!shown.borrow().cap_on, "a click on the help left the box as it was");
+}
+
+/// The popover asks on a click and keeps on Keep, on Esc and on a click outside. Only the danger button acts.
+#[test]
+fn confirm_popover_keeps_unless_told_to_act() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let acted = Rc::new(Cell::new(0));
+    let seen = Rc::clone(&acted);
+    let mut confirm = None;
+    let mut harness = Harness::builder().with_size([600.0, 400.0]).with_context_setup(install_look).build_ui(move |ui| {
+        let button = small_danger_button(ui, "Clear tray decisions");
+        if button.clicked() {
+            confirm = Some(true);
+        }
+        if confirm_popover(&button, &mut confirm, &CLEAR, CONFIRM_WIDTH) {
+            seen.set(seen.get() + 1);
+        }
+        ui.add_space(200.0);
+        ui.label("Outside");
+    });
+    harness.run();
+    let open = |harness: &Harness| harness.query_by_label("Keep them").is_some();
+    assert!(!open(&harness));
+
+    harness.get_by_label("Clear tray decisions").click();
+    harness.run();
+    assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them takes the focus first");
+    harness.get_by_label("Keep them").click();
+    harness.run();
+    assert!(!open(&harness));
+
+    harness.get_by_label("Clear tray decisions").click();
+    harness.run();
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(!open(&harness), "Esc keeps");
+
+    harness.get_by_label("Clear tray decisions").click();
+    harness.run();
+    harness.get_by_label("Outside").click();
+    harness.run();
+    assert!(!open(&harness), "a click outside keeps");
+    assert_eq!(acted.get(), 0);
+
+    harness.get_by_label("Clear tray decisions").click();
+    harness.run();
+    harness.get_by_label("Clear decisions").click();
+    harness.run();
+    assert!(!open(&harness));
+    assert_eq!(acted.get(), 1);
 }

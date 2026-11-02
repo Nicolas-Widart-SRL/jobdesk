@@ -28,6 +28,9 @@ pub struct Snapshot {
     pub usage: UsageReport,
     /// Whether the run logs were read into `usage`. False until then, so Usage statistics says it is reading.
     pub usage_read: bool,
+    /// The last reload asked for before the run logs were read into `usage`. A task that ends asks for one, and its cost
+    /// is in `usage` only from the snapshot that carries that ask.
+    pub usage_asked: u64,
     pub issues: Vec<Issue>,
     pub today: NaiveDate,
     /// When the load began, so the shell can tell a snapshot read after some moment, such as a run's end.
@@ -79,7 +82,7 @@ impl Snapshot {
         let insights = search_insights(&pipeline);
         let counts = topic_counts(&profile);
         let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
-        let (usage, usage_read) = (UsageReport::default(), false);
-        Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage, usage_read, issues, today, read_at }
+        let (usage, usage_read, usage_asked) = (UsageReport::default(), false, 0);
+        Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage, usage_read, usage_asked, issues, today, read_at }
     }
 }

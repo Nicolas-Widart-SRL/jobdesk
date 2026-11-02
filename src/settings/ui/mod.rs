@@ -1,3 +1,7 @@
+mod about;
+mod data;
+mod defaults;
+mod permissions;
 mod usage;
 
 use std::cell::Cell;
@@ -6,12 +10,17 @@ use chrono::NaiveDate;
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice, UsageState, index, rail_word, search,
+    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, RuntimeWord, SearchHits, Settings, StartScreen, TextSize, ThemeChoice,
+    UsageState, cap_word, index, rail_word, search, size_short,
 };
-use crate::ui_kit::tokens::{BODY_PADDING, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING};
+use crate::settings::ui::about::AboutView;
+use crate::settings::ui::data::DataView;
+use crate::ui_kit::tokens::{
+    BODY_PADDING, DOC_MEASURE, FIELD_HEIGHT, GUTTER, HEADER_PADDING, INSET, PICK_PADDING, PICK_ROW_HEIGHT, RUN_SIDE, SETTING_ROW_PADDING, SETTING_SECTION_GAP,
+};
 use crate::ui_kit::{
-    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, pick_row, rail_title, rich, search_field, set_reduced_motion, setting_check,
-    setting_row, setting_section, settings_page, shortcut_button, slip, small_button, toggle_group,
+    Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, hit_mark, pick_row, rail_title, rich, search_field, set_reduced_motion,
+    setting_check, setting_row, setting_section, settings_page, shortcut_button, slip, small_button, toggle_group,
 };
 
 /// How wide Open on's combo box is.
@@ -19,12 +28,16 @@ const OPEN_ON_WIDTH: f32 = 180.0;
 
 const SHOW_FOLDER: &str = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
 
-/// What stays between frames: the page open, the search and the period Usage statistics counts.
+/// What stays between frames: the page open, the search, the period Usage statistics counts, Run defaults' amounts
+/// as typed, and whether Clear tray decisions is asking.
 #[derive(Default)]
 pub struct SettingsScreen {
     page: Page,
     query: String,
     period: Period,
+    edits: defaults::Edits,
+    /// Clear tray decisions' popover: open, and whether Keep them still takes the focus.
+    clearing: Option<bool>,
 }
 
 impl SettingsScreen {
@@ -38,6 +51,11 @@ impl SettingsScreen {
     /// The page open, which Settings reopens on.
     pub fn page(&self) -> Page {
         self.page
+    }
+
+    /// Settings is closed, by whatever way: a popover that was asking closes with it, so reopening never finds it open.
+    pub fn closed(&mut self) {
+        self.clearing = None;
     }
 }
 
@@ -53,6 +71,17 @@ pub struct SettingsView<'a> {
     pub usage: UsageState<'a>,
     /// The app's day, which names the month in Usage statistics before its logs are read.
     pub today: NaiveDate,
+    /// Whether a new task may start this month, as the launcher checks it.
+    pub cap: CapCheck,
+    /// The app's data folder as the user reads it, if there is one.
+    pub data: Option<&'a str>,
+    /// What the data folder holds, once measured.
+    pub sizes: Option<DataSizes>,
+    /// How many decisions the open folder's tray holds. None with no folder open, or a tray that could not be read or saved.
+    pub decisions: Option<usize>,
+    /// This copy's version, and Claude Code's as the tool check knows it.
+    pub version: &'a str,
+    pub claude: ClaudeVersion<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +89,10 @@ pub enum SettingsRequest {
     Back,
     ChangeFolder,
     ShowFolder,
+    /// Show the app's own data folder, never the job search folder.
+    ShowDataFolder,
+    /// Forget the open folder's tray decisions. Asked only after Clear decisions in the popover.
+    ClearDecisions,
     /// Close Settings and show Applications.
     OpenApplications,
     /// Open the launcher, as New task… does on Tasks.
@@ -70,12 +103,14 @@ pub enum SettingsRequest {
 /// `other_page` draws the pages another feature owns, such as Runtime status, with the search query.
 pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_page: &mut dyn FnMut(&mut Ui, Page, &str)) -> Option<SettingsRequest> {
     let mut request = None;
-    // Esc clears a search before anything else takes it, the field included.
+    // Esc clears a search before anything else takes it, the field included. While Clear tray decisions asks, Esc
+    // belongs to its popover, which egui's memory of open popups does not hold, and keeps the decisions.
     let ctx = ui.ctx().clone();
-    let clears = !screen.query.is_empty() && !Popup::is_any_open(&ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+    let asking = screen.clearing.is_some();
+    let clears = !asking && !screen.query.is_empty() && !Popup::is_any_open(&ctx) && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if clears {
         screen.query.clear();
-    } else if back_pressed(&ctx) {
+    } else if !asking && back_pressed(&ctx) {
         request = Some(SettingsRequest::Back);
     }
     let area = ui.available_rect_before_wrap();
@@ -105,17 +140,39 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             let lead = if matches!(view.usage, UsageState::Reading) { usage::READING } else { page.lead() };
             // The toggles run first, so the body counts the period picked this frame.
             let period = Cell::new(screen.period);
+            let cap = view.settings.preferences().cap;
             let (_, asked) = settings_page(
                 &mut page_ui,
                 page.title(),
                 lead,
                 |ui| usage::period_toggles(ui, &period, view.today),
-                |ui| usage::body(ui, view.usage, period.get(), view.today, &query),
+                |ui| usage::body(ui, view.usage, period.get(), view.today, &cap, &query),
             );
             screen.period = period.get();
             request = asked.or(request);
         }
+        Page::Defaults => {
+            let edits = &mut screen.edits;
+            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| defaults::body(ui, view.settings, edits, view.usage, &query));
+        }
+        Page::Permissions => {
+            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| permissions::body(ui, view.settings, &query));
+        }
+        Page::Data => {
+            let data = DataView { folder: view.data, sizes: view.sizes, decisions: view.decisions, workspace_open: view.folder.is_some() };
+            let clearing = &mut screen.clearing;
+            let (_, asked) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| data::body(ui, view.settings, data, clearing, &query));
+            request = asked.or(request);
+        }
+        Page::About => {
+            let about = AboutView { version: view.version, claude: view.claude };
+            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
+        }
         _ => other_page(&mut page_ui, page, &query),
+    }
+    // The popover asks about the page it sits on, so another page or leaving Settings closes it.
+    if screen.page != Page::Data || request == Some(SettingsRequest::Back) {
+        screen.clearing = None;
     }
     ui.advance_cursor_after_rect(area);
     request
@@ -241,8 +298,25 @@ fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
             RuntimeWord::Missing(n) => (format!("{n} missing"), Tone::Closed.into()),
             RuntimeWord::ToFill(n) => (format!("{n} to fill"), Tone::Interview.into()),
         },
+        Page::Defaults => match (view.cap, view.settings.preferences().cap.active()) {
+            (CapCheck::Reached(_), _) => ("Cap reached".to_owned(), Tone::Closed.into()),
+            (_, Some(amount)) => (cap_word(amount), Ink::Muted),
+            (_, None) => (String::new(), Ink::Muted),
+        },
+        Page::Permissions => (view.settings.preferences().permissions.label().to_owned(), Ink::Muted),
+        Page::Data => (view.sizes.map(|sizes| size_short(sizes.total())).unwrap_or_default(), Ink::Muted),
+        Page::About => (view.version.to_owned(), Ink::Muted),
         _ => (String::new(), Ink::Muted),
     }
+}
+
+/// A line at the foot of a page, under its last row, held to the measure.
+fn page_note(ui: &mut Ui, text: &str, query: &str) {
+    ui.add_space(SETTING_SECTION_GAP.0);
+    ui.scope(|ui| {
+        ui.set_max_width(DOC_MEASURE);
+        hit_mark(ui, text, Type::NOTE, Ink::Muted, query);
+    });
 }
 
 fn rail_row(ui: &mut Ui, title: &str, word: &str, ink: Ink) {
@@ -384,7 +458,13 @@ mod tests {
         report: UsageReport,
         pipeline: Pipeline,
         reading: bool,
+        decisions: Option<usize>,
+        cap: CapCheck,
+        no_folder: bool,
     }
+
+    /// The fictional data folder's sizes: 212 MB in all.
+    const SIZES: DataSizes = DataSizes { run_logs: 211_800_000, decisions: 18_000 };
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()
@@ -423,12 +503,18 @@ mod tests {
             let usage = if state.reading { UsageState::Reading } else { UsageState::Read { report: &state.report, pipeline: &state.pipeline, today: today() } };
             let view = SettingsView {
                 settings: &mut state.settings,
-                folder: Some("~/Documents/ai-job-search"),
+                folder: (!state.no_folder).then_some("~/Documents/ai-job-search"),
                 folder_read: true,
                 runtime: RuntimeWord::Missing(1),
                 folder_wait: None,
                 usage,
                 today: today(),
+                cap: state.cap,
+                data: Some("~/Library/Application Support/Jobdesk"),
+                sizes: Some(SIZES),
+                decisions: state.decisions,
+                version: "0.1.0",
+                claude: ClaudeVersion::Found("2.1.4"),
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -460,7 +546,17 @@ mod tests {
 
     fn state_with(settings: Settings) -> Rc<RefCell<State>> {
         let pipeline = sent_on(&[day(2026, 10, 7), day(2026, 10, 16), day(2026, 8, 20)]);
-        Rc::new(RefCell::new(State { screen: SettingsScreen::default(), settings, asked: None, report: report(), pipeline, reading: false }))
+        Rc::new(RefCell::new(State {
+            screen: SettingsScreen::default(),
+            settings,
+            asked: None,
+            report: report(),
+            pipeline,
+            reading: false,
+            decisions: Some(214),
+            cap: CapCheck::Open,
+            no_folder: false,
+        }))
     }
 
     #[test]
@@ -522,7 +618,7 @@ mod tests {
             assert!(!rows.is_empty(), "{}", page.title());
             assert_eq!(rows[0].accesskit_node().is_disabled(), !page.built(), "{}", page.title());
         }
-        assert_eq!(harness.query_all_by_label("Later").count(), 8);
+        assert_eq!(harness.query_all_by_label("Later").count(), 4);
         harness.get_by_label("1 missing");
     }
 
@@ -558,9 +654,12 @@ mod tests {
         state.borrow_mut().screen.query = "folder".to_owned();
         let mut harness = harness(state.clone());
         harness.run();
-        harness.get_by_label("3 matches");
-        harness.get_by_label("1 match");
-        harness.get_by_label("4 settings match. Esc clears the search.");
+        // Data and privacy matches four times, General three, Permissions twice, Run defaults and Runtime status once.
+        assert_eq!(harness.query_all_by_label("4 matches").count(), 1);
+        assert_eq!(harness.query_all_by_label("3 matches").count(), 1);
+        assert_eq!(harness.query_all_by_label("2 matches").count(), 1);
+        assert_eq!(harness.query_all_by_label("1 match").count(), 2);
+        harness.get_by_label("11 settings match. Esc clears the search.");
         assert!(harness.query_by_label("Appearance").is_none());
         assert!(harness.query_by_label("Usage statistics").is_none());
         assert_eq!(state.borrow().screen.page, Page::General, "the open page had no hit");
@@ -619,6 +718,12 @@ mod tests {
                 folder_wait: None,
                 usage: UsageState::NoFolder,
                 today: today(),
+                cap: CapCheck::Open,
+                data: None,
+                sizes: None,
+                decisions: None,
+                version: "0.1.0",
+                claude: ClaudeVersion::NotFound,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -630,17 +735,245 @@ mod tests {
 
     #[test]
     fn every_indexed_line_shows_on_its_page() {
-        for page in [Page::General, Page::Appearance, Page::Usage] {
+        for page in [Page::General, Page::Appearance, Page::Usage, Page::Defaults, Page::Permissions, Page::Data, Page::About] {
             let state = state();
             state.borrow_mut().screen.open_on(page);
             let mut harness = harness(state);
             harness.run();
-            // A checkbox's help is its description, as its words are part of it.
+            // A checkbox's help is its description, as its words are part of it, and the cap's checkbox is named by its sentence.
             for &line in index(page) {
                 let described = harness.query_all_by(|node| node.description().as_deref() == Some(line)).next().is_some();
-                assert!(described || harness.query_all_by_label(line).next().is_some(), "{}: {line}", page.title());
+                let in_sentence = harness
+                    .query_all_by(|node| node.role() == egui::accesskit::Role::CheckBox && node.label().is_some_and(|label| label.contains(line)))
+                    .next()
+                    .is_some();
+                assert!(described || in_sentence || harness.query_all_by_label(line).next().is_some(), "{}: {line}", page.title());
             }
         }
+    }
+
+    fn on(state: &Rc<RefCell<State>>, page: Page) {
+        state.borrow_mut().screen.open_on(page);
+    }
+
+    #[test]
+    fn the_new_pages_say_their_state_in_the_rail() {
+        let state = state();
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert!(harness.query_all_by_label("Later").next().is_some(), "Providers and the job search pages wait");
+        harness.get_by_label("Allow and note");
+        harness.get_by_label("212 MB");
+        harness.get_by_label("0.1.0");
+        assert!(harness.query_by_label_contains("Cap ").is_none(), "no cap, no word");
+
+        state.borrow_mut().settings.set_cap_on(true);
+        state.borrow_mut().settings.set_cap_amount(crate::settings::application::Dollars::parse("60"));
+        state.borrow_mut().settings.set_permissions(crate::settings::application::PermissionMode::Ask);
+        harness.run();
+        harness.get_by_label("Cap $60");
+        harness.get_by_label("Ask first");
+
+        let reached = state.borrow().settings.preferences().cap.reached(60.4, today()).unwrap();
+        state.borrow_mut().cap = CapCheck::Reached(reached);
+        harness.run();
+        harness.get_by_label("Cap reached");
+    }
+
+    #[test]
+    fn the_about_page_shows_its_own_heading() {
+        let state = state();
+        on(&state, Page::About);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label("About Jobdesk");
+        harness.get_by_label("2.1.4");
+        assert!(harness.get_by_label("Show licences").accesskit_node().is_disabled(), "there is no licence file to show yet");
+        assert!(!harness.get_by_label("Open the review").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn a_typed_budget_saves_once_it_reads_and_empty_saves_none() {
+        let state = state();
+        on(&state, Page::Defaults);
+        let mut harness = harness(state.clone());
+        harness.run();
+        fn field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+            harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("Spend at most, USD"))
+        }
+        field(&harness).focus();
+        harness.run();
+        field(&harness).type_text("4.5");
+        harness.run();
+        let budget = state.borrow().settings.preferences().run_defaults.budget;
+        assert_eq!(budget, crate::settings::application::Dollars::parse("4.50"));
+        assert_eq!(field(&harness).value().as_deref(), Some("4.5"), "the field keeps what was typed");
+
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Backspace);
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().run_defaults.budget, None, "empty starts each command at its suggestion");
+    }
+
+    #[test]
+    fn ask_me_before_each_tool_saves_ask() {
+        let state = state();
+        on(&state, Page::Permissions);
+        let mut harness = harness(state.clone());
+        harness.run();
+        let ask = harness.get_by_label("Ask me before each tool");
+        assert_eq!(ask.accesskit_node().role(), egui::accesskit::Role::RadioButton);
+        ask.click();
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().permissions, crate::settings::application::PermissionMode::Ask);
+        harness.get_by_label("Allow and note in the activity").click();
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().permissions, crate::settings::application::PermissionMode::AllowAndNote);
+    }
+
+    fn clear_button<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Clear tray decisions")
+    }
+
+    #[test]
+    fn clear_tray_decisions_waits_with_nothing_to_clear() {
+        let state = state();
+        on(&state, Page::Data);
+        state.borrow_mut().decisions = Some(0);
+        let mut harness = harness(state.clone());
+        harness.run();
+        // Each reason shows on hover over the disabled button.
+        let waits_because = |harness: &mut Harness<'static>, why: &str| {
+            assert!(clear_button(harness).accesskit_node().is_disabled(), "{why}");
+            clear_button(harness).hover();
+            harness.run_steps(8);
+            assert!(harness.query_by_label(why).is_some(), "{why}");
+        };
+        waits_because(&mut harness, "No decisions to clear.");
+
+        state.borrow_mut().decisions = None;
+        harness.run();
+        waits_because(&mut harness, "Today's decisions are not available.");
+        assert!(harness.query_by_label("No decisions to clear.").is_none(), "a tray that could not be read is not an empty one");
+        clear_button(&harness).click();
+        harness.run();
+        assert!(harness.query_all_by_label_contains("tray decisions?").next().is_none(), "nothing asks");
+
+        state.borrow_mut().no_folder = true;
+        harness.run();
+        waits_because(&mut harness, "Choose a folder first.");
+    }
+
+    /// A command's budget saves only an amount. Text that is not one stays in the field while it has the focus, and
+    /// the saved budget stays as it was.
+    #[test]
+    fn a_command_budget_that_does_not_read_keeps_the_saved_one() {
+        let mut settings = Settings::unsaved();
+        settings.add_command(crate::runs::application::CATALOG.iter().find(|spec| spec.name == "/rank").unwrap());
+        let saved = settings.preferences().run_defaults.commands[0].budget;
+        let state = state_with(settings);
+        on(&state, Page::Defaults);
+        let mut harness = harness(state.clone());
+        harness.run();
+        fn field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+            harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("Spend at most for /rank"))
+        }
+        field(&harness).focus();
+        harness.run();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("abc");
+        harness.run();
+        assert_eq!(field(&harness).value().as_deref(), Some("abc"), "the typed text stays while the field has the focus");
+        assert_eq!(state.borrow().settings.preferences().run_defaults.commands[0].budget, saved, "the saved budget stays");
+
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("2.5");
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().run_defaults.commands[0].budget, crate::settings::application::Dollars::parse("2.50").unwrap());
+    }
+
+    #[test]
+    fn about_says_checking_while_the_tool_check_runs() {
+        let mut settings = Settings::unsaved();
+        let mut screen = SettingsScreen::default();
+        screen.open_on(Page::About);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let view = SettingsView {
+                settings: &mut settings,
+                folder: None,
+                folder_read: false,
+                runtime: RuntimeWord::None,
+                folder_wait: None,
+                usage: UsageState::NoFolder,
+                today: today(),
+                cap: CapCheck::Open,
+                data: None,
+                sizes: None,
+                decisions: None,
+                version: "0.1.0",
+                claude: ClaudeVersion::Checking,
+            };
+            show(ui, &mut screen, view, &mut |_, _, _| {});
+        });
+        harness.run();
+        harness.get_by_label("Checking…");
+        assert!(harness.query_by_label("Not found").is_none(), "a check still running never says Claude Code is missing");
+    }
+
+    #[test]
+    fn clear_tray_decisions_asks_first_and_esc_keeps_them() {
+        let state = state();
+        on(&state, Page::Data);
+        let mut harness = harness(state.clone());
+        harness.run();
+        clear_button(&harness).click();
+        harness.run();
+        let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 214 tray decisions?").next().is_some();
+        assert!(asking(&harness));
+        assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them is the default");
+        harness.key_press(Key::Escape);
+        harness.run();
+        assert!(!asking(&harness));
+        assert_eq!(state.borrow().asked, None, "Esc keeps them, and Settings stays");
+
+        clear_button(&harness).click();
+        harness.run();
+        harness.get_by_label("Clear decisions").click();
+        harness.run();
+        assert_eq!(state.borrow().asked, Some(SettingsRequest::ClearDecisions));
+    }
+
+    #[test]
+    fn show_in_finder_asks_for_the_data_folder() {
+        let state = state();
+        on(&state, Page::Data);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("~/Library/Application Support/Jobdesk");
+        harness.get_by_label("Run logs 211.8 MB, tray decisions 18 KB.");
+        harness.get_by_label(SHOW_FOLDER).click();
+        harness.run();
+        assert_eq!(state.borrow().asked, Some(SettingsRequest::ShowDataFolder));
+    }
+
+    #[test]
+    fn a_command_row_adds_and_removes() {
+        let state = state();
+        on(&state, Page::Defaults);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Add a command").click();
+        harness.run();
+        harness.get_by_label("/rank").click();
+        harness.run();
+        let commands = |state: &Rc<RefCell<State>>| -> Vec<String> {
+            state.borrow().settings.preferences().run_defaults.commands.iter().map(|row| row.command.clone()).collect()
+        };
+        assert_eq!(commands(&state), ["/rank"]);
+        harness.get_by_label("Model for /rank");
+        harness.get_by_label("Remove /rank").click();
+        harness.run();
+        assert!(commands(&state).is_empty());
     }
 
     #[test]
@@ -707,6 +1040,29 @@ mod tests {
         assert!(harness.query_by_label("$41.20").is_none());
     }
 
+    /// October's $41.20 fills a bar against a $60 cap, and only the month's figure has one.
+    #[test]
+    fn the_months_spend_measures_against_the_cap() {
+        const CAP_NOTE: &str = "of your $60.00 monthly cap";
+        let state = state();
+        on_usage(&state);
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert!(harness.query_by_label(CAP_NOTE).is_none(), "no cap, no bar");
+        harness.get_by_label("in October");
+
+        state.borrow_mut().settings.set_cap_on(true);
+        state.borrow_mut().settings.set_cap_amount(crate::settings::application::Dollars::parse("60"));
+        harness.run();
+        harness.get_by_label(CAP_NOTE);
+        assert!(harness.query_by_label("in October").is_none());
+        for period in ["90 days", "This year", "All time"] {
+            harness.get_by_label(period).click();
+            harness.run();
+            assert!(harness.query_by_label(CAP_NOTE).is_none(), "{period}");
+        }
+    }
+
     #[test]
     fn per_application_sent_shows_only_when_something_was_sent() {
         let state = state();
@@ -763,6 +1119,12 @@ mod tests {
                 folder_wait: None,
                 usage: UsageState::NoFolder,
                 today: today(),
+                cap: CapCheck::Open,
+                data: None,
+                sizes: None,
+                decisions: None,
+                version: "0.1.0",
+                claude: ClaudeVersion::NotFound,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

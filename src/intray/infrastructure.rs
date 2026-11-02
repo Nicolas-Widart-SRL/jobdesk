@@ -179,4 +179,19 @@ mod tests {
         DecisionFile::new(dir.path().to_owned(), Path::new("/w")).save(&[]).unwrap();
         assert_eq!(fs::metadata(dir.path().join(FILE)).unwrap().permissions().mode() & 0o777, 0o600);
     }
+
+    #[test]
+    fn clearing_one_workspace_keeps_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = DecisionFile::new(dir.path().to_owned(), Path::new("/one"));
+        let second = DecisionFile::new(dir.path().to_owned(), Path::new("/two"));
+        let kept = [decision("send:b", Outcome::Later, None)];
+        first.save(&[decision("triage:a", Outcome::Skipped, Some(SkipReason::Rate))]).unwrap();
+        second.save(&kept).unwrap();
+
+        first.save(&[]).unwrap();
+
+        assert_eq!(first.load().unwrap(), vec![]);
+        assert_eq!(second.load().unwrap(), kept);
+    }
 }

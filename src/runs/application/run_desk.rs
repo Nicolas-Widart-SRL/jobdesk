@@ -40,9 +40,13 @@ impl RunDesk {
         Self { gateway, repaint, runs: Vec::new(), sessions: HashMap::new(), events, event_sender, started: 0, asks_permission: false }
     }
 
-    /// Sends each permission to the user instead of allowing it.
-    pub fn ask_permission(&mut self) {
-        self.asks_permission = true;
+    /// On, each permission goes to the user instead of being allowed. It holds for every prompt from the next poll on.
+    pub fn set_asks_permission(&mut self, asks: bool) {
+        self.asks_permission = asks;
+    }
+
+    pub fn asks_permission(&self) -> bool {
+        self.asks_permission
     }
 
     pub fn restore(&mut self, history: &dyn RunHistory) {
@@ -362,6 +366,28 @@ mod tests {
         desk.poll();
         assert_eq!(script.borrow().sent, ["Allow { remember: false }"]);
         assert_eq!(desk.run(&id).unwrap().current_prompt().unwrap().request_id, "q");
+    }
+
+    #[test]
+    fn an_asking_desk_leaves_permissions_to_the_user_until_turned_off() {
+        let (mut desk, script) = desk();
+        desk.set_asks_permission(true);
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        let permission = |request_id: &str| Prompt {
+            request_id: request_id.into(),
+            kind: PromptKind::Permission { tool: "Bash".into(), detail: "ls".into(), can_remember: false },
+            input_json: "{}".into(),
+            suggestions_json: None,
+        };
+        desk.sink_for(&id)(AgentEvent::PromptRaised(permission("p")));
+        desk.poll();
+        assert!(script.borrow().sent.is_empty(), "the permission waits for the user");
+        assert_eq!(desk.run(&id).unwrap().current_prompt().unwrap().request_id, "p");
+
+        desk.set_asks_permission(false);
+        desk.sink_for(&id)(AgentEvent::PromptRaised(permission("p2")));
+        desk.poll();
+        assert_eq!(script.borrow().sent, ["Allow { remember: false }"], "the next one is allowed");
     }
 
     #[test]

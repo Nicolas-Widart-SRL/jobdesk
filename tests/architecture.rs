@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FEATURES: [&str; 8] = ["discovery", "dossier", "insights", "intray", "runs", "settings", "tracking", "workspace"];
+const FEATURES: [&str; 9] = ["discovery", "dossier", "insights", "intray", "profile", "runs", "settings", "tracking", "workspace"];
 const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
 const APPEARANCE: [&str; 15] = [
     "Color32",

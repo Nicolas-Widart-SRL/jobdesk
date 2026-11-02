@@ -1,0 +1,11 @@
+mod editor;
+mod marks;
+mod view;
+
+pub use editor::{ProfileEditor, SaveOutcome};
+pub use marks::{Mark, UpdatedMarks};
+pub use view::{BlockView, ProfileView, Role, SectionView, TopicCounts, TopicView, profile_view, topic_counts};
+
+pub use crate::profile::domain::{
+    Block, BlockKey, Fill, Group, ProfileFile, ProfileStore, SectionRef, TOPICS, TopicId, TopicSpec, blocks, role_heading, topic_fill,
+};

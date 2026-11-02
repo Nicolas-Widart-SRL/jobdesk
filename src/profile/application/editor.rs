@@ -80,7 +80,8 @@ impl ProfileEditor {
 
     /// Reads the file again just before writing, and replaces only the block. While `busy`, a run may be writing the
     /// same file, so it returns before reading anything. A block that changed on disk, or is gone from it, is written
-    /// only with `over_theirs`: over the block, or at the end of its `##`, or of the file. A new block goes in at once.
+    /// only with `over_theirs`: over the block, or at the end of its `##`, or of the file. A new block goes in at the end
+    /// of the block it was opened after, and when that block is gone, at the end of the file, again only with `over_theirs`.
     pub fn save(&mut self, busy: bool, over_theirs: bool) -> SaveOutcome {
         if busy {
             return SaveOutcome::Busy;
@@ -91,7 +92,14 @@ impl ProfileEditor {
             Err(error) => return SaveOutcome::Failed(error),
         };
         let saved = if open.new {
-            insert_at(&text, end_of(&text, &open.key), &open.draft)
+            match find(&text, &open.key) {
+                Some(range) => insert_at(&text, range.end, &open.draft),
+                None if !over_theirs => {
+                    open.theirs = None;
+                    return SaveOutcome::Gone;
+                }
+                None => insert_at(&text, text.len(), &open.draft),
+            }
         } else {
             match check(&text, &open.key, &open.opened_with) {
                 SaveCheck::Same(range) => replace(&text, range, &open.draft),
@@ -118,11 +126,6 @@ impl ProfileEditor {
             Err(error) => SaveOutcome::Failed(error),
         }
     }
-}
-
-/// The end of the block `key` names, or of the file when it is gone.
-fn end_of(text: &str, key: &BlockKey) -> usize {
-    find(text, key).map_or(text.len(), |range| range.end)
 }
 
 /// The end of the first `##` named as the parent of `key`, or of the file when there is none.
@@ -214,6 +217,19 @@ mod tests {
         assert!(!editor.is_dirty());
         assert_eq!(editor.save(false, false), SaveOutcome::Saved);
         assert_eq!(file(&memory), TEXT.replace("Shipped.\n\n", "Shipped.\n\n### Dev - Acme (2018 – 2021)\nBuilt.\n\n"));
+    }
+
+    /// The section a new role was opened under was renamed on disk, so the role would land at the end of the file.
+    #[test]
+    fn a_new_block_whose_section_is_gone_asks_first() {
+        let (memory, mut editor) = editor(TEXT);
+        editor.open_new(key(2, "Professional Experience", None), "### Dev - Acme (2018 – 2021)\nBuilt.".to_owned());
+        let renamed = TEXT.replace("## Professional Experience", "## Experience");
+        memory.files.borrow_mut().insert(ProfileFile::Candidate, renamed.clone());
+        assert_eq!(editor.save(false, false), SaveOutcome::Gone);
+        assert_eq!((memory.writes.get(), file(&memory)), (0, renamed.clone()));
+        assert_eq!(editor.save(false, true), SaveOutcome::Saved);
+        assert_eq!(file(&memory), format!("{renamed}\n### Dev - Acme (2018 – 2021)\nBuilt.\n"));
     }
 
     #[test]

@@ -118,6 +118,13 @@ fn profile_note(band: &WorkflowBand) -> String {
     if band.profile_hidden == 0 { filled } else { format!("{filled}, {} hidden", band.profile_hidden) }
 }
 
+/// Filled topics in text, then the ones known to be unfilled unlit, then the hidden ones in the failure ink, so a
+/// topic that could not be read never counts as unfilled.
+fn profile_marks(band: &WorkflowBand) -> Vec<(usize, Option<Ink>)> {
+    let unfilled = band.profile_total.saturating_sub(band.profile_filled + band.profile_hidden);
+    vec![(band.profile_filled, Some(Ink::Text)), (unfilled, None), (band.profile_hidden, Some(Ink::Status(Tone::Closed)))]
+}
+
 /// With every topic hidden there is nothing to count, so the stage says why instead of showing 0.
 fn profile_hidden(band: &WorkflowBand) -> Option<&'static str> {
     (band.profile_total > 0 && band.profile_hidden == band.profile_total).then_some(PROFILE_HIDDEN)
@@ -130,7 +137,7 @@ fn workflow(ui: &mut Ui, band: &WorkflowBand, tracker: Option<&str>, jobs: Optio
         FlowNode {
             label: "Profile",
             figure: format!("{}/{}", band.profile_filled, band.profile_total),
-            marks: vec![(band.profile_filled, text), (band.profile_total.saturating_sub(band.profile_filled), None)],
+            marks: profile_marks(band),
             note: profile_note(band),
             hidden: profile_hidden(band),
         },
@@ -428,5 +435,12 @@ mod tests {
         assert_eq!((profile_note(&band(6, 11, 1)), profile_hidden(&band(6, 11, 1))), ("6 of 11 profile topics filled, 1 hidden".to_owned(), None));
         assert_eq!(profile_hidden(&band(0, 11, 11)), Some(PROFILE_HIDDEN));
         assert_eq!(profile_hidden(&band(0, 0, 0)), None);
+    }
+
+    #[test]
+    fn hidden_topics_are_marked_apart_from_unfilled_ones() {
+        let closed = Some(Ink::Status(Tone::Closed));
+        assert_eq!(profile_marks(&band(6, 11, 1)), [(6, Some(Ink::Text)), (4, None), (1, closed)]);
+        assert_eq!(profile_marks(&band(7, 11, 0)), [(7, Some(Ink::Text)), (4, None), (0, closed)]);
     }
 }

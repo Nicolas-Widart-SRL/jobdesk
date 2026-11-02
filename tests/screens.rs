@@ -2655,7 +2655,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Profile],
             subtitle: "ai-job-search",
             alert: "Part of your profile could not be read.",
-            shown: &["Everything else still works."],
+            shown: &["Everything else still works.", "Setup, could not be read"],
             not_shown: &[],
         },
         Case {
@@ -2664,7 +2664,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             subtitle: "The whole workflow, search health and skill gaps, read live from your files",
             alert: "Part of your profile could not be read.",
             shown: &["6 of 11 profile topics filled, 1 hidden"],
-            not_shown: &["7 of 11 profile topics filled", "6 of 10 profile topics filled"],
+            not_shown: &["7 of 11 profile topics filled", "6 of 10 profile topics filled", "Insights, could not be read"],
         },
     ];
     for (index, case) in cases.iter().enumerate() {

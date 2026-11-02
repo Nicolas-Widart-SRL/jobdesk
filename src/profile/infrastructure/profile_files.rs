@@ -34,13 +34,13 @@ impl ProfileFiles {
             let why = why.to_owned();
             move |error: io::Error| if error.kind() == ErrorKind::NotFound { LoadError::new(file.name(), &why) } else { failed(error) }
         };
-        let root = fs::canonicalize(&self.root).map_err(gone("is in a job search folder that is no longer there, so it was not saved"))?;
+        let root = fs::canonicalize(&self.root).map_err(gone("is in a job search folder that is not there, so it was not saved"))?;
         let path = self.path(file);
         let target = match fs::symlink_metadata(&path) {
-            Ok(_) => fs::canonicalize(&path).map_err(gone("links to a file that is no longer there, so it was not saved"))?,
+            Ok(_) => fs::canonicalize(&path).map_err(gone("links to a file that is not there, so it was not saved"))?,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 let folder = path.parent().ok_or_else(|| LoadError::new(file.name(), "has no folder"))?;
-                let missing = format!("cannot be created, because its folder {} is no longer there", folder_of(file));
+                let missing = format!("cannot be created, because its folder {} is not there", folder_of(file));
                 fs::canonicalize(folder).map_err(gone(&missing))?.join(file.name())
             }
             Err(error) => return Err(failed(error)),
@@ -192,9 +192,9 @@ mod tests {
     fn a_missing_folder_says_which() {
         let (dir, files) = files();
         let error = files.write(ProfileFile::SearchQueries, "new").unwrap_err();
-        assert_eq!(error.reason, "cannot be created, because its folder .claude/skills/job-scraper is no longer there");
+        assert_eq!(error.reason, "cannot be created, because its folder .claude/skills/job-scraper is not there");
         let gone = ProfileFiles::in_workspace(&dir.path().join("moved"));
-        assert_eq!(gone.write(ProfileFile::Candidate, "new").unwrap_err().reason, "is in a job search folder that is no longer there, so it was not saved");
+        assert_eq!(gone.write(ProfileFile::Candidate, "new").unwrap_err().reason, "is in a job search folder that is not there, so it was not saved");
     }
 
     #[cfg(unix)]
@@ -217,7 +217,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let link = dir.path().join(ProfileFile::Candidate.relative_path());
         std::os::unix::fs::symlink(outside.path().join("gone.md"), &link).unwrap();
-        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "links to a file that is no longer there, so it was not saved");
+        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "links to a file that is not there, so it was not saved");
         assert!(!outside.path().join("gone.md").exists());
         // The folder of a file that does not exist yet is a link out of the root.
         std::os::unix::fs::symlink(outside.path(), dir.path().join(".claude/skills/job-scraper")).unwrap();

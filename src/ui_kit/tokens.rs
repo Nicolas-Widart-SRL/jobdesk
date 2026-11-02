@@ -185,6 +185,17 @@ pub const NODE_GAP: f32 = 3.0;
 pub const NODE_TALLY_HEIGHT: f32 = 31.0;
 pub const NODE_TALLY_MARGIN: (f32, f32) = (6.0, 4.0);
 pub const NODE_ARROW: (f32, f32) = (14.0, 8.0);
+/// The room above and below the bar under a figure band's figure.
+pub const FIGURE_BAR_MARGIN: (f32, f32) = (4.0, 2.0);
+/// A loading figure band cell's grey blocks: the label's width and the figure's width and height,
+/// then the room above and below the figure, and the note's width in each cell in turn.
+pub const FIGURE_SKELETON: (f32, f32, f32) = (60.0, 110.0, 30.0);
+pub const FIGURE_SKELETON_MARGIN: (f32, f32) = (6.0, 4.0);
+pub const FIGURE_SKELETON_NOTES: [f32; 4] = [150.0, 120.0, 160.0, 130.0];
+/// A day heatmap's column of weekday names and its row of month names.
+pub const HEAT_LABELS: (f32, f32) = (30.0, 16.0);
+/// The room between a day heatmap and its notes, the notes' room above, and the gap between their lines.
+pub const HEAT_SIDE: (f32, f32, f32) = (32.0, 14.0, 5.0);
 pub const EVENT_PADDING: f32 = 8.0;
 pub const EVENT_GAP: f32 = 10.0;
 pub const EVENT_WHO_WIDTH: f32 = 56.0;

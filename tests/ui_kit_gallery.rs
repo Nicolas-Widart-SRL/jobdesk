@@ -7,15 +7,15 @@ use egui_kittest::{Harness, SnapshotOptions};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
-    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DealLook, FlowNode, Ink, KnotState, Palette, Subtitle, TabMark, Title, Tone, Type, agenda_return,
-    agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, copy_button,
-    danger_button, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, flow_band, folder_tab,
-    index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body,
-    panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command,
-    rich, score, search_field, segmented, select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
-    skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head,
-    status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band,
-    undo_row,
+    AgendaEnd, BandCell, CardLook, CellLook, CheckMark, DayHeatmap, DealLook, Figure, FlowNode, HeatDay, Ink, KnotState, Palette, Subtitle, TabMark, Title,
+    Tone, Type, agenda_return, agenda_row, alert, attention_count, bar, blank_card, brand, button, card_skeleton, card_tab, check_tag, code_box,
+    command_button, command_row, copy_button, danger_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut,
+    empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot,
+    lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper,
+    path_label, pick_row, primary_button, primary_key_button, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, score, search_field, segmented,
+    select_row, setting_check, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar,
+    small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame,
+    status_line, status_waits, step_line, strong, table_head, tag, tally, tally_strip, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -663,6 +663,133 @@ fn render(theme: Theme, name: &str) {
     harness.get_by_label(HOVERED_ROW).hover();
     harness.run_steps(2);
     harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The usage sheet's size: the main sheet is already as tall as a texture holds.
+const USAGE_SHEET: [f32; 2] = [1000.0, 900.0];
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/// The year shown: 53 weeks from Monday 27 October to Saturday 31 October a year on, which is today.
+const YEAR_WEEKS: usize = 53;
+const TODAY: (usize, usize) = (52, 5);
+/// The tip the pointer rests on in the snapshots.
+const HOVERED_DAY: (usize, usize) = (50, 1);
+
+/// A year's weeks of days, and the week each month's name stands over.
+type Year = (Vec<[Option<HeatDay>; 7]>, Vec<(usize, &'static str)>);
+
+/// A fictional year of tasks, every day from the first Monday to today. `blank` has no task at all.
+fn year(blank: bool) -> Year {
+    // Month lengths from October to October, so the day and month of each square can be named.
+    let lengths = [31, 30, 31, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31];
+    let mut dates = Vec::new();
+    for (index, length) in lengths.into_iter().enumerate() {
+        dates.extend((1..=length).map(|day| (day, (index + 9) % 12)));
+    }
+    let start = 26;
+    let mut months = Vec::new();
+    let weeks = (0..YEAR_WEEKS)
+        .map(|week| {
+            let (first, month) = dates[start + week * 7];
+            if first <= 7 && week > 0 {
+                months.push((week, MONTHS[month]));
+            }
+            std::array::from_fn(|weekday| {
+                if (week, weekday) > TODAY {
+                    return None;
+                }
+                let (day, month) = dates[start + week * 7 + weekday];
+                let seed = (day * 7 + month * 13) * 2_654_435_761 % 97;
+                let tasks = match () {
+                    _ if blank || week < 37 => 0,
+                    _ if weekday >= 5 => usize::from(seed > 77),
+                    _ if seed > 87 => 4,
+                    _ if seed > 60 => 2,
+                    _ if seed > 29 => 1,
+                    _ => 0,
+                };
+                let tasks = if !blank && (week, weekday) == HOVERED_DAY { 4 } else { tasks };
+                let step = match tasks {
+                    0 => 0,
+                    1 => 1,
+                    2 | 3 => 2,
+                    _ => 3,
+                };
+                let what = match tasks {
+                    0 => "no task".to_owned(),
+                    1 => "1 task, $0.80".to_owned(),
+                    tasks => format!("{tasks} tasks, ${}.10", tasks + 2),
+                };
+                Some(HeatDay { step, tip: format!("{} {day} {}: {what}", WEEKDAYS[weekday], MONTHS[month]) })
+            })
+        })
+        .collect();
+    (weeks, months)
+}
+
+const LEGEND: [&str; 4] = ["None", "1 task", "2 or 3 tasks", "4 or more"];
+
+fn usage(ui: &mut Ui) {
+    let figures = |bar: bool| {
+        [
+            Figure {
+                label: "Spent",
+                figure: "$41.20".to_owned(),
+                note: if bar { "of your $60.00 monthly cap" } else { "in October" }.to_owned(),
+                bar: bar.then_some((41.2 / 60.0, Ink::Text)),
+            },
+            Figure { label: "Tokens", figure: "4.1M".to_owned(), note: "in, and 0.6M out".to_owned(), bar: None },
+            Figure { label: "Cache hits", figure: "82%".to_owned(), note: "of input read from cache, which costs less".to_owned(), bar: None },
+            Figure { label: "Tasks", figure: "37".to_owned(), note: "33 finished, 3 stopped, 1 failed".to_owned(), bar: None },
+        ]
+    };
+    figure_band(ui, &figures(true));
+    ui.add_space(12.0);
+    figure_band(ui, &figures(false));
+    ui.add_space(12.0);
+    figure_band_loading(ui, 4);
+    ui.add_space(20.0);
+    let (weeks, months) = year(false);
+    let notes = ["Last 12 months, one square a day", "75 days with a task, since 13 July"];
+    let map = DayHeatmap { weeks: &weeks, today: Some(TODAY), months: &months, notes: &notes, legend: LEGEND, faded: false };
+    let shown = day_heatmap(ui, &map);
+    ui.data_mut(|data| data.insert_temp(egui::Id::NULL.with(HOVERED_DAY), shown.cells[HOVERED_DAY.0][HOVERED_DAY.1]));
+    ui.add_space(20.0);
+    let (weeks, months) = year(true);
+    let notes = ["Last 12 months, one square a day", "No task yet"];
+    day_heatmap(ui, &DayHeatmap { weeks: &weeks, today: Some(TODAY), months: &months, notes: &notes, legend: LEGEND, faded: true });
+    ui.add_space(20.0);
+    day_heatmap_loading(ui, YEAR_WEEKS);
+}
+
+/// The usage widgets on a page of paper, as Settings shows them.
+fn usage_sheet(theme: Theme, name: &str) {
+    let mut harness =
+        Harness::builder().with_size(USAGE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(|ui| {
+            jobdesk::ui_kit::desk(ui, |ui| {
+                jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
+                    paper(ui, false, |ui| {
+                        egui::Frame::new().inner_margin(22).show(ui, usage);
+                    });
+                });
+            });
+        });
+    harness.run_steps(3);
+    // The pointer rests on one day, so the sheet shows its tip.
+    let day: egui::Rect = harness.ctx.data(|data| data.get_temp(egui::Id::NULL.with(HOVERED_DAY))).expect("the hovered day was drawn");
+    harness.hover_at(day.center());
+    harness.run_steps(4);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn ui_kit_gallery_usage_dark() {
+    usage_sheet(Theme::Dark, "ui_kit_gallery_usage_dark");
+}
+
+#[test]
+fn ui_kit_gallery_usage_light() {
+    usage_sheet(Theme::Light, "ui_kit_gallery_usage_light");
 }
 
 #[test]

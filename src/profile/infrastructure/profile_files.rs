@@ -48,11 +48,39 @@ impl ProfileFiles {
         if !target.starts_with(&root) {
             return Err(LoadError::new(file.name(), "is outside your job search folder, so it was not saved"));
         }
-        if fs::metadata(&target).is_ok_and(|metadata| metadata.permissions().readonly()) {
-            return Err(LoadError::new(file.name(), "is read-only, so it was not saved"));
+        if let Ok(metadata) = fs::metadata(&target) {
+            if metadata.permissions().readonly() {
+                return Err(LoadError::new(file.name(), "is read-only, so it was not saved"));
+            }
+            #[cfg(unix)]
+            if let Some(why) = not_yours(&target, &metadata, current_user()) {
+                return Err(LoadError::new(file.name(), why));
+            }
         }
         Ok(target)
     }
+}
+
+#[cfg(unix)]
+fn current_user() -> libc::uid_t {
+    // SAFETY: geteuid takes nothing and always succeeds.
+    unsafe { libc::geteuid() }
+}
+
+/// Why `user` may not replace the file at `target`, if they may not. The rename puts a new file in its place, owned by
+/// whoever saves, so a file owned by another user would quietly change hands, and a file `user` cannot write in place
+/// would be replaced all the same, because the rename needs only the folder.
+#[cfg(unix)]
+fn not_yours(target: &Path, metadata: &fs::Metadata, user: libc::uid_t) -> Option<&'static str> {
+    use std::os::unix::fs::MetadataExt;
+    if metadata.uid() != user {
+        return Some("belongs to another user, so it was not saved");
+    }
+    // The mode bits can allow a write that an access list denies, so the file is opened for writing, which changes nothing.
+    if metadata.is_file() && OpenOptions::new().write(true).open(target).is_err() {
+        return Some("cannot be written by your user, so it was not saved");
+    }
+    None
 }
 
 /// The folder of `file` from the root, as the user would look for it.
@@ -173,6 +201,35 @@ mod tests {
         permissions.set_readonly(true);
         fs::set_permissions(&path, permissions).unwrap();
         assert!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason.contains("read-only"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    /// The rename would hand the file to the current user, so a file someone else owns is not saved.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_owned_by_another_user_is_not_saved() {
+        let (dir, _) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        assert_eq!(not_yours(&path, &metadata, current_user().wrapping_add(1)), Some("belongs to another user, so it was not saved"));
+        assert_eq!(not_yours(&path, &metadata, current_user()), None);
+    }
+
+    /// Write bits for the group alone do not read as read-only, yet the owner cannot write the file in place.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_its_owner_cannot_write_is_not_saved() {
+        use std::os::unix::fs::PermissionsExt;
+        if current_user() == 0 {
+            return;
+        }
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o464)).unwrap();
+        assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "cannot be written by your user, so it was not saved");
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 

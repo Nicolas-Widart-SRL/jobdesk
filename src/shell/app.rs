@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, NaiveDate};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
@@ -50,6 +50,9 @@ const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Ta
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
 const SETTINGS_KEYS: [&str; 2] = command_chord(",");
+/// How long Save waits after a run for the snapshot worker's next load. Past it, Jobdesk reads the profile itself, so a
+/// worker that died cannot hold Save off.
+const RUN_READ_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -91,7 +94,8 @@ impl Screen {
     }
 }
 
-/// Window state. It only reads snapshots.
+/// Window state. It reads the checkout through snapshots, except the profile: it writes one block at a time through
+/// `ProfileEditor`, and reads the profile back after a Save, or after a run that no snapshot follows in time.
 pub struct Shell {
     screen: Screen,
     workspace: Option<WorkspaceRoot>,
@@ -136,7 +140,7 @@ pub struct Shell {
     profile_editor: Option<ProfileEditor>,
     /// The tab the user picked while Profile asks whether to drop their draft.
     leave_to: Option<Screen>,
-    /// When the last profile save was read back, so a snapshot read before it cannot show the old text again.
+    /// When the profile was last read back, after a save or a run, so a snapshot read before it cannot show the old text again.
     profile_saved: Option<Instant>,
     /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
     /// take the focus.
@@ -422,34 +426,12 @@ impl Shell {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        if let Some(mut latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) {
-            // A snapshot read before the last save would show the saved block as it was, so the profile read back stays.
-            match self.profile_saved {
-                Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
-                _ => self.profile_saved = None,
-            }
-            // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
-            if let Some(ended) = self.run_ended
-                && latest.read_at.is_some_and(|read| read >= ended)
-            {
-                self.marks.finish(&latest.profile, Local::now().naive_local());
-                self.run_ended = None;
-            }
-            // A run that started before the folder was first read keeps the first snapshot as its start.
-            let first = !self.loaded;
-            self.snapshot = latest;
-            self.loaded = true;
-            if first && self.was_busy && self.run_ended.is_none() {
-                self.marks.begin(&self.snapshot.profile);
-            }
-            if let Some(open) = &mut self.open_dossier {
-                open.view = None;
-            }
-        }
+        self.take_snapshot();
         if let Some(desk) = &mut self.desk {
             desk.poll();
         }
         self.follow_runs();
+        self.settle_run_end(ui.ctx());
         if let Some(pages) = &mut self.pages {
             pages.poll();
         }
@@ -488,6 +470,53 @@ impl Shell {
             self.quit_dialog(ui.ctx());
         }
         note_focus(ui.ctx());
+    }
+
+    /// Takes the newest snapshot the worker sent, if any.
+    fn take_snapshot(&mut self) {
+        let Some(mut latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) else { return };
+        // A snapshot read before the last read back would show the saved block as it was, so the profile read back stays.
+        match self.profile_saved {
+            Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
+            _ => self.profile_saved = None,
+        }
+        // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
+        if let Some(ended) = self.run_ended
+            && latest.read_at.is_some_and(|read| read >= ended)
+        {
+            self.marks.finish(&latest.profile, Local::now().naive_local());
+            self.run_ended = None;
+        }
+        // A run that started before the folder was first read keeps the first snapshot as its start.
+        let first = !self.loaded;
+        self.snapshot = latest;
+        self.loaded = true;
+        if first && self.was_busy && self.run_ended.is_none() {
+            self.marks.begin(&self.snapshot.profile);
+        }
+        if let Some(open) = &mut self.open_dossier {
+            open.view = None;
+        }
+    }
+
+    /// Whether Save waits for the first load after a run ended, so a Save is never marked as the run's.
+    fn save_waits_for_load(&self) -> bool {
+        self.run_ended.is_some() && self.updates.is_some()
+    }
+
+    /// Stops the wait for a load after a run once it has lasted `RUN_READ_WAIT`. Jobdesk then reads the profile itself
+    /// and marks the run's changes from that read, so a Save made after it, which a late snapshot would hold, is not marked.
+    fn settle_run_end(&mut self, ctx: &egui::Context) {
+        let Some(ended) = self.run_ended else { return };
+        let waited = ended.elapsed();
+        if waited < RUN_READ_WAIT {
+            // No input may come, so a frame is asked for when the wait runs out.
+            ctx.request_repaint_after(RUN_READ_WAIT - waited);
+            return;
+        }
+        self.read_back_profile();
+        self.marks.finish(&self.snapshot.profile, Local::now().naive_local());
+        self.run_ended = None;
     }
 
     /// A run's start keeps the profile as it stands. Its end asks for a fresh load, and the first snapshot read after the
@@ -864,8 +893,9 @@ impl Shell {
             Screen::Profile => {
                 // A file that fails hides only the topics it feeds, so the screen as a whole never fails.
                 // A run that just ended may still be writing, and its changes are not marked until the load after its end
-                // arrives. A save in between would be marked as the run's, so Save waits for that load too.
-                let reading = self.run_ended.is_some() && self.updates.is_some();
+                // arrives. A save in between would be marked as the run's, so Save waits for that load too, for
+                // `RUN_READ_WAIT` at most.
+                let reading = self.save_waits_for_load();
                 let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: Local::now().naive_local() };
                 let asked = match self.profile_editor.as_mut() {
                     Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
@@ -925,7 +955,8 @@ impl Shell {
     }
 
     /// Reads the profile back after a save, so the saved block shows at once instead of after the folder watcher's next
-    /// load. Only the profile files are read, as a snapshot reads them, and the next snapshot replaces the result.
+    /// load. It also stands in for a load that did not follow a run in time. Only the profile files are read, as a
+    /// snapshot reads them, and the next snapshot replaces the result.
     fn read_back_profile(&mut self) {
         let Some(root) = self.workspace.as_ref() else { return };
         let (view, errors) = profile::load(root.path());
@@ -1419,6 +1450,41 @@ mod tests {
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
         harness.run_steps(3);
         assert_eq!(fs::read_to_string(second.join(CANDIDATE)).unwrap(), text, "nothing of the first folder was written");
+    }
+
+    /// A snapshot worker that sends nothing after a run ends holds Save for `RUN_READ_WAIT` at most. Jobdesk then reads the
+    /// profile itself and marks what the run changed, so a Save after that is not marked when a late snapshot comes.
+    #[test]
+    fn a_silent_snapshot_worker_holds_save_only_briefly() {
+        use crate::profile::application::TopicId;
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = sample_checkout(&folder, "search");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let mut shell = Shell::with_snapshot(Screen::Profile, workspace::open(&root).unwrap(), Snapshot::load(&root, today));
+        let feed = shell.snapshot_feed();
+        let rewrite = |from: &str, to: &str| {
+            let text = fs::read_to_string(root.join(CANDIDATE)).unwrap();
+            assert!(text.contains(from), "{from}");
+            fs::write(root.join(CANDIDATE), text.replace(from, to)).unwrap();
+        };
+        shell.marks.begin(&shell.snapshot.profile);
+        rewrite("Antwerp. Freelance.", "Ghent. Employed.");
+        shell.run_ended = Some(Instant::now());
+        let ctx = egui::Context::default();
+        shell.settle_run_end(&ctx);
+        assert!(shell.save_waits_for_load(), "Save waits for the load after the run");
+
+        shell.run_ended = Instant::now().checked_sub(RUN_READ_WAIT);
+        shell.settle_run_end(&ctx);
+        assert!(!shell.save_waits_for_load(), "the wait ends without a snapshot");
+        assert!(shell.marks.rail_mark(TopicId::Experience), "the run's change is marked from Jobdesk's own read");
+
+        // The user saves, then the worker's late snapshot holds the save.
+        rewrite("Meuse Valley University", "Scheldt Valley University");
+        feed.send(Snapshot::load(&root, today)).unwrap();
+        shell.take_snapshot();
+        assert!(!shell.marks.rail_mark(TopicId::Education), "the save is not marked as the run's");
     }
 
     /// A frame of `shell`'s keys with the window asked to close, and the commands it sent to the window.

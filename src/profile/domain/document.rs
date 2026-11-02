@@ -127,13 +127,6 @@ pub fn select(blocks: &[Block], section: &SectionRef) -> Vec<Block> {
         .collect()
 }
 
-pub fn section_blocks(text: &str, file: ProfileFile, section: &SectionRef) -> Vec<Block> {
-    if section.file != file {
-        return Vec::new();
-    }
-    select(&blocks(text), section)
-}
-
 /// The line ending the file uses around `at`, taken from the text before it, or from the whole text when that has no line break.
 fn line_ending(text: &str, at: usize) -> &'static str {
     let before = &text[..at];
@@ -347,14 +340,13 @@ mod tests {
     fn a_section_names_its_parent() {
         let text = "## Scoring Dimensions\n### 1. Technical Skills Match (0-100)\nx\n### 2. Other\ny\n## Elsewhere\n### Technical Skills Match\nz\n";
         let section = SectionRef { file: ProfileFile::Evaluation, parent: Some("Scoring Dimensions"), heading: Some("Technical Skills Match") };
-        let found = section_blocks(text, ProfileFile::Evaluation, &section);
+        let found = select(&blocks(text), &section);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].heading, "1. Technical Skills Match (0-100)");
         let elsewhere = SectionRef { parent: Some("Elsewhere"), ..section };
-        assert_eq!(section_blocks(text, ProfileFile::Evaluation, &elsewhere)[0].heading, "Technical Skills Match");
+        assert_eq!(select(&blocks(text), &elsewhere)[0].heading, "Technical Skills Match");
         let other = SectionRef { parent: Some("Nothing"), ..section };
-        assert!(section_blocks(text, ProfileFile::Evaluation, &other).is_empty());
-        assert!(section_blocks(text, ProfileFile::Candidate, &section).is_empty());
+        assert!(select(&blocks(text), &other).is_empty());
     }
 
     #[test]
@@ -412,10 +404,10 @@ mod tests {
     fn a_claude_md_parent_must_match_whole() {
         let text = "## Candidate Profile Rules\n### Identity\nno\n## Candidate Profile\n### Identity\nyes\n";
         let section = SectionRef { file: ProfileFile::ClaudeMd, parent: Some("Candidate Profile"), heading: Some("Identity") };
-        let found = section_blocks(text, ProfileFile::ClaudeMd, &section);
+        let found = select(&blocks(text), &section);
         assert_eq!(found.len(), 1);
         assert_eq!(&text[found[0].range.clone()], "### Identity\nyes\n");
         let numbered = "## 🧑 2. Candidate profile\n### Identity\nyes\n";
-        assert_eq!(section_blocks(numbered, ProfileFile::ClaudeMd, &section).len(), 1);
+        assert_eq!(select(&blocks(numbered), &section).len(), 1);
     }
 }

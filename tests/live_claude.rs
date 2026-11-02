@@ -105,6 +105,17 @@ fn a_full_session_works() {
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);
     assert!(run.activity.iter().any(|item| matches!(&item.kind, ActivityKind::You(text) if text.contains("THIRD"))));
 
+    // Each process's total starts again from zero, so usage must add the processes, not take the last total.
+    let log = std::fs::read_to_string(logs.join(format!("{id}.jsonl"))).unwrap();
+    let resume_at = log.lines().position(|line| line == r#"{"type":"jobdesk_resume"}"#).expect("a resume marker");
+    let result_cost = |line: &str| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        (value["type"] == "result").then(|| value["total_cost_usd"].as_f64()).flatten()
+    };
+    let before = log.lines().take(resume_at).filter_map(result_cost).last().expect("a result before the resume");
+    let after = log.lines().skip(resume_at).find_map(result_cost).expect("a result after the resume");
+    assert!(after < before, "the resumed process reports its own total: {after} after {before}");
+
     // Usage adds up both processes from the log.
     let tasks = runs::usage_logs(logs, &workspace).tasks();
     println!("usage {tasks:?}");

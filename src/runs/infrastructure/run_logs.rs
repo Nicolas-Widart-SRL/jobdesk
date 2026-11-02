@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +17,8 @@ const USER: &str = "jobdesk_user";
 const RESUME_LINE: &str = r#"{"type":"jobdesk_resume"}"#;
 /// The user asked the run to stop. The CLI writes nothing of its own for that.
 const STOP_LINE: &str = r#"{"type":"jobdesk_stop"}"#;
+/// How every `UserLine` starts, since its fields serialize in order.
+const USER_LINE_START: &str = r#"{"type":"jobdesk_user","#;
 
 #[derive(Serialize, Deserialize)]
 struct Meta {
@@ -155,9 +157,10 @@ impl RunLogUsage {
 
     /// The task one log records. None for another workspace's log, or one with no result and no stop:
     /// that task is still running or never ran.
+    /// A line that is not UTF-8 ends the log there, as it does in replay.
     fn read(&self, path: &Path) -> io::Result<Option<TaskCost>> {
-        let mut lines = BufReader::new(File::open(path)?).lines();
-        let Some(first) = lines.next().transpose()? else { return Ok(None) };
+        let mut lines = BufReader::new(File::open(path)?).lines().map_while(Result::ok);
+        let Some(first) = lines.next() else { return Ok(None) };
         let Ok(meta) = serde_json::from_str::<Meta>(&first) else { return Ok(None) };
         if meta.r#type != META || meta.workspace != self.workspace {
             return Ok(None);
@@ -168,9 +171,11 @@ impl RunLogUsage {
         let mut current: Option<ProcessTotals> = None;
         let (mut stopped, mut ever_stopped, mut last_failed) = (false, false, None);
         for line in lines {
-            let line = line?;
             if line == RESUME_LINE {
                 ended.extend(current.take());
+                stopped = false;
+            } else if line.starts_with(USER_LINE_START) {
+                // A reply after a stop takes the task up again, in the same process or a resumed one.
                 stopped = false;
             } else if line == STOP_LINE {
                 (stopped, ever_stopped) = (true, true);
@@ -204,10 +209,12 @@ impl RunLogUsage {
     }
 }
 
-/// The slash command a task line starts with, if it starts with one.
+/// The slash command a task line starts with, if it starts with one. A path such as `/Users/x/cv.pdf` is not a command.
 fn command_of(line: &str) -> Option<String> {
     let word: String = visible_chars(line.split_whitespace().next()?).collect();
-    word.starts_with('/').then_some(word)
+    let name = word.strip_prefix('/')?;
+    let shaped = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'));
+    shaped.then_some(word)
 }
 
 /// One entry per model id, in the order each first appears, with its figures added up.
@@ -231,7 +238,8 @@ impl UsageLogs for RunLogUsage {
     /// Every task in the folder, with no limit on how many.
     fn tasks(&mut self) -> Vec<TaskCost> {
         let paths = log_paths(&self.dir);
-        self.cache.retain(|path, _| paths.contains(path));
+        let present: HashSet<&PathBuf> = paths.iter().collect();
+        self.cache.retain(|path, _| present.contains(path));
         let mut tasks = Vec::new();
         for path in paths {
             let Ok(metadata) = fs::metadata(&path) else { continue };
@@ -301,6 +309,7 @@ mod tests {
             for line in *lines {
                 match *line {
                     "stop" => log.note_stop(),
+                    "reply" => log.append_user("go on"),
                     line => log.append(line),
                 }
             }
@@ -354,6 +363,29 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_after_a_stop_in_the_same_process_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.25}"#;
+        write(dir.path(), "/w", "a", &[&["stop", stopped, "reply", &result(0.5)]]);
+
+        let task = &tasks(dir.path())[0];
+
+        assert_eq!(task.outcome, TaskOutcome::Finished);
+        assert_eq!(task.cost_usd, 0.5);
+        assert_eq!(RunLogs::new(dir.path().to_owned(), Path::new("/w")).recent(1)[0].status, RunStatus::Closed);
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_ends_the_log_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = [META_LINE, &result(0.5)].join("\n").into_bytes();
+        bytes.extend(b"\n\xff\xfe\n");
+        bytes.extend(result(0.75).into_bytes());
+        fs::write(dir.path().join("a.jsonl"), bytes).unwrap();
+        assert_eq!(tasks(dir.path())[0].cost_usd, 0.5);
+    }
+
+    #[test]
     fn an_error_result_fails_the_task() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "/w", "a", &[&[r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":2.0}"#]]);
@@ -372,21 +404,30 @@ mod tests {
     #[test]
     fn a_typed_task_has_no_command() {
         assert_eq!(command_of("  /apply\u{200b} https://x.example"), Some("/apply".into()));
+        assert_eq!(command_of("/ai-job-search:rank_jobs-2 now"), Some("/ai-job-search:rank_jobs-2".into()));
         assert_eq!(command_of("Tell me a story"), None);
+        assert_eq!(command_of("/Users/x/cv.pdf summarise"), None);
+        assert_eq!(command_of("/ alone"), None);
+        assert_eq!(command_of("/rank!"), None);
         assert_eq!(command_of(""), None);
     }
 
     #[test]
-    fn the_cache_reads_a_changed_file_again() {
+    fn the_cache_reads_only_a_changed_file_again() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "/w", "a", &[&[&result(0.5)]]);
+        let path = dir.path().join("a.jsonl");
+        fs::write(&path, [META_LINE, &result(0.5)].join("\n")).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let mut usage = RunLogUsage::new(dir.path().to_owned(), Path::new("/w"));
-        let first = usage.tasks();
-        assert_eq!(usage.tasks(), first);
+        assert_eq!(usage.tasks()[0].cost_usd, 0.5);
 
-        write(dir.path(), "/w", "a", &[&[&result(0.25)]]);
+        // Same size and time: the cached figure stands, so the file was not read.
+        fs::write(&path, [META_LINE, &result(0.7)].join("\n")).unwrap();
+        File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+        assert_eq!(usage.tasks()[0].cost_usd, 0.5);
 
-        assert_eq!(usage.tasks()[0].cost_usd, 0.75);
+        File::options().write(true).open(&path).unwrap().set_modified(modified + std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(usage.tasks()[0].cost_usd, 0.7);
     }
 
     #[test]

@@ -293,7 +293,8 @@ fn comments_hidden(ui: &mut Ui, html: &str) {
 }
 
 /// A message as a document: one readable column that never grows past the space it has, with headings held to the
-/// section size. A top-level table leaves the column and fills the whole width, and scrolls only past that.
+/// section size. A top-level table leaves the column and scrolls only past the whole width. One of two or more columns
+/// fills that width, and one of a single column keeps the width of its cells.
 /// Every part goes through `markdown`, so ARCHITECTURE.md#trust holds.
 pub fn document(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
     document_with(ui, cache, text, markdown);
@@ -355,6 +356,8 @@ struct Run {
 }
 
 /// Every cell of the first table in `text`, the head row's included.
+/// No footnote marker is measured: a table's own part never holds a footnote's definition, so `parts` keeps a text whole
+/// when a cell points to one, and a table in a whole text keeps to the column and is never widened.
 fn table_cells(text: &str) -> Vec<Cell> {
     let mut cells: Vec<Cell> = Vec::new();
     let mut column = 0;
@@ -388,6 +391,8 @@ fn table_cells(text: &str) -> Vec<Cell> {
 /// The viewer lays a table out as a grid in a group frame and a sideways scroll area, and the grid widens each column
 /// to the least cell width the style sets. Each cell after the first opens with two spaces, and the table ends where
 /// the last column's widest cell ends, so only the columns before it can take the room.
+/// A table of one column keeps its own width: a cell claims only its text, and the least cell width only moves the
+/// next column along, so with no column after it nothing in the style can widen the grid or its scroll area.
 fn fill_width(ui: &mut Ui, cells: &[Cell], width: f32) {
     let style = ui.style();
     let (body, code) = (TextStyle::Body.resolve(style), TextStyle::Monospace.resolve(style));
@@ -405,8 +410,9 @@ fn fill_width(ui: &mut Ui, cells: &[Cell], width: f32) {
         columns[cell.column] = columns[cell.column].max(size);
     }
     let Some((&last, before)) = columns.split_last() else { return };
-    // A point to spare, so rounding never brings the scroll bar back.
-    if let Some(floor) = column_floor(before, width - frame - last - 1.0) {
+    // A point to spare, so rounding never brings the scroll bar back, and room for a floating bar beside the table at rest.
+    let spare = 1.0 + ui.spacing().scroll.floating_width;
+    if let Some(floor) = column_floor(before, width - frame - last - spare) {
         ui.spacing_mut().interact_size.x = floor;
     }
 }
@@ -815,12 +821,13 @@ mod tests {
 
     const WIDE_TABLE: &str = "| Role | Score | Notes |\n|---|---|---|\n| Platform engineer at Tessel | 4.2 | Event sourcing and Kafka match the posting, and the team runs the same payments stack the last role used. |\n| Staff engineer at Kestrel | 3.1 | A strong product, but the role leans on mobile work and card schemes, two gaps the CV cannot close yet. |";
 
-    /// A table narrower than the room widens to fill it, at any width, and its last cell stays in sight.
+    /// A table narrower than the room widens to fill it, at any width, and its last cell stays in sight. It stops a
+    /// floating bar's width short, so a bar beside it at rest never touches its frame.
     #[test]
     fn a_narrow_table_fills_the_width() {
         let source: &'static str = "Spoken at work.\n\n| Language | Level | Notes |\n|---|---|---|\n| French | Native | |\n| English | C1 | Daily at work since `2014` |\n| Dutch | B1 | Meetings, not contracts |";
         for size in [700.0, 1000.0, 1400.0] {
-            let found = Rc::new(RefCell::new((0.0, Rect::NOTHING)));
+            let found = Rc::new(RefCell::new((0.0, 0.0, Rect::NOTHING)));
             let seen = Rc::clone(&found);
             let mut cache = CommonMarkCache::default();
             let setup = |ctx: &egui::Context| {
@@ -828,16 +835,55 @@ mod tests {
                 crate::ui_kit::install_theme(ctx);
             };
             let mut harness = Harness::builder().with_size([size, 600.0]).with_context_setup(setup).build_ui(move |ui| {
-                let room = ui.available_width();
-                *seen.borrow_mut() = (room, ui.scope(|ui| document(ui, &mut cache, source)).response.rect);
+                let (room, bar) = (ui.available_width(), ui.spacing().scroll.floating_width);
+                *seen.borrow_mut() = (room, bar, ui.scope(|ui| document(ui, &mut cache, source)).response.rect);
             });
             harness.run();
-            let (room, area) = *found.borrow();
+            let (room, bar, area) = *found.borrow();
             // The widest cell ends in code, so the frame and the cell's two runs all count.
             let last = harness.get_by_label("2014").rect();
-            assert!(area.width() >= room - 2.0 && area.width() <= room, "in {room} px the document is {} px", area.width());
+            assert!(area.width() >= room - bar - 2.0 && area.width() <= room - bar, "in {room} px the document is {} px", area.width());
             assert!(last.right() <= area.right() - 6.0, "the last cell ends at {}, the table at {}", last.right(), area.right());
         }
+    }
+
+    /// A table of one column has no column before its last to widen, so it keeps the width of its cells, whole and with
+    /// no scroll bar, at any width.
+    #[test]
+    fn a_one_column_table_keeps_its_width() {
+        let source: &'static str = "| Step |\n|---|\n| Ask about the salary band |\n| Send the portfolio |";
+        for size in [400.0, 1000.0] {
+            let area = Rc::new(RefCell::new(Rect::NOTHING));
+            let seen = Rc::clone(&area);
+            let mut cache = CommonMarkCache::default();
+            let mut harness = Harness::builder().with_size([size, 400.0]).build_ui(move |ui| {
+                *seen.borrow_mut() = ui.scope(|ui| document(ui, &mut cache, source)).response.rect;
+            });
+            harness.run();
+            let (area, cell) = (*area.borrow(), harness.get_by_label("Ask about the salary band").rect());
+            assert!(area.width() < 300.0, "in {size} px the table is {} px", area.width());
+            assert!(cell.right() <= area.right() - 6.0, "the cell ends at {}, the table at {}", cell.right(), area.right());
+        }
+    }
+
+    /// A footnote marker in a cell keeps the text whole, so its table is never widened past what its cells measure, and
+    /// the marker shows inside the table with no scroll bar.
+    #[test]
+    fn a_footnote_in_a_cell_keeps_the_table_unwidened() {
+        let source: &'static str =
+            "Gates.\n\n| Gate | Result |\n|---|---|\n| Salary | Checked against the band[^1] |\n\nAfter[^1].\n\n[^1]: Ask on the first call.";
+        assert_eq!(parts(source).len(), 1);
+        let area = Rc::new(RefCell::new(Rect::NOTHING));
+        let seen = Rc::clone(&area);
+        let mut cache = CommonMarkCache::default();
+        let mut harness = Harness::builder().with_size([1000.0, 600.0]).build_ui(move |ui| {
+            *seen.borrow_mut() = ui.scope(|ui| document(ui, &mut cache, source)).response.rect;
+        });
+        harness.run();
+        let area = *area.borrow();
+        let marker = harness.query_all_by_label("1").map(|node| node.rect()).max_by(|a, b| a.right().total_cmp(&b.right())).expect("the marker shows");
+        assert!(area.width() <= DOC_MEASURE, "the document is {} px", area.width());
+        assert!(marker.right() <= area.right() - 6.0, "the marker ends at {}, the table at {}", marker.right(), area.right());
     }
 
     #[test]
@@ -1215,5 +1261,31 @@ mod tests {
                 assert!((bullet - middle).abs() <= 0.75, "a bullet sits at {bullet}, the middle of its text at {middle}");
             }
         }
+    }
+
+    /// A bullet beside a task's box sits on the middle of the task's text.
+    #[test]
+    fn a_task_bullet_sits_on_the_middle_of_its_line() {
+        let bullets = bullets_beside_text(unmarked, "- [ ] a new resume\n- [x] warm cover");
+        assert_eq!(bullets.len(), 2, "{bullets:?}");
+        for (bullet, middle) in bullets {
+            assert!((bullet - middle).abs() <= 0.75, "a bullet sits at {bullet}, the middle of its text at {middle}");
+        }
+    }
+
+    /// A bullet with no text on its line stays where the viewer put it, and the bullet after it still moves.
+    #[test]
+    fn a_bullet_with_no_text_stays_put() {
+        fn plain(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+            markdown(ui, cache, text);
+        }
+        fn viewer(ui: &mut Ui, cache: &mut CommonMarkCache, text: &'static str) {
+            CommonMarkViewer::new().show(ui, cache, text);
+        }
+        let source = "-\n- one";
+        let (moved, kept) = (bullets_beside_text(plain, source), bullets_beside_text(viewer, source));
+        assert_eq!((moved.len(), kept.len()), (2, 2), "{moved:?} {kept:?}");
+        assert_eq!(moved[0].0, kept[0].0, "the bare bullet moved");
+        assert!((moved[1].0 - moved[1].1).abs() <= 0.75, "the bullet beside one sits at {}, its text at {}", moved[1].0, moved[1].1);
     }
 }

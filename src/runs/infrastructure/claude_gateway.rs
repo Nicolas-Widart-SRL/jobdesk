@@ -11,7 +11,9 @@ use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, own_group};
-use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, KeyReader, SignIn, redacted};
+use crate::shared_kernel::{
+    ApiKey, BASE_URL_VARIABLE, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, PLAIN_HTTP_REFUSED, SignIn, inherited_env, plain_http_endpoint, redacted,
+};
 
 const STDERR_LINES_KEPT: usize = 12;
 
@@ -163,8 +165,12 @@ impl KeyMasker {
 }
 
 /// Starts the process. A key that cannot be had ends it before any process exists, and never falls back to the Claude plan.
+/// So does an inherited base URL that would carry the key in the clear, checked before the key is read.
 /// The key comes back with the process, kept only to mask it in what the process says.
-fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader) -> Result<(Child, KeyMasker), String> {
+fn spawn_claude(claude: &Path, workspace: &Path, path: &str, request: &RunRequest, keys: &KeyReader, env: &EnvReader) -> Result<(Child, KeyMasker), String> {
+    if request.sign_in == SignIn::ApiKey && env(BASE_URL_VARIABLE).is_some_and(|url| plain_http_endpoint(&url)) {
+        return Err(PLAIN_HTTP_REFUSED.to_owned());
+    }
     let key = task_key(request.sign_in, keys)?;
     // The command holds the key only until it is spawned.
     let spawned = command_for(claude, workspace, path, request, key.as_ref()).spawn();
@@ -194,7 +200,7 @@ fn supervise(setup: &Setup, request: &RunRequest, sink: EventSink, inbox: &Recei
         emit(AgentEvent::ProcessExited { failure: Some("Claude CLI not found. Install Claude Code, then run this again.".to_owned()) });
         return;
     };
-    let (mut child, masker) = match spawn_claude(&claude, workspace, path, request, keys) {
+    let (mut child, masker) = match spawn_claude(&claude, workspace, path, request, keys, &inherited_env) {
         Ok(spawned) => spawned,
         Err(failure) => {
             emit(AgentEvent::ProcessExited { failure: Some(failure) });
@@ -373,13 +379,41 @@ mod key_tests {
             (Arc::new(|| Ok(None)) as KeyReader, KEY_GONE.to_owned()),
             (Arc::new(|| Err("access denied".to_owned())) as KeyReader, format!("Jobdesk could not read your API key from the {STORE}: access denied")),
         ] {
-            let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys).unwrap_err();
+            let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &no_env).unwrap_err();
             assert_eq!(failure, expected);
         }
         request.sign_in = SignIn::ClaudeSignIn;
         let keys: KeyReader = Arc::new(|| panic!("the reader must not be called"));
-        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys).unwrap_err();
+        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &no_env).unwrap_err();
         assert!(failure.starts_with("Could not start Claude"), "the Claude sign-in goes on to the spawn");
+    }
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn base_url(url: &'static str) -> impl Fn(&str) -> Option<String> {
+        move |name| (name == "ANTHROPIC_BASE_URL").then(|| url.to_owned())
+    }
+
+    #[test]
+    fn a_key_never_goes_to_a_plain_http_base_url() {
+        let nowhere = Path::new("/nonexistent/claude");
+        let mut request = request();
+        let keys: KeyReader = Arc::new(|| panic!("the key must not be read"));
+        for url in ["http://proxy.example.com:8080", "HTTP://Example.com", "http://localhost.evil.com"] {
+            let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &base_url(url)).unwrap_err();
+            assert_eq!(failure, PLAIN_HTTP_REFUSED, "{url}");
+            assert!(!failure.contains("example") && !failure.contains("evil"), "the notice names no address");
+        }
+        let keys: KeyReader = Arc::new(|| Ok(ApiKey::parse(FAKE)));
+        for url in ["https://proxy.example.com", "http://127.0.0.1:8080", "http://[::1]:4000", "http://localhost"] {
+            let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &base_url(url)).unwrap_err();
+            assert!(failure.starts_with("Could not start Claude"), "{url} goes on to the spawn");
+        }
+        request.sign_in = SignIn::ClaudeSignIn;
+        let failure = spawn_claude(nowhere, Path::new("/w"), "/bin", &request, &keys, &base_url("http://proxy.example.com")).unwrap_err();
+        assert!(failure.starts_with("Could not start Claude"), "the Claude sign-in passes no key, so it is not checked");
     }
 
     #[test]
@@ -526,7 +560,7 @@ mod key_tests {
             std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
 
             // As `supervise` does, without its search for `claude` on the PATH.
-            let (mut child, masker) = spawn_claude(&claude, workspace.path(), "/bin:/usr/bin", &request, &reader).unwrap();
+            let (mut child, masker) = spawn_claude(&claude, workspace.path(), "/bin:/usr/bin", &request, &reader, &no_env).unwrap();
             let log = Arc::new(Mutex::new(RunLog::open(&data.path().join("runs"), workspace.path(), &request).unwrap()));
             let events = Arc::new(Mutex::new(Vec::new()));
             let (ended, stream_end) = mpsc::channel();

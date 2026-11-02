@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::settings::domain::{ConnectionTester, Outcome, TestDone, TestReport};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, own_group};
-use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, redacted};
+use crate::shared_kernel::{ApiKey, BASE_URL_VARIABLE, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, PLAIN_HTTP_REFUSED, inherited_env, plain_http_endpoint, redacted};
 
 const PROMPT: &str = "Reply with the single word: ready";
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -42,7 +42,7 @@ impl ConnectionTester for ClaudeTester {
     fn start(&self, key: Option<ApiKey>, done: TestDone) {
         let repaint = Arc::clone(&self.repaint);
         thread::spawn(move || {
-            let mut report = test(key.as_ref());
+            let mut report = test(key.as_ref(), &inherited_env);
             // Claude Code should never echo the key, but if it did, the report must not carry it.
             report.said = redacted(&report.said, key.as_ref());
             done(report);
@@ -88,7 +88,11 @@ fn unreached(said: String) -> TestReport {
     TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said, source: None }
 }
 
-fn test(key: Option<&ApiKey>) -> TestReport {
+/// A key test whose inherited base URL would carry the key in the clear starts no process.
+fn test(key: Option<&ApiKey>, env: &EnvReader) -> TestReport {
+    if key.is_some() && env(BASE_URL_VARIABLE).is_some_and(|url| plain_http_endpoint(&url)) {
+        return unreached(PLAIN_HTTP_REFUSED.to_owned());
+    }
     let folder = match tempfile::TempDir::new() {
         Ok(folder) => folder,
         Err(error) => return unreached(format!("Could not make a temporary folder: {error}")),
@@ -468,6 +472,15 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "echo out; echo err >&2; exit 3"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         assert_eq!(run(command, TIMEOUT), (lines(&["out"]), lines(&["err"]), Ending::Exited("code 3".to_owned())));
+    }
+
+    #[test]
+    fn a_key_test_never_goes_to_a_plain_http_base_url() {
+        let key = ApiKey::parse(FAKE).unwrap();
+        let env = |name: &str| (name == BASE_URL_VARIABLE).then(|| "http://proxy.example.com:8080".to_owned());
+        // It returns before it looks for `claude`, so no process starts.
+        let report = test(Some(&key), &env);
+        assert_eq!(report, TestReport { outcome: Outcome::Unreached, cost_usd: 0.0, said: PLAIN_HTTP_REFUSED.to_owned(), source: None });
     }
 
     #[test]

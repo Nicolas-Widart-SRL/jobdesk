@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::runs::domain::{AgentEvent, Decision, ModelCost, Prompt, PromptKind, Question, QuestionOption, Usage};
+use crate::runs::domain::{AgentEvent, Decision, ModelCost, Prompt, PromptKind, Question, QuestionOption, Tokens, Usage};
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// Longest tool input shown on a permission card. Longer input is cut with a clear marker.
@@ -52,18 +52,34 @@ fn text_delta(event: &Value) -> Option<AgentEvent> {
 fn assistant_message(event: &Value) -> Vec<AgentEvent> {
     let nested = is_nested(event);
     let blocks = event.pointer("/message/content").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
-    blocks
-        .iter()
-        .filter_map(|block| match text_of(block, "type") {
-            "text" => Some(AgentEvent::AssistantText { text: text_of(block, "text").to_owned(), nested }),
-            "tool_use" => {
-                let name = text_of(block, "name").to_owned();
-                let summary = tool_summary(&name, block.get("input").unwrap_or(&Value::Null));
-                Some(AgentEvent::ToolStarted { id: text_of(block, "id").to_owned(), name, summary, nested })
-            }
-            _ => None,
-        })
-        .collect()
+    let events = blocks.iter().filter_map(|block| match text_of(block, "type") {
+        "text" => Some(AgentEvent::AssistantText { text: text_of(block, "text").to_owned(), nested }),
+        "tool_use" => {
+            let name = text_of(block, "name").to_owned();
+            let summary = tool_summary(&name, block.get("input").unwrap_or(&Value::Null));
+            Some(AgentEvent::ToolStarted { id: text_of(block, "id").to_owned(), name, summary, nested })
+        }
+        _ => None,
+    });
+    events.chain(message_usage(event)).collect()
+}
+
+/// What the message used, when it names itself and says. A subagent's message costs too, so nesting does not matter.
+fn message_usage(event: &Value) -> Option<AgentEvent> {
+    let message = event.get("message")?;
+    let id = text_of(message, "id");
+    let usage = message.get("usage").filter(|usage| usage.is_object())?;
+    if id.is_empty() {
+        return None;
+    }
+    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let tokens = Tokens {
+        input: count("input_tokens"),
+        output: count("output_tokens"),
+        cache_write: count("cache_creation_input_tokens"),
+        cache_read: count("cache_read_input_tokens"),
+    };
+    Some(AgentEvent::MessageUsage { id: id.to_owned(), model: text_of(message, "model").to_owned(), tokens })
 }
 
 /// The one thing about a tool call a person wants to read.
@@ -319,6 +335,38 @@ mod tests {
         assert_eq!(parse_line(tool), [AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "ls".into(), nested: true }]);
         let delta = r#"{"type":"stream_event","parent_tool_use_id":"p","event":{"delta":{"type":"text_delta","text":"x"}}}"#;
         assert_eq!(parse_line(delta), []);
+    }
+
+    #[test]
+    fn an_assistant_message_gives_its_content_and_its_usage() {
+        let line = r#"{"type":"assistant","message":{"id":"msg_01","model":"claude-opus-4-5","content":[{"type":"text","text":"Looking"},{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":6,"output_tokens":42,"cache_creation_input_tokens":1500,"cache_read_input_tokens":20000}}}"#;
+        assert_eq!(
+            parse_line(line),
+            [
+                AgentEvent::AssistantText { text: "Looking".into(), nested: false },
+                AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "ls".into(), nested: false },
+                AgentEvent::MessageUsage {
+                    id: "msg_01".into(),
+                    model: "claude-opus-4-5".into(),
+                    tokens: Tokens { input: 6, output: 42, cache_write: 1500, cache_read: 20000 },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_message_costs_too() {
+        let line = r#"{"type":"assistant","parent_tool_use_id":"p","message":{"id":"msg_02","model":"claude-haiku-4-5","content":[],"usage":{"input_tokens":3,"output_tokens":9}}}"#;
+        let tokens = Tokens { input: 3, output: 9, cache_write: 0, cache_read: 0 };
+        assert_eq!(parse_line(line), [AgentEvent::MessageUsage { id: "msg_02".into(), model: "claude-haiku-4-5".into(), tokens }]);
+    }
+
+    #[test]
+    fn a_message_without_usage_or_id_gives_no_usage() {
+        let no_usage = r#"{"type":"assistant","message":{"id":"msg_03","model":"m","content":[{"type":"text","text":"x"}]}}"#;
+        assert_eq!(parse_line(no_usage), [AgentEvent::AssistantText { text: "x".into(), nested: false }]);
+        let no_id = r#"{"type":"assistant","message":{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        assert_eq!(parse_line(no_id), []);
     }
 
     #[test]

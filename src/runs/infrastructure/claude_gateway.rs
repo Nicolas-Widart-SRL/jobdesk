@@ -5,6 +5,7 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest};
 use crate::runs::infrastructure::run_logs::RunLog;
@@ -14,6 +15,8 @@ use crate::shared_kernel::process_tree::{kill_tree, no_window, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, SignIn, inherited_env, key_route_refusal, redacted};
 
 const STDERR_LINES_KEPT: usize = 12;
+/// How often a line with no event of its own says the run is alive.
+const HEARD_EVERY: Duration = Duration::from_secs(1);
 
 #[cfg(windows)]
 const STORE: &str = "Credential Manager";
@@ -261,10 +264,17 @@ fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
     }
 }
 
+/// Whether a line that gives no event shows the run is alive, given when the thread last emitted anything.
+/// Partial deltas stream many times a second, so a repaint for each would cost more than it shows.
+fn heard_due(now: Instant, last_emit: Option<Instant>) -> bool {
+    last_emit.is_none_or(|last| now.saturating_duration_since(last) >= HEARD_EVERY)
+}
+
 /// Each line is masked before the log and the events see it. The mask holds no quote or backslash, so a JSON line stays JSON.
 fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn(AgentEvent) + Send + 'static, done: Sender<Outgoing>, masker: KeyMasker) {
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
+        let mut last_emit: Option<Instant> = None;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let line = masker.mask(&line);
             if let Some(log) = &log
@@ -272,7 +282,15 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
             {
                 log.append(&line);
             }
-            parse_line(&line).into_iter().for_each(&emit);
+            let events = parse_line(&line);
+            let now = Instant::now();
+            if !events.is_empty() {
+                last_emit = Some(now);
+                events.into_iter().for_each(&emit);
+            } else if heard_due(now, last_emit) {
+                last_emit = Some(now);
+                emit(AgentEvent::Heard);
+            }
         }
         let _ = done.send(Outgoing::StreamEnded);
     });
@@ -295,6 +313,20 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
                 tail.pop_front();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod heard_tests {
+    use super::*;
+
+    #[test]
+    fn a_line_with_no_event_is_heard_at_most_once_a_second() {
+        let t0 = Instant::now();
+        assert!(heard_due(t0, None), "the first one always is");
+        assert!(!heard_due(t0 + Duration::from_millis(900), Some(t0)));
+        assert!(heard_due(t0 + Duration::from_secs(1), Some(t0)));
+        assert!(!heard_due(t0, Some(t0 + Duration::from_secs(5))), "a clock that went back is not due");
     }
 }
 

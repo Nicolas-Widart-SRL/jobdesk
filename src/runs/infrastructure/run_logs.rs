@@ -119,6 +119,11 @@ impl RunLogs {
                 run.note_stop_requested();
                 continue;
             }
+            // Each process reports its own running total, so the cost of the ones before it is kept apart.
+            if line == RESUME_LINE {
+                run.note_new_process();
+                continue;
+            }
             match serde_json::from_str::<UserLine>(&line) {
                 Ok(user) if user.r#type == USER => run.note_reply(&user.text),
                 _ => parse_line(&line).into_iter().for_each(|event| run.apply(event)),
@@ -304,6 +309,7 @@ impl UsageLogs for RunLogUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::domain::CostFigure;
 
     fn request(id: &str, line: &str) -> RunRequest {
         RunRequest {
@@ -425,6 +431,44 @@ mod tests {
         let old = [META_LINE, &result(0.5), r#"{"type":"jobdesk_user","text":"go on"}"#, &result(0.25), &result(0.5)].join("\n");
         fs::write(dir.path().join("a.jsonl"), old).unwrap();
         assert_eq!(tasks(dir.path())[0].cost_usd, 1.0);
+    }
+
+    /// An assistant line as the CLI writes it, with fictional figures: 1M output tokens at Opus list price is $25.
+    fn assistant(id: &str, output: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-4-5","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":0,"output_tokens":{output}}}}}}}"#
+        )
+    }
+
+    fn replayed(dir: &Path) -> Run {
+        RunLogs::new(dir.to_owned(), Path::new("/w")).recent(1).remove(0)
+    }
+
+    #[test]
+    fn a_replayed_run_with_a_result_shows_the_exact_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "/w", "a", &[&[&assistant("m1", 1_000_000), &result(0.5)]]);
+
+        assert_eq!(replayed(dir.path()).shown_cost(), CostFigure { usd: 0.5, estimated: false });
+    }
+
+    #[test]
+    fn a_replayed_run_with_no_result_shows_an_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "/w", "a", &[&[&assistant("m1", 1_000_000)]]);
+
+        assert_eq!(replayed(dir.path()).shown_cost(), CostFigure { usd: 25.0, estimated: true });
+    }
+
+    #[test]
+    fn a_replayed_resume_adds_the_processes_together() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "/w", "a", &[&[&result(0.5)], &[&result(0.25)]]);
+
+        let run = replayed(dir.path());
+
+        assert_eq!(run.cost_usd, 0.75);
+        assert_eq!(run.shown_cost(), CostFigure { usd: 0.75, estimated: false });
     }
 
     #[test]

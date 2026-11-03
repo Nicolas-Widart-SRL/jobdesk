@@ -54,9 +54,12 @@ fn a_full_session_works() {
         .unwrap();
 
     // Question, then permission with a remembered rule, then a stop point.
-    let (mut asked, mut allowed) = (false, false);
+    let (mut asked, mut allowed, mut estimated_early) = (false, false, false);
     wait(&mut desk, &id, |desk| {
         let run = desk.run(&id).unwrap();
+        // `cost_usd` is the CLI's own figure, which is 0 until the first result.
+        let shown = run.shown_cost();
+        estimated_early |= run.cost_usd == 0.0 && shown.estimated && shown.usd > 0.0;
         if let Some(prompt) = run.current_prompt().cloned() {
             match &prompt.kind {
                 PromptKind::Questions(questions) => {
@@ -77,6 +80,7 @@ fn a_full_session_works() {
     dump(&desk, &id);
     assert_eq!(desk.run(&id).unwrap().status, RunStatus::AwaitingReply);
     assert!(asked && allowed);
+    assert!(estimated_early, "the cost showed as an estimate above 0 before the first result");
     assert!(workspace.join("probe.txt").exists());
     assert!(!workspace.join(".claude/settings.local.json").exists(), "a remembered rule must not reach the checkout");
 
@@ -103,6 +107,7 @@ fn a_full_session_works() {
     let run = &restored.runs()[0];
     assert_eq!(run.status, RunStatus::Closed);
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);
+    assert!((run.cost_usd - cost_usd).abs() < 1e-9, "a resumed run replays with every process's cost: {} against {cost_usd}", run.cost_usd);
     assert!(run.activity.iter().any(|item| matches!(&item.kind, ActivityKind::You(text) if text.contains("THIRD"))));
 
     // Each process's total starts again from zero, so usage must add the processes, not take the last total.

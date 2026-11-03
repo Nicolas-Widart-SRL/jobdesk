@@ -14,27 +14,32 @@ fn text_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
-/// Translates one line of `claude --output-format stream-json`. Unknown lines mean nothing here.
+/// Translates one line of `claude --output-format stream-json`, on its own. Unknown lines mean nothing here.
+/// The app reads through `StreamReader`, which needs the lines in order.
+#[cfg(test)]
 pub fn parse_line(line: &str) -> Vec<AgentEvent> {
-    let Ok(event) = serde_json::from_str::<Value>(line) else { return Vec::new() };
-    match text_of(&event, "type") {
-        "system" if text_of(&event, "subtype") == "init" => {
+    serde_json::from_str::<Value>(line).map_or_else(|_| Vec::new(), |event| parse_event(&event))
+}
+
+fn parse_event(event: &Value) -> Vec<AgentEvent> {
+    match text_of(event, "type") {
+        "system" if text_of(event, "subtype") == "init" => {
             vec![AgentEvent::SessionStarted {
-                session_id: text_of(&event, "session_id").to_owned(),
-                model: text_of(&event, "model").to_owned(),
-                api_key_source: text_of(&event, "apiKeySource").to_owned(),
+                session_id: text_of(event, "session_id").to_owned(),
+                model: text_of(event, "model").to_owned(),
+                api_key_source: text_of(event, "apiKeySource").to_owned(),
             }]
         }
-        "system" if text_of(&event, "subtype") == "background_tasks_changed" => {
+        "system" if text_of(event, "subtype") == "background_tasks_changed" => {
             vec![AgentEvent::BackgroundTasksChanged { count: event.get("tasks").and_then(Value::as_array).map_or(0, Vec::len) }]
         }
-        "stream_event" => stream_event(&event),
-        "assistant" => assistant_message(&event),
-        "user" => tool_results(&event),
-        "rate_limit_event" => vec![AgentEvent::UsageChanged(usage(&event))],
-        "control_request" => prompt(&event).map(AgentEvent::PromptRaised).into_iter().collect(),
-        "control_cancel_request" => vec![AgentEvent::PromptWithdrawn { request_id: text_of(&event, "request_id").to_owned() }],
-        "result" => vec![turn_ended(&event)],
+        "stream_event" => stream_event(event),
+        "assistant" => assistant_message(event),
+        "user" => tool_results(event),
+        "rate_limit_event" => vec![AgentEvent::UsageChanged(usage(event))],
+        "control_request" => prompt(event).map(AgentEvent::PromptRaised).into_iter().collect(),
+        "control_cancel_request" => vec![AgentEvent::PromptWithdrawn { request_id: text_of(event, "request_id").to_owned() }],
+        "result" => vec![turn_ended(event)],
         _ => Vec::new(),
     }
 }
@@ -76,7 +81,7 @@ fn message_usage(message: Option<&Value>) -> Option<AgentEvent> {
 
 /// With partial messages on, the final figures of a message come in its `message_delta`, which names neither model nor id:
 /// the id is the line's own `api_message_id`, which is assumed to be the `message.id` of the lines before it.
-/// The model is left empty here, and `StreamReader` fills it in.
+/// The model is left empty here. `StreamReader` fills in the one it saw for the id, and drops the event when it saw none.
 fn message_delta_usage(event: &Value) -> Option<AgentEvent> {
     let usage = event.pointer("/event/usage").filter(|usage| usage.is_object())?;
     usage_event(text_of(event, "api_message_id"), "", usage)
@@ -115,20 +120,24 @@ pub struct StreamReader {
 
 impl StreamReader {
     pub fn read(&mut self, line: &str) -> Vec<AgentEvent> {
-        parse_line(line)
+        let Ok(value) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+        let from_delta = is_message_delta(&value);
+        parse_event(&value)
             .into_iter()
             .filter_map(|event| match event {
-                AgentEvent::MessageUsage { id, model, tokens } => self.remember(id, model, tokens),
+                AgentEvent::MessageUsage { id, model, tokens } => self.remember(id, model, tokens, from_delta),
                 other => Some(other),
             })
             .collect()
     }
 
     /// A message's figures only grow, so the larger of each one stands. A model not named is the one seen before.
-    /// Figures for a message whose model was never named are dropped, because nothing could price them: the id may not be
-    /// the one its lines were seen under, and a guess would count the message twice.
-    fn remember(&mut self, id: String, model: String, tokens: Tokens) -> Option<AgentEvent> {
-        if model.is_empty() && !self.seen.contains_key(&id) {
+    /// A `message_delta` for an id the reader has not seen start is dropped, because it names no model to price it by,
+    /// and its id may not be the one its message's other lines went by: a guess could count the message twice.
+    /// So the estimate can read low there, but never double. A `message_start` or `assistant` line that names its own id
+    /// but no model is kept, and priced by the fallback of `price_for`.
+    fn remember(&mut self, id: String, model: String, tokens: Tokens, from_delta: bool) -> Option<AgentEvent> {
+        if from_delta && !self.seen.contains_key(&id) {
             return None;
         }
         if self.seen.len() >= MESSAGES_KEPT && !self.seen.contains_key(&id) {
@@ -146,6 +155,10 @@ impl StreamReader {
         };
         Some(AgentEvent::MessageUsage { id, model: known_model.clone(), tokens: *known })
     }
+}
+
+fn is_message_delta(event: &Value) -> bool {
+    text_of(event, "type") == "stream_event" && event.pointer("/event/type").and_then(Value::as_str) == Some("message_delta")
 }
 
 /// A `stream_event`: a partial text, or the usage of the message it belongs to.
@@ -437,6 +450,7 @@ pub(super) mod captured {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::domain::estimate_usd;
 
     #[test]
     fn reads_a_session_start() {
@@ -522,6 +536,28 @@ mod tests {
         let mut reader = StreamReader::default();
         assert_eq!(reader.read(&captured::message_delta("msg_zz", "null", 48)), []);
         assert!(reader.seen.is_empty(), "nothing is kept for it either");
+    }
+
+    /// A gateway may leave the model out. The message names its own id, so it is kept, and priced as the dearest model.
+    #[test]
+    fn a_start_or_assistant_line_with_no_model_is_kept_and_priced_as_opus() {
+        let without_model = |line: String| line.replace(r#""model":"claude-haiku-4-5","#, "");
+        let content = r#"{"type":"text","text":"Hi"}"#;
+        for line in [without_model(captured::message_start("msg_a1", "null", 2)), without_model(captured::assistant("msg_a1", "null", content, 2))] {
+            assert!(!line.contains("haiku"));
+            let events = StreamReader::default().read(&line);
+            let Some(AgentEvent::MessageUsage { model, tokens, .. }) = events.last().cloned() else { panic!("{events:?}") };
+            assert_eq!(model, "");
+            assert_eq!(estimate_usd(&tokens, &model), estimate_usd(&tokens, "claude-opus-4-5"));
+        }
+    }
+
+    #[test]
+    fn a_delta_after_a_start_with_no_model_counts_and_is_priced_as_opus_too() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2).replace(r#""model":"claude-haiku-4-5","#, ""));
+
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", "", 48)]);
     }
 
     /// If `api_message_id` were not the id of the message's other lines, the delta would price a second message.

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use egui::style::ScrollAnimation;
 use egui::text::LayoutJob;
@@ -10,7 +11,8 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
     Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine,
-    StepState, ToolState, action_noun, band, closing_question, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point, wants_reply,
+    StepState, Sweep, ToolState, action_noun, band, closing_question, cost_text, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point,
+    wants_reply,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
@@ -18,10 +20,10 @@ use crate::ui_kit::tokens::{
     PROMPT_PADDING, ROW_GAP, RUN_SIDE, SCREEN_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
 };
 use crate::ui_kit::{
-    BandCell, CellLook, Confirm, Ink, KeptHeight, KnotState, Subtitle, Title, Tone, Type, button, button_width, code_box, confirm_popover, copyable,
-    danger_button, divider, document, empty_state, enabled_when, hand, markdown, muted, page_body, page_head, panel, panel_body, panel_header, path_label,
-    pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button, small_danger_button, solid_tag, split, step_line,
-    strong, tag, turn_band, wrapped_height,
+    BandCell, CellLook, Confirm, Ink, KeptHeight, KnotState, Subtitle, SweepForm, Title, Tone, Type, band_note_spoken, button, button_width, code_box,
+    confirm_popover, copyable, danger_button, divider, document, empty_state, enabled_when, estimate_note, hand, markdown, muted, page_body, page_head, panel,
+    panel_body, panel_header, path_label, pick_row, primary_button, primary_command_action, prompt_box_tone, rich, slip, slip_bar, small_button,
+    small_danger_button, solid_tag, split, step_line, strong, sweep_moves, tag, turn_band_live, wrapped_height,
 };
 
 const ACTIVITY_SHOWN: usize = 400;
@@ -52,6 +54,11 @@ const CHOICES_MAX_HEIGHT: f32 = 260.0;
 const DETAIL_MIN_HEIGHT: f32 = 40.0;
 const DETAIL_MAX_HEIGHT: f32 = 180.0;
 const DETAIL_GAP: f32 = 4.0;
+/// About 30 frames a second, while the sweep moves.
+const SWEEP_FRAME: Duration = Duration::from_millis(33);
+/// The Whose turn cell, which carries the sweep.
+const WHO_CELL: usize = 1;
+const ESTIMATE_NOTE: &str = "Estimated until Claude's turn ends.";
 
 /// What the run screen asks of the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,10 +252,12 @@ struct View {
     from: usize,
     /// The newest top-level message, which a settled story opens on.
     newest: Option<usize>,
+    /// The time this frame shows.
+    now: Instant,
 }
 
 impl View {
-    fn of(run: &Run) -> Self {
+    fn of(run: &Run, now: Instant) -> Self {
         let from = run.activity.len().saturating_sub(ACTIVITY_SHOWN);
         let lines = step_lines(run);
         let steps: Vec<(Option<usize>, Option<StepLine>)> =
@@ -268,8 +277,34 @@ impl View {
             }
         }
         let newest = run.activity.iter().rposition(|item| !item.nested && matches!(item.kind, ActivityKind::Claude(_)));
-        Self { band: band(run), parts, from, newest }
+        Self { band: band(run, now), parts, from, newest, now }
     }
+}
+
+fn sweep_form(sweep: Sweep) -> SweepForm {
+    match sweep {
+        Sweep::Working => SweepForm::Working,
+        Sweep::Quiet => SweepForm::Quiet,
+        Sweep::LongQuiet => SweepForm::LongQuiet,
+        Sweep::Stopping => SweepForm::Stopping,
+    }
+}
+
+/// When the screen next needs a frame: soon while the sweep moves, else when the first of `ticking`, figures shown
+/// in whole seconds, turns over. None when nothing on screen changes by itself.
+fn next_frame(moving: bool, ticking: &[Duration]) -> Option<Duration> {
+    if moving {
+        return Some(SWEEP_FRAME);
+    }
+    ticking.iter().map(|shown| Duration::from_secs(1) - Duration::from_nanos(u64::from(shown.subsec_nanos()))).min()
+}
+
+/// The figures on screen that count the seconds: Elapsed while the clock runs, and the time since the last update
+/// while the band says it.
+fn ticking(run: &Run, view: &View) -> Vec<Duration> {
+    let elapsed = run.elapsed.is_running().then(|| run.elapsed.total(view.now));
+    let quiet = view.band.who_spoken.as_ref().and(run.last_heard).map(|heard| view.now.saturating_duration_since(heard));
+    elapsed.into_iter().chain(quiet).collect()
 }
 
 impl RunScreen {
@@ -305,6 +340,7 @@ impl RunScreen {
             return request;
         };
         let narrow = ui.ctx().content_rect().width() < DETAILS_BELOW_WIDTH;
+        let now = desk.now();
         // A run that stopped or failed can still hold its process, idle: its session can be ended too.
         let idle = matches!(run.status, RunStatus::Stopped | RunStatus::Failed(_)) && !run.is_busy() && desk.has_session(&run.id);
         let endable = run.awaits_reply() || idle;
@@ -327,11 +363,15 @@ impl RunScreen {
             None => self.ending = None,
         }
         match head.details_button {
-            Some(button) => self.details_popup(desk, &run, &button),
+            Some(button) => self.details_popup(desk, &run, &button, now),
             None => self.details = false,
         }
-        let view = View::of(&run);
+        let view = View::of(&run, now);
         page_body(ui, |ui| self.body(ui, desk, &run, &view, root, narrow));
+        let moving = view.band.sweep.is_some_and(|sweep| sweep_moves(ui.ctx(), sweep_form(sweep)));
+        if let Some(after) = next_frame(moving, &ticking(&run, &view)) {
+            ui.ctx().request_repaint_after(after);
+        }
         None
     }
 
@@ -348,7 +388,7 @@ impl RunScreen {
     }
 
     /// The side column, in a popup under Run details when the window is narrow.
-    fn details_popup(&mut self, desk: &RunDesk, run: &Run, button: &Response) {
+    fn details_popup(&mut self, desk: &RunDesk, run: &Run, button: &Response, now: Instant) {
         let mut open = self.details;
         // It scrolls in what the window leaves under the button, up to its most.
         let room = button.ctx.content_rect().bottom() - button.rect.bottom() - ITEM_GAP - SCREEN_GAP;
@@ -362,7 +402,7 @@ impl RunScreen {
             .accessible_name(RUN_DETAILS)
             .show(|ui| {
                 ui.set_width(RUN_SIDE);
-                self.facts(ui, desk, run, Some(height));
+                self.facts(ui, desk, run, now, Some(height));
             });
         // Picking a run closes the popup.
         self.details = open && self.details;
@@ -377,7 +417,13 @@ impl RunScreen {
             BandCell { label: "Whose turn", value: &band.who.value, note: &band.who.note, look: cell_look(&band.who), marks: &[] },
             BandCell { label: "What next", value: &band.next.value, note: &band.next.note, look: cell_look(&band.next), marks: &[] },
         ];
-        turn_band(ui, &cells, compact, "Where the run is", &band.tally);
+        // The sweep's phase follows the run's own clock, so it holds through the user's turn and goes on after.
+        let seconds = run.elapsed.total(view.now).as_secs_f64();
+        let sweep = band.sweep.map(|sweep| (WHO_CELL, sweep_form(sweep), seconds));
+        let shown = turn_band_live(ui, &cells, compact, "Where the run is", &band.tally, sweep);
+        if let Some(spoken) = &band.who_spoken {
+            band_note_spoken(ui, &shown, WHO_CELL, spoken);
+        }
         ui.add_space(ROW_GAP);
         if wants_reply(run) {
             self.turn_bar(ui, desk, run);
@@ -387,7 +433,7 @@ impl RunScreen {
             self.story(ui, desk, run, view, root);
         } else {
             split(ui, RUN_SIDE, |main, side| {
-                self.facts(side, desk, run, None);
+                self.facts(side, desk, run, view.now, None);
                 self.story(main, desk, run, view, root);
             });
         }
@@ -806,7 +852,7 @@ impl RunScreen {
     }
 
     /// This run and Recent runs: the side column, or the Run details popup, `popup` tall at most.
-    fn facts(&mut self, ui: &mut Ui, desk: &RunDesk, run: &Run, popup: Option<f32>) {
+    fn facts(&mut self, ui: &mut Ui, desk: &RunDesk, run: &Run, now: Instant, popup: Option<f32>) {
         let area = match popup {
             // A popup has no height of its own to fill, so its scroll area is told the height to take.
             Some(height) => ScrollArea::vertical().id_salt("run_details").auto_shrink([false, true]).max_height(height).min_scrolled_height(height),
@@ -818,9 +864,15 @@ impl RunScreen {
                 panel_body(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_GAP;
-                    fact(ui, "Cost", &format!("${:.2} of ${:.2}", run.cost_usd, run.budget_usd));
-                    slip_bar(ui, (run.cost_usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
-                    fact(ui, "Elapsed", &elapsed_text(run.duration_ms));
+                    // Cost counts up from each message's tokens, marked About until the turn's result gives the real figure.
+                    let cost = run.shown_cost();
+                    fact(ui, "Cost", &cost_text(run));
+                    slip_bar(ui, (cost.usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
+                    if cost.estimated {
+                        estimate_note(ui, ESTIMATE_NOTE);
+                    }
+                    // By the clock, from the send to the run's end: it runs on through the user's turn and holds once the run ends.
+                    fact(ui, "Elapsed", &elapsed_text(run.elapsed.total(now).as_millis() as u64));
                     if let Some(model) = &run.model {
                         fact(ui, "Model", &first_line(model));
                     }
@@ -859,7 +911,8 @@ impl RunScreen {
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     status_tag(ui, run);
-                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.cost_usd), Type::BODY, Ink::Faint)));
+                    // The live cost, without About: the row has no room for it.
+                    ui.add(egui::Label::new(rich(ui, format!("${:.2}", run.shown_cost().usd), Type::BODY, Ink::Faint)));
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let ink = if on { Ink::Text } else { Ink::Muted };
                         ui.add(egui::Label::new(rich(ui, first_line(&run.line), Type::MONO, ink)).truncate());
@@ -1066,5 +1119,23 @@ mod tests {
         assert_eq!(toggle_text(0, 0, false, false), "Show details");
         assert_eq!(toggle_text(0, 4, false, true), "Hide actions");
         assert_eq!(toggle_text(0, 0, false, true), "Hide details");
+    }
+
+    #[test]
+    fn the_sweep_asks_for_about_thirty_frames_a_second() {
+        assert_eq!(next_frame(true, &[Duration::from_millis(4_250)]), Some(Duration::from_millis(33)));
+        assert_eq!(next_frame(true, &[]), Some(Duration::from_millis(33)));
+    }
+
+    #[test]
+    fn ticking_figures_ask_for_a_frame_on_the_next_whole_second() {
+        assert_eq!(next_frame(false, &[Duration::from_millis(4_250)]), Some(Duration::from_millis(750)));
+        assert_eq!(next_frame(false, &[Duration::from_secs(4)]), Some(Duration::from_secs(1)));
+        assert_eq!(next_frame(false, &[Duration::from_millis(4_250), Duration::from_millis(9_900)]), Some(Duration::from_millis(100)), "the first to turn");
+    }
+
+    #[test]
+    fn nothing_that_moves_asks_for_no_frame() {
+        assert_eq!(next_frame(false, &[]), None);
     }
 }

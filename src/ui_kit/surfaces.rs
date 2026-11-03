@@ -1876,6 +1876,16 @@ pub fn turn_band_live(
     response
 }
 
+/// Gives the note of the band's cell at `index` other words for screen readers than it shows, such as a note that
+/// counts the seconds: it is then read the same until the words change. A compact band has no note, so nothing changes.
+pub fn band_note_spoken(ui: &Ui, band: &Response, index: usize, spoken: &str) {
+    let id = band.id.with(index).with("note");
+    if ui.ctx().has_accesskit_node(id) {
+        // A label's words are its node's value.
+        ui.ctx().accesskit_node_builder(id, |node| node.set_value(spoken));
+    }
+}
+
 /// One plain line for a step: its knot, its name, one sentence and an optional toggle on the right, such as "Show 3 actions".
 /// With no knot, its place stays empty, so names line up.
 /// With a toggle, the whole line is its hit area: a click anywhere on it counts, and the line lights up under the pointer.

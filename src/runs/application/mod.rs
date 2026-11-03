@@ -6,7 +6,7 @@ mod usage;
 
 pub use plain_text::{command_word, first_filled_line, first_line, last_line, notice_text};
 pub use run_desk::{Clock, RunDesk, StartError, StartOptions};
-pub use story::{Band, BandText, BandTone, StepLine, StepState, action_noun, band, elapsed_text, short_path, step_lines, step_states};
+pub use story::{Band, BandText, BandTone, StepLine, StepState, Sweep, action_noun, band, cost_text, elapsed_text, short_path, step_lines, step_states};
 pub use turn::{ClosingQuestion, clock_runs, closing_question, stop_point, wants_reply};
 pub use usage::{CommandRow, DayCount, ModelRow, UsageReport, UsageTotals, YearOfDays};
 

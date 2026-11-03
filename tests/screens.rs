@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use egui::{CursorIcon, Key, Theme};
@@ -12,7 +13,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
-    RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
+    RunRequest, StartOptions, TaskCost, TaskOutcome, Tokens, Usage, UsageReport,
 };
 use jobdesk::settings::application::{
     ApiKey, ConnectionTester, DataSizes, Dollars, Drawn, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn,
@@ -82,6 +83,26 @@ fn shell_on(screen: Screen, name: &str, today: NaiveDate) -> Shell {
 }
 
 type SharedSink = Arc<Mutex<Option<EventSink>>>;
+
+/// The moment every scripted clock counts from.
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+/// Stops the desk's clock `seconds` after the epoch. Elapsed, the last update and the sweep read it,
+/// so a snapshot holds still however long the test takes.
+fn clock_at(desk: &mut RunDesk, seconds: f64) {
+    let now = epoch() + Duration::from_secs_f64(seconds);
+    desk.set_clock(Arc::new(move || now));
+}
+
+/// A desk on the scripted clock, standing at the epoch until the test moves it.
+fn desk_on(gateway: impl AgentGateway + 'static) -> RunDesk {
+    let mut desk = RunDesk::new(Box::new(gateway), Arc::new(|| {}));
+    clock_at(&mut desk, 0.0);
+    desk
+}
 
 /// Plays back events the way the real gateway would.
 struct ScriptedGateway(SharedSink);
@@ -156,7 +177,7 @@ fn apply_run(final_event: AgentEvent) -> RunDesk {
 
 fn apply_run_ending(final_events: impl IntoIterator<Item = AgentEvent>) -> RunDesk {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     // Permission prompts, as Ask me before each tool shows them.
     desk.set_asks_permission(true);
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
@@ -170,6 +191,7 @@ fn apply_run_ending(final_events: impl IntoIterator<Item = AgentEvent>) -> RunDe
         tool("3", "Read", ".claude/skills/job-application-assistant/04-job-evaluation.md", false),
         done("3"),
         AgentEvent::AssistantText { text: "**Fit 78, Strong Fit.** Event sourcing and Kafka match. Card schemes are a gap.\n\n| Area | Match |\n|---|---|\n| Skills | Strong |\n| Experience | Strong |".into(), nested: false },
+        used("msg_1", 30_000),
         tool("4", "Write", "cv/main_kestrel_solution_architect.tex", false),
         done("4"),
         tool("5", "Agent", "application-reviewer: Research and critique", false),
@@ -179,18 +201,28 @@ fn apply_run_ending(final_events: impl IntoIterator<Item = AgentEvent>) -> RunDe
         tool("8", "Bash", "ls -Z \"$SCRATCHPAD\"", false),
         failed("8", "ls: invalid option -- 'Z'\nTry 'ls --help' for more information."),
         tool("7", "Bash", "cd cv && lualatex -interaction=nonstopmode main_kestrel_solution_architect.tex", false),
+        used("msg_2", 18_000),
     ];
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
     events.into_iter().chain(final_events).for_each(emit);
     drop(guard);
+    // The last word comes at 8:05. A prompt keeps the clock running while the user reads it, and an end holds it.
+    clock_at(&mut desk, 485.0);
+    desk.poll();
+    clock_at(&mut desk, 571.0);
     desk
+}
+
+/// What one of Claude's messages used, priced as Opus while the turn is under way.
+fn used(id: &str, output: u64) -> AgentEvent {
+    AgentEvent::MessageUsage { id: id.into(), model: "claude-opus-5-5".into(), tokens: Tokens { input: 3_000, output, cache_write: 8_000, cache_read: 90_000 } }
 }
 
 /// An `/apply` run that evaluated the posting, asked whether to draft, and ended its turn.
 fn tray_waiting_apply_run() -> RunDesk {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "a5ce0bcc-22f9".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
@@ -259,7 +291,7 @@ fn stop_after_evaluate(calls: SharedCalls) -> RunDesk {
 /// /apply stopped after Evaluate on `message`, with the sink to play more events into.
 fn stop_with(calls: SharedCalls, message: &str) -> (RunDesk, SharedSink) {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), calls)), Arc::new(|| {}));
+    let mut desk = desk_on(RecordingGateway(Arc::clone(&sink), calls));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
     let events = [
         AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
@@ -281,6 +313,10 @@ fn stop_with(calls: SharedCalls, message: &str) -> (RunDesk, SharedSink) {
     let emit = guard.as_ref().unwrap();
     events.into_iter().for_each(emit);
     drop(guard);
+    // Claude stops at 2:30, and the user has read for a minute since: the clock runs on through their turn.
+    clock_at(&mut desk, 150.0);
+    desk.poll();
+    clock_at(&mut desk, 212.0);
     (desk, sink)
 }
 
@@ -306,16 +342,28 @@ fn apply_drafting() -> (RunDesk, SharedSink) {
             tool("7", "Write", "cv/main_kestrel_solution_architect.tex", false),
             done("7"),
             tool("8", "Write", "cover_letters/cover_kestrel_solution_architect.tex", false),
+            used("msg_3", 500),
         ],
     );
+    // The last update came 3 s ago, and the sweep is 1.1 s into a pass.
+    clock_at(&mut desk, 250.1);
+    desk.poll();
+    clock_at(&mut desk, 253.1);
     (desk, sink)
+}
+
+/// The same draft, with no update for 3 min.
+fn apply_drafting_quiet() -> RunDesk {
+    let (mut desk, _) = apply_drafting();
+    clock_at(&mut desk, 430.1);
+    desk
 }
 
 const SUMMARY: &str = "# Application ready: Kestrel Payments, Solution Architect\n\nThe CV (2 pages) and the cover letter (1 page) are built, and both checks passed.\n\n## What changed after review\n\n- 6 reviewer edits applied. 1 was skipped because your profile does not back it.\n- The letter now opens with the payments migration.\n\n## Next\n\n- Read both PDFs in the dossier.\n- Send it yourself. Jobdesk never sends applications.";
 
 /// /apply through Finish, its closing summary, and the process gone.
 fn apply_finished() -> RunDesk {
-    let (desk, sink) = apply_drafting();
+    let (mut desk, sink) = apply_drafting();
     emit_all(
         &sink,
         [
@@ -337,6 +385,10 @@ fn apply_finished() -> RunDesk {
             AgentEvent::ProcessExited { failure: None },
         ],
     );
+    // It ends at 14:20, and the figure holds after.
+    clock_at(&mut desk, 860.0);
+    desk.poll();
+    clock_at(&mut desk, 900.0);
     desk
 }
 
@@ -356,7 +408,7 @@ fn render_desk(desk: RunDesk, theme: Theme, name: &str) {
 
 fn render_launcher(theme: Theme, name: &str) {
     let mut shell = shell(Screen::Launcher, name);
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     render_with(shell, theme, name);
 }
 
@@ -382,7 +434,7 @@ macro_rules! screens {
 fn a_command_button_leads_to_a_started_run() {
     let mut shell = shell(Screen::Insights, "click_through");
     let gateway = ScriptedGateway(SharedSink::default());
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(gateway));
     let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(2);
 
@@ -403,7 +455,7 @@ fn a_command_button_leads_to_a_started_run() {
 fn a_long_activity_keeps_the_prompt_visible() {
     let mut shell = shell(Screen::Runs, "long_activity");
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     // Permission prompts, as Ask me before each tool shows them.
     desk.set_asks_permission(true);
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
@@ -622,7 +674,7 @@ fn stop_here_ends_your_turn() {
 fn allowances_stay_folded_in_a_step_without_actions() {
     let mut shell = shell(Screen::Runs, "allowance_folded");
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
     emit_all(
         &sink,
@@ -648,7 +700,7 @@ fn allowances_stay_folded_in_a_step_without_actions() {
 #[test]
 fn a_command_without_steps_folds_allowances_under_details() {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/outcome kestrel", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
     emit_all(&sink, [permission_prompt()]);
     let mut harness = tray_harness_with(desk, "no_rail_details");
@@ -663,7 +715,7 @@ fn a_command_without_steps_folds_allowances_under_details() {
 #[test]
 fn a_failed_tool_shows_the_last_lines_of_its_reason() {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/outcome kestrel", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
     let reason = (1..=10).map(|at| format!("Downloading {at}0%\n")).collect::<String>() + "\nerror:\u{202e} auth expired";
     emit_all(&sink, [tool("1", "Bash", "bun run tools/cli.ts fetch", false), failed("1", &reason)]);
@@ -1008,7 +1060,7 @@ fn cmd_enter(harness: &mut Harness) {
 
 fn recording_shell(screen: Screen, name: &str, calls: &SharedCalls) -> Shell {
     let mut shell = shell(screen, name);
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(calls))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(calls))));
     shell
 }
 
@@ -1183,7 +1235,7 @@ fn a_gone_dossier_falls_back_to_applications() {
     let mut shell = shell(Screen::Tracker, name);
     let feed = shell.snapshot_feed();
     shell.open_dossier("tessel_group_solution_architect", jobdesk::dossier::page_store(Arc::new(|| {})));
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     let mut harness = tray_harness(shell);
     let applications = "Pick an application for its details and dossier.";
     assert!(!is_shown(&harness, applications), "the dossier shows");
@@ -1325,7 +1377,7 @@ fn many_choices(request_id: &str) -> AgentEvent {
 fn a_reply_shows_an_image_as_its_alt_text() {
     let mut shell = shell(Screen::Runs, "reply_image");
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let text = "![Tracking pixel](https://tracker.example/p.png)";
     sink.lock().unwrap().as_ref().unwrap()(AgentEvent::AssistantText { text: text.into(), nested: false });
@@ -1829,7 +1881,7 @@ fn jobs_mark_what_waits_in_today() {
 fn the_first_frame_shows_the_prompt_in_one_pass() {
     let mut shell = shell(Screen::Runs, "first_frame");
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.set_asks_permission(true);
     desk.start("/rank --limit 10", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     let session = AgentEvent::SessionStarted { session_id: "b7d2e410-93c1".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() };
@@ -1915,7 +1967,7 @@ fn the_applications_legend_hints_at_details_when_nothing_waits() {
 fn setup_offers_one_look_for_more_in_your_documents() {
     let started = SharedSink::default();
     let mut shell = shell(Screen::Workspace, "setup_expand");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
     let mut checks = EnvironmentChecks::new(Arc::new(FixedTools), Arc::new(|| {}));
     checks.ensure_started();
     *shell.environment_slot() = Some(checks);
@@ -2074,7 +2126,7 @@ const MERIDIAN: &str = "Tech Lead Java, Real-Time Traffic";
 #[test]
 fn y_leads_from_a_card_to_a_started_run() {
     let mut shell = shell(Screen::InTray, "tray_click_through");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     let mut harness = tray_harness(shell);
     assert!(is_shown(&harness, HARBOR));
 
@@ -2138,7 +2190,7 @@ fn bring_them_back_refills_the_tray() {
 fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
     let started = SharedSink::default();
     let mut shell = shell(Screen::InTray, "tray_find_new_jobs");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
     let mut harness = tray_harness(shell);
     for _ in 0..TRAY_CARDS {
         press(&mut harness, Key::L);
@@ -2293,7 +2345,7 @@ fn the_tally_counts_what_is_done() {
 fn bring_back_returns_set_aside_cards_without_a_run() {
     let mut shell = shell(Screen::InTray, "tray_bring_back_row");
     let started = SharedSink::default();
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
     let mut harness = tray_harness(shell);
     press(&mut harness, Key::L);
     assert!(is_shown(&harness, "1 set aside, back tomorrow: Harbor Bank. Bring it back now."));
@@ -2436,7 +2488,7 @@ fn a_footer_button_leaves_the_card_in_place() {
 
 fn smallest_tray(name: &str, gateway: ScriptedGateway) -> Harness<'static> {
     let mut shell = shell(Screen::InTray, name);
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(gateway), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(gateway));
     let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
@@ -2657,7 +2709,7 @@ fn empty_screens_offer_verbs_not_commands() {
     for (screen, verb, command) in [(Screen::Tracker, "Draft an application…", "/apply"), (Screen::Insights, "Find skill gaps…", "/upskill")] {
         let started = SharedSink::default();
         let mut shell = empty_shell_on(screen, "empty_verbs");
-        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
         // Tall, so Insights shows its skill gap section without scrolling.
         let mut harness = Harness::builder().with_size([1280.0, 1400.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
         harness.run_steps(3);
@@ -2678,7 +2730,7 @@ fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
     for (button, line) in [("Find new jobs…", Some("/scrape")), ("New task…", None)] {
         let started = SharedSink::default();
         let mut shell = empty_shell_on(Screen::Runs, "empty_tasks");
-        *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+        *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
         let mut harness = tray_harness(shell);
         assert!(is_shown(&harness, "No tasks yet"));
         assert!(is_shown(
@@ -2700,7 +2752,7 @@ fn the_empty_tasks_screen_opens_the_launcher_and_starts_nothing() {
 #[test]
 fn runs_empty_light() {
     let mut shell = shell(Screen::Runs, "runs_empty_light");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     render_with(shell, Theme::Light, "runs_empty_light");
 }
 
@@ -3020,7 +3072,7 @@ const EVALUATION: &str =
 fn dossier_shell(name: &str) -> Shell {
     let mut shell = shell(Screen::Tracker, name);
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/apply https://tessel.example/1", &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let guard = sink.lock().unwrap();
     let emit = guard.as_ref().unwrap();
@@ -3436,7 +3488,7 @@ fn usage_links_leave_settings() {
     assert!(is_shown(&harness, "Record a result…"), "Applications is on show");
 
     let mut launcher = shell_with_usage("settings_usage_new_task", Vec::new());
-    *launcher.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *launcher.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     launcher.open_settings(Page::Usage);
     let (mut harness, shell) = shared_harness(launcher);
     harness.get_by_label("New task…").click();
@@ -3460,7 +3512,7 @@ fn over_the_cap() -> Vec<TaskCost> {
 /// Its desk records what it starts and sends into `calls`.
 fn capped_shell(screen: Screen, name: &str, tasks: Vec<TaskCost>, calls: &SharedCalls) -> Shell {
     let mut shell = usage_shell_on(screen, name, tasks);
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(calls))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(calls))));
     shell.settings_mut().set_cap_on(true);
     shell.settings_mut().set_cap_amount(Dollars::parse("60"));
     shell
@@ -3548,7 +3600,7 @@ fn run_waits_for_the_spend_of_a_task_that_ended() {
     let calls = SharedCalls::default();
     let sink = SharedSink::default();
     let mut shell = usage_shell_on(Screen::Launcher, name, usage_tasks());
-    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    let mut desk = desk_on(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls)));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     *shell.desk_slot() = Some(desk);
     shell.settings_mut().set_cap_on(true);
@@ -3744,7 +3796,7 @@ fn clearing_tray_decisions_asks_first() {
 fn leaving_settings_any_way_closes_the_clear_popover() {
     let data = tempfile::tempdir().unwrap();
     let mut shell = shell_with_decisions("settings_clear_cmd_k", data.path(), 2);
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     let (mut harness, shell) = shared_harness(shell);
     let asking = |harness: &Harness<'static>| harness.query_all_by_label("Clear 2 tray decisions?").next().is_some();
     clear_decisions_button(&harness).click();
@@ -3767,7 +3819,7 @@ fn leaving_settings_any_way_closes_the_clear_popover() {
 #[test]
 fn ask_me_turns_prompts_on() {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 5.0 }, run_started()).unwrap();
     let mut shell = shell(Screen::InTray, "settings_ask_me");
     *shell.desk_slot() = Some(desk);
@@ -3960,7 +4012,7 @@ fn insights_loading_dark() {
 #[test]
 fn loading_deals_no_card_and_ignores_keys() {
     let mut shell = loading_shell("tray_loading");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     let mut harness = tray_harness(shell);
     assert!(is_shown(&harness, "Reading your job search…"));
     assert!(is_shown(&harness, "Your first card appears in a moment."));
@@ -4055,6 +4107,88 @@ fn run_working_light() {
 }
 
 #[test]
+fn run_working_dark() {
+    render_desk(apply_drafting().0, Theme::Dark, "run_working_dark");
+}
+
+/// No update for 3 min: the edge is a still dashed rule, and What next says long writes can be quiet.
+#[test]
+fn run_quiet_light() {
+    render_desk(apply_drafting_quiet(), Theme::Light, "run_quiet_light");
+}
+
+const ESTIMATE: &str = "Estimated until Claude's turn ends.";
+
+/// A harness on the Tasks screen that keeps the shell within reach, so a test can move the desk's clock.
+fn live_harness(desk: RunDesk, name: &str) -> (Harness<'static>, Rc<RefCell<Shell>>) {
+    let mut shell = shell(Screen::Runs, name);
+    *shell.desk_slot() = Some(desk);
+    shared_harness(shell)
+}
+
+/// Moves the clock of the shell's desk to `seconds`, then draws.
+fn move_clock(harness: &mut Harness, shell: &Rc<RefCell<Shell>>, seconds: f64) {
+    clock_at(shell.borrow_mut().desk_slot().as_mut().unwrap(), seconds);
+    harness.run_steps(3);
+}
+
+#[test]
+fn the_cost_is_an_estimate_until_the_turn_ends() {
+    let (desk, sink) = apply_drafting();
+    let (mut harness, _shell) = live_harness(desk, "cost_estimate");
+    assert!(is_shown(&harness, "About $1.24 of $3.00") && is_shown(&harness, ESTIMATE), "while Claude works");
+    assert!(is_shown(&harness, "$1.24"), "Recent runs shows the live cost without About");
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.31, duration_ms: 1 }]);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "$1.31 of $3.00"), "the result's exact figure");
+    assert!(!is_shown(&harness, ESTIMATE) && !is_shown(&harness, "About $1.31 of $3.00"));
+}
+
+#[test]
+fn elapsed_ticks_while_claude_works_and_holds_when_done() {
+    let (desk, sink) = apply_drafting();
+    let (mut harness, shell) = live_harness(desk, "elapsed_holds");
+    assert!(is_shown(&harness, "4:13"));
+    move_clock(&mut harness, &shell, 300.0);
+    assert!(is_shown(&harness, "5:00"), "it ticks while Claude works");
+    emit_all(&sink, [AgentEvent::AssistantText { text: "Both documents are drafted.".into(), nested: false }]);
+    emit_all(&sink, [AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.31, duration_ms: 1 }]);
+    harness.run_steps(3);
+    move_clock(&mut harness, &shell, 400.0);
+    assert!(is_shown(&harness, "Claude is done for now"));
+    assert!(is_shown(&harness, "5:00") && !is_shown(&harness, "6:40"), "done for now holds it");
+
+    let id = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].id.clone();
+    shell.borrow_mut().desk_slot().as_mut().unwrap().reply(&id, "Make the letter shorter.").unwrap();
+    move_clock(&mut harness, &shell, 410.0);
+    assert!(is_shown(&harness, "5:10"), "a reply goes on from the held figure");
+}
+
+#[test]
+fn elapsed_keeps_going_through_a_question() {
+    let (mut harness, shell) = live_harness(apply_run(question_prompt()), "elapsed_question");
+    assert!(is_shown(&harness, "9:31"), "Claude asked at 8:05");
+    assert!(is_shown(&harness, "About $1.42 of $5.00") && is_shown(&harness, ESTIMATE), "a pending prompt keeps About");
+    move_clock(&mut harness, &shell, 600.0);
+    assert!(is_shown(&harness, "10:00"));
+}
+
+#[test]
+fn the_whose_turn_cell_reads_its_quiet_state_not_the_seconds() {
+    let (desk, _sink) = apply_drafting();
+    let (mut harness, shell) = live_harness(desk, "spoken_quiet");
+    let fresh = "Claude's turn. Last update under 30 seconds ago";
+    assert!(is_shown(&harness, fresh) && !is_shown(&harness, "Last update 3s ago"), "the note is read by its state");
+    move_clock(&mut harness, &shell, 260.0);
+    assert!(is_shown(&harness, fresh), "the same words ten seconds on");
+    move_clock(&mut harness, &shell, 300.0);
+    assert!(is_shown(&harness, "Claude's turn. No update for over 30 seconds"));
+    move_clock(&mut harness, &shell, 430.1);
+    assert!(is_shown(&harness, "Claude's turn. No update for over 2 minutes"));
+    assert!(is_shown(&harness, "Long writes can be quiet. Stop run keeps the files so far."));
+}
+
+#[test]
 fn run_finished_dark() {
     render_desk(apply_finished(), Theme::Dark, "run_finished_dark");
 }
@@ -4097,7 +4231,7 @@ fn reload_harness(name: &str) -> (Harness<'static>, SharedSink, std::sync::mpsc:
     let mut shell = shell(Screen::Runs, name);
     let reloads = shell.reload_feed();
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
     *shell.desk_slot() = Some(desk);
     let harness = tray_harness(shell);
@@ -4155,7 +4289,7 @@ fn profile_with_run_on(root: std::path::PathBuf) -> (Shell, std::path::PathBuf, 
     let mut shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
     let feed = shell.snapshot_feed();
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/setup --section experience", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     *shell.desk_slot() = Some(desk);
     (shell, root, sink, feed)
@@ -4251,7 +4385,7 @@ fn a_run_started_before_the_first_read_still_marks_its_changes() {
     let mut shell = Shell::loading(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), day());
     let feed = shell.snapshot_feed();
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.start("/setup --section experience", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
     *shell.desk_slot() = Some(desk);
     let mut harness = tray_harness(shell);
@@ -4273,7 +4407,7 @@ fn a_run_started_before_the_first_read_still_marks_its_changes() {
 fn an_empty_topic_shows_its_command() {
     let started = SharedSink::default();
     let mut shell = shell(Screen::Profile, "profile_empty_command");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
     let mut harness = tray_harness(shell);
     pick_topic(&mut harness, "Goals and deal-breakers");
     assert!(!is_shown(&harness, "/setup --section goals"));
@@ -4340,7 +4474,7 @@ fn a_run_that_changes_one_role_marks_experience_only() {
 fn update_with_claude_fills_the_launcher_and_starts_nothing() {
     let started = SharedSink::default();
     let mut shell = shell(Screen::Profile, "profile_update_with_claude");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&started))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
     let mut harness = tray_harness(shell);
     assert!(is_shown(&harness, "5 roles. Claude picks from these for each CV."), "Experience opens first: it has blanks to fill");
 
@@ -4737,7 +4871,7 @@ fn a_cut_cv_label_shows_in_full_on_focus() {
 fn rebuild_opens_the_launcher_and_starts_nothing() {
     let calls = SharedCalls::default();
     let (mut shell, _root) = cv_shell("profile_cv_rebuild");
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(&calls))), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
     let mut harness = tray_harness(shell);
     open_cv(&mut harness);
     harness.get_by_label("Tessel platform lead, Source newer").click();
@@ -5762,7 +5896,7 @@ fn at(hour: u32, minute: u32) -> NaiveDateTime {
 /// A desk whose one task, started at `started` with `method`, said it signed in through `source`, then ended.
 fn signed_in_desk(source: &str, method: SignIn, started: NaiveDateTime) -> RunDesk {
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    let mut desk = desk_on(ScriptedGateway(Arc::clone(&sink)));
     desk.set_sign_in(method);
     desk.start("/rank", &StartOptions { model: None, budget_usd: 1.0 }, started).unwrap();
     emit_all(
@@ -5992,7 +6126,7 @@ fn open_the_task_selects_it() {
 #[test]
 fn before_any_task_the_note_waits_for_one() {
     let mut shell = sign_in_shell("providers_no_task", idle_tester());
-    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
     let harness = tray_harness(shell);
     assert!(is_shown(&harness, "The sign-in each task uses shows here after your first task. Claude Code reports it itself."));
     assert!(!is_shown(&harness, "Open the task"));
@@ -6184,7 +6318,7 @@ fn test_connection_waits_for_a_session_that_waits_on_a_reply() {
 fn a_reply_that_needs_a_process_waits_for_the_test() {
     let calls = SharedCalls::default();
     let sink = SharedSink::default();
-    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    let mut desk = desk_on(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls)));
     desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
     emit_all(
         &sink,

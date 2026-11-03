@@ -500,7 +500,7 @@ fn runs(ui: &mut Ui) {
         ui,
         &[
             BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
-            BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
+            BandCell { label: "Whose turn", value: "Claude's", note: "Last update 3s ago", look: CellLook::Ink(Tone::Active), marks: &[] },
             BandCell {
                 label: "What next",
                 value: "Nothing for now",
@@ -517,7 +517,7 @@ fn runs(ui: &mut Ui) {
     turn_band(
         ui,
         &[
-            BandCell { label: "Where", value: "All 7 steps", note: "Finished in 14m 20s", look: CellLook::Plain, marks: &finished },
+            BandCell { label: "Where", value: "All 7 steps", note: "Finished in 14:20", look: CellLook::Plain, marks: &finished },
             BandCell { label: "Whose turn", value: "Nobody", note: "The session is closed", look: CellLook::Plain, marks: &[] },
             BandCell { label: "What next", value: "Read the documents", note: "Open the dossier, then send it yourself.", look: CellLook::Plain, marks: &[] },
         ],

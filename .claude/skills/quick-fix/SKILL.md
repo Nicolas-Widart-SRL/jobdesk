@@ -7,7 +7,7 @@ argument-hint: "<what to fix>"
 # Ship a quick fix
 
 The main session is the lead, defined in `.claude/agents/lead.md`.
-It writes no code itself: one builder writes the fix.
+It writes no code or docs itself: one builder writes the fix, or `docs-writer` writes a docs-only fix.
 The user's words in the task win over this workflow, for example "do it yourself" or "use ship".
 
 Task: $ARGUMENTS
@@ -53,12 +53,13 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Never check out, reset or pull in the main checkout.
    Never check out the branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
 2. **Brief one builder.** Run no planner and no plan waves. Write the one step yourself: its files, the edit and its check.
+   Use `docs-writer` when the fix changes only `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or files in `docs/`.
    Use `builder-sonnet` when you name the files, the edit and the test. Use `builder` otherwise.
    Brief it as the Briefs section of the `ship` skill says.
    Once it reports, check the step as step 6 says, before any review.
 3. **Review.** A step on the Also reviewed list gets one `reviewer` pass, one round.
    Brief it as the Briefs section of `ship` says, with the range `<branch>..<step-branch>` and the step's worktree as the head checkout.
-   Send the builder every High and Medium finding with SendMessage.
+   Send the builder, or the docs-writer, every High and Medium finding with SendMessage.
    Once it has applied them, run the step 6 check again (`git diff --stat`, files, layers, areas) before the merge.
    This is not another reviewer round.
    A High also escalates after the builder's fix (step 6), so `ship` re-reviews it.

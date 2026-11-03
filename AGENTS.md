@@ -37,10 +37,10 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 - One run works at a time, because two commands could overwrite each other's files.
 - Card actions never start a run. Y opens the launcher, and the user starts the run there.
-- Tool permissions are allowed and noted in the activity by default, and Settings › Permissions turns prompts on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Trust](ARCHITECTURE.md#trust).
+- Tool permissions are allowed and noted in the activity by default, and Settings › Permissions turns prompts on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Tool permissions](docs/architecture/trust.md#tool-permissions).
 - Authentication stays with the `claude` CLI, and Jobdesk offers no login. The one exception is an optional Anthropic Console API key the user pastes in Settings › Providers. It is kept only in the system keychain and passed only in the environment of the `claude` process, never when an inherited `ANTHROPIC_BASE_URL` is neither `https` nor `http` to this machine without a proxy variable. It never goes in a file, a log, a command line, a panic or a `Debug` impl, and a saved key is never on screen in full. Where the whole key shows up in what a task's process prints, the run log, the activity and the failure get its mask. The one exception is the key being typed, while the user presses Show.
 - Test connection is not a run. It uses no tools, runs in an empty temporary folder, is capped at $0.01, writes no run log, is not counted in Usage, and is disabled while a task runs.
-- Postings, notes and reports are untrusted: render them as [Trust](ARCHITECTURE.md#trust) says.
+- Postings, notes and reports are untrusted: render them as [Trust](docs/architecture/trust.md#rendering-untrusted-text) says.
 - The UI reads the `Snapshot`, never the disk.
 - `tests/sample_workspace` holds fictional data only, because snapshots are committed.
 
@@ -54,7 +54,9 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 ## Details
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers, runs or trust handling.
+- [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers. Its Runtime section points to the file for each other topic.
+- [docs/architecture/runs.md](docs/architecture/runs.md): read before changing how a task starts, stops, signs in or waits on the user.
+- [docs/architecture/trust.md](docs/architecture/trust.md): read before changing how untrusted text renders, the API key's path or tool permissions.
 - [docs/auth-review.md](docs/auth-review.md): read before changing authentication, naming or distribution.
 - [README.md](README.md): the landing page and install guide.
 - [docs/guide.md](docs/guide.md): user-facing behavior, screen by screen.

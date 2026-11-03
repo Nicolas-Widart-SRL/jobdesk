@@ -206,7 +206,10 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
         }
         Page::About => {
             let about = AboutView { version: view.version, claude: view.claude };
-            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
+            let (_, providers) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
+            if providers {
+                screen.page = Page::Providers;
+            }
         }
         Page::Terms => {
             let lead = if matches!(view.terms, TermsState::Reading) { terms::READING } else { page.lead() };
@@ -1240,6 +1243,27 @@ mod tests {
         harness.get_by_label("2.1.4");
         assert!(harness.get_by_label("Show licences").accesskit_node().is_disabled(), "there is no licence file to show yet");
         assert!(!harness.get_by_label("Open the changelog").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn how_tasks_sign_in_opens_providers() {
+        let state = state();
+        on(&state, Page::About);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("How tasks sign in");
+        harness.get_by_label("Open Providers").click();
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::Providers);
+        assert_eq!(state.borrow().asked, None, "a jump inside Settings asks the shell for nothing");
+        harness.get_by_label(Page::Providers.lead());
+    }
+
+    #[test]
+    fn a_search_finds_how_tasks_sign_in() {
+        let about = |query: &str| search(query, Drawn::folder(true)).is_some_and(|hits| hits.pages.iter().any(|&(page, _)| page == Page::About));
+        assert!(about("How tasks sign in"));
+        assert!(about("optional API key"));
     }
 
     #[test]

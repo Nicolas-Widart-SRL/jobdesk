@@ -7,7 +7,6 @@ Only what is not built yet stays here.
 - [Canvas](#canvas)
 - [Pages](#pages)
 - [Code home](#code-home)
-- [Doc changes](#doc-changes)
 
 ## Canvas
 
@@ -36,7 +35,3 @@ Only what is not built yet stays here.
 ## Code home
 
 - The planner picks the notifications crate and checks it on macOS and Windows.
-
-## Doc changes
-
-- `docs/guide.md`, the About line under Settings: add that About also has How tasks sign in, which says Claude Code signs in on its own and Jobdesk keeps only an optional API key in the keychain (Credential Manager on Windows), with Open Providers to go to the Providers page.

@@ -58,7 +58,7 @@ impl DecisionFile {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         options.open(&temporary)?.write_all(text.as_bytes())?;
-        fs::rename(temporary, &self.path)
+        crate::shared_kernel::replace_file::rename_over(&temporary, &self.path)
     }
 }
 

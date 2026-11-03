@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 
 use crate::dossier::domain::{ApplicationRef, ArchiveContents, ArchiveRepository, NamedText, PdfDocument, PostingText, ResearchNote, within_workspace};
 use crate::shared_kernel::dates::{days_from, parse_iso_date};
+use crate::shared_kernel::file_text::{with_lf, without_bom};
 
 const GUARD_HEADING: &str = "## posting_guard";
 const RESEARCH_TTL_DAYS: i64 = 30;
@@ -28,7 +29,9 @@ impl ArchiveFiles {
 
     fn research(&self, company: &str, today: NaiveDate) -> Option<ResearchNote> {
         let name = company.trim().to_lowercase().replace(' ', "-");
-        let text = within_workspace(&self.root, &format!("company_research/{name}.json")).and_then(|path| fs::read_to_string(path).ok())?;
+        let text = within_workspace(&self.root, &format!("company_research/{name}.json"))
+            .and_then(|path| fs::read_to_string(path).ok())
+            .map(|text| without_bom(&text).to_owned())?;
         let value: Option<serde_json::Value> = serde_json::from_str(&text).ok();
         let fetched_on = value.as_ref().and_then(|value| value.get("fetched_date")).and_then(|date| date.as_str()).and_then(parse_iso_date);
         let pretty = value.and_then(|value| serde_json::to_string_pretty(&value).ok()).unwrap_or(text);
@@ -42,13 +45,18 @@ impl ArchiveRepository for ArchiveFiles {
         let cv = self.document("CV", &application.cv_file, format!("cv/main_{}.pdf", application.folder));
         let letter = self.document("Cover letter", &application.cover_letter_file, format!("cover_letters/cover_{}.pdf", application.folder));
         ArchiveContents {
-            posting: fs::read_to_string(folder.join("job_posting.md")).ok().map(|text| split_posting(&text)),
+            posting: fs::read_to_string(folder.join("job_posting.md")).ok().map(|text| split_posting(&shown_text(&text))),
             prep_packs: texts_named(&folder, "interview_prep_"),
             follow_ups: texts_named(&folder, "followup_"),
             research: self.research(&application.company, today),
             documents: cv.into_iter().chain(letter).collect(),
         }
     }
+}
+
+/// An archived text as the dossier shows it: no byte order mark, and LF line endings, which every label lays out.
+fn shown_text(text: &str) -> String {
+    with_lf(without_bom(text))
 }
 
 fn split_posting(text: &str) -> PostingText {
@@ -70,7 +78,7 @@ fn texts_named(folder: &Path, prefix: &str) -> Vec<NamedText> {
         .filter_map(|file| {
             let text = fs::read_to_string(folder.join(&file)).ok()?;
             let name = file.strip_prefix(prefix)?.strip_suffix(".md")?.replace('_', " ");
-            Some(NamedText { name, text })
+            Some(NamedText { name, text: shown_text(&text) })
         })
         .collect()
 }

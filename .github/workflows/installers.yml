@@ -42,9 +42,9 @@ jobs:
         include:
           - os: macos-latest
             tests: ''
-          # Screen snapshots are macOS baselines, so Windows runs the platform-neutral tests only.
+          # Screen snapshots are macOS baselines, so Windows builds and runs the tests with the snapshot compares skipped.
           - os: windows-latest
-            tests: --lib --test architecture
+            tests: ''
     # Under workflow_call inputs.quick is null, so a release always runs this job.
     if: ${{ !inputs.quick }}
     runs-on: ${{ matrix.os }}

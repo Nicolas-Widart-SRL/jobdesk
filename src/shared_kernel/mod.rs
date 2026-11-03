@@ -1,6 +1,7 @@
 pub mod api_key;
 pub mod check_state;
 pub mod dates;
+pub mod file_text;
 pub mod host_path;
 pub mod key_mask;
 pub mod load_error;
@@ -8,6 +9,7 @@ pub mod markdown;
 pub mod model_choice;
 pub mod placeholders;
 pub mod process_tree;
+pub mod replace_file;
 pub mod sign_in;
 pub mod source;
 pub mod visible_text;

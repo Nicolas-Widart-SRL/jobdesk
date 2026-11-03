@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::shared_kernel::file_text::without_bom;
 use crate::workspace::domain::{PortalInfo, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
 
 const ASSISTANT: &str = ".claude/skills/job-application-assistant";
@@ -16,7 +17,7 @@ impl CheckoutInspector {
     }
 
     fn read(&self, relative: &str) -> Option<String> {
-        fs::read_to_string(self.root.join(relative)).ok()
+        fs::read_to_string(self.root.join(relative)).ok().map(|text| without_bom(&text).to_owned())
     }
 
     fn portals(&self) -> Vec<PortalInfo> {

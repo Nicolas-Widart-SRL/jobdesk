@@ -274,12 +274,21 @@ pub fn short_path(root: &str, path: &str) -> (String, String) {
     let path = path.replace('\\', "/");
     let root = root.replace('\\', "/");
     let root = root.trim_end_matches('/');
-    let inside = match path.strip_prefix(root).and_then(|rest| rest.strip_prefix('/')) {
+    let inside = match strip_root(&path, root).and_then(|rest| rest.strip_prefix('/')) {
         Some(rest) if !root.is_empty() && !rest.split('/').any(|part| part == "..") => rest,
         _ => &path,
     };
     let (dir, file) = inside.split_at(inside.rfind('/').map_or(0, |at| at + 1));
     (visible_chars(dir).collect(), visible_chars(file).collect())
+}
+
+/// Cuts `root` from the front of `path`. A drive letter matches in either case, as Windows does.
+fn strip_root<'a>(path: &'a str, root: &str) -> Option<&'a str> {
+    let drive = |text: &str| text.as_bytes().get(1) == Some(&b':') && text.as_bytes()[0].is_ascii_alphabetic();
+    if drive(root) && drive(path) && path[..1].eq_ignore_ascii_case(&root[..1]) {
+        return path[1..].strip_prefix(&root[1..]);
+    }
+    path.strip_prefix(root)
 }
 
 pub fn elapsed_text(ms: u64) -> String {
@@ -704,6 +713,8 @@ mod tests {
         assert_eq!(short_path("/w/ws", "/w/ws/cv/main_acme.tex"), ("cv/".to_owned(), "main_acme.tex".to_owned()));
         assert_eq!(short_path("/w/ws/", "/w/ws/job_search_tracker.csv"), (String::new(), "job_search_tracker.csv".to_owned()));
         assert_eq!(short_path("C:\\w", "C:\\w\\cv\\main_a.tex"), ("cv/".to_owned(), "main_a.tex".to_owned()));
+        assert_eq!(short_path("C:\\w", "c:\\w\\cv\\a.tex"), ("cv/".to_owned(), "a.tex".to_owned()));
+        assert_eq!(short_path("c:\\w", "C:\\w\\cv\\a.tex"), ("cv/".to_owned(), "a.tex".to_owned()));
     }
 
     #[test]

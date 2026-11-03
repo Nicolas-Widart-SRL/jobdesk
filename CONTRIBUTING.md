@@ -60,6 +60,17 @@ UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery
 
 Refresh snapshots on macOS only, so every baseline comes from one renderer. `UPDATE_SNAPSHOTS=1` skips changes under the 200-pixel tolerance. Use `UPDATE_SNAPSHOTS=force` to rewrite every baseline.
 
+CI also builds and tests on Windows: a job on `windows-latest` runs clippy with `-D warnings` and `cargo test`. Snapshot renders and compares run on macOS only, behind the `SNAPSHOTS` gate in `tests/screens.rs` and `tests/ui_kit_gallery.rs`. Every other assertion in those files runs on every system. Tests marked `#[cfg(windows)]` run only in the Windows job.
+
+`.gitattributes` checks text out with LF on every system (`* text=auto eol=lf`) and keeps PNG and PDF files binary. So a test that needs a CRLF file builds it from the LF one itself.
+
+To catch Windows-only clippy warnings before CI does, lint for Windows on your machine:
+
+```bash
+rustup target add x86_64-pc-windows-msvc
+cargo clippy --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+```
+
 Miri runs weekly and on demand (Actions tab, "Miri", Run workflow) over the domain, application and shared_kernel tests, not on each pull request. To run it locally:
 
 ```bash

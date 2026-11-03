@@ -55,8 +55,11 @@ impl ProfileFiles {
                 return Err(LoadError::new(file.name(), "is read-only, so it was not saved"));
             }
             #[cfg(unix)]
-            if let Some(why) = not_yours(&target, &metadata, current_user()) {
+            if let Some(why) = not_yours(&metadata, current_user()) {
                 return Err(LoadError::new(file.name(), why));
+            }
+            if cannot_write(&target, &metadata) {
+                return Err(LoadError::new(file.name(), CANNOT_WRITE));
             }
         }
         Ok(target)
@@ -69,20 +72,25 @@ fn current_user() -> libc::uid_t {
     unsafe { libc::geteuid() }
 }
 
-/// Why `user` may not replace the file at `target`, if they may not. The rename puts a new file in its place, owned by
-/// whoever saves, so a file owned by another user would quietly change hands, and a file `user` cannot write in place
-/// would be replaced all the same, because the rename needs only the folder.
+/// Why `user` may not replace a file with this `metadata`, if they may not. The rename puts a new file in its place, owned
+/// by whoever saves, so a file owned by another user would quietly change hands.
 #[cfg(unix)]
-fn not_yours(target: &Path, metadata: &fs::Metadata, user: libc::uid_t) -> Option<&'static str> {
+fn not_yours(metadata: &fs::Metadata, user: libc::uid_t) -> Option<&'static str> {
     use std::os::unix::fs::MetadataExt;
-    if metadata.uid() != user {
-        return Some("belongs to another user, so it was not saved");
-    }
-    // The mode bits can allow a write that an access list denies, so the file is opened for writing, which changes nothing.
-    if metadata.is_file() && OpenOptions::new().write(true).open(target).is_err() {
-        return Some("cannot be written by your user, so it was not saved");
-    }
-    None
+    (metadata.uid() != user).then_some("belongs to another user, so it was not saved")
+}
+
+#[cfg(unix)]
+const CANNOT_WRITE: &str = "cannot be written by your user, so it was not saved";
+#[cfg(not(unix))]
+const CANNOT_WRITE: &str = "cannot be written, or is open in another program, so it was not saved";
+
+/// Whether the file at `target` cannot be written in place, which the rename would not notice, because it needs only the
+/// folder. The mode bits or an access list can deny a write that the read-only flag does not show, so the file is opened
+/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file that is
+/// gone by now is not a refusal: the save creates it.
+fn cannot_write(target: &Path, metadata: &fs::Metadata) -> bool {
+    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err_and(|error| error.kind() != ErrorKind::NotFound)
 }
 
 /// The folder of `file` from the root, as the user would look for it.
@@ -97,6 +105,8 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     let folder = target.parent().ok_or(ErrorKind::InvalidInput)?;
     remove_stale_copies(target, SystemTime::now());
     let copy = write_copy(target, next_copy, |file| file.write_all(text.as_bytes()))?;
+    // A plain rename, never a retry: the save compared the file once, and a program that writes it during a wait would be
+    // overwritten unseen. A file held open fails at once, and the user sees it.
     if let Err(error) = fs::rename(&copy, target) {
         let _ = fs::remove_file(&copy);
         return Err(error);
@@ -457,8 +467,8 @@ mod tests {
         let path = dir.path().join(ProfileFile::Candidate.relative_path());
         fs::write(&path, "old").unwrap();
         let metadata = fs::metadata(&path).unwrap();
-        assert_eq!(not_yours(&path, &metadata, current_user().wrapping_add(1)), Some("belongs to another user, so it was not saved"));
-        assert_eq!(not_yours(&path, &metadata, current_user()), None);
+        assert_eq!(not_yours(&metadata, current_user().wrapping_add(1)), Some("belongs to another user, so it was not saved"));
+        assert_eq!(not_yours(&metadata, current_user()), None);
     }
 
     /// Write bits for the group alone do not read as read-only, yet the owner cannot write the file in place.
@@ -476,6 +486,30 @@ mod tests {
         assert!(!fs::metadata(&path).unwrap().permissions().readonly());
         assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "cannot be written by your user, so it was not saved");
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    /// Another program holds the file with no sharing, as a sync client or an editor can, so the save is refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_another_program_holds_open_is_not_saved() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let held = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, CANNOT_WRITE);
+        drop(held);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_file_that_is_gone_is_not_a_refusal_to_write() {
+        let (dir, _) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(!cannot_write(&path, &metadata));
     }
 
     #[cfg(unix)]

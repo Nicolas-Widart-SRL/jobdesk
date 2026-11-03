@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::insights::domain::{SkillGap, SkillGapReport, SkillGapSource, StudyItem};
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::dates::iso_dates_in;
+use crate::shared_kernel::file_text::{with_lf, without_bom};
 
 const SOURCE: &str = "upskill";
 
@@ -30,7 +31,7 @@ impl SkillGapSource for UpskillReports {
         names.sort();
         let Some(name) = names.pop() else { return Ok(None) };
         let text = fs::read_to_string(self.folder.join(&name)).map_err(|error| LoadError::new(format!("{SOURCE}/{name}"), error))?;
-        Ok(Some(parse_report(name, &text)))
+        Ok(Some(parse_report(name, without_bom(&text))))
     }
 }
 
@@ -39,7 +40,8 @@ fn is_aggregate(name: &str) -> bool {
 }
 
 fn parse_report(file_name: String, text: &str) -> SkillGapReport {
-    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: text.to_owned(), ..Default::default() };
+    let text = with_lf(text);
+    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, ..Default::default() };
     let mut section = "";
     let mut bullets_into_new = false;
     for line in text.lines() {
@@ -69,6 +71,7 @@ fn parse_report(file_name: String, text: &str) -> SkillGapReport {
             }
         }
     }
+    report.raw = text;
     report
 }
 
@@ -98,6 +101,13 @@ mod tests {
         assert_eq!(report.study_order[0].time, "20h");
         assert_eq!(report.total_time.as_deref(), Some("Total estimated time: ~20h"));
         assert_eq!((report.gaps_closed.len(), report.new_gaps.len()), (1, 1));
+    }
+
+    #[test]
+    fn a_report_with_lone_carriage_returns_reads_like_its_raw_view() {
+        let report = parse_report("report-2026-10-28.md".into(), &REPORT.replace('\n', "\r"));
+        assert_eq!(report, parse_report("report-2026-10-28.md".into(), REPORT));
+        assert!(report.mode.starts_with("Aggregate") && report.raw == REPORT);
     }
 
     #[test]

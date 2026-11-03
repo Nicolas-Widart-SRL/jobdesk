@@ -10,6 +10,7 @@ use crate::settings::domain::{
     ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SkipReasons,
     SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
 };
+use crate::shared_kernel::file_text::without_bom;
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
 const FILE: &str = "settings.json";
@@ -95,7 +96,7 @@ impl PreferencesFile {
         file.write_all(text.as_bytes())?;
         // On disk before the rename, or a power loss could keep the rename and lose the data.
         file.sync_all()?;
-        fs::rename(temporary, &self.path)?;
+        crate::shared_kernel::replace_file::rename_over(&temporary, &self.path)?;
         // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
         // Best effort: some mounts refuse to sync a folder, and the file is already in place.
         #[cfg(unix)]
@@ -113,7 +114,7 @@ impl PreferencesStore for PreferencesFile {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(LoadError::new(FILE, error)),
         };
-        let record: Record = serde_json::from_str(&text).map_err(|error| LoadError::new(FILE, error))?;
+        let record: Record = serde_json::from_str(without_bom(&text)).map_err(|error| LoadError::new(FILE, error))?;
         Ok(Some(preferences_from(record)))
     }
 
@@ -339,6 +340,15 @@ mod tests {
         file.save(&preferences).unwrap();
         assert_eq!(file.load().unwrap(), Some(preferences));
         assert!(!file.path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_still_loads() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        write(&file, "\u{feff}{\"theme\": \"dark\", \"open_on\": \"applications\"}\r\n");
+        let loaded = file.load().unwrap().unwrap();
+        assert_eq!((loaded.theme, loaded.open_on), (ThemeChoice::Dark, StartScreen::Applications));
     }
 
     fn dollars(text: &str) -> Dollars {

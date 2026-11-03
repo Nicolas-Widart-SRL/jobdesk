@@ -42,3 +42,4 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 27 `.github/workflows/miri.yml`: a rust-cache step on a weekly nightly job saved entries the next run could not reuse (step since removed). Class: state over time.
 - PR 28 `docs/guide.md`: "One of two or more columns" reads as one column out of many; say "a table of two or more columns". Class: ambiguous wording.
 PR 30 docs/guide.md: the review missed a stale "other sections open in later versions" sentence left after the last Settings page was built. Class: copy claims more than the data.
+PR 34 src/dossier/domain/archive.rs: the Windows device-name list missed the superscript digits COM¹-COM³ and LPT¹-LPT³. Class: untrusted text.

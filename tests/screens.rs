@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
-use egui_kittest::{Harness, SnapshotOptions};
+use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
@@ -23,6 +23,28 @@ use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
+
+/// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
+const SNAPSHOTS: bool = cfg!(target_os = "macos");
+
+/// Gives the harness the renderer that draws snapshots, where they are compared.
+fn with_renderer<State>(builder: HarnessBuilder<State>) -> HarnessBuilder<State> {
+    if SNAPSHOTS { builder.wgpu() } else { builder }
+}
+
+/// Compares the harness to the baseline `name`, where snapshots are compared.
+fn compare(harness: &mut Harness, name: &str) {
+    if SNAPSHOTS {
+        harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(clippy::assertions_on_constants)]
+fn snapshots_compare_on_macos() {
+    assert!(SNAPSHOTS);
+}
 
 fn sample_workspace(root: &Path) {
     let source = Path::new("tests/sample_workspace");
@@ -339,15 +361,11 @@ fn render_launcher(theme: Theme, name: &str) {
 }
 
 fn render_with(mut shell: Shell, theme: Theme, name: &str) {
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_pixels_per_point(1.5)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 macro_rules! screens {
@@ -2554,17 +2572,13 @@ fn tray_after(mut harness: Harness, keys: &[Key], name: &str) {
     for key in keys {
         press(&mut harness, *key);
     }
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 fn wgpu_tray(mut shell: Shell, theme: Theme) -> Harness<'static> {
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_pixels_per_point(1.5)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     harness
 }
@@ -3010,13 +3024,9 @@ fn dossier_shell(name: &str) -> Shell {
 
 fn render_dossier(section: Option<&str>, theme: Theme, name: &str) {
     let mut shell = dossier_shell(name);
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_pixels_per_point(1.5)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
     if let Some(section) = section {
         harness.get_by_label_contains(section).click();
@@ -3025,7 +3035,7 @@ fn render_dossier(section: Option<&str>, theme: Theme, name: &str) {
         harness.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 struct FixedTools;
@@ -3042,18 +3052,14 @@ fn render_workspace(theme: Theme, name: &str) {
 
 /// Renders once the tool check is back, so the status bar says whether Claude is installed. It starts as the app's does, at launch.
 fn render_probed(shell: Shell, theme: Theme, name: &str) {
-    probed_wgpu(probed(shell, FixedTools), theme).snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut probed_wgpu(probed(shell, FixedTools), theme), name);
 }
 
 /// A rendering harness on `shell`, stepped until its tool check is back.
 fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
-    let mut harness = Harness::builder()
-        .with_size([1280.0, 820.0])
-        .with_pixels_per_point(1.5)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui));
     settle(&mut harness);
     harness
 }
@@ -3081,7 +3087,7 @@ fn render_settings_on(shell: Shell, page: Page, query: Option<&str>, theme: Them
         search(&harness).type_text(query);
         harness.run_steps(3);
     }
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -3153,7 +3159,7 @@ fn settings_terms_failed_light() {
     harness.get_by_label("Update with Claude…").hover();
     harness.run_steps(8);
     assert!(is_shown(&harness, "Fix the file first, so Claude does not write over it."));
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -3357,7 +3363,7 @@ fn render_usage(mut shell: Shell, hover: Option<(usize, usize)>, theme: Theme, n
         harness.hover_at(first + egui::vec2(week as f32, weekday as f32) * pitch);
         harness.run_steps(4);
     }
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// Tue 13 Oct: three weeks before today's column, the second day.
@@ -3645,7 +3651,7 @@ fn launcher_cap_light() {
     pick_command(&mut harness, "/rank");
     harness.get_by_label("Run").hover();
     harness.run_steps(8);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// A fictional decisions file in `folder`: `count` skips for the folder at `root`, and one for a folder elsewhere.
@@ -3838,14 +3844,14 @@ fn settings_defaults_light() {
     command_row(settings, "/rank", ModelChoice::Sonnet, "3.00");
     command_row(settings, "/apply", ModelChoice::Opus, "5.00");
     let mut harness = render_settings_shell(shell, Page::Defaults);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
 fn settings_permissions_light() {
     let name = "settings_permissions_light";
     let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::Permissions);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// Data and privacy at the default Forever, with Clear tray decisions asking about 214 fictional decisions.
@@ -3860,21 +3866,21 @@ fn settings_data_light() {
     // The pointer leaves the button, so it shows at rest under the popover.
     harness.hover_at(egui::pos2(700.0, 700.0));
     harness.run_steps(3);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
 fn settings_about_light() {
     let name = "settings_about_light";
     let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::About);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// Every required tool answers, so the menu has no Setup tab.
 #[test]
 fn menu_without_setup_light() {
     let mut harness = probed_wgpu(probed(shell(Screen::InTray, "menu_without_setup_light"), AllTools), Theme::Light);
-    harness.snapshot_options("menu_without_setup_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "menu_without_setup_light");
 }
 
 /// The sample folder, open but not read yet.
@@ -4046,15 +4052,11 @@ fn run_finished_dark() {
 fn run_turn_1040_light() {
     let mut shell = shell(Screen::Runs, "run_turn_1040_light");
     *shell.desk_slot() = Some(apply_stop_after_evaluate());
-    let mut harness = Harness::builder()
-        .with_size([1040.0, 650.0])
-        .with_pixels_per_point(1.5)
-        .with_theme(Theme::Light)
-        .with_context_setup(install_look)
-        .wgpu()
-        .build_ui(move |ui| shell.show(ui));
+    let mut harness =
+        with_renderer(Harness::builder().with_size([1040.0, 650.0]).with_pixels_per_point(1.5).with_theme(Theme::Light).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui));
     harness.run_steps(3);
-    harness.snapshot_options("run_turn_1040_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "run_turn_1040_light");
 }
 
 #[test]
@@ -4434,7 +4436,7 @@ fn render_profile(shell: Shell, pick: Option<&str>, theme: Theme, name: &str) {
     if let Some(title) = pick {
         pick_topic(&mut harness, title);
     }
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -4485,7 +4487,7 @@ fn profile_updated_light() {
     harness.run_steps(3);
     feed.send(Snapshot::load(&root, day())).unwrap();
     harness.run_steps(3);
-    harness.snapshot_options("profile_updated_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "profile_updated_light");
 }
 
 /// The last line of the sample's first role, and the same with its blank filled in.
@@ -4851,7 +4853,7 @@ fn write_it_myself_opens_the_first_section() {
 fn profile_edit_light() {
     let mut harness = probed_wgpu(probed(shell(Screen::Profile, "profile_edit_light"), FixedTools), Theme::Light);
     fill_the_budget(&mut harness);
-    harness.snapshot_options("profile_edit_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "profile_edit_light");
 }
 
 /// A run works, so Save waits and says why on hover.
@@ -4862,7 +4864,7 @@ fn profile_busy_light() {
     fill_the_budget(&mut harness);
     button(&harness, "Save").hover();
     harness.run_steps(8);
-    harness.snapshot_options("profile_busy_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "profile_busy_light");
 }
 
 /// A task added a line to the role while it was open.
@@ -4873,7 +4875,7 @@ fn profile_conflict_light() {
     fill_the_budget(&mut harness);
     rewrite(&root, CANDIDATE, "update within a minute.\n", "update within a minute.\n- Introduced a weekly planning review with depot managers.\n");
     cmd_enter(&mut harness);
-    harness.snapshot_options("profile_conflict_light", &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, "profile_conflict_light");
 }
 
 /// Save mine over it writes only over the version the box shows. A newer one opens the box again on it.
@@ -5350,7 +5352,7 @@ fn render_providers(shell: Shell, theme: Theme) -> Harness<'static> {
 fn settings_providers_light() {
     let name = "settings_providers_light";
     let mut harness = render_providers(sign_in_shell(name, idle_tester()), Theme::Light);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -5361,21 +5363,21 @@ fn settings_key_entry_light() {
     // The pointer leaves the row it picked, so the row shows at rest.
     harness.hover_at(egui::pos2(700.0, 700.0));
     harness.run_steps(3);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
 fn settings_key_saved_light() {
     let name = "settings_key_saved_light";
     let mut harness = render_providers(key_saved_shell(name), Theme::Light);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
 fn settings_key_saved_dark() {
     let name = "settings_key_saved_dark";
     let mut harness = render_providers(key_saved_shell(name), Theme::Dark);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -5387,7 +5389,7 @@ fn settings_key_failed_light() {
     // The pointer leaves Save key's place, so nothing under it shows as hovered.
     harness.hover_at(egui::pos2(700.0, 700.0));
     harness.run_steps(3);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// The note names the method each task started with, not the one in use now.

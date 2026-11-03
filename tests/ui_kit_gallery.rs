@@ -1061,6 +1061,7 @@ const NOTES: ReleaseNotes = ReleaseNotes {
     title: "Jobdesk 0.2.0",
     released: "Released Fri 30 Oct. You have 0.1.0.",
     notes: RELEASE_NOTES,
+    notes_label: "What changed in 0.2.0",
     trust: "From the GitHub release. Its links and images do not open here.",
     slip: None,
     primary: "Download 0.2.0",
@@ -1245,6 +1246,73 @@ fn release_notes_popover_opens_on_its_primary_action() {
     primary.hover();
     harness.run_steps(4);
     assert!(harness.query_by_label_contains("A task is running").is_some(), "a waiting action says why");
+}
+
+/// The notes take a Tab stop and scroll on the keys, and they start at the top each time they open and for each release.
+#[test]
+fn release_notes_scroll_from_the_keyboard() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let shown = Rc::new(RefCell::new((false, "Jobdesk 0.2.0")));
+    let state = Rc::clone(&shown);
+    let mut cache = CommonMarkCache::default();
+    let mut harness = Harness::builder().with_size([900.0, 700.0]).with_context_setup(install_look).build_ui(move |ui| {
+        let mut state = state.borrow_mut();
+        ui.add_space(600.0);
+        let mark = status_mark_button(ui, Ink::Text, "Jobdesk 0.2.0 is out", state.0);
+        if mark.clicked() {
+            state.0 = !state.0;
+        }
+        let notes = ReleaseNotes { title: state.1, ..NOTES };
+        release_notes_popover(&mark, &mut state.0, &notes, &mut cache);
+    });
+    harness.run();
+    let top = |harness: &Harness| harness.get_by_label("Features").rect().top();
+    let focused = |harness: &Harness| harness.get_by_label("What changed in 0.2.0").accesskit_node().is_focused();
+    let tab_to_notes = |harness: &mut Harness| {
+        for _ in 0..8 {
+            if focused(harness) {
+                return;
+            }
+            harness.key_press(egui::Key::Tab);
+            harness.run();
+        }
+        panic!("Tab never reached the notes");
+    };
+    let press = |harness: &mut Harness, key| {
+        harness.key_press(key);
+        harness.run();
+    };
+
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    let start = top(&harness);
+    tab_to_notes(&mut harness);
+    press(&mut harness, egui::Key::PageDown);
+    let paged = top(&harness);
+    assert!(paged < start - 100.0, "Page Down moved the notes from {start} to {paged}");
+    press(&mut harness, egui::Key::ArrowUp);
+    assert!(top(&harness) > paged, "Up moves back a line");
+    assert!(focused(&harness), "the arrows keep the focus on the notes");
+    press(&mut harness, egui::Key::End);
+    assert!(top(&harness) <= paged, "End goes to the foot");
+    press(&mut harness, egui::Key::Home);
+    assert_eq!(top(&harness), start, "Home goes back to the top");
+
+    press(&mut harness, egui::Key::PageDown);
+    press(&mut harness, egui::Key::Escape);
+    assert!(harness.query_by_label("Download 0.2.0").is_none(), "Esc closes");
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    assert_eq!(top(&harness), start, "the notes open at the top again");
+
+    tab_to_notes(&mut harness);
+    press(&mut harness, egui::Key::PageDown);
+    assert!(top(&harness) < start);
+    shown.borrow_mut().1 = "Jobdesk 0.2.1";
+    harness.run();
+    assert_eq!(top(&harness), start, "another release's notes start at the top");
 }
 
 #[test]

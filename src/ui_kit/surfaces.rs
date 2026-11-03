@@ -1003,6 +1003,8 @@ pub struct ReleaseNotes<'a> {
     pub released: &'a str,
     /// The release's notes: untrusted Markdown from the network, shown through `release_markdown`.
     pub notes: &'a str,
+    /// What a screen reader calls the notes, which take a Tab stop and scroll on the keys, such as "What changed in 0.2.0".
+    pub notes_label: &'a str,
     /// The `faint` line under the notes on where they come from and what they cannot do.
     pub trust: &'a str,
     /// What the primary action does, on a slip above the actions, once the update is ready. `None` before.
@@ -1065,23 +1067,31 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
             divider(ui);
             Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).show(ui, |ui| {
+                // Keyed by the release, so other notes start at the top, and back at the top each time it opens.
+                let notes_id = id.with(("release_notes", notes.title));
+                let paper = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let height = NOTES_HEIGHT - 2.0 * HAIRLINE;
-                    egui::ScrollArea::vertical()
-                        .id_salt(id.with("release_notes"))
-                        .auto_shrink([false, false])
-                        .min_scrolled_height(height)
-                        .max_height(height)
-                        .show(ui, |ui| {
-                            let (left, top, right, bottom) = NOTES_BODY_PADDING;
-                            Frame::new().inner_margin(Margin { left, right, top, bottom }).show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.spacing_mut().item_spacing.y = ITEM_GAP;
-                                release_markdown(ui, cache, notes.notes);
-                            });
+                    let delta = notes_keys(ui, notes_id, height);
+                    let scroll = egui::ScrollArea::vertical().id_salt(notes_id).auto_shrink([false, false]).min_scrolled_height(height).max_height(height);
+                    let scroll = if opening { scroll.vertical_scroll_offset(0.0) } else { scroll };
+                    scroll.show(ui, |ui| {
+                        if let Some(delta) = delta {
+                            ui.scroll_with_delta_animation(vec2(0.0, delta), egui::style::ScrollAnimation::none());
+                        }
+                        let (left, top, right, bottom) = NOTES_BODY_PADDING;
+                        Frame::new().inner_margin(Margin { left, right, top, bottom }).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            release_markdown(ui, cache, notes.notes);
                         });
+                    });
                 });
+                // The notes hold nothing to click, so they take a Tab stop of their own, read from the keyboard.
+                let region = ui.interact(paper.response.rect, notes_id, Sense::focusable_noninteractive());
+                region.widget_info(|| WidgetInfo::labeled(Role::ScrollView, true, notes.notes_label));
+                if region.has_focus() {
+                    ui.painter().rect_stroke(paper.response.rect, RADIUS_PANEL, Stroke::new(FOCUS_RING, p.active), StrokeKind::Inside);
+                }
                 ui.add_space(ROW_GAP);
                 ui.add(egui::Label::new(rich(ui, notes.trust, Type::SMALL, Ink::Faint)).wrap());
                 if let Some(slip) = notes.slip {
@@ -1144,6 +1154,22 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
         }
     });
     picked
+}
+
+/// How far the notes `id`, a view `height` tall, scroll this frame on the keys, while they have the focus: a line on
+/// Up and Down, a view less a line on Page Up and Page Down, to either end on Home and End. Each key it reads is taken,
+/// and the up and down arrows stay with the notes rather than move the focus. The delta moves the content, so it is
+/// negative going down.
+fn notes_keys(ui: &Ui, id: egui::Id, height: f32) -> Option<f32> {
+    if !ui.memory(|memory| memory.has_focus(id)) {
+        return None;
+    }
+    ui.memory_mut(|memory| memory.set_focus_lock_filter(id, EventFilter { vertical_arrows: true, ..Default::default() }));
+    let line = ui.fonts_mut(|fonts| fonts.row_height(&Type::BODY.font()));
+    let page = (height - line).max(line);
+    let far = 1.0e6;
+    let keys = [(Key::ArrowUp, line), (Key::ArrowDown, -line), (Key::PageUp, page), (Key::PageDown, -page), (Key::Home, far), (Key::End, -far)];
+    ui.input_mut(|input| keys.into_iter().filter(|(key, _)| input.consume_key(Modifiers::NONE, *key)).map(|(_, delta)| delta).reduce(|a, b| a + b))
 }
 
 /// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.

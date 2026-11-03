@@ -9,7 +9,7 @@
                 "args": ["build", "--bin=jobdesk", "--package=jobdesk"],
                 "filter": { "name": "jobdesk", "kind": "bin" }
             },
-            "args": ["--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "args": ["--workspace", "${workspaceFolder}/../ai-job-search"],
             "cwd": "${workspaceFolder}"
         },
         {
@@ -20,7 +20,7 @@
                 "args": ["build", "--release", "--bin=jobdesk", "--package=jobdesk"],
                 "filter": { "name": "jobdesk", "kind": "bin" }
             },
-            "args": ["--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "args": ["--workspace", "${workspaceFolder}/../ai-job-search"],
             "cwd": "${workspaceFolder}"
         }
     ]

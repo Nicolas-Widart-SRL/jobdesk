@@ -249,7 +249,8 @@ const PERMISSIONS: [&str; 12] = [
     "Allowing every tool means a posting written to trick Claude could get a command run before you see it. The commands in your job search folder check postings with posting_guard before they score them.",
 ];
 
-/// The data folder's section, the run logs', the tray's, then the line on who can read them.
+/// The data folder's section, the run logs', the tray's, then the line on who can read them and what leaves this
+/// computer.
 const DATA: [&str; 11] = [
     "Data folder",
     "Everything Jobdesk keeps apart from your job search folder.",
@@ -261,7 +262,7 @@ const DATA: [&str; 11] = [
     "Tray decisions",
     "Clear tray decisions",
     "Forgets this folder's decisions on Today and the reasons given for past skips, so Today deals those cards again. Other folders keep theirs, and run logs stay.",
-    "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
+    "Run logs and decisions are readable only by your user account. Only tasks send your job search out, through Claude Code. The update check asks GitHub for the latest release, with Jobdesk's version and nothing about your job search. Turn it off in About.",
 ];
 
 /// The versions, the updates, the links, then the line on who makes Jobdesk. The switch has a help for on and one for

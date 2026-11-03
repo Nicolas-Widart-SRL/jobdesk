@@ -18,7 +18,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 - **Today** deals your decisions one card at a time: Y opens the suggested task, L sets it aside (until tomorrow by default), N skips, U undoes.
 - **Jobs, Applications and Insights** update live as commands change your files.
 - **Tasks** starts any slash command and shows its progress, Claude's questions, the cost and the history.
-- **Profile** shows what Claude reads about you, topic by topic, opens the setup task for one topic, and lets you edit a block in place.
+- **Profile** shows what Claude reads about you, topic by topic, opens the setup task for one topic, lets you edit a block in place, and previews your CV PDFs with how fresh each is.
 - **Application dossiers** gather the PDFs, verification, keyword coverage, evaluation, prep packs and follow-ups of each application.
 - **Settings** shows what your tasks cost and the terms Jobs checks against. It sets the theme, the Today queue, the Jobs view filters, how tasks sign in, run defaults, a monthly cap, tool permissions and how long run logs stay.
 - **Nothing runs until you start it**, and Jobdesk changes your checkout only when you save a Profile edit.

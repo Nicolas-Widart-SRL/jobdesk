@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths inside the workspace, guards the API key and handles tool permissions, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key and handles tool permissions, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -15,6 +15,7 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A failed tool's reason, and a load error's reason | Plain text, with hidden characters removed |
 | A run's notices | Plain text, with hidden characters removed: see [Notices](#notices) |
 | Test connection's error | Plain text: see [Masking](#masking) |
+| PDFs, in the dossier and in CV documents | Page images only: see [CV files](#cv-files) |
 
 A link opens only on click, and only for `http` or `https`.
 
@@ -31,7 +32,7 @@ Profile text renders through `profile_markdown`, which is `markdown` with HTML b
 
 ## Paths from the tracker
 
-Paths read from the tracker must stay inside the workspace. `within_workspace` checks them, and it reads `/` and `\` as separators on every system.
+Paths read from the tracker must stay inside the workspace. `within_workspace` in `shared_kernel` checks them, and it reads `/` and `\` as separators on every system.
 
 On every system it refuses:
 
@@ -47,6 +48,22 @@ On Windows only, it also refuses:
 - a part named like a device, such as `con.json`.
 
 The check reads only the text of the path and never asks the file system. So the path it returns names a place under the workspace folder, but symbolic links are not resolved. The dossier's archive readers, and the PDF pages they lead to, follow links when they open the file, so a link inside the workspace, at the file or at a folder on its path, can lead the read outside the workspace.
+
+## CV files
+
+The files in `cv/` come from the checkout, and CV PDFs carry text tailored from postings.
+
+- A CV PDF renders only as page images: no text layer, link, form or embedded action reaches the screen. The renderer's reason for a failure shows as plain text with hidden characters removed.
+- The list skips names that start with a dot, are not `.tex` or `.pdf`, or hold a control or hidden character, so no row shows a name that looks like another file's.
+- Each name goes through `within_workspace` as `cv/<name>` and must come back as that one part. Then every link is resolved: `cv/` must sit inside the resolved checkout, and the file must be a regular file inside the resolved `cv/`. A `cv/` that resolves outside shows nothing, and a file that does is skipped.
+- Open PDF and Show in Finder check the name again when clicked. Open PDF hands the system viewer only a resolved file whose extension is `.pdf`, as one argument that no shell reads.
+- `.claude/commands/build-cv.md` is checked only for existence, as a regular file inside the resolved checkout. Jobdesk never reads it.
+- `/build-cv <stem>` is offered only for a stem of ASCII letters, digits, `_` and `-` that does not start with `-`, so the line it fills in carries no option and no second command.
+
+The checks run once, before the work they guard. So, as for a profile save:
+
+- a running task that swaps a file for a link between the click's check and the spawn can send Open PDF or Show in Finder elsewhere;
+- pages render from the path the list was read with, so a file swapped for a link after that read can lead the render outside the workspace, as for the dossier.
 
 ## The API key
 

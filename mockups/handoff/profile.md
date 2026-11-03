@@ -180,7 +180,7 @@ Brief: a rail entry on Profile that previews the CV PDFs in the job search folde
 
 **Pages**
 - Each page sits in `page_frame` on the paper, side by side with `PAGE_GAP` between. A page takes the scroll area's height less its caption, and less when needed so two pages fit side by side, never less than `PAGE_SIZE`. A third page wraps under them, and the area scrolls. Its width follows the rendered page, A4 portrait in practice. Under it, "Page N of M" in `Type::NOTE`, `faint`.
-- Pages render on the worker threads that render the dossier's, keyed by path and modification time, so a PDF that `/build-cv` rewrites renders again and its tag updates on the next snapshot. They need a larger raster than the dossier's thumbnails, so the render takes the target size.
+- Pages render on the worker threads that render the dossier's and share the dossier's page cache, keyed by path and modification time, so a PDF that `/build-cv` rewrites renders again and its tag updates on the next snapshot. Pages render at a fixed 2x, and `fitted_pages` draws them at the size the screen gives.
 - **Loading**: `skeleton` blocks at page size with a short caption skeleton. The list and head come from the snapshot and show at once, with "Rendering the pages…" at the end of the meta line.
 - **Not built yet**: one empty `page_frame` at page size on `card`, saying "No PDF yet. It shows here once /build-cv has built it." in `muted`, centred.
 - **Render failed**: `prompt_box_tone` in `Closed` at the top of the scroll area: "This PDF could not be rendered.", a sentence saying the file is unchanged and Open PDF still opens it, then the renderer's reason in a `copyable` `code_box`, as plain text with control, escape, bidi and zero-width characters removed.
@@ -200,15 +200,6 @@ Brief: a rail entry on Profile that previews the CV PDFs in the job search folde
 - **`blank_page`**: an empty `page_frame` at page size, filled `card`, with one centred line in `muted`.
 
 No new token. The list column reuses `RUN_SIDE`.
-
-### Doc changes
-
-For the planner's docs step. None of these is in the docs yet:
-- `docs/guide.md` › Profile: a paragraph on CV documents: the Built from your profile row pinned under the topics, and its state words (N out of date, N documents, None yet, Hidden). The list: masters first, then applications, newest first. The four tags and what each means, Current including a PDF saved in the same second as its `.tex`. Jobdesk never builds a PDF: Rebuild the PDF… and Build the PDF… only open `/build-cv <name>` in the launcher, and are disabled while a task runs. They show only when the folder has the `/build-cv` command. Without it, the line says so and suggests updating the ai-job-search checkout. Open PDF and Show in Finder. A PDF with no `.tex` is listed as Current, with nothing to build it from.
-- `ARCHITECTURE.md` › Features: the `profile` row adds "CV document, staleness" to its language, and to what it reads "the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists". The compare of the two times stays in `profile`'s domain.
-- `docs/architecture/profile.md`: one line on how CV documents reach the `Snapshot`: the `cv/` stems with their file stamps, and whether `.claude/commands/build-cv.md` exists, read with the profile files, an unreadable check counting as missing. The build action needs both an out-of-date document and the command.
-- `ARCHITECTURE.md` › PDF pages: pages also render for Profile's CV documents, at the size the screen asks for.
-- `docs/architecture/trust.md`: CV PDFs render as page images only, and their paths pass `within_workspace`. Jobdesk only checks that `build-cv.md` exists and never reads it.
 
 ## Later ideas
 

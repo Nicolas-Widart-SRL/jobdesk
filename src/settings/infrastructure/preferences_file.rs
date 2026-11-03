@@ -95,7 +95,7 @@ impl PreferencesFile {
         file.write_all(text.as_bytes())?;
         // On disk before the rename, or a power loss could keep the rename and lose the data.
         file.sync_all()?;
-        fs::rename(temporary, &self.path)?;
+        crate::shared_kernel::replace_file::rename_over(&temporary, &self.path)?;
         // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
         // Best effort: some mounts refuse to sync a folder, and the file is already in place.
         #[cfg(unix)]

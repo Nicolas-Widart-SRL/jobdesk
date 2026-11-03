@@ -8,6 +8,7 @@ pub mod markdown;
 pub mod model_choice;
 pub mod placeholders;
 pub mod process_tree;
+pub mod replace_file;
 pub mod sign_in;
 pub mod source;
 pub mod visible_text;

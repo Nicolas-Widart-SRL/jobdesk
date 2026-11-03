@@ -1,6 +1,6 @@
 ---
 name: doc-coauthoring
-description: Writing guidance for the docs-writer agent: structure, refinement and reader testing for technical docs. Preloaded into docs-writer only. The main session, the planner and the builders never load it.
+description: "Writing guidance for the docs-writer agent: structure, refinement and reader testing for technical docs. Preloaded into docs-writer only. The main session, the planner and the builders never load it."
 user-invocable: false
 ---
 

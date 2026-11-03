@@ -184,6 +184,8 @@ pub struct Shell {
     auto_check: bool,
     /// The user chose Restart to update, and the window is closing for it. Any answer that keeps the window open clears it.
     restart_pending: bool,
+    /// A withdrawn release stopped the restart's close this frame, so the close request is not asked about again.
+    close_dropped: bool,
     /// Where the window leaves what Restart to update applies once it has closed, with the arguments to open again with.
     restart_slot: RestartSlot,
     /// The arguments Jobdesk started with, after the program's name.
@@ -261,6 +263,7 @@ impl Shell {
             update_screen: UpdateScreen::default(),
             auto_check: true,
             restart_pending: false,
+            close_dropped: false,
             restart_slot: RestartSlot::default(),
             launch_args: Vec::new(),
         }
@@ -662,21 +665,25 @@ impl Shell {
             self.updates.set_auto(auto);
         }
         self.updates.poll(now);
-        self.drop_gone_restart();
+        self.drop_gone_restart(ctx);
         if let Some(wait) = self.updates.next_due(now) {
             ctx.request_repaint_after(wait);
         }
     }
 
-    /// A release withdrawn while Restart to update waits takes its download with it, so the restart is off. The draft ask
-    /// it raised closes, and an agreed quit is taken back, so the window stays rather than quit a Jobdesk that would not
-    /// open again. A close already on its way stops at the draft, which asks again.
-    fn drop_gone_restart(&mut self) {
+    /// A release withdrawn while Restart to update waits takes its download with it, so the restart is off, and the window
+    /// stays rather than quit a Jobdesk that would not open again. The draft ask it raised closes. A close already on its
+    /// way stops here, without asking again: the one Restart to update sent, which lands as a close request the frame after,
+    /// or the one Discard sent, which agreed to the quit. Runs before `handle_shortcuts_and_quit` reads the request.
+    fn drop_gone_restart(&mut self, ctx: &egui::Context) {
         if !self.restart_pending || self.updates.restart_plan().is_some() {
             return;
         }
         self.restart_pending = false;
-        self.quit_agreed = false;
+        if std::mem::take(&mut self.quit_agreed) || ctx.input(|input| input.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_dropped = true;
+        }
         if matches!(self.away, Some((Pending::Quit, _))) {
             self.away = None;
         }
@@ -885,7 +892,9 @@ impl Shell {
             }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
-        let closing = ctx.input(|input| input.viewport().close_requested());
+        // A close a withdrawn release already stopped is not a quit to ask about.
+        let dropped = std::mem::take(&mut self.close_dropped);
+        let closing = ctx.input(|input| input.viewport().close_requested()) && !dropped;
         // Unsaved profile text asks first, one ask at a time. Once the user agrees, the window asks to close again, and a
         // live session asks next. A close while the folder ask shows waits for its answer.
         if closing && self.draft_unsaved() && !self.quit_agreed {
@@ -2240,13 +2249,31 @@ mod tests {
         assert_eq!(args, [OsString::from("--verbose"), OsString::from("--workspace"), open]);
     }
 
+    /// Ready updates whose next check finds 0.2.0 withdrawn.
+    fn withdrawn_updates() -> Updates {
+        let withdrawn =
+            crate::updates::application::Release { version: crate::updates::application::Version { major: 0, minor: 1, patch: 0 }, ..release_020() };
+        ready_updates_then(vec![crate::updates::application::ServiceEvent::Checked(Ok(withdrawn))])
+    }
+
     /// A shell whose ready 0.2.0 the next check finds withdrawn, with an unsaved draft.
     fn withdrawn_with_draft(ctx: &egui::Context, data: &Path, folder: &tempfile::TempDir) -> Shell {
         let mut shell = ready_with_draft(ctx, data, folder);
-        let withdrawn =
-            crate::updates::application::Release { version: crate::updates::application::Version { major: 0, minor: 1, patch: 0 }, ..release_020() };
-        shell.updates = ready_updates_then(vec![crate::updates::application::ServiceEvent::Checked(Ok(withdrawn))]);
+        shell.updates = withdrawn_updates();
         shell
+    }
+
+    /// A frame in which the check asked for answers, then the window's keys and close request are read, in the order
+    /// `show` takes them. `close` is whether the window was asked to close in it.
+    fn update_frame(ctx: &egui::Context, shell: &mut Shell, close: bool) -> Vec<egui::ViewportCommand> {
+        let mut input = egui::RawInput::default();
+        if close {
+            input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        }
+        commands(ctx.run_ui(input, |ui| {
+            shell.follow_updates(ui.ctx(), update_time());
+            shell.handle_shortcuts_and_quit(ui.ctx());
+        }))
     }
 
     /// A release withdrawn while the draft asks takes Restart to update with it: the ask closes and the window and the
@@ -2261,7 +2288,7 @@ mod tests {
         assert_eq!(shell.away, Some((Pending::Quit, true)), "the draft asks first");
 
         shell.updates.check_now(update_time());
-        shell.follow_updates(&ctx, update_time());
+        update_frame(&ctx, &mut shell, false);
         assert_eq!(shell.updates.restart_plan(), None, "the download went with the release");
         assert_eq!(shell.away, None, "the ask closes, with nothing left to restart for");
         assert!(!shell.restart_pending && shell.draft_unsaved(), "the window and the draft stay");
@@ -2269,8 +2296,26 @@ mod tests {
         assert_eq!(slot(&shell), None);
     }
 
-    /// A release withdrawn between Discard and the close does not quit Jobdesk silently: the close stops and the draft
-    /// asks again, now for a plain quit.
+    /// A release withdrawn after Restart to update sent its close, before the close is read, keeps the window: with
+    /// nothing to apply, the close would quit a Jobdesk that does not open again. A later quit goes as usual.
+    #[test]
+    fn a_release_withdrawn_before_the_restart_closes_keeps_the_window() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        shell.updates = withdrawn_updates();
+        assert!(restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close));
+
+        shell.updates.check_now(update_time());
+        assert!(update_frame(&ctx, &mut shell, true).contains(&egui::ViewportCommand::CancelClose), "the close stops");
+        assert!(!shell.restart_pending && shell.away.is_none() && !shell.confirm_quit, "and nothing asks");
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None);
+        assert!(!close_frame(&ctx, &mut shell).contains(&egui::ViewportCommand::CancelClose), "the user's next quit goes");
+    }
+
+    /// A release withdrawn between Discard and the close keeps the window and the draft, and asks nothing: a second
+    /// Discard would quit a Jobdesk that does not open again. A later quit asks about the draft as usual.
     #[test]
     fn a_release_withdrawn_after_discard_stops_the_close() {
         let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -2282,10 +2327,13 @@ mod tests {
         assert!(sent.contains(&egui::ViewportCommand::Close), "Discard closes the window");
 
         shell.updates.check_now(update_time());
-        shell.follow_updates(&ctx, update_time());
-        assert!(close_frame(&ctx, &mut shell).contains(&egui::ViewportCommand::CancelClose), "the close stops");
-        assert_eq!(shell.away, Some((Pending::Quit, true)), "and the draft asks again");
-        assert!(!shell.restart_pending && shell.draft_unsaved());
+        assert!(update_frame(&ctx, &mut shell, true).contains(&egui::ViewportCommand::CancelClose), "the close stops");
+        assert_eq!(shell.away, None, "with no ask");
+        assert!(!shell.restart_pending && !shell.quit_agreed && shell.draft_unsaved(), "the window and the draft stay");
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None);
+        assert!(close_frame(&ctx, &mut shell).contains(&egui::ViewportCommand::CancelClose));
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "the user's next quit asks about the draft");
     }
 
     /// A gateway that hands its sink to the test, so a session can end its turn and wait for a reply.

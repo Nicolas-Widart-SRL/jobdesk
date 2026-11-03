@@ -114,6 +114,8 @@ struct Cell {
     failure: Option<String>,
     /// Counts saves and removes, so a read that started before one never replaces what it wrote.
     generation: u64,
+    /// Counts keychain reads that ended, so a reader that waited shares a failure only when a read ended meanwhile.
+    reads: u64,
 }
 
 /// The saved key in process memory, shared with each task's start. The keychain is read once per launch, until a read succeeds:
@@ -130,25 +132,32 @@ struct KeyCache {
 
 impl KeyCache {
     fn new(keys: Arc<dyn KeyStore>) -> Self {
-        Self { keys, cell: Mutex::new(Cell { held: Held::NotRead, failure: None, generation: 0 }), turn: Mutex::new(()), waiting: AtomicUsize::new(0) }
+        Self {
+            keys,
+            cell: Mutex::new(Cell { held: Held::NotRead, failure: None, generation: 0, reads: 0 }),
+            turn: Mutex::new(()),
+            waiting: AtomicUsize::new(0),
+        }
     }
 
     /// The held key, or the keychain's answer when nothing is held. A read under way on another thread is waited for and shared,
-    /// so two callers at once read the keychain once, and its failure is the answer of each. The window must not call this.
+    /// so two callers at once read the keychain once, and its failure is the answer of each. A wait on a turn held without a read,
+    /// such as the page's look at an old failure, shares nothing and reads again. The window must not call this.
     fn read_waiting(&self) -> Result<Option<ApiKey>, KeyStoreError> {
         let (turn, waited) = match self.turn.try_lock() {
-            Ok(turn) => (turn, false),
-            Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), false),
+            Ok(turn) => (turn, None),
+            Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), None),
             Err(TryLockError::WouldBlock) => {
+                let before = self.cell().reads;
                 self.waiting.fetch_add(1, Ordering::SeqCst);
                 let turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
                 self.waiting.fetch_sub(1, Ordering::SeqCst);
-                (turn, true)
+                (turn, Some(before))
             }
         };
-        if waited {
+        if let Some(before) = waited {
             let cell = self.cell();
-            if let (None, Some(message)) = (cell.held.answer(), &cell.failure) {
+            if let (true, None, Some(message)) = (cell.reads != before, cell.held.answer(), &cell.failure) {
                 return Err(KeyStoreError { message: message.clone() });
             }
         }
@@ -204,6 +213,7 @@ impl KeyCache {
         };
         let read = self.keys.read();
         let mut cell = self.cell();
+        cell.reads += 1;
         match read {
             Ok(found) if cell.generation == generation => {
                 cell.held = found.map_or(Held::Absent, Held::Present);
@@ -1054,6 +1064,26 @@ mod tests {
         f.providers.read_once();
         assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()), "the page takes the denial without a prompt");
         assert_eq!(f.keys.reads(), 1);
+    }
+
+    #[test]
+    fn a_task_that_waited_only_on_the_page_reads_the_keychain_again() {
+        let mut f = fixture(Some(FAKE));
+        f.keys.fail_reads.store(true, Ordering::SeqCst);
+        f.providers.read_once();
+        assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()));
+        f.keys.fail_reads.store(false, Ordering::SeqCst);
+        // The page holds the turn a moment to look at the old failure, without asking the keychain.
+        let key = Arc::clone(&f.providers.key);
+        let turn = key.turn.lock().unwrap();
+        let reading = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.map(|key| key.expose().to_owned()))
+        });
+        f.wait_for_waiters(1);
+        drop(turn);
+        assert_eq!(reading.join().unwrap().unwrap().as_deref(), Some(FAKE), "no read ended while it waited, so the old denial is not its answer");
+        assert_eq!(f.keys.reads(), 2);
     }
 
     #[test]

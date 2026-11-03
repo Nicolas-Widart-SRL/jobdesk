@@ -2733,6 +2733,10 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
             Source::Profile => {
                 fs::write(root.join(".claude/skills/job-application-assistant/02-behavioral-profile.md"), b"# Behavioral Profile\n\nCaf\xe9\n").unwrap()
             }
+            Source::CvDocuments => {
+                fs::remove_dir_all(root.join("cv")).unwrap();
+                fs::write(root.join("cv"), b"").unwrap();
+            }
             Source::Decisions => unreachable!("the tray reports its own file"),
         }
     }
@@ -2828,6 +2832,14 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             alert: "Part of your profile could not be read.",
             shown: &["6 of 11 profile topics filled, 1 hidden"],
             not_shown: &["7 of 11 profile topics filled", "6 of 10 profile topics filled", "Insights, could not be read"],
+        },
+        Case {
+            screen: Screen::Profile,
+            broken: &[Source::CvDocuments],
+            subtitle: "Claude reads this before it scores a job or writes a CV or a letter.",
+            alert: "Your CV folder could not be read.",
+            shown: &["Your profile topics still show, and every task still runs."],
+            not_shown: &[],
         },
     ];
     for (index, case) in cases.iter().enumerate() {

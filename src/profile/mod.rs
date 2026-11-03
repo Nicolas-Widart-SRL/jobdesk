@@ -7,14 +7,29 @@ pub mod ui;
 
 use std::path::Path;
 
-use crate::profile::application::{ProfileEditor, ProfileStore, ProfileView, profile_view};
-use crate::profile::infrastructure::ProfileFiles;
+use crate::profile::application::{CvShelf, ProfileEditor, ProfileStore, ProfileView, cv_shelf, profile_view};
+use crate::profile::infrastructure::{CvFolder, ProfileFiles};
 use crate::shared_kernel::LoadError;
 
 /// Each profile file that exists but cannot be read gives one error, and hides only the topics it feeds.
 pub fn load(root: &Path) -> (ProfileView, Vec<LoadError>) {
     let files = ProfileFiles::in_workspace(root);
     profile_view(&|file| files.read(file))
+}
+
+/// The CV documents of `cv/`. A folder that cannot be read is an error, and a missing one is an empty shelf.
+pub fn load_cv(root: &Path) -> Result<CvShelf, LoadError> {
+    CvFolder::in_workspace(root).list().map(cv_shelf)
+}
+
+/// Opens one PDF of `cv/` in the system's viewer, when the name still passes the check.
+pub fn open_cv_pdf(root: &Path, name: &str) {
+    CvFolder::in_workspace(root).open_pdf(name);
+}
+
+/// Shows one file of `cv/` in the system's file manager, when the name still passes the check.
+pub fn reveal_cv_file(root: &Path, name: &str) {
+    CvFolder::in_workspace(root).reveal(name);
 }
 
 /// The editor saves one block at a time into the checkout, the only write Jobdesk makes there.

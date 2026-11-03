@@ -10,7 +10,7 @@
 /* Settings, a full screen. Choose with ?state=…&theme=light|dark.
    usage|usage-empty|loading|providers|key-entry|key-saved|key-failed|terms|terms-missing|terms-failed|
    general|appearance|queue|jobs|defaults|cap|perms|runtime|data|about|search, and the Setup tab in the menu: nav.
-   Updates in About: about-checking|about-failed|about-update|about-notes|about-ready-waits.
+   Updates in About: about-checking|about-failed|about-update|about-ready-waits.
    Grid.html's scoped shell, copied under .st, so app.css and the other canvases are unchanged. Fictional data only. */
 body { margin: 0; }
 .st {
@@ -49,14 +49,6 @@ body { margin: 0; }
 .st .sact { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
 .st .sact.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
 .st .sdiv { flex: none; width: 1px; height: 16px; background: var(--line); }
-/* Release notes on a slip inside About (option B): Markdown held to the section size, links as words, images as alt text. */
-.st .rn { position: relative; margin: 2px 0 12px; padding: 4px 22px 12px 16px; height: 210px; overflow: hidden; }
-.st .rn h3 { margin: 10px 0 4px; font: 600 17px/1.3 var(--slab); }
-.st .rn ul { margin: 0; padding: 0 0 0 18px; }
-.st .rn li { margin: 3px 0; line-height: 1.45; }
-.st .rn li::marker { color: var(--muted); }
-.st .rn b { font-weight: 600; }
-.st .rn .bar-y { top: 6px; right: 5px; height: 48%; }
 .st .hp.bad { color: var(--closed); }
 
 /* Controls, as UiPass.html draws them. */
@@ -627,25 +619,16 @@ function a_data() {
 }
 
 // ---------- About ----------
-// The Updates section. mode: current|checking|failed|update|notes|ready-waits.
+// The Updates section. mode: current|checking|failed|update|ready-waits.
 // The bar's group for each mode, as Update.html draws it.
 const MK = (tone, t) => `<span class="sbtn mk"><span class="sq" style="background: var(--${tone})"></span>${t}</span>`;
 const SACT = (t, dis) => `<span class="sact${dis ? ' dis' : ''}">${t}</span>`;
 const UPD_BAR = {
   update: MK('text', 'Jobdesk 0.2.0 is out') + SACT('Download'),
-  notes: MK('text', 'Jobdesk 0.2.0 is out') + SACT('Download'),
   'ready-waits': MK('hired', '0.2.0 is downloaded and checked') + SACT('Restart to update', true),
 };
 const AUTO_ON = 'When Jobdesk opens and about every 6 hours, it reads the latest release on GitHub. It downloads nothing until you choose Download.';
 const AUTO_OFF = 'Off. Jobdesk looks for a new version only when you choose Check now.';
-const RN_SOURCE = `<h3>Features</h3><ul>
-    <li><b>settings</b>: keep run logs for 30 days, 90 days or forever (#41)</li>
-    <li><b>today</b>: Later can set a card aside until Monday</li>
-    <li><b>tasks</b>: reopen a stopped task with a reply (#44)</li></ul>
-  <p class="muted" style="margin: 6px 0 0 18px">The new Data and privacy page</p>
-  <h3>Bug fixes</h3><ul>
-    <li><b>jobs</b>: a cut title shows in full on hover</li>
-    <li><b>profile</b>: Save keeps your draft when the file changed on disk</li></ul>`;
 function updatesSection(mode) {
   const latest = {
     current: sr('Latest version', 'Last checked today at 09:12.', TAG('Up to date', 'hired', 'sm') + B('Check now', 'sm')),
@@ -653,9 +636,6 @@ function updatesSection(mode) {
     failed: `<div class="sr"><div><div class="lb">Latest version</div><div class="hp bad">Could not reach GitHub at 09:12: the connection timed out.</div><div class="hp">Jobdesk tries again in about 6 hours, and nothing changed on this computer.</div></div>
       <div class="ct">${TAG('Check failed', 'closed', 'sm')}${B('Check now', 'sm')}</div></div>`,
     update: sr('Latest version', 'Jobdesk 0.2.0, released Fri 30 Oct. You have 0.1.0. Last checked today at 09:12.', `<span class="lk">What's new</span>${B('Download 0.2.0', 'sm pri')}`),
-    notes: sr('Latest version', 'Jobdesk 0.2.0, released Fri 30 Oct. You have 0.1.0. Last checked today at 09:12.', `${B('Download 0.2.0', 'sm pri')}`) +
-      `<div class="slp rn" aria-label="What changed in 0.2.0">${RN_SOURCE}<span class="bar-y"></span></div>
-       <p class="faint" style="font-size: 12.5px; margin: -4px 0 4px">From the GitHub release. Its links and images do not open here. <span class="lk" style="margin-left: 6px">Open the release page</span></p>`,
     'ready-waits': `<div class="sr" style="position: relative"><div><div class="lb">Latest version</div><div class="hp">Jobdesk 0.2.0 is downloaded and its signature checked. Restart closes Jobdesk, installs it and opens it again with the same folder and settings.</div></div>
       <div class="ct">${B('Restart to update', 'sm pri dis')}</div>
       <div class="tip" style="right: 0; top: 54px; width: 280px">A task waits for your reply in Tasks. End its session there, then restart.</div>${ARROW(812, 34)}</div>`,
@@ -672,10 +652,10 @@ function a_about(mode = 'current') {
       sr('What changed', 'Every release, newest first.', `<span class="lk">Open the changelog</span>`) +
       sr('Licences', 'Jobdesk and the open-source parts it is built from.', `<span class="lk">Show licences</span>`)) +
     `<p class="muted" style="margin-top: 16px; font-size: 13px">Jobdesk runs Claude Code. It is not made by Anthropic.</p>`;
-  const word = { failed: ['Check failed', 'x'], update: ['0.2.0 is out', ''], notes: ['0.2.0 is out', ''], 'ready-waits': ['0.2.0 ready', ''] }[mode];
+  const word = { failed: ['Check failed', 'x'], update: ['0.2.0 is out', ''], 'ready-waits': ['0.2.0 ready', ''] }[mode];
   const o = { status: { upd: UPD_BAR[mode], waits: mode === 'ready-waits' } };
   if (word) o.rail = { words: { about: word } };
-  return shellA('about', page('About Jobdesk', 'A desk for your ai-job-search folder.', body, { bar: mode === 'notes' || mode === 'ready-waits' }), o);
+  return shellA('about', page('About Jobdesk', 'A desk for your ai-job-search folder.', body, { bar: mode === 'ready-waits' }), o);
 }
 
 // ---------- The Setup tab in the menu ----------
@@ -702,7 +682,7 @@ const STATES = {
   general: a_general, appearance: a_appearance, queue: a_queue, jobs: a_jobs, defaults: () => a_defaults(), cap: a_cap, perms: a_perms,
   runtime: a_runtime, data: a_data, about: () => a_about('current'), search: () => a_defaults({ search: true }),
   'about-checking': () => a_about('checking'), 'about-failed': () => a_about('failed'), 'about-update': () => a_about('update'),
-  'about-notes': () => a_about('notes'), 'about-ready-waits': () => a_about('ready-waits'),
+  'about-ready-waits': () => a_about('ready-waits'),
   nav,
 };
 document.getElementById('root').innerHTML = (STATES[STATE] || a_usage)();

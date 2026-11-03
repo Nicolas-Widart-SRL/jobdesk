@@ -836,6 +836,120 @@ pub(in crate::ui_kit) fn amount_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: 
     response
 }
 
+/// What the user types into a `secret_field`, such as an API key, and whether the field shows it.
+/// Its `Debug` prints `Secret(…)` and never the text, so a log or a panic message cannot hold the key.
+#[derive(Default)]
+pub struct Secret {
+    text: String,
+    shown: bool,
+    /// Set by `take` and `clear`, so the field forgets its cursor and edit history the next time it is drawn.
+    forget: bool,
+}
+
+impl Secret {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the field holds nothing but spaces, so there is nothing to save.
+    pub fn is_blank(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+
+    /// Returns the text as typed and empties the field, masked again.
+    pub fn take(&mut self) -> String {
+        self.shown = false;
+        self.forget = true;
+        std::mem::take(&mut self.text)
+    }
+
+    /// Empties the field, masked again.
+    pub fn clear(&mut self) {
+        self.take();
+    }
+
+    /// Shows the text in the field, or masks it, as its Show toggle does.
+    pub fn set_shown(&mut self, shown: bool) {
+        self.shown = shown;
+    }
+}
+
+impl From<String> for Secret {
+    /// A field that already holds `text`, masked.
+    fn from(text: String) -> Self {
+        Self { text, ..Self::default() }
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(…)")
+    }
+}
+
+/// A single-line field for a key or password, in `Type::MONO`, masked unless its Show toggle is on, with the `hint` in
+/// `faint` while it is empty. It never puts its text on the clipboard, Show on or off: Copy and Cut do nothing in it,
+/// and a settled selection is not offered to the system either. It keeps no undo history, so Cmd+Z cannot bring back a
+/// key that `Secret::take` or `Secret::clear` removed. The response is the text edit's.
+pub fn secret_field(ui: &mut Ui, secret: &mut Secret, hint: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    // The field's id is its place in `ui`, taken before anything is added, as `search_field` takes its own.
+    let id = ui.next_auto_id().with("secret_field");
+    if std::mem::take(&mut secret.forget) {
+        ui.ctx().data_mut(|data| data.remove::<egui::text_edit::TextEditState>(id));
+    }
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), FIELD_HEIGHT), Sense::hover());
+    // Show is measured first and added after the edit, so Tab reaches the field before it, though it sits at the right.
+    let show = line(ui, "Show", SMALL.font, p.text, f32::INFINITY).size().x + SMALL.padding * 2.0;
+    let field = Rect::from_min_max(rect.min, egui::pos2((rect.right() - show - BUTTON_GAP).max(rect.left()), rect.bottom()));
+    // The field's box is painted last, when its focus is known, under what it holds.
+    let under = ui.painter().add(egui::Shape::Noop);
+    let room = field.shrink2(vec2(FIELD_PADDING, 0.0));
+    // The edit copies a selection on Copy or Cut while it has the focus, so those never reach it.
+    if ui.memory(|memory| memory.has_focus(id)) {
+        ui.ctx().input_mut(|input| input.events.retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Cut)));
+    }
+    let ink = if enabled { p.text } else { dimmed(p.text) };
+    let edit = egui::TextEdit::singleline(&mut secret.text)
+        .id(id)
+        .password(!secret.shown)
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::ZERO)
+        .font(Type::MONO.font())
+        .text_color(ink)
+        .hint_text(egui::RichText::new(hint).font(Type::BODY.font()).color(if enabled { p.faint } else { dimmed(p.faint) }))
+        .desired_width(room.width().max(0.0))
+        .align(egui::Align2::LEFT_CENTER);
+    let before = ui.ctx().output(|output| output.commands.len());
+    let response = ui.put(room, edit);
+    // A shown selection is offered as the system's primary selection on Linux, which is a clipboard too.
+    ui.ctx().output_mut(|output| {
+        let added = output.commands.split_off(before.min(output.commands.len()));
+        output.commands.extend(added.into_iter().filter(|command| !matches!(command, egui::OutputCommand::TextSelectionSettled(_))));
+    });
+    // The undo history holds every text the field held, so it is dropped each frame.
+    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+        state.clear_undoer();
+        state.store(ui.ctx(), id);
+    }
+    let toggle = Rect::from_min_max(egui::pos2(field.right() + BUTTON_GAP, rect.top()), rect.max);
+    let mut side = ui.new_child(egui::UiBuilder::new().max_rect(toggle).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    if small_toggle(&mut side, "Show", secret.shown).clicked() {
+        secret.shown = !secret.shown;
+        // The edit was drawn before the click was known, so the next frame masks or shows the text.
+        ui.ctx().request_repaint();
+    }
+    let border = match (enabled, response.has_focus()) {
+        (false, _) => dimmed(p.line),
+        (true, true) => p.text,
+        (true, false) => p.line,
+    };
+    ui.painter().set(under, egui::Shape::rect_filled(field, RADIUS_BUTTON, p.field));
+    ui.painter().rect_stroke(field, RADIUS_BUTTON, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    response
+}
+
 /// How long a Copy button reads Copied, in seconds.
 const COPIED_FOR: f64 = 2.0;
 
@@ -1078,6 +1192,176 @@ mod tests {
         harness.get_by(|node| node.id() == second).type_text("motion");
         harness.run();
         assert_eq!(*texts.borrow(), ["spending".to_owned(), "motion".to_owned()]);
+    }
+
+    /// An obviously fake key.
+    const FAKE_KEY: &str = "sk-ant-fake-0000-not-a-real-key";
+
+    /// A harness with one `secret_field` over a shared `Secret`, so a test can type in it and read or clear it.
+    fn secret_harness(secret: &std::rc::Rc<std::cell::RefCell<Secret>>) -> Harness<'static> {
+        let field = std::rc::Rc::clone(secret);
+        Harness::builder().with_size([500.0, 80.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            secret_field(ui, &mut field.borrow_mut(), "Paste your key");
+        })
+    }
+
+    /// Types `FAKE_KEY` into the field, from the keyboard as a user would.
+    fn type_fake_key(harness: &mut Harness) {
+        harness.get_by_role(egui::accesskit::Role::PasswordInput).focus();
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::PasswordInput).type_text(FAKE_KEY);
+        harness.run();
+    }
+
+    /// Every accessibility node's value, label, description and placeholder, joined.
+    fn every_node_text(harness: &Harness) -> String {
+        harness
+            .query_all_by(|_| true)
+            .flat_map(|node| {
+                let node = node.accesskit_node();
+                [node.value(), node.label(), node.description(), node.placeholder().map(str::to_owned)]
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_secret_never_prints_its_text() {
+        let mut secret = Secret::new();
+        secret.text = FAKE_KEY.to_owned();
+        assert_eq!(format!("{secret:?}"), "Secret(…)");
+        assert_eq!(format!("{secret:#?}"), "Secret(…)");
+        assert!(!secret.is_blank());
+        assert_eq!(secret.take(), FAKE_KEY);
+        assert!(secret.is_blank());
+        secret.text = "   ".to_owned();
+        assert!(secret.is_blank(), "spaces alone are nothing to save");
+    }
+
+    #[test]
+    fn a_hidden_secret_reaches_no_screen_reader() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        type_fake_key(&mut harness);
+        assert_eq!(secret.borrow().text, FAKE_KEY, "the key was not typed in");
+        assert!(!every_node_text(&harness).contains(FAKE_KEY), "a hidden key reaches the accessibility tree");
+        // Show puts it on screen, and so in the tree, which proves the search above can find it.
+        harness.get_by_label("Show").click();
+        harness.run();
+        assert!(every_node_text(&harness).contains(FAKE_KEY), "a shown key is not in the tree");
+    }
+
+    /// Steps a few frames, and fails if any of them asks for text on the clipboard or the primary selection.
+    fn no_clipboard_for_a_while(harness: &mut Harness) {
+        for _ in 0..3 {
+            harness.step();
+            let leaked = harness
+                .output()
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::OutputCommand::CopyText(_) | egui::OutputCommand::TextSelectionSettled(_)));
+            assert!(!leaked, "the key reached a clipboard");
+        }
+    }
+
+    #[test]
+    fn a_shown_secret_never_reaches_the_clipboard() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        type_fake_key(&mut harness);
+        harness.get_by_label("Show").click();
+        no_clipboard_for_a_while(&mut harness);
+        harness.get_by_role(egui::accesskit::Role::TextInput).focus();
+        no_clipboard_for_a_while(&mut harness);
+        // Select all settles a selection, then Copy and Cut each ask for it, and no frame may put it on a clipboard.
+        // Each goes straight into the next frame's input: a queued event gets frames of its own, which `output` skips.
+        let select_all = egui::Event::Key { key: egui::Key::A, pressed: true, modifiers: egui::Modifiers::COMMAND, repeat: false, physical_key: None };
+        for event in [select_all, egui::Event::Copy, egui::Event::Cut] {
+            harness.input_mut().events.push(event);
+            no_clipboard_for_a_while(&mut harness);
+        }
+        assert_eq!(secret.borrow().text, FAKE_KEY, "Cut took the key out of the field");
+    }
+
+    #[test]
+    fn undo_after_clear_brings_nothing_back() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        type_fake_key(&mut harness);
+        // Time passes, as it would while the user reads the key before saving it.
+        let later = harness.ctx.input(|input| input.time) + 5.0;
+        harness.input_mut().time = Some(later);
+        harness.run();
+        secret.borrow_mut().clear();
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::PasswordInput).focus();
+        harness.run();
+        // Each undo is checked, because a second one could step back past the key to the empty field again.
+        for _ in 0..3 {
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+            harness.run();
+            assert_eq!(secret.borrow().text, "", "undo brought the key back");
+        }
+        assert!(!secret.borrow().shown);
+    }
+
+    #[test]
+    fn clear_forgets_the_fields_cursor() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        type_fake_key(&mut harness);
+        let id = harness.ctx.memory(|memory| memory.focused()).expect("the field has the focus");
+        // Away from the field, the edit leaves its kept state as it is, so only the removal can reset it.
+        harness.ctx.memory_mut(|memory| memory.surrender_focus(id));
+        harness.run();
+        let cursor = |ctx: &egui::Context| egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range());
+        assert!(cursor(&harness.ctx).is_some(), "the field kept no cursor after typing");
+        secret.borrow_mut().clear();
+        harness.run();
+        assert_eq!(cursor(&harness.ctx), None, "the field kept its cursor after clear");
+    }
+
+    #[test]
+    fn tab_reaches_the_field_before_show() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let field = std::rc::Rc::clone(&secret);
+        let mut harness = Harness::builder().with_size([500.0, 120.0]).with_context_setup(kit_setup).build_ui(move |ui| {
+            button(ui, "Before");
+            secret_field(ui, &mut field.borrow_mut(), "Paste your key");
+        });
+        harness.run();
+        harness.get_by_label("Before").focus();
+        harness.run();
+        let focused = |harness: &Harness| harness.query_by(|node| node.is_focused()).map(|node| (node.accesskit_node().role(), node.accesskit_node().label()));
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness), Some((egui::accesskit::Role::PasswordInput, None)), "Tab skipped the field");
+        harness.key_press(egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness), Some((egui::accesskit::Role::Button, Some("Show".to_owned()))));
+        harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        harness.run();
+        assert_eq!(focused(&harness).map(|(role, _)| role), Some(egui::accesskit::Role::PasswordInput), "Shift+Tab from Show missed the field");
+        assert!(!secret.borrow().shown, "moving the focus showed the key");
+    }
+
+    #[test]
+    fn show_is_a_labelled_toggle() {
+        let secret = std::rc::Rc::new(std::cell::RefCell::new(Secret::new()));
+        let mut harness = secret_harness(&secret);
+        harness.run();
+        assert_eq!(harness.get_by_label("Show").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        harness.get_by_label("Show").click();
+        harness.run();
+        assert!(secret.borrow().shown);
+        assert_eq!(harness.get_by_label("Show").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        harness.get_by_role(egui::accesskit::Role::TextInput);
     }
 
     #[test]

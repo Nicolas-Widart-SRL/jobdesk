@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const FEATURES: [&str; 9] = ["discovery", "dossier", "insights", "intray", "profile", "runs", "settings", "tracking", "workspace"];
-const IMPURE: [&str; 9] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit"];
+const IMPURE: [&str; 10] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit", "keyring"];
 const APPEARANCE: [&str; 15] = [
     "Color32",
     "Palette",
@@ -156,4 +156,86 @@ fn domain_and_infrastructure_stay_private() {
             assert!(!declarations.contains(&format!("pub mod {layer}")), "{feature}::{layer} must be private");
         }
     }
+}
+
+/// Every place `needle` shows in the files, as `(path, byte offset)`.
+fn occurrences(files: &[(PathBuf, String)], needle: &str) -> Vec<(PathBuf, usize)> {
+    files.iter().flat_map(|(file, text)| text.match_indices(needle).map(|(at, _)| (file.clone(), at))).collect()
+}
+
+fn read_all(root: &str) -> Vec<(PathBuf, String)> {
+    let mut paths = Vec::new();
+    rust_files(Path::new(root), &mut paths);
+    paths.into_iter().map(|path| (path.clone(), fs::read_to_string(path).unwrap())).collect()
+}
+
+/// The words are put together here, so this file does not match its own search.
+fn keychain_call() -> String {
+    ["system", "_keychain("].concat()
+}
+
+/// What is wrong with how the sources reach the system keychain: its crate is named in one adapter, and it is built in
+/// `settings/mod.rs` and, at most, in the body of `fn start(` in the shell. The body ends at the first closing brace
+/// indented four spaces. An end that is not found is a violation, so the check never fails open.
+fn keychain_violations(sources: &[(PathBuf, String)]) -> Vec<String> {
+    // A checkout with CRLF line ends reads like one with LF, so the boundary below finds its end.
+    let sources: Vec<(PathBuf, String)> = sources.iter().map(|(file, text)| (file.clone(), text.replace("\r\n", "\n"))).collect();
+    let sources = sources.as_slice();
+    let mut violations = Vec::new();
+    let crate_path = ["key", "ring::"].concat();
+    for (file, _) in occurrences(sources, &crate_path) {
+        if file != Path::new("src/settings/infrastructure/system_keychain.rs") {
+            violations.push(format!("{}: {crate_path} belongs in the system keychain adapter", file.display()));
+        }
+    }
+    let app = Path::new("src/shell/app.rs");
+    let body = sources.iter().find(|(file, _)| file == app).and_then(|(_, text)| {
+        // The definition line, so a mention of `fn start(` in a comment or a string does not move the range.
+        let at = text.find("\n    fn start(")? + 1;
+        Some(at..at + text[at..].find("\n    }\n")?)
+    });
+    for (file, at) in occurrences(sources, &keychain_call()) {
+        let allowed = file == Path::new("src/settings/mod.rs") || (file == app && body.as_ref().is_some_and(|body| body.contains(&at)));
+        if !allowed {
+            violations.push(format!("{}: may not call the system keychain here", file.display()));
+        }
+    }
+    violations
+}
+
+#[test]
+fn the_system_keychain_is_reached_from_one_place() {
+    let violations = keychain_violations(&read_all("src"));
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+    assert!(occurrences(&read_all("tests"), &keychain_call()).is_empty(), "tests must never touch the real keychain");
+}
+
+fn source(path: &str, text: &str) -> (PathBuf, String) {
+    (PathBuf::from(path), text.to_owned())
+}
+
+#[test]
+fn the_keychain_check_sees_a_call_outside_its_one_place() {
+    let call = keychain_call();
+    let app = |text: &str| source("src/shell/app.rs", text);
+    let inside = format!("impl App {{\n    fn start() {{\n        let keys = {call});\n    }}\n\n    fn other() {{}}\n}}\n");
+    let outside = format!("impl App {{\n    fn start() {{\n        let _ = 1;\n    }}\n\n    fn other() {{\n        let keys = {call});\n    }}\n}}\n");
+    assert!(keychain_violations(&[app(&inside)]).is_empty());
+    assert!(keychain_violations(&[source("src/settings/mod.rs", &format!("pub fn {call}) {{}}"))]).is_empty());
+    assert!(keychain_violations(&[app(&inside.replace('\n', "\r\n"))]).is_empty(), "CRLF line ends find the end of the body");
+    assert_eq!(keychain_violations(&[app(&outside.replace('\n', "\r\n"))]).len(), 1, "and still reject a call outside it");
+    assert_eq!(keychain_violations(&[app(&outside)]).len(), 1, "a call in another function is rejected");
+    assert_eq!(keychain_violations(&[source("src/shell/other.rs", &inside)]).len(), 1, "a call in another file is rejected");
+    assert_eq!(keychain_violations(&[source("src/settings/ui/mod.rs", &inside)]).len(), 1);
+    let mention = format!(
+        "/// Built by `fn start(` below.\nimpl App {{\n    fn other() {{\n        let keys = {call});\n    }}\n\n    fn start() {{\n        let _ = 1;\n    }}\n}}\n"
+    );
+    assert_eq!(keychain_violations(&[app(&mention)]).len(), 1, "a mention of `fn start(` earlier does not widen the body");
+    let no_start = format!("fn other() {{\n    let keys = {call});\n}}\n");
+    assert_eq!(keychain_violations(&[app(&no_start)]).len(), 1, "no `fn start(` allows nothing");
+    let unended = format!("impl App {{\n    fn start() {{\n        let keys = {call});\n");
+    assert_eq!(keychain_violations(&[app(&unended)]).len(), 1, "a body whose end is not found allows nothing");
+    let adapter = format!("use {}Entry;", ["key", "ring::"].concat());
+    assert_eq!(keychain_violations(&[source("src/shell/app.rs", &adapter)]).len(), 1);
+    assert!(keychain_violations(&[source("src/settings/infrastructure/system_keychain.rs", &adapter)]).is_empty());
 }

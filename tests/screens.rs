@@ -14,7 +14,11 @@ use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
-use jobdesk::settings::application::{DataSizes, Dollars, Page, PermissionMode, Settings, drawn_index, index};
+use jobdesk::settings::application::{
+    ApiKey, ConnectionTester, DataSizes, Dollars, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn, TestDone,
+    TestReport, drawn_index, index,
+};
+use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
@@ -1506,6 +1510,7 @@ fn unbuilt_sections_are_disabled() {
         let row = harness.query_all_by_label(page.title()).next().unwrap_or_else(|| panic!("{} is listed", page.title()));
         assert_eq!(row.accesskit_node().is_disabled(), !page.built(), "{}", page.title());
     }
+    assert_eq!(harness.query_all_by_label("Later").count(), 3, "Providers is built, so only the job search pages wait");
 }
 
 /// With Reduce motion ticked, a decided card is gone on the next frame, with no slide.
@@ -2744,7 +2749,9 @@ fn a_failed_source_marks_its_tab_and_today_deals_the_rest() {
     assert!(!is_shown(&harness, "Open Setup"));
     harness.get_by_label("Open Runtime status").click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "You will see which account Claude uses after the first task. Jobdesk stores no credentials."), "Runtime status is on show");
+    // This shell has no tool check, so Runtime status draws only the alert, in Settings.
+    assert!(harness.query_by_label_contains("Back to app").is_some(), "Settings is open on Runtime status");
+    assert!(harness.query_by_label_contains("Jobdesk stores no credentials").is_none(), "the status bar no longer says how tasks sign in");
     assert!(is_shown(&harness, "Your applications could not be read."), "the alert shows there too");
     assert!(!is_shown(&harness, "Open Runtime status"), "Runtime status has no button to itself");
 
@@ -4818,4 +4825,560 @@ fn discard_on_quit_waits_for_the_session_ask() {
 
     ask_to_close(&mut harness);
     assert!(is_shown(&harness, DISCARD_ASK), "the next quit asks about the draft again");
+}
+
+/// Fictional keys only: neither has ever been a real key.
+const FAKE_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
+const REFUSED_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-1111-Xq7m";
+/// The API key's line on the left, which names where the key is kept.
+const KEY_LINE: &str = if cfg!(windows) { "A Console key, in Credential Manager" } else { "A Console key, in your keychain" };
+
+/// A Test connection that answers at once, as Claude Code would once its process ends.
+struct AnsweringTester {
+    outcome: Outcome,
+    cost_usd: f64,
+    said: &'static str,
+    /// How Claude Code said it signed in.
+    source: Option<&'static str>,
+}
+
+impl ConnectionTester for AnsweringTester {
+    fn start(&self, _: Option<ApiKey>, done: TestDone) {
+        done(TestReport { outcome: self.outcome, cost_usd: self.cost_usd, said: self.said.to_owned(), source: self.source.map(str::to_owned) });
+    }
+}
+
+/// A tester of the saved key, which Claude Code reports as `ANTHROPIC_API_KEY` once it got that far.
+fn answering(outcome: Outcome, cost_usd: f64, said: &'static str) -> Box<dyn ConnectionTester> {
+    let source = (outcome == Outcome::Passed).then_some("ANTHROPIC_API_KEY");
+    Box::new(AnsweringTester { outcome, cost_usd, said, source })
+}
+
+/// A tester whose Claude Code signed in through `source`, as the init line says.
+fn answering_from(outcome: Outcome, said: &'static str, source: &'static str) -> Box<dyn ConnectionTester> {
+    Box::new(AnsweringTester { outcome, cost_usd: 0.004, said, source: Some(source) })
+}
+
+/// 31 October at `hour`:`minute`, the clock Providers counts ages to.
+fn at(hour: u32, minute: u32) -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(hour, minute, 0).unwrap()
+}
+
+/// A desk whose one task, started at `started` with `method`, said it signed in through `source`, then ended.
+fn signed_in_desk(source: &str, method: SignIn, started: NaiveDateTime) -> RunDesk {
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(ScriptedGateway(Arc::clone(&sink))), Arc::new(|| {}));
+    desk.set_sign_in(method);
+    desk.start("/rank", &StartOptions { model: None, budget_usd: 1.0 }, started).unwrap();
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "7c41e2d0-0b9a".into(), model: "claude-sonnet-4-5".into(), api_key_source: source.into() },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.31, duration_ms: 42_000 },
+            AgentEvent::ProcessExited { failure: None },
+        ],
+    );
+    desk
+}
+
+/// Settings › Providers over Today at 11:30, with the usage fixture and a $60 cap, as the canvas's rail shows them.
+/// The last task, started with `method` at `started`, signed in through `source`, and `providers` holds the key and
+/// Test connection.
+fn providers_shell(name: &str, providers: Providers, (source, method): (&str, SignIn), started: NaiveDateTime) -> Shell {
+    let mut shell = shell_with_usage(name, usage_tasks()).with_providers(providers).with_now(at(11, 30));
+    shell.settings_mut().set_cap_on(true);
+    shell.settings_mut().set_cap_amount(Dollars::parse("60"));
+    *shell.desk_slot() = Some(signed_in_desk(source, method, started));
+    shell.open_settings(Page::Providers);
+    shell
+}
+
+/// No key saved, and the last task signed in with the Claude sign-in two hours ago.
+fn sign_in_shell(name: &str, tester: Box<dyn ConnectionTester>) -> Shell {
+    providers_shell(name, open_providers(memory_keychain(None), tester), ("none", SignIn::ClaudeSignIn), at(9, 30))
+}
+
+/// A key saved and in use, its test passed a minute ago, and the last task signed in with it four minutes ago.
+fn key_saved_shell(name: &str) -> Shell {
+    let providers = open_providers(memory_keychain(Some(FAKE_KEY)), idle_tester());
+    let mut shell = providers_shell(name, providers, ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
+    shell.settings_mut().set_sign_in(SignIn::ApiKey);
+    shell.settings_mut().set_key_test(Some(KeyTest { passed: true, at: at(11, 29), cost_usd: 0.004 }));
+    shell
+}
+
+fn key_field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+    harness.get_by_role(egui::accesskit::Role::PasswordInput)
+}
+
+/// Picks the API key on the left and pastes `key` into its field.
+fn type_key(harness: &mut Harness<'static>, key: &str) {
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    key_field(harness).focus();
+    harness.run_steps(1);
+    key_field(harness).type_text(key);
+    harness.run_steps(3);
+}
+
+/// Saves the key typed, which tests it at once, and lets the test's answer reach the page.
+fn save_key(harness: &mut Harness<'static>) {
+    harness.get_by_label("Save key").click();
+    harness.run_steps(4);
+}
+
+fn desk_sign_in(shell: &Rc<RefCell<Shell>>) -> SignIn {
+    shell.borrow_mut().desk_slot().as_ref().unwrap().sign_in()
+}
+
+/// No label, value or description on screen holds `key` in full.
+fn assert_never_shown(harness: &Harness, key: &str) {
+    let holds = harness.query_all_by(|node| {
+        [node.label(), node.value(), node.description()].into_iter().flatten().any(|text| text.contains(key) || text.contains("FAKE-not-a-real"))
+    });
+    assert_eq!(holds.count(), 0, "the key shows only as its mask");
+}
+
+#[test]
+fn save_key_waits_for_a_key() {
+    let mut harness = tray_harness(sign_in_shell("providers_save_waits", idle_tester()));
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    let save = harness.get_by_label("Save key");
+    assert!(save.accesskit_node().is_disabled());
+    save.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Paste a key first."));
+    key_field(&harness).focus();
+    harness.run_steps(1);
+    key_field(&harness).type_text("   ");
+    harness.run_steps(3);
+    assert!(harness.get_by_label("Save key").accesskit_node().is_disabled(), "spaces are no key");
+}
+
+/// A key that passes its test signs the next task in, and the rail and the desk say so. The key never shows in full.
+#[test]
+fn a_saved_key_that_passes_signs_tasks_in() {
+    let (mut harness, shell) = shared_harness(sign_in_shell("providers_key_passes", answering(Outcome::Passed, 0.004, "ready")));
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn);
+    type_key(&mut harness, FAKE_KEY);
+    assert_never_shown(&harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert_eq!(desk_sign_in(&shell), SignIn::ApiKey, "the next task signs in with the key");
+    assert_eq!(harness.query_all_by_label("API key").count(), 3, "the rail says so, beside the row's title and the detail's");
+    assert!(is_shown(&harness, "sk-ant-••••••••"));
+    assert!(is_shown(&harness, "R2kd"));
+    assert!(is_shown(&harness, "Passed"));
+    assert!(is_shown(&harness, "just now, for $0.004"));
+    assert_eq!(key_field_count(&harness), 0, "the field is gone, emptied");
+    assert_never_shown(&harness, FAKE_KEY);
+}
+
+fn key_field_count(harness: &Harness) -> usize {
+    harness.query_all_by_role(egui::accesskit::Role::PasswordInput).count()
+}
+
+/// A refused key stays saved, says what Claude Code said, and leaves tasks on the Claude sign-in.
+#[test]
+fn a_refused_key_leaves_tasks_on_the_claude_sign_in() {
+    let (mut harness, shell) = shared_harness(sign_in_shell("providers_key_refused", answering(Outcome::Refused, 0.0, "Invalid API key")));
+    type_key(&mut harness, REFUSED_KEY);
+    save_key(&mut harness);
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn);
+    assert!(is_shown(&harness, "Key refused"), "the rail says so");
+    assert!(is_shown(&harness, "Claude Code refused this key."));
+    assert!(is_shown(&harness, "Invalid API key"), "what Claude Code said, as plain text");
+    assert!(is_shown(&harness, "Xq7m"), "the key stays saved");
+    assert_never_shown(&harness, REFUSED_KEY);
+}
+
+/// A test that never reached the point of trying the key reads as such, never as a refusal, and changes no method.
+#[test]
+fn an_unreached_test_is_no_refusal() {
+    let (mut harness, shell) =
+        shared_harness(sign_in_shell("providers_key_unreached", answering(Outcome::Unreached, 0.0, "Claude Code did not answer within a minute.")));
+    type_key(&mut harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn, "tasks keep their method");
+    assert!(is_shown(&harness, "Claude Code could not test this key."));
+    assert!(is_shown(&harness, "Claude Code did not answer within a minute."));
+    assert!(harness.query_by_label_contains("efused").is_none(), "nothing says it was refused");
+    assert!(is_shown(&harness, "R2kd"), "the key stays saved");
+    assert!(!is_shown(&harness, "Key refused"), "the rail keeps the Claude sign-in");
+}
+
+/// While a task works, Test connection waits and says why. One Claude process runs at a time.
+#[test]
+fn test_connection_waits_while_a_task_runs() {
+    let mut shell = sign_in_shell("providers_task_running", idle_tester());
+    *shell.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut harness = tray_harness(shell);
+    let reason = "A task is running. Test once it ends.";
+    assert!(is_shown(&harness, reason), "the reason shows without the pointer, for the keyboard and a screen reader");
+    let test = harness.get_by_label("Test connection");
+    assert!(test.accesskit_node().is_disabled());
+    test.hover();
+    harness.run_steps(8);
+    assert_eq!(harness.query_all_by_label(reason).count(), 2, "and on hover");
+}
+
+/// A key saved while a task is open is not tested, and the note says so before Save key.
+#[test]
+fn a_key_saved_while_a_task_is_open_waits_untested() {
+    let mut shell = sign_in_shell("providers_save_task_open", answering(Outcome::Passed, 0.004, "ready"));
+    *shell.desk_slot() = Some(apply_run(permission_prompt()));
+    let mut harness = tray_harness(shell);
+    type_key(&mut harness, FAKE_KEY);
+    assert!(
+        harness.query_by_label_contains("A task is open, so it waits at Not tested yet: once that ends, choose Test connection or Use for tasks.").is_some()
+    );
+    assert!(harness.query_by_label_contains("then tests it for about a cent").is_none(), "no test is promised");
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "Not tested yet"), "the tester was not asked");
+    assert!(is_shown(&harness, "R2kd"), "the key is saved");
+}
+
+/// A key saved while a test of the Claude sign-in still runs is not tested either, and the note says why.
+#[test]
+fn a_key_saved_while_another_test_finishes_waits_untested() {
+    let mut harness = tray_harness(sign_in_shell("providers_save_testing", idle_tester()));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    type_key(&mut harness, FAKE_KEY);
+    let note = "Another test is finishing, so it waits at Not tested yet: once that ends, choose Test connection or Use for tasks.";
+    assert!(harness.query_by_label_contains(note).is_some());
+    assert!(harness.query_by_label_contains("then tests it for about a cent").is_none(), "no test is promised");
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "Not tested yet"), "the key is not under test");
+    assert!(is_shown(&harness, "R2kd"), "the key is saved");
+}
+
+/// Remove asks first. Esc keeps the key; Remove key deletes it and moves tasks back to the Claude sign-in.
+#[test]
+fn remove_asks_first_and_esc_keeps_the_key() {
+    let keys = memory_keychain(Some(FAKE_KEY));
+    let providers = open_providers(Arc::clone(&keys), idle_tester());
+    let mut shell = providers_shell("providers_remove", providers, ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
+    shell.settings_mut().set_sign_in(SignIn::ApiKey);
+    let (mut harness, shell) = shared_harness(shell);
+    let asking = |harness: &Harness<'static>| harness.query_all_by_label("Remove the API key?").next().is_some();
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    assert!(asking(&harness), "it asks first");
+    assert!(harness.get_by_label("Keep it").accesskit_node().is_focused(), "Keep it is the default");
+    press(&mut harness, Key::Escape);
+    assert!(!asking(&harness));
+    assert!(shell.borrow().settings_open(), "Esc keeps the key, and Settings stays");
+    assert!(keys.read().unwrap().is_some());
+    assert_eq!(desk_sign_in(&shell), SignIn::ApiKey);
+
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove key").click();
+    harness.run_steps(3);
+    assert!(keys.read().unwrap().is_none(), "the keychain item is gone");
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn);
+    assert_eq!(harness.query_all_by_label("Not set").count(), 2, "the row and the detail say no key is set");
+}
+
+/// Open the task leaves Settings for that task on Tasks.
+#[test]
+fn open_the_task_selects_it() {
+    let (mut harness, shell) = shared_harness(sign_in_shell("providers_open_task", idle_tester()));
+    assert!(is_shown(&harness, "Last task signed in with your Claude sign-in"));
+    assert!(is_shown(&harness, ", 2 hours ago. Claude Code reports this itself."));
+    harness.get_by_label("Open the task").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(harness.query_all_by_label("/rank").next().is_some(), "the task is on show");
+}
+
+/// Before any task, the note says it will show after the first one.
+#[test]
+fn before_any_task_the_note_waits_for_one() {
+    let mut shell = sign_in_shell("providers_no_task", idle_tester());
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(ScriptedGateway(SharedSink::default())), Arc::new(|| {})));
+    let harness = tray_harness(shell);
+    assert!(is_shown(&harness, "The sign-in each task uses shows here after your first task. Claude Code reports it itself."));
+    assert!(!is_shown(&harness, "Open the task"));
+}
+
+/// Test connection runs Claude Code, so the launcher's Run waits for it to end and says why.
+#[test]
+fn run_waits_while_a_test_runs() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::InTray, "providers_run_waits", &calls).with_providers(open_providers(memory_keychain(None), idle_tester()));
+    shell.open_settings(Page::Providers);
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Testing…"));
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    let run = harness.get_by_label("Run");
+    assert!(run.accesskit_node().is_disabled());
+    run.hover();
+    harness.run_steps(8);
+    assert!(harness.query_all_by_label("Test connection is running. Run opens once it ends.").next().is_some());
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing starts while the test runs");
+}
+
+fn render_providers(shell: Shell, theme: Theme) -> Harness<'static> {
+    probed_wgpu(probed(shell, VersionedTools), theme)
+}
+
+#[test]
+fn settings_providers_light() {
+    let name = "settings_providers_light";
+    let mut harness = render_providers(sign_in_shell(name, idle_tester()), Theme::Light);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_key_entry_light() {
+    let name = "settings_key_entry_light";
+    let mut harness = render_providers(sign_in_shell(name, idle_tester()), Theme::Light);
+    type_key(&mut harness, FAKE_KEY);
+    // The pointer leaves the row it picked, so the row shows at rest.
+    harness.hover_at(egui::pos2(700.0, 700.0));
+    harness.run_steps(3);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_key_saved_light() {
+    let name = "settings_key_saved_light";
+    let mut harness = render_providers(key_saved_shell(name), Theme::Light);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_key_saved_dark() {
+    let name = "settings_key_saved_dark";
+    let mut harness = render_providers(key_saved_shell(name), Theme::Dark);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_key_failed_light() {
+    let name = "settings_key_failed_light";
+    let mut harness = render_providers(sign_in_shell(name, answering(Outcome::Refused, 0.0, "Invalid API key")), Theme::Light);
+    type_key(&mut harness, REFUSED_KEY);
+    save_key(&mut harness);
+    // The pointer leaves Save key's place, so nothing under it shows as hovered.
+    harness.hover_at(egui::pos2(700.0, 700.0));
+    harness.run_steps(3);
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+/// The note names the method each task started with, not the one in use now.
+#[test]
+fn the_note_names_the_method_the_task_started_with() {
+    // A task on the Claude sign-in found a key in the environment, then the user saved a key that passed.
+    let (mut harness, shell) = shared_harness(providers_shell(
+        "providers_note_env_key",
+        open_providers(memory_keychain(None), answering(Outcome::Passed, 0.004, "ready")),
+        ("ANTHROPIC_API_KEY", SignIn::ClaudeSignIn),
+        at(9, 30),
+    ));
+    type_key(&mut harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert_eq!(desk_sign_in(&shell), SignIn::ApiKey);
+    assert!(is_shown(&harness, "Last task signed in with an API key from your environment"), "not the key saved since");
+
+    // A task on the saved key, then the user removed it.
+    let keys = memory_keychain(Some(FAKE_KEY));
+    let mut shell = providers_shell("providers_note_removed", open_providers(keys, idle_tester()), ("ANTHROPIC_API_KEY", SignIn::ApiKey), at(11, 26));
+    shell.settings_mut().set_sign_in(SignIn::ApiKey);
+    let (mut harness, shell) = shared_harness(shell);
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove key").click();
+    harness.run_steps(3);
+    assert_eq!(desk_sign_in(&shell), SignIn::ClaudeSignIn);
+    assert!(is_shown(&harness, "Last task signed in with your API key"), "the key the task used, though it is gone now");
+}
+
+/// A key typed and not saved is forgotten whichever way the user leaves it.
+#[test]
+fn a_typed_key_is_forgotten_on_the_way_out() {
+    let empty = |harness: &Harness<'static>| key_field(harness).value().unwrap_or_default().is_empty();
+    let typed = |name: &str| {
+        let (mut harness, shell) = shared_harness(sign_in_shell(name, idle_tester()));
+        type_key(&mut harness, FAKE_KEY);
+        assert!(!empty(&harness), "the field holds the key");
+        (harness, shell)
+    };
+    let back_to_key = |harness: &mut Harness<'static>| {
+        harness.get_by_label(KEY_LINE).click();
+        harness.run_steps(3);
+    };
+
+    let (mut harness, _) = typed("providers_forget_row");
+    harness.get_by_label("Your login in Claude Code").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "another row was picked");
+
+    let (mut harness, _) = typed("providers_forget_page");
+    harness.get_by_label("General").click();
+    harness.run_steps(3);
+    harness.get_by_label("Providers").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "another page was opened");
+
+    let (mut harness, shell) = typed("providers_forget_esc");
+    press(&mut harness, Key::Escape);
+    press(&mut harness, Key::Escape);
+    assert!(!shell.borrow().settings_open(), "the first Esc leaves the field, the second closes Settings");
+    cmd_comma(&mut harness);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "Settings was closed");
+
+    let (mut harness, _) = typed("providers_forget_cancel");
+    harness.get_by_label("Cancel").click();
+    harness.run_steps(3);
+    back_to_key(&mut harness);
+    assert!(empty(&harness), "Cancel");
+}
+
+/// A keychain that will not take the key: the field is emptied all the same, and the page says why.
+struct LockedKeychain;
+
+impl KeyStore for LockedKeychain {
+    fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
+        Ok(None)
+    }
+
+    fn write(&self, _: &ApiKey) -> Result<(), KeyStoreError> {
+        Err(KeyStoreError { message: "The keychain is locked.".to_owned() })
+    }
+
+    fn delete(&self) -> Result<(), KeyStoreError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_refused_keychain_write_still_empties_the_field() {
+    let providers = open_providers(Arc::new(LockedKeychain), idle_tester());
+    let mut harness = tray_harness(providers_shell("providers_locked", providers, ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    type_key(&mut harness, FAKE_KEY);
+    save_key(&mut harness);
+    assert!(is_shown(&harness, "The keychain is locked."));
+    assert!(key_field(&harness).value().unwrap_or_default().is_empty());
+    assert_never_shown(&harness, FAKE_KEY);
+}
+
+/// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too. Its
+/// reason says how to free it, as a working task's cannot.
+#[test]
+fn test_connection_waits_for_a_session_that_waits_on_a_reply() {
+    let mut shell = sign_in_shell("providers_session_waits", idle_tester());
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    let harness = tray_harness(shell);
+    assert!(harness.get_by_label("Test connection").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "A task is still open. Reply or end it, then test."), "the reason shows without the pointer");
+    assert!(!is_shown(&harness, "A task is running. Test once it ends."), "nothing is working");
+}
+
+/// While Test connection runs, a reply that would start a new process waits and says why.
+#[test]
+fn a_reply_that_needs_a_process_waits_for_the_test() {
+    let calls = SharedCalls::default();
+    let sink = SharedSink::default();
+    let mut desk = RunDesk::new(Box::new(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))), Arc::new(|| {}));
+    desk.start(APPLY_LINE, &StartOptions { model: None, budget_usd: 3.0 }, run_started()).unwrap();
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "3f9a21c0-5d7e".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: STOP_EVALUATION.into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.12, duration_ms: 303_000 },
+            AgentEvent::ProcessExited { failure: None },
+        ],
+    );
+    let mut shell = shell(Screen::InTray, "providers_reply_waits").with_providers(open_providers(memory_keychain(None), idle_tester()));
+    *shell.desk_slot() = Some(desk);
+    shell.open_settings(Page::Providers);
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Tasks").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Test connection is running. You can reply once it ends."));
+    assert!(harness.get_by_label("Send").accesskit_node().is_disabled());
+    assert_eq!(calls.lock().unwrap().starts, 1, "no process started for a reply");
+}
+
+/// Testing… is the shown method's own: a test of the other method, or one turned away from, reads as still finishing.
+#[test]
+fn another_methods_test_reads_as_still_finishing() {
+    let keys = memory_keychain(Some(FAKE_KEY));
+    let mut harness = tray_harness(providers_shell("providers_other_test", open_providers(keys, idle_tester()), ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Testing…"), "the Claude sign-in's own test");
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    let test = harness.get_by_label("Test connection");
+    assert!(test.accesskit_node().is_disabled());
+    assert!(!is_shown(&harness, "Testing…"));
+    assert!(is_shown(&harness, "Another test is still finishing."));
+}
+
+/// A Claude sign-in test that a key in the environment answered says so: its pass is that key's, and its refusal is
+/// mended there, not with /login.
+#[test]
+fn a_sign_in_test_names_a_key_from_the_environment() {
+    let mut harness = tray_harness(sign_in_shell("providers_env_pass", answering_from(Outcome::Passed, "ready", "ANTHROPIC_API_KEY")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Passed"));
+    assert!(is_shown(
+        &harness,
+        "Claude Code used an API key from your environment, not your Claude sign-in. Tasks on the Claude sign-in use it too while it is set."
+    ));
+
+    let mut harness = tray_harness(sign_in_shell("providers_env_refused", answering_from(Outcome::Refused, "Invalid API key", "ANTHROPIC_API_KEY")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "The API key in your environment was refused."));
+    assert!(!is_shown(&harness, "Claude Code is not signed in."));
+    assert!(harness.query_by_label_contains("then /login, and test again").is_none(), "/login would not mend it");
+
+    let mut harness = tray_harness(sign_in_shell("providers_login_refused", answering_from(Outcome::Refused, "Not logged in", "none")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Claude Code is not signed in."));
+
+    // Claude Code names an account signed in with /login this way: it is the Claude sign-in.
+    let mut harness = tray_harness(sign_in_shell("providers_login_key_pass", answering_from(Outcome::Passed, "ready", "/login managed key")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Passed"));
+    assert!(harness.query_by_label_contains("not your Claude sign-in").is_none(), "the pass is the sign-in's own");
+
+    let mut harness = tray_harness(sign_in_shell("providers_login_key_refused", answering_from(Outcome::Refused, "OAuth token expired", "/login managed key")));
+    harness.get_by_label("Test connection").click();
+    harness.run_steps(4);
+    assert!(is_shown(&harness, "Claude Code is not signed in."), "/login mends it");
+    assert!(!is_shown(&harness, "Claude Code was refused with a sign-in it chose itself."));
+}
+
+/// Each way in is one control a screen reader names, with whether it is picked. Cloud providers says why it waits.
+#[test]
+fn the_ways_in_are_heard() {
+    let harness = tray_harness(sign_in_shell("providers_heard", idle_tester()));
+    let login = harness.get_by_label("Claude sign-in, Your login in Claude Code, In use");
+    assert_eq!(login.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    let key_name = format!("API key, {KEY_LINE}, Not set");
+    let key = harness.get_by_label(&key_name);
+    assert_eq!(key.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    let cloud = harness.get_by_label("Cloud providers, Amazon Bedrock, Google Vertex AI, Later");
+    assert!(cloud.accesskit_node().is_disabled());
+    assert_eq!(cloud.accesskit_node().description().as_deref(), Some("Not available yet."));
 }

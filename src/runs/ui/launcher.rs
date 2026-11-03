@@ -22,11 +22,15 @@ const FORM_WIDTH: f32 = 400.0;
 const NO_BUDGET: &str = "Enter a budget above zero.";
 const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
 const TICK_FIRST: &str = "Tick \"I understand\" first.";
+/// Test connection runs Claude Code too, and one Claude process runs at a time.
+const TESTING: &str = "Test connection is running. Run opens once it ends.";
 
 /// What a new task starts with, and whether the monthly cap lets one start.
 pub struct LaunchRules<'a> {
     pub defaults: &'a RunDefaults,
     pub cap: &'a CapCheck,
+    /// Settings' Test connection is running, so Run waits for it to end.
+    pub testing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,12 +182,14 @@ impl Launcher {
                 CapCheck::Reached(reached) => Some(reached),
                 CapCheck::Open | CapCheck::Reading => None,
             };
-            let ready = budget.is_some() && !busy && *rules.cap == CapCheck::Open && (!self.command.destructive || self.reset_confirmed);
+            let ready = budget.is_some() && !busy && !rules.testing && *rules.cap == CapCheck::Open && (!self.command.destructive || self.reset_confirmed);
             if budget.is_none() {
                 alert(ui, NO_BUDGET);
             }
             if busy {
                 strong(ui, BUSY);
+            } else if rules.testing {
+                strong(ui, TESTING);
             }
             if let Some(reached) = reached {
                 strong(ui, cap_line(reached));
@@ -191,6 +197,7 @@ impl Launcher {
             let why = match rules.cap {
                 _ if budget.is_none() => NO_BUDGET.to_owned(),
                 _ if busy => BUSY.to_owned(),
+                _ if rules.testing => TESTING.to_owned(),
                 CapCheck::Reached(reached) => cap_reason(reached),
                 CapCheck::Reading => CAP_READING.to_owned(),
                 CapCheck::Open => TICK_FIRST.to_owned(),

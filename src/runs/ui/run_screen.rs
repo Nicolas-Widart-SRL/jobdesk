@@ -102,6 +102,8 @@ struct Head {
 
 /// Why replies wait while another run works.
 const BLOCKED: &str = "Another run is working. You can reply when it finishes.";
+/// A reply to a run whose process has ended starts a new one, which waits for Settings' Test connection.
+const TESTING: &str = "Test connection is running. You can reply once it ends.";
 /// Why the quick replies wait while the field holds a reply.
 const DRAFTED: &str = "Send or clear your reply first.";
 
@@ -634,7 +636,7 @@ impl RunScreen {
             Some(question) => {
                 let gap = ui.spacing().item_spacing.y;
                 let line = wrapped_height(ui, "Claude asks", Type::BODY, f32::INFINITY);
-                let blocked = if desk.is_busy() { line + gap } else { 0.0 };
+                let blocked = if reply_blocked(desk, run).is_some() { line + gap } else { 0.0 };
                 let rows = (budget - blocked - reply_rows_height(ui, replies) - gap) / line;
                 let rows = (rows.floor().max(1.0) as usize).min(QUESTION_ROWS);
                 // Plain text: Claude's message is untrusted, and the question is read, not rendered.
@@ -665,9 +667,10 @@ impl RunScreen {
     /// When the quick replies would leave the field under `REPLY_FIELD_MIN_WIDTH`, they take a row of their own above it, wrapped.
     /// With `focus`, the field takes focus once per run and turn: on the turn's first frame, unless the user is typing in another field.
     fn reply_row(&mut self, ui: &mut Ui, desk: &mut RunDesk, run: &Run, replies: &[QuickReply], hint: &str, focus: bool) {
-        let blocked = desk.is_busy();
-        if blocked {
-            muted(ui, BLOCKED);
+        let why_blocked = reply_blocked(desk, run);
+        let blocked = why_blocked.is_some();
+        if let Some(why) = why_blocked {
+            muted(ui, why);
         }
         // A quick reply never replaces what the user is writing: it waits until the field is sent or cleared.
         let drafted = !self.reply.trim().is_empty();
@@ -706,7 +709,7 @@ impl RunScreen {
             }
             let typed = !self.reply.trim().is_empty();
             // While another run works, the muted line above says why, and the pointer says so again here.
-            let why = if blocked { BLOCKED } else { "Type a reply first." };
+            let why = why_blocked.unwrap_or("Type a reply first.");
             let send = ui
                 .with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, typed && !blocked, why, |ui| primary_button(ui, "Send")).clicked())
                 .inner;
@@ -910,6 +913,18 @@ fn inline_replies(ui: &Ui, replies: &[QuickReply]) -> bool {
     let gap = ui.spacing().item_spacing.x;
     let quick_width: f32 = replies.iter().map(|reply| button_width(ui, reply.button) + gap).sum();
     quick_width + REPLY_FIELD_MIN_WIDTH + gap + button_width(ui, "Send") <= ui.available_width()
+}
+
+/// Why a reply to `run` cannot be sent now, if it cannot: another run works, or it needs a new process while
+/// Test connection runs.
+fn reply_blocked(desk: &RunDesk, run: &Run) -> Option<&'static str> {
+    if desk.is_busy() {
+        Some(BLOCKED)
+    } else if desk.reply_waits_for_test(&run.id) {
+        Some(TESTING)
+    } else {
+        None
+    }
 }
 
 /// The height of the reply row, with the quick replies' own wrapped rows above it when they do not fit beside the field.

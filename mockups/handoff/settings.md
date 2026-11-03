@@ -83,15 +83,6 @@ Brief: a Settings screen with grouped sections, including signing tasks in with 
 
 **Jobs view**: hide jobs that fail the day-rate, commute or language check, hide jobs scored under a number (every list on Jobs), hide jobs the safety check flagged. Filters hide rows only and never change a job's lane, because `/rank` owns the lists. Jobs counts what it hides and offers Show them. A flagged ad still deals on Today as Check this ad.
 
-**Providers**
-- A note on top names the sign-in the last task used, from the CLI's `apiKeySource`, with its age and Open the task. Before any task it says it will show after the first one.
-- Left: three `pick_row`s with `title_over` and a `tag`: Claude sign-in, API key, Cloud providers. "In use" is `hired`, "Not set" and "Available" are `Plain`, "Refused" is `closed`. Cloud providers (Bedrock, Vertex) stays a disabled, faded row with "Later" and the hover reason "Not available yet." The method in use is picked when the page opens, so the detail is never empty.
-- Right: the detail in a slip. Claude sign-in: Jobdesk stores nothing, the installed Claude Code version, and how to switch account (`claude`, then `/login`, in a terminal). A Use for tasks button shows when the method is not in use.
-- **API key entry**: `secret_field` with a Show toggle, then Save key (primary, disabled while the field is empty), Cancel, and a link to create a key in the Console. Save key writes the key to the keychain and runs Test connection at once, for about a cent. Tasks switch to the key only once the test passes, so a mistyped key never breaks the next task. A refused key leaves tasks on the Claude sign-in.
-- **Saved**: the key as `sk-ant-` and dots, then its last four characters. Replace opens the entry field. Remove asks first (`confirm_popover`: Keep it, the default, and Remove key), then deletes the keychain item, and tasks go back to the Claude sign-in. "Kept in" names the keychain item.
-- **Test connection**: a `claude -p` with one fixed prompt, no tools, `--max-budget-usd 0.01`, run in an empty temporary folder, so it cannot touch the checkout. It is not a task: Tasks does not list it, no card follows it, it writes no run log, and Usage does not count it. Its cost shows only here, beside the result. It reads "Testing…" while it runs. It is disabled while a task runs ("A task is running. Test once it ends."), which keeps one Claude process at a time. Passed shows a `hired` tag, its age and its cost. Failed shows `prompt_box_tone` in `Closed` with what Claude Code said as plain text, with control, bidi and zero-width characters removed, then Replace key, Test again and Remove.
-- Passing the key: when the key is in use, each task's `claude` process gets it as `ANTHROPIC_API_KEY` in its environment, read from the keychain just before spawning. It never goes on the command line, into a run log's `jobdesk_meta` line, into the settings file or onto the screen.
-
 **Run defaults**
 - Model: a combo of the launcher's list. Its first entry keeps the launcher's name, "Claude default", so one choice has one name.
 - Spend at most, USD: empty by default, so each command starts at its suggested budget from the command catalog. An amount starts every task at that amount. The monthly cap is a separate setting.
@@ -116,33 +107,21 @@ Brief: a Settings screen with grouped sections, including signing tasks in with 
 
 ## Code home
 
-- A new `settings` feature, with its language: preference, sign-in method, API key, run default, command override, spend cap, retention. It owns a settings file in the data folder and a keychain adapter in its infrastructure. It joins `FEATURES` in `tests/architecture.rs`.
 - Usage is a read model in `runs`' application layer, because `runs` owns the logs. Settings reads it, tracking's applications sent, discovery's terms and workspace's checks, each through their application layers.
-- `runs` takes the defaults, the cap and the key from `settings`' application layer when it starts a run. The UI still reads the `Snapshot`.
 - The planner picks the notifications crate and checks it on macOS and Windows.
-- Copy: the first-run status line "Jobdesk uses its sign-in and stores no passwords" changes to match the optional key.
 
 ## New widgets
 
 - **`setting_row`**: label in `Type::STRONG` and help in `Type::NOTE` `muted` on the left, held to `DOC_MEASURE`, and the control on the right, centred. A `line` hairline sits above. The checkbox form puts the box first at `CHECK_BOX`. A compact form with the label column at `COMMAND_NAME_WIDTH` serves the provider detail.
 - **`figure_band`**: `flow_band` without arrows or tallies. Equal cells on `panel` with a `line` hairline around them and between cells, `NODE_PADDING`, label in `Type::TAB` `muted`, figure in `Type::FIGURE`, note in `Type::NOTE` `muted`, and an optional `slip_bar` under the figure.
 - **`day_heatmap`**: 53 week columns by 7 days of `STATUS_DOT` squares at no radius, `TALLY_GAP_Y` apart. The steps are `raised` (none), `line` (1), `faint` (2 or 3) and `text` (4 or more). Today gets a `text` ring outside a `card` gap. Month labels and Mon, Wed, Fri sit in `Type::SMALL` `muted`. To its right, in `Type::NOTE` `muted`, are what a square means, the days with a task, and the legend. Hover gives a tooltip. It takes no click.
-- **`secret_field`**: a single-line `field` in password mode in `Type::MONO`, `FIELD_HEIGHT`, `FIELD_PADDING`, with a Show `small_toggle` beside it. It never copies its text to the clipboard, and it clears its buffer on Save or Cancel.
 - **`search_field`**: a `field` with a hint in `faint`, Esc to clear and a Clear `link` while it holds text.
 - **`hit_mark`**: a text format, like `blank_mark`. It puts the `mark` swipe without its `turn` rule under matched words. The highlighter means "here", which is what a search hit is.
 - **`status_button`**: a button at `STATUS_SEGMENT_HEIGHT` and `STATUS_SEGMENT_PADDING` in the status bar, label and keys in `Type::SMALL`, `raised` with `text` ink when on.
 - **`confirm_popover`**: the End session popover moved into the kit. A strong question, one `muted` line, the safe primary focused first, a danger button, and "Esc keeps …" in `faint`.
 - **`toggle_group`**: a row of `small_toggle`s with `TOGGLE_GAP` that reports as one radio group to screen readers.
 
-The rail and the provider list are built from existing parts: `slip`, `group_title`, `pick_row`, `title_over`, `tag`.
-
 ## Doc changes
 
-- **AGENTS.md hard rules, credentials**: replace "Authentication stays with the `claude` CLI. Jobdesk offers no login and handles no credentials." Jobdesk still offers no login, and the Claude sign-in stays with the CLI. The one credential it handles is an optional Anthropic Console API key the user pastes in Settings. It is kept only in the system keychain and passed only in the environment of each run's `claude` process. It never goes in a file, a log, a command line or on screen in full.
-- **AGENTS.md hard rules, Test connection**: Test connection is not a run. It uses no tools, runs in an empty temporary folder, is capped at $0.01, writes no run log, and is disabled while a task runs.
-- **ARCHITECTURE.md Features**: the `settings` row's language gains sign-in method and API key as each ships.
 - **ARCHITECTURE.md Runtime**: Later, the Coming up range and the dealing range become settings, with today's values as defaults.
-- **ARCHITECTURE.md Trust**: the key's path (keychain, environment only, never logged). Test connection's error renders as plain text with hidden characters removed.
-- **docs/auth-review.md**: "How Jobdesk authenticates" names the optional key and how it reaches the CLI: Save key tests it first, and tasks switch only after a pass. Mark step 2 of "Before a public release" done once the keychain entry ships. The status bar no longer shows the sign-in: Settings › Providers and Runtime status do.
-- **docs/guide.md**: the Settings section gains the API key and Test connection's cost of about a cent (not counted in Usage). In Privacy and trust, "It stores no credentials" gains the keychain exception. Today says Later and skip reasons are set in Settings.
-- **README**: the auth line says tasks use Claude Code's own sign-in, or an Anthropic Console API key pasted in Settings and kept in the system keychain.
+- **docs/guide.md**: Today says Later and skip reasons are set in Settings.

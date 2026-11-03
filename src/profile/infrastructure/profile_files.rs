@@ -105,6 +105,8 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     // Best effort: some mounts refuse to sync a folder, and the file is already in place.
     #[cfg(unix)]
     let _ = fs::File::open(folder).and_then(|folder| folder.sync_all());
+    #[cfg(not(unix))]
+    let _ = folder;
     Ok(())
 }
 

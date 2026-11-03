@@ -33,7 +33,7 @@ fn dump(desk: &RunDesk, id: &str) {
 }
 
 fn desk(workspace: &Path, logs: &Path) -> RunDesk {
-    runs::open_desk(workspace, logs.to_owned(), Arc::new(|| {}))
+    runs::open_desk(workspace, logs.to_owned(), Arc::new(|| {}), Arc::new(|| Ok(None)))
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn a_full_session_works() {
     desk.close(&id);
 
     // History rebuilds from the log.
-    let restored = runs::open_desk(&workspace, logs.clone(), Arc::new(|| {}));
+    let restored = runs::open_desk(&workspace, logs.clone(), Arc::new(|| {}), Arc::new(|| Ok(None)));
     let run = &restored.runs()[0];
     assert_eq!(run.status, RunStatus::Closed);
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);
@@ -187,4 +187,26 @@ fn a_run_can_edit_a_profile_file_under_dot_claude() {
     assert_eq!(desk.run(&id).unwrap().status, RunStatus::AwaitingReply);
     assert_eq!(std::fs::read_to_string(&profile).unwrap().trim_end(), "Name: Alex");
     desk.close(&id);
+}
+
+/// Test connection on the Claude sign-in: one `claude -p` with no tools, capped at a cent, in an empty temporary folder.
+#[test]
+#[ignore = "calls the real Claude CLI"]
+fn test_connection_passes_on_the_claude_sign_in() {
+    use jobdesk::settings;
+    use jobdesk::settings::application::{Outcome, Settings, SignIn};
+
+    let mut providers = settings::open_providers(settings::memory_keychain(None), settings::claude_tester(Arc::new(|| {})));
+    let mut preferences = Settings::unsaved();
+    providers.test_sign_in(false).unwrap();
+    let start = Instant::now();
+    while !providers.poll(&mut preferences, chrono::Local::now().naive_local()) {
+        assert!(start.elapsed() < LIMIT, "the test never ended");
+        sleep(Duration::from_millis(100));
+    }
+    let check = providers.sign_in_check().expect("a sign-in result");
+    println!("outcome {:?} cost {} source {:?} said {:?}", check.outcome, check.cost_usd, check.source, check.said);
+    assert_eq!(check.outcome, Outcome::Passed, "{}", check.said);
+    assert!(check.cost_usd < 0.02, "capped at a cent: {}", check.cost_usd);
+    assert_eq!(preferences.preferences().sign_in, SignIn::ClaudeSignIn, "a sign-in test changes no method");
 }

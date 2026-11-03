@@ -1,5 +1,6 @@
 use crate::settings::domain::run_defaults::{PermissionMode, Retention, RunDefaults, SpendCap};
-use crate::shared_kernel::LoadError;
+use crate::settings::domain::sign_in::KeyTest;
+use crate::shared_kernel::{LoadError, SignIn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeChoice {
@@ -97,6 +98,9 @@ pub struct Preferences {
     pub cap: SpendCap,
     pub permissions: PermissionMode,
     pub retention: Retention,
+    pub sign_in: SignIn,
+    /// The last check of the saved API key, kept so the page can say when it passed.
+    pub key_test: Option<KeyTest>,
 }
 
 pub trait PreferencesStore {
@@ -143,5 +147,7 @@ mod tests {
         assert_eq!(preferences.cap.active(), None);
         assert_eq!(preferences.permissions, PermissionMode::AllowAndNote);
         assert_eq!(preferences.retention, Retention::Forever, "nothing is deleted until the user says so");
+        assert_eq!(preferences.sign_in, SignIn::ClaudeSignIn, "tasks bill the Claude plan until the user picks a key");
+        assert_eq!(preferences.key_test, None);
     }
 }

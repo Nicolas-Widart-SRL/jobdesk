@@ -949,8 +949,15 @@ mod tests {
 
     #[test]
     fn a_turn_card_ranks_with_paused_runs() {
-        let request =
-            RunRequest { run_id: "r2".into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request = RunRequest {
+            run_id: "r2".into(),
+            line: "/apply x".into(),
+            model: None,
+            budget_usd: 3.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        };
         let mut waiting = Run::new(&request);
         waiting.apply(AgentEvent::AssistantText { text: "Which posting first?".into(), nested: false });
         waiting.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1 });
@@ -1129,7 +1136,15 @@ mod tests {
     }
 
     fn paused_on(id: &str, kind: PromptKind) -> Run {
-        let request = RunRequest { run_id: id.into(), line: "/apply x".into(), model: None, budget_usd: 3.0, started_at: String::new(), resume_session: None };
+        let request = RunRequest {
+            run_id: id.into(),
+            line: "/apply x".into(),
+            model: None,
+            budget_usd: 3.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        };
         let mut run = Run::new(&request);
         let prompt = Prompt { request_id: "p".into(), kind, input_json: "{}".into(), suggestions_json: None };
         run.apply(AgentEvent::PromptRaised(prompt));

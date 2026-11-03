@@ -104,6 +104,8 @@ pub const WAITS_EDGE: f32 = 3.0;
 pub const PICK_EDGE: f32 = 3.0;
 /// The opacity of a card that is decided or set aside.
 pub const FADED_OPACITY: f32 = 0.8;
+/// The opacity of a choice that is not available yet, such as Cloud providers: fainter than a faded card, as on the canvas.
+pub const LATER_OPACITY: f32 = 0.55;
 /// How much of its ink and border a disabled control keeps. egui's own fade is off, so the kit paints this.
 pub const DISABLED_OPACITY: f32 = 0.5;
 /// The room between a step's knot and its words.

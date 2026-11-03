@@ -25,11 +25,11 @@ use crate::ui_kit::tokens::{
     CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
     EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
     FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN,
-    HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN,
-    NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
-    ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP,
-    SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING,
-    SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
+    HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
+    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
+    RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP,
+    SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING,
+    SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
     TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
@@ -485,6 +485,19 @@ pub fn spoken_pick_row(ui: &mut Ui, on: bool, spoken: &str, focus_tip: Option<&s
         response.show_tooltip_text(tip);
     }
     response
+}
+
+/// A pick row for a choice that is not available yet, such as Cloud providers: disabled, faded to `LATER_OPACITY`,
+/// heard as `spoken`, and saying `why` on hover and to a screen reader as its description.
+pub fn later_pick_row(ui: &mut Ui, spoken: &str, why: &str, add: impl FnOnce(&mut Ui)) -> Response {
+    ui.scope(|ui| {
+        // A disabled `pick_row` fades itself to `FADED_OPACITY`, so this takes it the rest of the way.
+        ui.multiply_opacity(LATER_OPACITY / FADED_OPACITY);
+        let response = enabled_when(ui, false, why, |ui| spoken_pick_row(ui, false, spoken, None, add));
+        ui.ctx().accesskit_node_builder(response.id, |node| node.set_description(why));
+        response
+    })
+    .inner
 }
 
 /// A page of Settings on paper: `title` in `Type::H1` over one `lead` line in `Type::TAKE` `muted`, `actions` at the right,
@@ -1040,6 +1053,24 @@ pub fn note<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// A panel inside paper, such as a note at the top of a Settings page or the detail beside a list: the panel fill in a
+/// `line` hairline, which keeps it apart in dark, where panel and paper are one colour. `padding` is the left and right,
+/// the top and the bottom room inside it.
+pub fn ruled_panel<R>(ui: &mut Ui, padding: (i8, i8, i8), add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = Palette::of(ui);
+    let (x, top, bottom) = padding;
+    Frame::new()
+        .fill(p.panel)
+        .stroke(Stroke::new(HAIRLINE, p.line))
+        .corner_radius(RADIUS_PANEL)
+        .inner_margin(Margin { left: x, right: x, top, bottom })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
 /// The height of a part laid out after what must leave room for it, such as a footer under a scroll area,
 /// as it measured on the frame before.
 #[derive(Debug, Clone, Copy)]
@@ -1067,9 +1098,21 @@ impl KeptHeight {
 
 /// Commands and untrusted text: plain, in a recessed box.
 pub fn code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    code_frame(ui, Stroke::NONE, add)
+}
+
+/// `code_box` in a `line` hairline, for text quoted inside a box of its own, such as what Claude Code said in a failed
+/// test, so the quote still stands apart from the box around it.
+pub fn ruled_code_box<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let line = Palette::of(ui).line;
+    code_frame(ui, Stroke::new(HAIRLINE, line), add)
+}
+
+fn code_frame<R>(ui: &mut Ui, stroke: Stroke, add: impl FnOnce(&mut Ui) -> R) -> R {
     let fill = Palette::of(ui).field;
     Frame::new()
         .fill(fill)
+        .stroke(stroke)
         .corner_radius(RADIUS_CARD)
         .inner_margin(margin(CODE_PADDING))
         .show(ui, |ui| {

@@ -2,18 +2,21 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value, json};
 
 use crate::settings::domain::{
-    CommandDefault, Dollars, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen, TextSize, ThemeChoice,
+    CommandDefault, Dollars, KeyTest, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen, TextSize, ThemeChoice,
 };
-use crate::shared_kernel::{LoadError, ModelChoice};
+use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
 const FILE: &str = "settings.json";
+/// How a key test's time is written: to the minute, in local time.
+const TEST_TIME: &str = "%Y-%m-%dT%H:%M";
 
 /// Every field may be missing, and an unknown field is ignored, so an older or newer file still loads.
-/// The run defaults, cap, permissions and retention arrive as raw JSON and are read leniently below:
+/// The run defaults, cap, permissions, retention, sign-in and key test arrive as raw JSON and are read leniently below:
 /// a field of the wrong shape falls back to its default and never fails the rest of the file.
 #[derive(Serialize, Deserialize)]
 struct Record {
@@ -39,6 +42,10 @@ struct Record {
     permissions: Value,
     #[serde(default)]
     keep_run_logs: Value,
+    #[serde(default)]
+    sign_in: Value,
+    #[serde(default)]
+    key_test: Value,
 }
 
 fn default_text_size() -> i64 {
@@ -122,6 +129,8 @@ fn preferences_from(record: Record) -> Preferences {
         cap,
         permissions,
         retention: retention_from(&record.keep_run_logs),
+        sign_in: sign_in_from(&record.sign_in),
+        key_test: key_test_from(&record.key_test),
     }
 }
 
@@ -154,6 +163,23 @@ fn retention_from(value: &Value) -> Retention {
         Some("90_days") => Retention::Days90,
         _ => Retention::Forever,
     }
+}
+
+/// Only `"api_key"` picks the key, so a missing or unknown word keeps tasks on the Claude plan.
+fn sign_in_from(value: &Value) -> SignIn {
+    if value.as_str() == Some("api_key") { SignIn::ApiKey } else { SignIn::ClaudeSignIn }
+}
+
+/// A test of the wrong shape reads as none. The file holds when the test ran and what it cost, never the key.
+fn key_test_from(value: &Value) -> Option<KeyTest> {
+    let passed = value.get("passed")?.as_bool()?;
+    let at = NaiveDateTime::parse_from_str(value.get("at")?.as_str()?, TEST_TIME).ok()?;
+    let cost_usd = value.get("cost_usd")?.as_f64().filter(|cost| cost.is_finite() && *cost >= 0.0)?;
+    Some(KeyTest { passed, at, cost_usd })
+}
+
+fn key_test_value(test: &KeyTest) -> Value {
+    json!({"passed": test.passed, "at": test.at.format(TEST_TIME).to_string(), "cost_usd": number_value(test.cost_usd)})
 }
 
 fn record_from(preferences: &Preferences) -> Record {
@@ -191,6 +217,11 @@ fn record_from(preferences: &Preferences) -> Record {
             Retention::Days90 => "90_days",
             Retention::Forever => "forever",
         }),
+        sign_in: Value::from(match preferences.sign_in {
+            SignIn::ClaudeSignIn => "claude",
+            SignIn::ApiKey => "api_key",
+        }),
+        key_test: preferences.key_test.as_ref().map_or(Value::Null, key_test_value),
     }
 }
 
@@ -199,7 +230,11 @@ fn model_word(model: ModelChoice) -> &'static str {
 }
 
 fn number_from(dollars: Option<Dollars>) -> Value {
-    dollars.and_then(|sum| Number::from_f64(sum.usd())).map_or(Value::Null, Value::Number)
+    dollars.map_or(Value::Null, |sum| number_value(sum.usd()))
+}
+
+fn number_value(amount: f64) -> Value {
+    Number::from_f64(amount).map_or(Value::Null, Value::Number)
 }
 
 #[cfg(test)]
@@ -253,7 +288,14 @@ mod tests {
             cap: SpendCap { on: true, amount: Some(dollars("60")) },
             permissions: PermissionMode::Ask,
             retention: Retention::Days90,
+            sign_in: SignIn::ApiKey,
+            key_test: Some(key_test(true, 3, 0.04)),
         }
+    }
+
+    fn key_test(passed: bool, minute: u32, cost_usd: f64) -> KeyTest {
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap().and_hms_opt(14, minute, 0).unwrap();
+        KeyTest { passed, at, cost_usd }
     }
 
     #[test]
@@ -286,7 +328,8 @@ mod tests {
             serde_json::json!({
                 "theme": "system", "text_size": 100, "reduce_motion": false, "open_on": "today",
                 "model": "default", "budget_usd": null, "commands": [],
-                "cap_on": false, "cap_usd": null, "permissions": "allow", "keep_run_logs": "forever"
+                "cap_on": false, "cap_usd": null, "permissions": "allow", "keep_run_logs": "forever",
+                "sign_in": "claude", "key_test": null
             })
         );
         file.save(&every_key_set()).unwrap();
@@ -300,7 +343,8 @@ mod tests {
                     {"command": "/scrape", "model": "haiku", "budget_usd": 1.0},
                     {"command": "/rank", "model": "default", "budget_usd": 3.25},
                 ],
-                "cap_on": true, "cap_usd": 60.0, "permissions": "ask", "keep_run_logs": "90_days"
+                "cap_on": true, "cap_usd": 60.0, "permissions": "ask", "keep_run_logs": "90_days",
+                "sign_in": "api_key", "key_test": {"passed": true, "at": "2026-03-09T14:03", "cost_usd": 0.04}
             })
         );
     }
@@ -431,6 +475,87 @@ mod tests {
             commands,
             vec![row("/scrape", ModelChoice::Haiku, "1"), row("/cv", ModelChoice::Default, "2.5"), row("/followup", ModelChoice::Default, "3")]
         );
+    }
+
+    fn sign_in_in(file: &PreferencesFile, field: &str) -> SignIn {
+        write(file, &format!(r#"{{"sign_in": {field}}}"#));
+        file.load().unwrap().unwrap().sign_in
+    }
+
+    #[test]
+    fn the_sign_in_round_trips_and_only_api_key_picks_the_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for sign_in in [SignIn::ClaudeSignIn, SignIn::ApiKey] {
+            let preferences = Preferences { sign_in, ..Preferences::default() };
+            file.save(&preferences).unwrap();
+            assert_eq!(file.load().unwrap(), Some(preferences));
+        }
+        assert_eq!(sign_in_in(&file, r#""api_key""#), SignIn::ApiKey);
+        for field in [r#""claude""#, r#""API_KEY""#, r#""apikey""#, r#""key""#, r#""""#, "true", "1", "null", "[]", r#"{"api_key": true}"#] {
+            assert_eq!(sign_in_in(&file, field), SignIn::ClaudeSignIn, "{field}");
+        }
+        write(&file, "{}");
+        assert_eq!(file.load().unwrap().unwrap().sign_in, SignIn::ClaudeSignIn, "a missing key keeps the Claude plan");
+    }
+
+    #[test]
+    fn a_key_test_round_trips() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for test in [key_test(true, 3, 0.04), key_test(false, 59, 0.0)] {
+            let preferences = Preferences { key_test: Some(test), ..Preferences::default() };
+            file.save(&preferences).unwrap();
+            assert_eq!(file.load().unwrap(), Some(preferences));
+        }
+    }
+
+    #[test]
+    fn a_key_test_of_the_wrong_shape_reads_as_none_and_keeps_the_rest() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for field in [
+            "null",
+            "true",
+            "7",
+            r#""passed""#,
+            "[]",
+            "{}",
+            r#"{"passed": true, "at": "2026-03-09T14:03"}"#,
+            r#"{"passed": true, "cost_usd": 0.04}"#,
+            r#"{"at": "2026-03-09T14:03", "cost_usd": 0.04}"#,
+            r#"{"passed": "yes", "at": "2026-03-09T14:03", "cost_usd": 0.04}"#,
+            r#"{"passed": true, "at": "yesterday", "cost_usd": 0.04}"#,
+            r#"{"passed": true, "at": "2026-03-09", "cost_usd": 0.04}"#,
+            r#"{"passed": true, "at": "2026-13-09T14:03", "cost_usd": 0.04}"#,
+            r#"{"passed": true, "at": 5, "cost_usd": 0.04}"#,
+            r#"{"passed": true, "at": "2026-03-09T14:03", "cost_usd": "0.04"}"#,
+            r#"{"passed": true, "at": "2026-03-09T14:03", "cost_usd": -1}"#,
+            r#"{"passed": true, "at": "2026-03-09T14:03", "cost_usd": null}"#,
+        ] {
+            write(&file, &format!(r#"{{"theme": "dark", "sign_in": "api_key", "key_test": {field}}}"#));
+            let preferences = file.load().unwrap().unwrap();
+            assert_eq!(preferences.key_test, None, "{field}");
+            assert_eq!((preferences.theme, preferences.sign_in), (ThemeChoice::Dark, SignIn::ApiKey), "{field}");
+        }
+        write(&file, "{}");
+        assert_eq!(file.load().unwrap().unwrap().key_test, None);
+        write(&file, r#"{"key_test": {"passed": false, "at": "2026-03-09T14:03", "cost_usd": 2, "note": "extra"}}"#);
+        assert_eq!(file.load().unwrap().unwrap().key_test, Some(key_test(false, 3, 2.0)), "an extra field is ignored");
+    }
+
+    #[test]
+    fn the_file_never_holds_the_key() {
+        const FAKE: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        let key = crate::shared_kernel::ApiKey::parse(FAKE).unwrap();
+        let preferences = Preferences { sign_in: SignIn::ApiKey, key_test: Some(key_test(true, 3, 0.04)), ..Preferences::default() };
+        // Nothing in a preference can hold the key, so the proof is in the text of the whole file.
+        file.save(&preferences).unwrap();
+        let text = fs::read_to_string(&file.path).unwrap();
+        assert!(!text.contains(key.expose()) && !text.contains("sk-ant") && !text.contains("R2kd"), "{text}");
+        assert!(text.contains("api_key"));
     }
 
     #[test]

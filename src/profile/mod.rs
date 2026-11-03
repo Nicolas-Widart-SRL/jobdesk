@@ -201,4 +201,24 @@ mod tests {
         assert!(after.contains("venues.\r\n- Ran the studio's first accessibility audit.\r\n\r\n## Independent Projects"), "{after:?}");
         assert!(!after.replace("\r\n", "").contains('\n'), "every line still ends in CRLF");
     }
+
+    #[test]
+    fn a_file_with_a_byte_order_mark_keeps_it_at_byte_zero() {
+        let dir = sample();
+        let file = path(dir.path(), ProfileFile::Candidate);
+        let text = fs::read_to_string(&file).unwrap();
+        let before = format!("\u{feff}{}", &text[text.find("## Identity").unwrap()..]);
+        fs::write(&file, &before).unwrap();
+        let (view, errors) = load(dir.path());
+        assert!(errors.is_empty(), "{errors:?}");
+        let identity = view.topics.into_iter().find(|topic| topic.id == TopicId::Identity).unwrap().sections.remove(0).block;
+        assert_eq!(identity.heading, "Identity", "the heading on line 1 is read");
+        let mut editor = open_editor(dir.path());
+        editor.open(identity.key, identity.text.clone());
+        *editor.draft_mut().unwrap() = identity.text.replace("Namur, Belgium", "Dinant, Belgium");
+        assert_eq!(editor.save(false, false), SaveOutcome::Saved);
+        let after = fs::read(&file).unwrap();
+        assert!(after.starts_with("\u{feff}## Identity\n".as_bytes()), "{:?}", &after[..16]);
+        assert_eq!(String::from_utf8(after).unwrap(), before.replacen("Namur, Belgium", "Dinant, Belgium", 1));
+    }
 }

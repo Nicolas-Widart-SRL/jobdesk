@@ -2,6 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::{iso_dates_in, parse_iso_date};
 use crate::shared_kernel::{LoadError, WebUrl};
 use crate::tracking::domain::{ApplicationRepository, ApplicationStatus, AppliedOn, OutcomeRecord, Stage, TrackedApplication, archive_folder};
@@ -21,7 +22,7 @@ impl TrackerFiles {
     fn outcome_of(&self, row: &Row) -> Option<OutcomeRecord> {
         let folder = archive_folder(&row.company, &row.role)?;
         let path = self.root.join("documents/applications").join(folder).join("outcome.md");
-        fs::read_to_string(path).ok().map(|text| parse_outcome(&text))
+        fs::read_to_string(path).ok().map(|text| parse_outcome(without_bom(&text)))
     }
 }
 
@@ -64,7 +65,7 @@ struct Row {
 
 /// Columns are read by name. Rows from before `deadline`, or cut short, read as empty cells.
 fn parse_rows(text: &str) -> csv::Result<Vec<Row>> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let text = without_bom(text);
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(text.as_bytes());
     let headers = reader.headers()?.clone();
     reader

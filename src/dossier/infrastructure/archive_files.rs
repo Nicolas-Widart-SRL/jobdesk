@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use chrono::NaiveDate;
 
 use crate::dossier::domain::{ApplicationRef, ArchiveContents, ArchiveRepository, NamedText, PdfDocument, PostingText, ResearchNote, within_workspace};
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::{days_from, parse_iso_date};
 
 const GUARD_HEADING: &str = "## posting_guard";
@@ -42,7 +43,7 @@ impl ArchiveRepository for ArchiveFiles {
         let cv = self.document("CV", &application.cv_file, format!("cv/main_{}.pdf", application.folder));
         let letter = self.document("Cover letter", &application.cover_letter_file, format!("cover_letters/cover_{}.pdf", application.folder));
         ArchiveContents {
-            posting: fs::read_to_string(folder.join("job_posting.md")).ok().map(|text| split_posting(&text)),
+            posting: fs::read_to_string(folder.join("job_posting.md")).ok().map(|text| split_posting(without_bom(&text))),
             prep_packs: texts_named(&folder, "interview_prep_"),
             follow_ups: texts_named(&folder, "followup_"),
             research: self.research(&application.company, today),
@@ -70,7 +71,7 @@ fn texts_named(folder: &Path, prefix: &str) -> Vec<NamedText> {
         .filter_map(|file| {
             let text = fs::read_to_string(folder.join(&file)).ok()?;
             let name = file.strip_prefix(prefix)?.strip_suffix(".md")?.replace('_', " ");
-            Some(NamedText { name, text })
+            Some(NamedText { name, text: without_bom(&text).to_owned() })
         })
         .collect()
 }

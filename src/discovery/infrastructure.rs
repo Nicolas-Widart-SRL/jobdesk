@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::discovery::domain::{CommuteTier, FetchFailure, FitLevel, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::parse_iso_date;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{LoadError, WebUrl};
@@ -132,7 +133,7 @@ pub fn read_your_terms(root: &Path) -> TermsRead {
 
 fn read_part<T>(root: &Path, file: &str, parse: impl FnOnce(&str) -> T) -> Result<T, LoadError> {
     match fs::read_to_string(root.join(SKILLS).join(file)) {
-        Ok(text) => Ok(parse(&text)),
+        Ok(text) => Ok(parse(without_bom(&text))),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(parse("")),
         Err(error) => Err(LoadError::new(file, error)),
     }

@@ -3,6 +3,7 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::profile::domain::topic::{ProfileFile, SectionRef};
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::markdown;
 
 /// A `##` or `###` of a file and everything under it.
@@ -31,17 +32,25 @@ struct Heading {
     start: usize,
 }
 
+/// The length of the byte order mark at the start of `text`, or 0. Ranges keep counting it, so a save leaves it at byte 0.
+fn bom_len(text: &str) -> usize {
+    text.len() - without_bom(text).len()
+}
+
 /// The headings at the top level of the document. A heading inside a code fence, a quote, a list or the front matter is not one.
+/// A byte order mark is read past, so it hides neither a first-line heading nor the front matter, and stays outside every block.
 fn headings(text: &str) -> Vec<Heading> {
+    let skip = bom_len(text);
+    let body = &text[skip..];
     let mut found = Vec::new();
     let mut nested = 0usize;
     let mut open: Option<Heading> = None;
-    for (event, range) in Parser::new_ext(text, markdown::options() | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS).into_offset_iter() {
+    for (event, range) in Parser::new_ext(body, markdown::options() | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS).into_offset_iter() {
         match event {
             Event::Start(Tag::BlockQuote(_) | Tag::List(_) | Tag::Item | Tag::FootnoteDefinition(_)) => nested += 1,
             Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item | TagEnd::FootnoteDefinition) => nested = nested.saturating_sub(1),
             Event::Start(Tag::Heading { level, .. }) if nested == 0 => {
-                let start = text[..range.start].rfind(['\n', '\r']).map_or(0, |at| at + 1);
+                let start = skip + body[..range.start].rfind(['\n', '\r']).map_or(0, |at| at + 1);
                 open = Some(Heading { level: level as usize as u8, text: String::new(), start });
             }
             Event::End(TagEnd::Heading(_)) => found.extend(open.take()),
@@ -160,7 +169,7 @@ pub fn insert_at(text: &str, at: usize, draft: &str) -> String {
     let (before, after) = text.split_at(at);
     let tail = &before[before.trim_end_matches(['\n', '\r', ' ', '\t']).len()..];
     let breaks = tail.replace("\r\n", "\n").chars().filter(|c| matches!(c, '\n' | '\r')).count();
-    let gap = if before.is_empty() { 0 } else { 2usize.saturating_sub(breaks) };
+    let gap = if before.len() == bom_len(before) { 0 } else { 2usize.saturating_sub(breaks) };
     let closing = if after.is_empty() || after.starts_with(['\n', '\r']) { 1 } else { 2 };
     format!("{before}{}{}{}{after}", ending.repeat(gap), with_ending(draft.trim_end(), ending), ending.repeat(closing))
 }
@@ -191,9 +200,9 @@ pub fn lines_with_endings(text: &str) -> Vec<&str> {
     lines
 }
 
-/// An ATX heading is one to six `#`, then a space or the end of the line.
+/// An ATX heading is one to six `#`, then a space or the end of the line. A byte order mark before it does not count.
 pub fn is_atx(line: &str) -> bool {
-    let line = line.trim_start();
+    let line = line[bom_len(line)..].trim_start();
     let rest = line.trim_start_matches('#');
     (1..=6).contains(&(line.len() - rest.len())) && (rest.trim_end_matches(['\r', '\n']).is_empty() || rest.starts_with([' ', '\t']))
 }
@@ -389,6 +398,20 @@ mod tests {
         assert_eq!(found[0].heading, "How");
         assert_eq!(found[0].range.start, text.find("## How").unwrap());
         assert!(blocks("---\nframework_version: 1.1.1\n---\n\n# Title\n").is_empty());
+    }
+
+    #[test]
+    fn a_byte_order_mark_hides_no_heading_and_stays_outside_every_block() {
+        let text = "\u{feff}## A\nx\n## B\ny\n";
+        let found = blocks(text);
+        assert_eq!(found.iter().map(|block| block.heading.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert_eq!(found[0].range, 3..10);
+        assert_eq!(replace(text, found[0].range.clone(), "## A\nz"), "\u{feff}## A\nz\n## B\ny\n");
+        let fronted = "\u{feff}---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## How\nx\n";
+        assert_eq!(blocks(fronted).iter().map(|block| block.heading.as_str()).collect::<Vec<_>>(), ["How"]);
+        assert!(is_atx("\u{feff}## A\n"));
+        assert_eq!(heading_len("\u{feff}## A\nbody\n"), 8);
+        assert_eq!(insert_at("\u{feff}", 3, "## N"), "\u{feff}## N\n");
     }
 
     #[test]

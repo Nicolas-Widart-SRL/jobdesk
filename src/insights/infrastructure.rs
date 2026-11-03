@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::insights::domain::{SkillGap, SkillGapReport, SkillGapSource, StudyItem};
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::iso_dates_in;
 
 const SOURCE: &str = "upskill";
@@ -30,7 +31,7 @@ impl SkillGapSource for UpskillReports {
         names.sort();
         let Some(name) = names.pop() else { return Ok(None) };
         let text = fs::read_to_string(self.folder.join(&name)).map_err(|error| LoadError::new(format!("{SOURCE}/{name}"), error))?;
-        Ok(Some(parse_report(name, &text)))
+        Ok(Some(parse_report(name, without_bom(&text))))
     }
 }
 

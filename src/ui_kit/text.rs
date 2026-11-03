@@ -384,7 +384,8 @@ fn rewritten(text: &str, mark: bool) -> (String, Vec<String>) {
                     outer.words.push(' ');
                 }
             }
-            Event::Text(part) if has_hidden(&part) => edits.push((range, escaped(&visible(&part)))),
+            // A decoded line end written back would start a new block, so it goes back as a space.
+            Event::Text(part) if has_hidden(&part) => edits.push((range, escaped(&visible(&part.replace(['\n', '\r'], " "))))),
             Event::InlineMath(_) | Event::DisplayMath(_) => edits.push((range.clone(), escaped(&text[range]))),
             Event::Start(Tag::Heading { level, .. }) if level != HeadingLevel::H1 => edits.extend(top_heading(text, range)),
             _ => {}
@@ -1607,6 +1608,34 @@ mod tests {
     #[test]
     fn release_notes_keep_their_line_ends() {
         assert_eq!(link_free("- a\r- b\r\n- c"), "- a\n- b\n- c");
+    }
+
+    /// The blocks of `text`, by kind, in order.
+    fn blocks(text: &str) -> Vec<String> {
+        Parser::new_ext(text, release_options())
+            .filter_map(|event| match event {
+                Event::Start(tag @ (Tag::Heading { .. } | Tag::Paragraph | Tag::Table(_) | Tag::TableRow)) => {
+                    Some(format!("{tag:?}").chars().take(5).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_decoded_line_end_stays_inside_its_block() {
+        for source in
+            ["## a&#10;b&#x200B;", "## a&#x0D;b&#8203;", "| a&#10;b&#x200B; | c |\n|---|---|\n| d | e |", "| a&#13;b&#x200B; | c |\n|---|---|\n| d | e |"]
+        {
+            let out = link_free(source);
+            assert_eq!(blocks(&out), blocks(source), "{source:?} became {out:?}");
+            assert!(settled(&out, &[]), "{out:?}");
+        }
+        // The parser gives each reference a text of its own: a line feed's is left as written, and a carriage return,
+        // which counts as hidden, goes back as a space between the words it parted.
+        assert_eq!(link_free("## a&#10;b&#x200B;"), "# a&#10;b");
+        assert_eq!(link_free("## a&#x0D;b&#8203;"), "# a b");
+        assert_eq!(link_free("| a&#13;b | c |\n|---|---|\n| d | e |"), "| a b | c |\n|---|---|\n| d | e |");
     }
 
     /// Whether `text` parses with no link and no image.

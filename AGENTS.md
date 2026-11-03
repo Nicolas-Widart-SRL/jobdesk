@@ -57,7 +57,6 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - [ARCHITECTURE.md](ARCHITECTURE.md): read before adding a feature or changing layers. Its Runtime section points to the file for each other topic.
 - [docs/architecture/runs.md](docs/architecture/runs.md): read before changing how a task starts, stops, signs in or waits on the user.
 - [docs/architecture/trust.md](docs/architecture/trust.md): read before changing how untrusted text renders, the API key's path or tool permissions.
-- [docs/auth-review.md](docs/auth-review.md): read before changing authentication, naming or distribution.
 - [README.md](README.md): the landing page and install guide.
 - [docs/guide.md](docs/guide.md): user-facing behavior, screen by screen.
 - [CONTRIBUTING.md](CONTRIBUTING.md): running, packaging, releasing and testing.

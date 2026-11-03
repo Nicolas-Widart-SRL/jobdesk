@@ -54,7 +54,7 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Never check out the branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
 2. **Brief one builder.** Run no planner and no plan waves. Write the one step yourself: its files, the edit and its check.
    Use `docs-writer` when the fix changes only `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or files in `docs/`.
-   Use `builder-sonnet` when you name the files, the edit and the test. Use `builder` otherwise.
+   Otherwise use `builder-sonnet` when you name the files, the edit and the test, and `builder` when you do not.
    Brief it as the Briefs section of the `ship` skill says.
    Once it reports, check the step as step 6 says, before any review.
 3. **Review.** A step on the Also reviewed list gets one `reviewer` pass, one round.

@@ -9,7 +9,7 @@ argument-hint: "<feature or task>"
 The main session is the lead, defined in `.claude/agents/lead.md`.
 It reads the notes, writes each subagent's brief and merges steps into the change's branch.
 It writes no code itself, not even a one-line fix: a builder writes every line.
-A docs-only step goes to `docs-writer` instead, as step 3 says. In this skill, what a builder does for its step, the docs-writer does for a docs step: its brief, its findings and its fixes.
+A docs-only step (a step the planner marked docs) goes to `docs-writer` instead, as step 3 says. In this skill, what a builder does for its step, the docs-writer does for a docs-only step: its brief, its findings and its fixes.
 Each subagent's model and effort live in its file in `.claude/agents/`, so do not override them in the call.
 The user's words in the task win over this workflow, for example "do it yourself" or "skip the planner".
 
@@ -140,7 +140,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    Never wait for a pull request with sleep, a loop, `gh --watch`, Monitor or ScheduleWakeup.
 
 A change with one step skips the step review: the change review is its only review.
-A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
+A docs-only step, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
 A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
 It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
 
@@ -316,6 +316,7 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
   merge it with `NO_CHECK=1 scripts/merge-step.sh <design-branch> <change>`.
   Give the planner the change's branch, the canvas paths, the index and every changed handoff file of the canvases' folder
   (`mockups/README.md` and `mockups/handoff/` by default). It reads them with `git show <change>:<path>`.
-  The planner puts the handoff files' Doc changes in a docs step, and that step deletes the section from each file after applying it.
+  The planner puts the handoff files' Doc changes in a handoff step, and that step deletes the section from each file after applying it.
+  The handoff step goes to `builder`, because it edits `mockups/handoff/`, which `docs-writer` may not edit.
 
 Use cheap models only for work that is fully written down.

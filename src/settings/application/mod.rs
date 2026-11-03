@@ -29,6 +29,8 @@ pub use crate::settings::domain::{
 };
 pub use crate::shared_kernel::{ApiKey, KeyReader, SignIn};
 pub use crate::tracking::application::Pipeline;
+/// What About draws of Jobdesk's own updates, as the updates feature words it.
+pub use crate::updates::application::{AboutAction, AboutButton, AboutUpdate, BarAction, CHECK_NOW, CHECKING_WORD, HelpLine, Mark, UpdateView};
 
 #[cfg(test)]
 pub use usage::sent_on;

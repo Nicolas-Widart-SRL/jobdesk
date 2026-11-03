@@ -22,6 +22,8 @@ use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
+use jobdesk::updates::application::{DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, Version};
+use jobdesk::updates::scripted_updates;
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
@@ -3812,6 +3814,8 @@ fn about_says_checking_until_the_tools_answer() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let release = Arc::new(AtomicBool::new(false));
     let mut shell = labelled(shell(Screen::InTray, "settings_about_checking"));
+    // No update check runs, so the only Checking… on the page is Claude Code's.
+    shell.settings_mut().set_check_updates(false);
     let mut checks = EnvironmentChecks::new(Arc::new(GatedTools(Arc::clone(&release))), Arc::new(|| {}));
     checks.ensure_started();
     *shell.environment_slot() = Some(checks);
@@ -3869,11 +3873,287 @@ fn settings_data_light() {
     compare(&mut harness, name);
 }
 
+/// About with the switch on and the last check at 09:12 finding nothing newer: Up to date, and Check now.
 #[test]
 fn settings_about_light() {
     let name = "settings_about_light";
-    let mut harness = render_settings_shell(shell_with_usage(name, usage_tasks()), Page::About);
+    let current = Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release_020() };
+    let shell = with_update(shell_with_usage(name, usage_tasks()), vec![ServiceEvent::Checked(Ok(current))]);
+    let mut harness = render_settings_shell(shell, Page::About);
+    assert!(is_shown(&harness, "Up to date") && is_shown(&harness, "Last checked today at 09:12."));
     compare(&mut harness, name);
+}
+
+/// Fictional notes for 0.2.0, as git-cliff writes them, with a link and an image that show only as words.
+const RELEASE_NOTES: &str = "### Features\n\n- **settings**: keep run logs for 30 days, 90 days or forever ([#41](https://example.com/jobdesk/pull/41))\n- **today**: Later can set a card aside until Monday\n- **tasks**: reopen a stopped task with a reply ([#44](https://example.com/jobdesk/pull/44))\n\n![The new Data and privacy page](https://example.com/jobdesk/data.png)\n\n### Bug fixes\n\n- **jobs**: a cut title shows in full on hover\n- **profile**: Save keeps your draft when the file changed on disk\n- **shell**: the window keeps its size between launches\n- **settings**: search finds Spend at most again\n";
+const RELEASE_PAGE: &str = "https://github.com/Nicolas-Widart-SRL/jobdesk/releases/tag/v0.2.0";
+
+/// A fictional 0.2.0, released the day before the sample folder is read.
+fn release_020() -> Release {
+    Release {
+        version: Version { major: 0, minor: 2, patch: 0 },
+        released: NaiveDate::from_ymd_opt(2026, 10, 30),
+        notes: RELEASE_NOTES.to_owned(),
+        size: 14_200_000,
+        signature: "fictional".to_owned(),
+    }
+}
+
+/// The check finds 0.2.0, then each download started ends as `then` says.
+fn found_then(then: impl IntoIterator<Item = ServiceEvent>) -> Vec<ServiceEvent> {
+    std::iter::once(ServiceEvent::Checked(Ok(release_020()))).chain(then).collect()
+}
+
+fn ended(end: DownloadEnd) -> ServiceEvent {
+    ServiceEvent::Ended { id: DownloadId(0), end }
+}
+
+/// `shell` as a Mac copy of 0.1.0 whose updates answer from `script`, with the clock at 09:12 on the day it is read.
+fn with_update(shell: Shell, script: Vec<ServiceEvent>) -> Shell {
+    let at = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 12, 0).unwrap();
+    labelled(shell).with_now(at).with_updates(scripted_updates("0.1.0", script, None, true, Some(Platform::MacArm)))
+}
+
+/// Today with every tool ready, as the update canvases draw it, its updates answering from `script`.
+fn update_harness(screen: Screen, name: &str, script: Vec<ServiceEvent>, theme: Theme) -> Harness<'static> {
+    probed_wgpu(probed(with_update(shell(screen, name), script), AllTools), theme)
+}
+
+/// Clicks `label`, then takes the pointer off the window, so nothing shows its hover and no pointer is drawn.
+fn click_away(harness: &mut Harness, label: &str) {
+    harness.get_by_label(label).click();
+    harness.run_steps(3);
+    harness.event(egui::Event::PointerGone);
+    harness.run_steps(3);
+}
+
+/// Today, as the check found 0.2.0: Jobdesk 0.2.0 is out, and Download.
+#[test]
+fn update_available_light() {
+    let name = "update_available_light";
+    let mut harness = update_harness(Screen::InTray, name, found_then([]), Theme::Light);
+    assert!(is_shown(&harness, "Jobdesk 0.2.0 is out") && is_shown(&harness, "Download"));
+    compare(&mut harness, name);
+}
+
+fn notes_open(name: &str, script: Vec<ServiceEvent>, mark: &str, theme: Theme) {
+    let mut harness = update_harness(Screen::InTray, name, script, theme);
+    click_away(&mut harness, mark);
+    compare(&mut harness, name);
+}
+
+/// The notes open over Today from the bar, with Download 0.2.0 focused.
+#[test]
+fn update_notes_light() {
+    notes_open("update_notes_light", found_then([]), "Jobdesk 0.2.0 is out", Theme::Light);
+}
+
+#[test]
+fn update_notes_dark() {
+    notes_open("update_notes_dark", found_then([]), "Jobdesk 0.2.0 is out", Theme::Dark);
+}
+
+/// After Download, each way the download goes, as the bar says it.
+fn downloaded(name: &str, then: ServiceEvent) -> Harness<'static> {
+    let mut harness = update_harness(Screen::InTray, name, found_then([then]), Theme::Light);
+    click_away(&mut harness, "Download");
+    harness
+}
+
+#[test]
+fn update_downloading_light() {
+    let name = "update_downloading_light";
+    let mut harness = downloaded(name, ServiceEvent::Progress { id: DownloadId(0), done: 5_400_000, total: 14_200_000 });
+    assert!(is_shown(&harness, "Downloading 0.2.0, 38%, 5.4 of 14.2 MB") && is_shown(&harness, "Cancel"));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn update_ready_light() {
+    let name = "update_ready_light";
+    let mut harness = downloaded(name, ended(DownloadEnd::Done("/fictional/updates/Jobdesk.app.tar.gz".into())));
+    assert!(is_shown(&harness, "0.2.0 is downloaded and checked") && is_shown(&harness, "Restart to update"));
+    compare(&mut harness, name);
+}
+
+/// The notes once ready: what Restart does, then Restart to update in Download's place.
+#[test]
+fn update_notes_ready_light() {
+    let name = "update_notes_ready_light";
+    let mut harness = downloaded(name, ended(DownloadEnd::Done("/fictional/updates/Jobdesk.app.tar.gz".into())));
+    click_away(&mut harness, "0.2.0 is downloaded and checked");
+    assert!(is_shown(&harness, "Jobdesk closes, installs 0.2.0 and opens again with the same folder and settings. Restart waits while a task is open."));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn update_failed_light() {
+    let name = "update_failed_light";
+    let mut harness = downloaded(name, ended(DownloadEnd::Failed { percent: 41, failure: Failure::Interrupted }));
+    assert!(is_shown(&harness, "Download of 0.2.0 stopped at 41%: the connection dropped") && is_shown(&harness, "Retry"));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn update_bad_signature_light() {
+    let name = "update_bad_signature_light";
+    let mut harness = downloaded(name, ended(DownloadEnd::BadSignature));
+    assert!(is_shown(&harness, "0.2.0 failed its signature check. It was deleted, not installed."));
+    compare(&mut harness, name);
+}
+
+/// Tasks with a run working: Restart to update is disabled, and says why on hover.
+fn ready_busy(name: &str, theme: Theme) {
+    let mut shell = with_update(shell(Screen::Runs, name), found_then([ended(DownloadEnd::Done("/fictional/updates/Jobdesk.app.tar.gz".into()))]));
+    *shell.desk_slot() = Some(apply_run_ending([]));
+    let mut harness = probed_wgpu(probed(shell, AllTools), theme);
+    click_away(&mut harness, "Download");
+    let restart = harness.get_by_label("Restart to update");
+    assert!(restart.accesskit_node().is_disabled());
+    restart.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "A task is running. Restart once it finishes, so it is not cut off halfway."));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn update_ready_busy_light() {
+    ready_busy("update_ready_busy_light", Theme::Light);
+}
+
+#[test]
+fn update_ready_busy_dark() {
+    ready_busy("update_ready_busy_dark", Theme::Dark);
+}
+
+/// About with the switch off and Check now pressed: Checking…, and Check now disabled.
+#[test]
+fn settings_about_update_checking_light() {
+    let name = "settings_about_update_checking_light";
+    let mut shell = with_update(shell_with_usage(name, usage_tasks()), Vec::new());
+    shell.settings_mut().set_check_updates(false);
+    let mut harness = render_settings_shell(shell, Page::About);
+    assert!(is_shown(&harness, "Not checked yet."), "no check starts against the switch");
+    click_away(&mut harness, "Check now");
+    assert!(is_shown(&harness, "Asking GitHub for the latest release…"));
+    assert!(harness.get_by_label("Check now").accesskit_node().is_disabled());
+    compare(&mut harness, name);
+}
+
+/// The check timed out at 09:12: the reason in About, and Check failed beside About on the rail. The bar stays quiet.
+#[test]
+fn settings_about_update_failed_light() {
+    let name = "settings_about_update_failed_light";
+    let shell = with_update(shell_with_usage(name, usage_tasks()), vec![ServiceEvent::Checked(Err(Failure::TimedOut))]);
+    let mut harness = render_settings_shell(shell, Page::About);
+    assert!(is_shown(&harness, "Could not reach GitHub at 09:12: the connection timed out."));
+    assert_eq!(harness.query_all_by_label("Check failed").count(), 2, "the tag and the rail");
+    compare(&mut harness, name);
+}
+
+/// 0.2.0 is out: What's new, and Download 0.2.0.
+#[test]
+fn settings_about_update_light() {
+    let name = "settings_about_update_light";
+    let shell = with_update(shell_with_usage(name, usage_tasks()), found_then([]));
+    let mut harness = render_settings_shell(shell, Page::About);
+    assert!(is_shown(&harness, "Jobdesk 0.2.0, released Fri 30 Oct. You have 0.1.0. Last checked today at 09:12."));
+    assert!(is_shown(&harness, "0.2.0 is out"), "the rail");
+    compare(&mut harness, name);
+}
+
+/// Settings open while a task waits on the user, with 0.2.0 ready: Restart to update in About is disabled, and says why.
+fn about_ready_waits(name: &str, theme: Theme) {
+    let mut shell = with_update(shell_with_usage(name, usage_tasks()), found_then([ended(DownloadEnd::Done("/fictional/updates/Jobdesk.app.tar.gz".into()))]));
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    shell.open_settings(Page::About);
+    let mut harness = probed_wgpu(probed(shell, VersionedTools), theme);
+    click_away(&mut harness, "Download 0.2.0");
+    assert!(is_shown(&harness, "A task waits for you") && is_shown(&harness, "0.2.0 ready"));
+    let about_restart = harness.get_all_by_label("Restart to update").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    assert!(about_restart.accesskit_node().is_disabled());
+    about_restart.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "A task waits for your reply in Tasks. End its session there, then restart."));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn settings_about_ready_waits_light() {
+    about_ready_waits("settings_about_ready_waits_light", Theme::Light);
+}
+
+#[test]
+fn settings_about_ready_waits_dark() {
+    about_ready_waits("settings_about_ready_waits_dark", Theme::Dark);
+}
+
+/// What's new opens the notes over Settings, Esc closes them before it leaves Settings, and the one link out is the
+/// release page built from the version, never an address from the notes.
+#[test]
+fn the_notes_open_over_settings_and_esc_closes_them_first() {
+    let shell = with_update(shell_with_usage("update_notes_esc", usage_tasks()), found_then([]));
+    let mut shell = shell;
+    shell.open_settings(Page::About);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&opened);
+    let shared = Rc::new(RefCell::new(shell));
+    let inner = Rc::clone(&shared);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| {
+        inner.borrow_mut().show(ui);
+        let urls: Vec<String> = ui.ctx().output(|output| {
+            output.commands.iter().filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
+        });
+        seen.borrow_mut().extend(urls);
+    });
+    harness.run_steps(3);
+    let notes_shown = |harness: &Harness| harness.query_by_label("From the GitHub release. Its links and images do not open here.").is_some();
+    assert!(!notes_shown(&harness));
+    harness.get_by_label("What's new").click();
+    harness.run_steps(3);
+    assert!(notes_shown(&harness), "the notes open over Settings");
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    assert!(!notes_shown(&harness), "Esc closes the notes");
+    assert!(shared.borrow().settings_open(), "and Settings stays");
+
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run_steps(3);
+    for link in harness.query_all_by_label("#41") {
+        link.click();
+    }
+    harness.run_steps(3);
+    harness.get_by_label("Open the release page").click();
+    harness.run_steps(3);
+    assert_eq!(*opened.borrow(), [RELEASE_PAGE], "only the page built from the version opens");
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    assert!(!shared.borrow().settings_open(), "a second Esc leaves Settings");
+}
+
+/// In the smallest window, with Settings open and a task waiting, the group's words are cut first: Retry and Settings
+/// stay whole inside the window, and nothing of the group lies over the left of the bar.
+#[test]
+fn the_update_group_fits_the_smallest_window() {
+    let script = found_then([ended(DownloadEnd::Failed { percent: 41, failure: Failure::Interrupted })]);
+    let mut shell = with_update(shell(Screen::InTray, "update_smallest_window"), script);
+    *shell.desk_slot() = Some(tray_waiting_apply_run());
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+    harness.run_steps(3);
+    harness.get_by_label("Download").click();
+    harness.run_steps(3);
+    harness.key_press_modifiers(COMMAND, Key::Comma);
+    harness.run_steps(3);
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1040.0, 640.0));
+    let rect = |label: &str| harness.get_by_label(label).rect();
+    // The rail's title says Settings too.
+    let settings = harness.get_by_role_and_label(egui::accesskit::Role::Button, STATUS_LINE).rect();
+    let (retry, words, waits) = (rect("Retry"), rect("Download of 0.2.0 stopped at 41%: the connection dropped"), rect("A task waits for you"));
+    assert!(window.contains_rect(retry) && window.contains_rect(settings), "{retry:?} {settings:?}");
+    assert!(retry.right() < settings.left() && words.right() < retry.left());
+    assert!(words.left() >= waits.right(), "the group never lies over the left: {words:?} {waits:?}");
 }
 
 /// Every required tool answers, so the menu has no Setup tab.

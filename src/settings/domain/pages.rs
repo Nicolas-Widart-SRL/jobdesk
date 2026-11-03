@@ -264,13 +264,18 @@ const DATA: [&str; 11] = [
     "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
 ];
 
-/// The versions, the links, then the line on who makes Jobdesk.
-const ABOUT: [&str; 11] = [
+/// The versions, the updates, the links, then the line on who makes Jobdesk. The switch's help is the one it shows on,
+/// as it is by default. Latest version's help says the state of the check, so a search cannot look through it.
+const ABOUT: [&str; 15] = [
     "This copy",
     "Jobdesk",
     "Version and build, for a bug report.",
     "Claude Code",
     "The program each task runs, installed on its own.",
+    "Updates",
+    "Check for updates automatically",
+    AUTO_CHECK_ON,
+    "Latest version",
     "Read more",
     "What changed",
     "Every release, newest first.",
@@ -278,6 +283,10 @@ const ABOUT: [&str; 11] = [
     "Jobdesk and the open-source parts it is built from.",
     "Jobdesk runs Claude Code. It is not made by Anthropic.",
 ];
+
+/// The help under Check for updates automatically while it is on, as the updates feature words it.
+const AUTO_CHECK_ON: &str =
+    "When Jobdesk opens and about every 6 hours, it reads the latest release on GitHub. It downloads nothing until you choose Download.";
 
 /// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
@@ -453,6 +462,16 @@ mod tests {
         }
         assert_eq!(drawn_index(Page::Runtime, Drawn::folder(true)), index(Page::Runtime));
         assert_eq!(drawn_index(Page::General, Drawn::folder(false)), index(Page::General));
+    }
+
+    #[test]
+    fn about_finds_the_updates_in_the_words_the_page_draws() {
+        let about = index(Page::About);
+        for line in ["Updates", "Check for updates automatically", "Latest version"] {
+            assert!(about.contains(&line), "{line}");
+        }
+        let switch_on = crate::updates::idle_updates("0.1.0", true).view().about.auto_help;
+        assert!(about.contains(&switch_on), "the switch's help, as the updates feature words it");
     }
 
     #[test]

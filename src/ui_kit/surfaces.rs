@@ -676,7 +676,15 @@ fn setting_rule(ui: &mut Ui) {
 /// One setting: `label` in `Type::STRONG` over its `help` in `Type::NOTE` `muted`, held to `DOC_MEASURE`, and the
 /// `control` at the right, centred on them. A hairline sits above. Hits of the search `query` are highlighted.
 pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: impl FnOnce(&mut Ui)) -> Response {
-    let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    setting_row_lines(ui, label, &[(help, Ink::Muted)], query, control)
+}
+
+/// A `setting_row` whose help is several lines, each in its own ink, such as a failure in `closed` over what happens
+/// next in `muted`. Each line starts on a line of its own, and an empty one takes no room.
+pub fn setting_row_lines(ui: &mut Ui, label: &str, help: &[(&str, Ink)], query: &str, control: impl FnOnce(&mut Ui)) -> Response {
+    let p = Palette::of(ui);
+    let text = setting_ink(ui, p.text);
+    let help: Vec<(&str, Color32)> = help.iter().filter(|(line, _)| !line.is_empty()).map(|&(line, ink)| (line, setting_ink(ui, ink.color(&p)))).collect();
     // Each row keeps its own measure, so it is keyed on its place among its parent's widgets.
     let id = ui.next_auto_id();
     ui.scope(|ui| {
@@ -697,15 +705,15 @@ pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: i
         let beside = if used.width() > 0.0 { used.width() + SETTING_CONTROL_GAP } else { 0.0 };
         let room = (full - beside).clamp(0.0, DOC_MEASURE);
         let label_lines = wrapped(ui, label, Type::STRONG, text, room);
-        let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
-        let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        let help_lines: Vec<_> = help.iter().map(|&(line, ink)| (line, wrapped(ui, line, Type::NOTE, ink, room))).collect();
+        let words = label_lines.size().y + help_lines.iter().map(|(_, lines)| SETTING_HELP_GAP + lines.size().y).sum::<f32>();
         let height = words.max(used.height()).max(least);
         let place = Rect::from_min_size(pos2(origin.x, top + (height - words) / 2.0), vec2(room, words));
         let mut column = ui.new_child(UiBuilder::new().id_salt("setting_words").max_rect(place).layout(Layout::top_down(Align::Min)));
         column.spacing_mut().item_spacing.y = SETTING_HELP_GAP;
         add_marked(&mut column, label_lines, label, query);
-        if let Some(help_lines) = help_lines {
-            add_marked(&mut column, help_lines, help, query);
+        for (line, lines) in help_lines {
+            add_marked(&mut column, lines, line, query);
         }
         kept.keep(ui, height, "a setting row changed height");
         ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover())
@@ -1007,16 +1015,17 @@ pub struct ReleaseNotes<'a> {
     pub notes_label: &'a str,
     /// The `faint` line under the notes on where they come from and what they cannot do.
     pub trust: &'a str,
-    /// What the primary action does, on a slip above the actions, once the update is ready. `None` before.
+    /// A slip above the actions: what the primary action does once the update is ready, or why there is no step to
+    /// take, such as a download that failed or a copy that cannot update itself. `None` when there is nothing to say.
     pub slip: Option<&'a str>,
-    /// The primary action, such as "Download 0.2.0" or "Restart to update".
-    pub primary: &'a str,
+    /// The primary action, such as "Download 0.2.0" or "Restart to update". `None` when there is no step to take.
+    pub primary: Option<&'a str>,
     /// Why the primary action waits, said on hover while it is disabled. `None` while it can go.
     pub primary_wait: Option<&'a str>,
     /// The size beside the primary action, such as "14.2 MB".
     pub size: Option<&'a str>,
-    /// The link to the release page, such as "Open the release page".
-    pub open_page: &'a str,
+    /// The link to the release page, such as "Open the release page". `None` when the page has nothing for this copy.
+    pub open_page: Option<&'a str>,
     /// The `faint` words on Esc: under the actions, or at the end of their row beside a slip.
     pub esc_note: &'a str,
 }
@@ -1111,30 +1120,33 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = STATUS_PROGRESS_GAP;
                     let wait = notes.primary_wait;
-                    let primary = enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| primary_button(ui, notes.primary));
-                    if focus && !ui.is_sizing_pass() {
-                        if wait.is_none() {
+                    if let Some(label) = notes.primary {
+                        let primary = enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| primary_button(ui, label));
+                        if focus && !ui.is_sizing_pass() && wait.is_none() {
                             primary.request_focus();
                         }
+                        if primary.clicked() {
+                            picked = Some(NotesAction::Primary);
+                        }
+                    }
+                    if !ui.is_sizing_pass() {
                         focus = false;
                     }
-                    if primary.clicked() {
-                        picked = Some(NotesAction::Primary);
-                    }
-                    if notes.slip.is_some() {
-                        if link(ui, notes.open_page).clicked() {
+                    let mut open_page = |ui: &mut Ui| {
+                        if let Some(label) = notes.open_page
+                            && link(ui, label).clicked()
+                        {
                             picked = Some(NotesAction::OpenPage);
                         }
+                    };
+                    if notes.slip.is_some() {
+                        open_page(ui);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| add_text(ui, notes.esc_note, Type::SMALL, Ink::Faint));
                     } else {
-                        if let Some(size) = notes.size {
+                        if let Some(size) = notes.size.filter(|_| notes.primary.is_some()) {
                             add_text(ui, size, Type::NOTE, Ink::Muted);
                         }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if link(ui, notes.open_page).clicked() {
-                                picked = Some(NotesAction::OpenPage);
-                            }
-                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), open_page);
                     }
                 });
                 if notes.slip.is_none() {

@@ -15,7 +15,8 @@ use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup,
 
 use crate::settings::application::{
     CapCheck, ClaudeVersion, DataSizes, Drawn, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen,
-    TermsState, TermsWord, TextSize, ThemeChoice, UsageState, WordTone, cap_word, hidden_word, index, rail_word, search, size_short, terms_drawn, terms_word,
+    TermsState, TermsWord, TextSize, ThemeChoice, UpdateView, UsageState, WordTone, cap_word, hidden_word, index, rail_word, search, size_short, terms_drawn,
+    terms_word,
 };
 use crate::settings::ui::about::AboutView;
 use crate::settings::ui::data::DataView;
@@ -107,6 +108,10 @@ pub struct SettingsView<'a> {
     pub terms: TermsState<'a>,
     /// How many jobs the Jobs view hides, and how many there are in all. None until the saved jobs are read.
     pub jobs: Option<(usize, usize)>,
+    /// Jobdesk's own updates, for About and its word on the rail.
+    pub update: &'a UpdateView,
+    /// Why Restart to update waits, if it does, as the shell words it.
+    pub restart_wait: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +131,18 @@ pub enum SettingsRequest {
     OpenLastTask,
     /// Close Settings and show Profile, where the profile your terms come from is edited.
     OpenProfile,
+    /// Check now: ask GitHub for the latest release, whatever the switch says.
+    CheckForUpdates,
+    /// Download the release found, or try its download again.
+    DownloadUpdate,
+    /// Stop the download that runs.
+    CancelUpdate,
+    /// Close Jobdesk and apply the download that is ready. Only the shell decides whether it may go now.
+    RestartToUpdate,
+    /// What's new: open the release notes over the desk.
+    OpenReleaseNotes,
+    /// Open the release page, at the address built from the version, for a copy that cannot update itself.
+    OpenReleasePage,
 }
 
 /// The Settings screen: Back to app and the rail at the left, the open page on paper beside them.
@@ -205,8 +222,13 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             request = asked.or(request);
         }
         Page::About => {
-            let about = AboutView { version: view.version, claude: view.claude };
-            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
+            let about = AboutView { version: view.version, claude: view.claude, update: &view.update.about, restart_wait: view.restart_wait };
+            let mut auto = view.settings.preferences().check_updates.is_on();
+            let (_, asked) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &mut auto, &query));
+            if auto != view.settings.preferences().check_updates.is_on() {
+                view.settings.set_check_updates(auto);
+            }
+            request = asked.or(request);
         }
         Page::Terms => {
             let lead = if matches!(view.terms, TermsState::Reading) { terms::READING } else { page.lead() };
@@ -375,7 +397,10 @@ fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
         }
         Page::Permissions => (view.settings.preferences().permissions.label().to_owned(), Ink::Muted),
         Page::Data => (view.sizes.map(|sizes| size_short(sizes.total())).unwrap_or_default(), Ink::Muted),
-        Page::About => (view.version.to_owned(), Ink::Muted),
+        Page::About => {
+            let (word, failed) = &view.update.rail_word;
+            (word.clone(), if *failed { Tone::Closed.into() } else { Ink::Muted })
+        }
         Page::Terms => match terms_word(view.terms) {
             word @ TermsWord::NotStated(_) => (word.text(), Tone::Interview.into()),
             word @ TermsWord::Hidden => (word.text(), Tone::Closed.into()),
@@ -591,6 +616,7 @@ mod tests {
         Harness::builder().with_size([width, 820.0]).with_context_setup(setup).build_ui(move |ui| {
             let state = &mut *state.borrow_mut();
             let usage = if state.reading { UsageState::Reading } else { UsageState::Read { report: &state.report, pipeline: &state.pipeline, today: today() } };
+            let update = crate::updates::idle_updates("0.1.0", true).view();
             let view = SettingsView {
                 settings: &mut state.settings,
                 folder: (!state.no_folder).then_some("~/Documents/ai-job-search"),
@@ -612,6 +638,8 @@ mod tests {
                 now: now(),
                 terms: if state.no_folder { TermsState::NoFolder } else { TermsState::Read(&state.terms) },
                 jobs: state.jobs,
+                update: &update,
+                restart_wait: None,
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -824,6 +852,7 @@ mod tests {
         let mut screen = SettingsScreen::default();
         let mut providers = memory_providers(None);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let update = crate::updates::idle_updates("0.1.0", true).view();
             let view = SettingsView {
                 settings: &mut settings,
                 folder: None,
@@ -845,6 +874,8 @@ mod tests {
                 now: now(),
                 terms: TermsState::NoFolder,
                 jobs: None,
+                update: &update,
+                restart_wait: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1349,6 +1380,7 @@ mod tests {
         let mut providers = memory_providers(None);
         screen.open_on(Page::About);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let update = crate::updates::idle_updates("0.1.0", true).view();
             let view = SettingsView {
                 settings: &mut settings,
                 folder: None,
@@ -1370,6 +1402,8 @@ mod tests {
                 now: now(),
                 terms: TermsState::NoFolder,
                 jobs: None,
+                update: &update,
+                restart_wait: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1570,6 +1604,7 @@ mod tests {
         let mut providers = memory_providers(None);
         screen.open_on(Page::Usage);
         let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let update = crate::updates::idle_updates("0.1.0", true).view();
             let view = SettingsView {
                 settings: &mut settings,
                 folder: None,
@@ -1591,6 +1626,8 @@ mod tests {
                 now: now(),
                 terms: TermsState::NoFolder,
                 jobs: None,
+                update: &update,
+                restart_wait: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

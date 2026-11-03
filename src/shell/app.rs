@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -42,6 +42,9 @@ use crate::ui_kit::{
     folder_tab, hidden_note, install_fonts, install_theme, knot, muted, note_dialog, note_focus, page_body, paper, primary_button, prompt_box_tone, rich,
     sheet_frame, shell_top_frame, shortcut_button, status_button, status_frame, status_line, status_note, status_waits, strong, take_command_request,
 };
+use crate::updates;
+use crate::updates::application::{BarAction, RestartPlan, SessionState, Updates, relaunch_args, restart_wait};
+use crate::updates::ui::{UpdateRequest, UpdateScreen};
 use crate::workspace;
 use crate::workspace::application::{EnvironmentChecks, Readiness, WorkspaceRoot, auth_mode, readiness};
 use crate::workspace::ui::WorkspaceAction;
@@ -108,7 +111,7 @@ pub struct Shell {
     snapshot: Snapshot,
     /// False from opening a folder until its first snapshot arrives. Today shows that it is reading.
     loaded: bool,
-    updates: Option<Receiver<Snapshot>>,
+    snapshots: Option<Receiver<Snapshot>>,
     /// Asks the snapshot worker to read again, because run logs change outside the checkout.
     reload: Option<Reload>,
     /// The reload the last task's end asked for. Until a snapshot carries it, the month's spend misses that task's cost.
@@ -172,7 +175,23 @@ pub struct Shell {
     /// The user agreed to drop their profile draft to quit. The draft stays until the window really closes, so a quit
     /// cancelled later, at the session ask, keeps it.
     quit_agreed: bool,
+    /// Jobdesk's own updates: the check, the download, and what Restart to update applies. Not a run: no Claude, no
+    /// run log, nothing counted in Usage.
+    updates: Updates,
+    /// Whether the release notes are open over the desk.
+    update_screen: UpdateScreen,
+    /// The switch for the automatic check as `updates` last took it. A change reaches it once, as Permissions does.
+    auto_check: bool,
+    /// The user chose Restart to update, and the window is closing for it. Any answer that keeps the window open clears it.
+    restart_pending: bool,
+    /// Where the window leaves what Restart to update applies once it has closed, with the arguments to open again with.
+    restart_slot: RestartSlot,
+    /// The arguments Jobdesk started with, after the program's name.
+    launch_args: Vec<OsString>,
 }
+
+/// What Restart to update applies once the window has closed, and the arguments the new copy opens with. `run` reads it.
+pub type RestartSlot = Arc<Mutex<Option<(RestartPlan, Vec<OsString>)>>>;
 
 /// What would drop unsaved profile text from outside Profile, once the user agrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +215,7 @@ impl Shell {
             workspace: None,
             snapshot: Snapshot { today, ..Snapshot::default() },
             loaded: false,
-            updates: None,
+            snapshots: None,
             reload: None,
             usage_due: 0,
             was_busy: false,
@@ -237,6 +256,13 @@ impl Shell {
             away: None,
             quit_after: false,
             quit_agreed: false,
+            // A check that never answers, so a preview or a test never reaches the network.
+            updates: updates::idle_updates(env!("CARGO_PKG_VERSION"), true),
+            update_screen: UpdateScreen::default(),
+            auto_check: true,
+            restart_pending: false,
+            restart_slot: RestartSlot::default(),
+            launch_args: Vec::new(),
         }
     }
 
@@ -295,9 +321,18 @@ impl Shell {
         Self { data_label: Some(label.to_owned()), data_sizes: Some(sizes), ..self }
     }
 
-    /// Shows `label` as this copy's version in Settings, for snapshots.
+    /// Shows `label` as this copy's version in Settings, for snapshots. The updates count it as the version in use, with
+    /// a check that never answers: give scripted ones with `with_updates` after this.
     pub fn with_version_label(self, label: &str) -> Self {
-        Self { version: label.to_owned(), ..self }
+        let updates = updates::idle_updates(label, true);
+        Self { version: label.to_owned(), ..self }.with_updates(updates)
+    }
+
+    /// Takes `updates`, such as scripted ones, for tests and snapshots. They follow the switch as the settings hold it.
+    pub fn with_updates(self, mut updates: Updates) -> Self {
+        let auto = self.settings.preferences().check_updates.is_on();
+        updates.set_auto(auto);
+        Self { updates, auto_check: auto, ..self }
     }
 
     /// Signs tasks in through `providers`, such as a key kept in memory and a scripted Test connection, for tests.
@@ -325,7 +360,7 @@ impl Shell {
     /// Hands the shell snapshots as the folder watcher does, for tests.
     pub fn snapshot_feed(&mut self) -> std::sync::mpsc::Sender<Snapshot> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.updates = Some(receiver);
+        self.snapshots = Some(receiver);
         sender
     }
 
@@ -365,17 +400,34 @@ impl Shell {
     /// It only asks each tool for its version, on a worker thread.
     /// The preferences reach the window here, before the first frame, and after that only when one changes.
     /// The system keychain is reached from here alone, and nothing reads it until Providers shows or a task starts.
-    fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
+    /// The updates read GitHub from here alone, and only while the switch is on or the user asks. What Restart to update
+    /// applies goes into `restart_slot` as the window closes, with `args` as the new copy's.
+    fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, restart_slot: RestartSlot, args: Vec<OsString>) -> Self {
         let repaint = ctx.clone();
         let environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
         let repaint = ctx.clone();
         let providers = settings::open_providers(settings::system_keychain(), settings::claude_tester(Arc::new(move || repaint.request_repaint())));
-        Self::launch(ctx, path, data, environment, providers)
+        let repaint = ctx.clone();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || repaint.request_repaint());
+        let folder = data.clone();
+        let make_updates = move |auto| match folder {
+            Some(folder) => updates::github(&folder, env!("CARGO_PKG_VERSION"), updates::install_block(), auto, wake),
+            None => updates::idle_updates(env!("CARGO_PKG_VERSION"), auto),
+        };
+        Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates) }
     }
 
-    /// `start` with the tool check and the providers given, so tests can launch without asking real tools or the keychain.
+    /// `start` with the tool check, the providers and the updates given, so tests can launch without asking real tools,
+    /// the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
-    fn launch(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>, mut environment: EnvironmentChecks, providers: Providers) -> Self {
+    fn launch(
+        ctx: &egui::Context,
+        path: Option<PathBuf>,
+        data: Option<PathBuf>,
+        mut environment: EnvironmentChecks,
+        providers: Providers,
+        make_updates: impl FnOnce(bool) -> Updates,
+    ) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
         let settings = data.as_deref().map_or_else(Settings::unsaved, |data| settings::open_settings(data, restored));
@@ -384,9 +436,27 @@ impl Shell {
         if let Some(data) = &data {
             prune_run_logs(data, settings.preferences().retention, Local::now().naive_local());
         }
+        let auto_check = settings.preferences().check_updates.is_on();
+        let mut updates = make_updates(auto_check);
+        // What a past session downloaded is never applied by this one. A Restart to update that did not install says why.
+        if let Some(data) = &data {
+            updates::clear_downloads(data);
+            if let Some(failed) = updates::last_apply_failure(data) {
+                updates.apply_failed(failed);
+            }
+        }
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
-        let mut shell = Self { data, environment: Some(environment), settings, permissions, providers, ..Self::empty(first, Local::now().date_naive()) };
+        let mut shell = Self {
+            data,
+            environment: Some(environment),
+            settings,
+            permissions,
+            providers,
+            updates,
+            auto_check,
+            ..Self::empty(first, Local::now().date_naive())
+        };
         // After the pruning, so the size is what stays.
         shell.measure_data();
         if let Some(path) = path {
@@ -413,8 +483,8 @@ impl Shell {
             Some(root) => {
                 let repaint = ctx.clone();
                 let usage = self.data.as_ref().map(|data| runs::usage_logs(data.join("runs"), root.path()));
-                let (updates, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
-                (self.updates, self.reload) = (Some(updates), Some(reload));
+                let (snapshots, reload) = live_snapshot::spawn(root.clone(), usage, move || repaint.request_repaint());
+                (self.snapshots, self.reload) = (Some(snapshots), Some(reload));
                 // The new worker numbers its own asks, and reads every log first.
                 self.usage_due = 0;
                 if let Some(data) = &self.data {
@@ -487,6 +557,10 @@ impl Shell {
     /// Closes the ask over every screen with the user's answer. A close asked for while it showed comes back after it.
     fn settle_away(&mut self, ctx: &egui::Context, discard: bool) {
         let Some((pending, _)) = self.away.take() else { return };
+        // Keep editing keeps the window, so a Restart to update that waited on the answer is off.
+        if !discard && pending == Pending::Quit {
+            self.restart_pending = false;
+        }
         if discard {
             self.answer_away(ctx, pending);
         }
@@ -535,6 +609,7 @@ impl Shell {
         if let Some(environment) = &mut self.environment {
             environment.poll();
         }
+        self.follow_updates(ui.ctx(), now);
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
@@ -573,6 +648,69 @@ impl Shell {
         note_focus(ui.ctx());
     }
 
+    /// Hands a changed switch for the automatic check to the updates, then takes what they heard and starts a check that
+    /// is due. The window wakes when the next one is.
+    fn follow_updates(&mut self, ctx: &egui::Context, now: NaiveDateTime) {
+        let auto = self.settings.preferences().check_updates.is_on();
+        if auto != self.auto_check {
+            self.auto_check = auto;
+            self.updates.set_auto(auto);
+        }
+        self.updates.poll(now);
+        if let Some(wait) = self.updates.next_due(now) {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// What a Claude session open in Tasks means for Restart to update: one working, one that only waits for a reply, or none.
+    fn session_state(&self) -> SessionState {
+        match &self.desk {
+            Some(desk) if desk.is_busy() => SessionState::Working,
+            Some(desk) if desk.has_live_process() => SessionState::Open,
+            _ => SessionState::None,
+        }
+    }
+
+    /// Why Restart to update waits, if it does.
+    fn restart_wait(&self) -> Option<&'static str> {
+        restart_wait(self.session_state())
+    }
+
+    /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
+    /// a Claude session is open, and applies nothing without a download that is ready.
+    fn restart_to_update(&mut self, ctx: &egui::Context) {
+        if self.restart_wait().is_some() || self.updates.restart_plan().is_none() {
+            return;
+        }
+        self.restart_pending = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Does what the update group, its notes or About asked. The check and the download are not runs: no Claude process,
+    /// no run log, nothing counted in Usage.
+    fn follow_update(&mut self, ctx: &egui::Context, request: UpdateRequest) {
+        match request {
+            UpdateRequest::Act(BarAction::Download | BarAction::Retry) => self.updates.download(),
+            UpdateRequest::Act(BarAction::Cancel) => self.updates.cancel(),
+            UpdateRequest::Act(BarAction::Restart) => self.restart_to_update(ctx),
+            // Built from the version tag, never read from the feed or the notes.
+            UpdateRequest::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+        }
+    }
+
+    /// What Restart to update applies, for `run` once the window has closed, with the folder open now. Only a restart the
+    /// user chose, with no session open, leaves one.
+    fn leave_restart(&mut self) {
+        if !self.restart_pending || self.folder_locked() {
+            return;
+        }
+        let Some(plan) = self.updates.restart_plan() else { return };
+        let args = relaunch_args(&self.launch_args, self.workspace.as_ref().map(WorkspaceRoot::path));
+        if let Ok(mut slot) = self.restart_slot.lock() {
+            *slot = Some((plan, args));
+        }
+    }
+
     /// Hands a changed Permissions setting to the desk, before it polls the prompts that wait. An unchanged one is left alone,
     /// so a desk set up some other way, as previews do, keeps its own.
     fn follow_permissions(&mut self) {
@@ -601,7 +739,7 @@ impl Shell {
 
     /// Takes the newest snapshot the worker sent, if any.
     fn take_snapshot(&mut self) {
-        let Some(mut latest) = self.updates.as_ref().and_then(|updates| updates.try_iter().last()) else { return };
+        let Some(mut latest) = self.snapshots.as_ref().and_then(|snapshots| snapshots.try_iter().last()) else { return };
         // A snapshot read before the last read back would show the saved block as it was, so the profile read back stays.
         match self.profile_saved {
             Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
@@ -628,7 +766,7 @@ impl Shell {
 
     /// Whether Save waits for the first load after a run ended, so a Save is never marked as the run's.
     fn save_waits_for_load(&self) -> bool {
-        self.run_ended.is_some() && self.updates.is_some()
+        self.run_ended.is_some() && self.snapshots.is_some()
     }
 
     /// Stops the wait for a load after a run once it has lasted `RUN_READ_WAIT`. Jobdesk then reads the profile itself
@@ -716,7 +854,7 @@ impl Shell {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
             });
             if keep {
-                (self.confirm_quit, self.quit_agreed) = (false, false);
+                (self.confirm_quit, self.quit_agreed, self.restart_pending) = (false, false, false);
             }
         }
         let active = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
@@ -747,6 +885,10 @@ impl Shell {
             note_dialog(ctx);
             return;
         }
+        // The release notes close on Esc before anything behind them takes it, Settings' Back to app included.
+        if self.update_screen.notes_open() && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.update_screen.close_notes();
+        }
         // Settings opens on the page last open, with or without a folder.
         if open_settings {
             self.settings_open = true;
@@ -767,7 +909,7 @@ impl Shell {
                     self.quit_focus = false;
                 }
                 if keep.clicked() {
-                    (self.confirm_quit, self.quit_agreed) = (false, false);
+                    (self.confirm_quit, self.quit_agreed, self.restart_pending) = (false, false, false);
                 }
                 if button(ui, "End session and quit").clicked() {
                     self.desk = None;
@@ -874,11 +1016,20 @@ impl Shell {
             if let Some(note) = self.screen_note() {
                 status_note(ui, &note, false);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if status_button(ui, "Settings", &SETTINGS_KEYS, self.settings_open).clicked() {
-                    self.settings_open = true;
-                }
-            });
+            // The right is Jobdesk's own: Settings, then the update group while there is one, its words cut first.
+            let view = self.updates.view();
+            let wait = self.restart_wait();
+            let asked = ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if status_button(ui, "Settings", &SETTINGS_KEYS, self.settings_open).clicked() {
+                        self.settings_open = true;
+                    }
+                    updates::ui::bar_group(ui, &mut self.update_screen, &view, wait)
+                })
+                .inner;
+            if let Some(request) = asked {
+                self.follow_update(ui.ctx(), request);
+            }
         });
     }
 
@@ -947,7 +1098,7 @@ impl Shell {
         match self.screen {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
-                let keys = !self.confirm_quit;
+                let keys = !self.confirm_quit && !self.update_screen.notes_open();
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
                 // In the alert's order, so the subtitle names them as the alert does.
                 let missing: Vec<&str> = failures
@@ -1186,6 +1337,8 @@ impl Shell {
             let kept = self.tray.as_ref().map(InTray::kept_jobs).unwrap_or_default();
             hidden_total(&snapshot.board, &self.settings.preferences().jobs_view, &kept)
         });
+        let update = self.updates.view();
+        let restart_wait = self.restart_wait();
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1214,6 +1367,8 @@ impl Shell {
                     now,
                     terms,
                     jobs,
+                    update: &update,
+                    restart_wait,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
@@ -1274,6 +1429,17 @@ impl Shell {
                 }
             }
             // The tray belongs to the open folder, so other folders keep their decisions. A tray that could not be read clears nothing.
+            Some(SettingsRequest::CheckForUpdates) => self.updates.check_now(now),
+            Some(SettingsRequest::DownloadUpdate) => self.follow_update(&ctx, UpdateRequest::Act(BarAction::Download)),
+            Some(SettingsRequest::CancelUpdate) => self.follow_update(&ctx, UpdateRequest::Act(BarAction::Cancel)),
+            Some(SettingsRequest::RestartToUpdate) => self.follow_update(&ctx, UpdateRequest::Act(BarAction::Restart)),
+            // Over Settings, anchored to the update group in the bar, which shows whenever there are notes.
+            Some(SettingsRequest::OpenReleaseNotes) => self.update_screen.open_notes(),
+            Some(SettingsRequest::OpenReleasePage) => {
+                if let Some(url) = update.notes.and_then(|notes| notes.release_page) {
+                    self.follow_update(&ctx, UpdateRequest::OpenPage(url));
+                }
+            }
             Some(SettingsRequest::ClearDecisions) => {
                 if self.workspace.is_some()
                     && let Some(tray) = &mut self.tray
@@ -1420,6 +1586,10 @@ impl eframe::App for Shell {
             storage.set_string(WORKSPACE_KEY, workspace.path().display().to_string());
         }
     }
+
+    fn on_exit(&mut self) {
+        self.leave_restart();
+    }
 }
 
 pub fn install_look(ctx: &egui::Context) {
@@ -1437,22 +1607,32 @@ fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Optio
     args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
 }
 
+/// Opens the window, and once it has closed applies the update the user chose Restart to update for, if any.
 pub fn run() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/brand/jobdesk-icon-1024.png")).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk").with_icon(icon),
         ..Default::default()
     };
-    eframe::run_native(
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let data = eframe::storage_dir("Jobdesk");
+    let restart = RestartSlot::default();
+    let (slot, folder) = (Arc::clone(&restart), data.clone());
+    let result = eframe::run_native(
         "Jobdesk",
         options,
-        Box::new(|creation| {
+        Box::new(move |creation| {
             install_look(&creation.egui_ctx);
             let saved = creation.storage.and_then(|storage| storage.get_string(WORKSPACE_KEY)).map(PathBuf::from);
-            let data = eframe::storage_dir("Jobdesk");
-            Ok(Box::new(Shell::start(&creation.egui_ctx, requested_workspace().or(saved), data)))
+            Ok(Box::new(Shell::start(&creation.egui_ctx, requested_workspace().or(saved), folder, slot, args)))
         }),
-    )
+    );
+    // The window is closed and every session with it, so nothing is cut off as the update applies.
+    let chosen = restart.lock().ok().and_then(|mut slot| slot.take());
+    if let (Some((plan, args)), Some(data)) = (chosen, &data) {
+        updates::finish(data, &plan, &args);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1483,7 +1663,8 @@ mod tests {
     /// A launch whose keychain, kept in memory, holds `key`, and whose Test connection never answers.
     fn launch_with(ctx: &egui::Context, path: Option<PathBuf>, data: &Path, key: Option<&str>) -> Shell {
         let providers = settings::open_providers(settings::memory_keychain(key), settings::idle_tester());
-        Shell::launch(ctx, path, Some(data.to_owned()), EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {})), providers)
+        let checks = EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {}));
+        Shell::launch(ctx, path, Some(data.to_owned()), checks, providers, |auto| updates::idle_updates("0.1.0", auto))
     }
 
     const FAKE_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
@@ -1907,6 +2088,187 @@ mod tests {
         assert!(sent.contains(&egui::ViewportCommand::Close), "Keep editing, then the close comes back");
         close_frame(&ctx, &mut shell);
         assert_eq!(shell.away, Some((Pending::Quit, true)), "and asks about the draft");
+    }
+
+    /// 09:12 on a fictional day, when the scripted update checks run.
+    fn update_time() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(9, 12, 0).unwrap()
+    }
+
+    fn release_020() -> crate::updates::application::Release {
+        let version = crate::updates::application::Version { major: 0, minor: 2, patch: 0 };
+        crate::updates::application::Release {
+            version,
+            released: None,
+            notes: "### Features\n\n- A fictional change".into(),
+            size: 10,
+            signature: "sig".into(),
+        }
+    }
+
+    /// Updates that found 0.2.0 and downloaded it, as a Mac copy of 0.1.0, so Restart to update has a plan.
+    fn ready_updates() -> Updates {
+        use crate::updates::application::{DownloadEnd, DownloadId, Platform, ServiceEvent};
+        let script = vec![
+            ServiceEvent::Checked(Ok(release_020())),
+            ServiceEvent::Ended { id: DownloadId(0), end: DownloadEnd::Done(PathBuf::from("/fictional/updates/Jobdesk.app.tar.gz")) },
+        ];
+        let mut updates = updates::scripted_updates("0.1.0", script, None, true, Some(Platform::MacArm));
+        updates.poll(update_time());
+        updates.poll(update_time());
+        updates.download();
+        updates.poll(update_time());
+        assert!(updates.restart_plan().is_some());
+        updates
+    }
+
+    /// A launched shell on a fresh checkout, with a download ready and an unsaved profile draft.
+    fn ready_with_draft(ctx: &egui::Context, data: &Path, folder: &tempfile::TempDir) -> Shell {
+        let mut shell = launch(ctx, Some(checkout(folder)), data);
+        shell.updates = ready_updates();
+        let key = crate::profile::application::BlockKey {
+            file: crate::profile::application::ProfileFile::Candidate,
+            level: 2,
+            heading: "Education".to_owned(),
+            parent: None,
+            nth: 0,
+        };
+        let editor = shell.profile_editor.as_mut().unwrap();
+        editor.open(key, "## Education\nMSc".to_owned());
+        *editor.draft_mut().unwrap() = "## Education\nPhD".to_owned();
+        shell
+    }
+
+    fn restart(ctx: &egui::Context, shell: &mut Shell) -> Vec<egui::ViewportCommand> {
+        commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.restart_to_update(ui.ctx())))
+    }
+
+    fn slot(shell: &Shell) -> Option<(crate::updates::application::RestartPlan, Vec<OsString>)> {
+        shell.restart_slot.lock().unwrap().clone()
+    }
+
+    /// Restart to update goes through the normal quit: an unsaved draft asks first, and Keep editing keeps the window
+    /// and applies nothing when it later closes.
+    #[test]
+    fn restart_to_update_asks_about_a_draft_and_keep_editing_applies_nothing() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = ready_with_draft(&ctx, data.path(), &folder);
+        assert!(restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close));
+        let sent = close_frame(&ctx, &mut shell);
+        assert!(sent.contains(&egui::ViewportCommand::CancelClose));
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "the draft asks first");
+
+        commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.settle_away(ui.ctx(), false)));
+        assert!(shell.draft_unsaved(), "Keep editing keeps the draft");
+        assert!(!shell.restart_pending);
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None, "a later quit does not update");
+    }
+
+    /// Discard goes on with the restart, and the new copy opens on the folder that is open, whatever it started with.
+    #[test]
+    fn discard_lets_restart_to_update_go_with_the_open_folder() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = ready_with_draft(&ctx, data.path(), &folder);
+        shell.launch_args = os_args(&["--workspace", "/fictional/old-search", "--verbose"]).collect();
+        restart(&ctx, &mut shell);
+        close_frame(&ctx, &mut shell);
+        let sent = commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.settle_away(ui.ctx(), true)));
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Discard closes the window");
+        assert!(!close_frame(&ctx, &mut shell).contains(&egui::ViewportCommand::CancelClose), "and nothing asks again");
+        shell.leave_restart();
+        let (plan, args) = slot(&shell).expect("the restart is left for run");
+        assert_eq!(plan, shell.updates.restart_plan().unwrap());
+        let open = shell.workspace.as_ref().unwrap().path().as_os_str().to_owned();
+        assert_eq!(args, [OsString::from("--verbose"), OsString::from("--workspace"), open]);
+    }
+
+    /// A gateway that hands its sink to the test, so a session can end its turn and wait for a reply.
+    struct Sinking(Arc<Mutex<Option<crate::runs::application::EventSink>>>);
+
+    impl AgentGateway for Sinking {
+        fn start(&self, _: &RunRequest, sink: EventSink) -> Box<dyn AgentSession> {
+            *self.0.lock().unwrap() = Some(sink);
+            Box::new(Idle)
+        }
+    }
+
+    /// Restart to update waits while a session is open, working or only waiting on a reply, and says why.
+    #[test]
+    fn restart_to_update_waits_while_a_session_is_open() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        shell.updates = ready_updates();
+        let sink = Arc::new(Mutex::new(None));
+        let mut desk = RunDesk::new(Box::new(Sinking(Arc::clone(&sink))), Arc::new(|| {}));
+        desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+        assert_eq!(shell.restart_wait(), Some("A task is running. Restart once it finishes, so it is not cut off halfway."));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending, "nothing closes");
+
+        let ended = crate::runs::application::AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 1_000 };
+        sink.lock().unwrap().as_ref().unwrap()(ended);
+        shell.desk.as_mut().unwrap().poll();
+        assert_eq!(shell.restart_wait(), Some("A task waits for your reply in Tasks. End its session there, then restart."));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending, "a session that waits on a reply counts too");
+
+        shell.restart_pending = true;
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None, "an open session never leaves a plan, whatever asked");
+        shell.desk = None;
+        assert_eq!(shell.restart_wait(), None);
+    }
+
+    /// Checking and downloading an update is not a run: no task starts, no run log is written, and Usage counts nothing.
+    #[test]
+    fn an_update_check_and_download_write_no_run_log() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let root = checkout(&folder);
+        let mut shell = launch(&ctx, Some(root.clone()), data.path());
+        let usage = || crate::runs::usage_logs(data.path().join("runs"), &root).tasks().len();
+        let before = usage();
+        shell.updates = ready_updates();
+        shell.updates.check_now(update_time());
+        shell.updates.poll(update_time());
+        assert!(shell.desk.as_ref().unwrap().runs().is_empty(), "no task started");
+        let logs = fs::read_dir(data.path().join("runs")).map(|entries| entries.count()).unwrap_or(0);
+        assert_eq!(logs, 0, "no run log");
+        assert_eq!((before, usage()), (0, 0), "Usage counts no task");
+    }
+
+    /// The switch reaches the updates at launch and when it changes, and a check that is due starts on the next frame.
+    #[test]
+    fn the_switch_for_the_automatic_check_reaches_the_updates() {
+        let (data, _folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        settings::open_settings(data.path(), Preferences::default()).set_check_updates(false);
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, None, data.path());
+        assert!(!shell.updates.view().about.auto, "the saved switch, at launch");
+        shell.follow_updates(&ctx, update_time());
+        assert!(!shell.updates.view().about.checking, "no check starts against the switch");
+        shell.settings.set_check_updates(true);
+        shell.follow_updates(&ctx, update_time());
+        assert!(shell.updates.view().about.auto && shell.updates.view().about.checking, "the change reaches the updates and a check starts");
+    }
+
+    /// A Restart to update that did not install is said at the next launch, in the failed look.
+    #[test]
+    fn a_launch_says_why_the_last_restart_did_not_install() {
+        let data = tempfile::tempdir().unwrap();
+        fs::create_dir_all(data.path().join("updates")).unwrap();
+        fs::write(data.path().join("updates/apply-failed"), "0.2.0 replace\n").unwrap();
+        fs::write(data.path().join("updates/1-Jobdesk-v0.2.0-macos-arm64.app.tar.gz"), "fictional").unwrap();
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, None, data.path());
+        let bar = shell.updates.view().bar.expect("the bar says it");
+        assert_eq!(bar.words, "0.2.0 was not installed: the new copy could not be put in place");
+        assert_eq!(bar.mark, crate::updates::application::Mark::Failed);
+        assert!(!data.path().join("updates/1-Jobdesk-v0.2.0-macos-arm64.app.tar.gz").exists(), "an old download is never applied");
+        assert!(!data.path().join("updates/apply-failed").exists(), "said once");
     }
 
     fn os_args(list: &[&str]) -> std::vec::IntoIter<OsString> {

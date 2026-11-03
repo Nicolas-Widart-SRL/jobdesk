@@ -2,7 +2,7 @@
 
 use chrono::{NaiveDate, NaiveDateTime};
 
-use crate::updates::domain::{Failure, InstallBlock, Platform, Version, percent};
+use crate::updates::domain::{ApplyFailure, Failure, InstallBlock, Platform, Version, percent};
 
 /// Settings › About, with the switch on and off.
 pub const AUTO_ON: &str = "When Jobdesk opens and about every 6 hours, it reads the latest release on GitHub. It downloads nothing until you choose Download.";
@@ -20,6 +20,8 @@ pub const RESTART: &str = "Restart to update";
 /// Under the release notes.
 pub const TRUST_LINE: &str = "From the GitHub release. Its links and images do not open here.";
 pub const NOTES_FOOT: &str = "Nothing installs until you choose Restart to update. Esc closes.";
+/// The foot beside the actions, when a slip above them already says what happens.
+pub const ESC_CLOSES: &str = "Esc closes";
 
 /// The day of a day or a time, as the notes and About say it: `Fri 30 Oct`.
 fn day(date: NaiveDate) -> String {
@@ -88,6 +90,33 @@ pub fn notes_meta(current: Version, released: Option<NaiveDate>) -> String {
 
 pub fn notes_download(version: Version) -> String {
     format!("Download {version}")
+}
+
+/// What a screen reader calls the notes of `version`.
+pub fn notes_label(version: Version) -> String {
+    format!("What changed in {version}")
+}
+
+/// Why Restart to update did not install a release, to follow a colon. Jobdesk's own words.
+pub fn apply_failure_reason(failure: ApplyFailure) -> &'static str {
+    match failure {
+        ApplyFailure::Missing => "the downloaded file was gone",
+        ApplyFailure::BadSignature => "the downloaded file no longer matched its signature",
+        ApplyFailure::NotInstalled => "this copy was not installed by a Jobdesk installer",
+        ApplyFailure::Replace => "the new copy could not be put in place",
+        ApplyFailure::Start => "the new copy did not start",
+    }
+}
+
+/// The bar after a Restart to update that did not install `version`: `0.2.0 was not installed: the new copy could not
+/// be put in place`.
+pub fn bar_apply_failed(version: Version, failure: ApplyFailure) -> String {
+    format!("{version} was not installed: {}", apply_failure_reason(failure))
+}
+
+/// About's line for the same, with the version that runs instead.
+pub fn about_apply_failed(version: Version, current: Version, failure: ApplyFailure) -> String {
+    format!("Restart to update did not install {version}: {}. You still have {current}.", apply_failure_reason(failure))
 }
 
 /// What Restart to update does, on the notes' slip once a download is ready.
@@ -312,6 +341,20 @@ mod tests {
             assert!(!reason.is_empty() && !reason.ends_with('.'), "{failure:?}: {reason}");
         }
         assert_eq!(failure_reason(Failure::Refused(503)), "GitHub answered with the error 503");
+    }
+
+    #[test]
+    fn an_update_that_did_not_install_says_why_in_jobdesks_own_words() {
+        for failure in [ApplyFailure::Missing, ApplyFailure::BadSignature, ApplyFailure::NotInstalled, ApplyFailure::Replace, ApplyFailure::Start] {
+            let reason = apply_failure_reason(failure);
+            assert!(!reason.is_empty() && !reason.ends_with('.'), "{failure:?}: {reason}");
+        }
+        assert_eq!(bar_apply_failed(v(2), ApplyFailure::Replace), "0.2.0 was not installed: the new copy could not be put in place");
+        assert_eq!(
+            about_apply_failed(v(2), v(1), ApplyFailure::Start),
+            "Restart to update did not install 0.2.0: the new copy did not start. You still have 0.1.0."
+        );
+        assert_eq!(notes_label(v(2)), "What changed in 0.2.0");
     }
 
     #[test]

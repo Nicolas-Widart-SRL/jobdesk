@@ -2,7 +2,7 @@ mod updates;
 mod words;
 
 pub use updates::{AboutAction, AboutButton, AboutUpdate, BarAction, BarGroup, BarProgress, HelpLine, Mark, NotesAction, NotesView, UpdateView, Updates};
-pub use words::{CHECK_NOW, CHECKING_WORD, SessionState, restart_wait};
+pub use words::{CHECK_NOW, CHECKING_WORD, ESC_CLOSES, SessionState, restart_wait};
 
 pub use crate::updates::domain::{
     ApplyFailed, ApplyFailure, DownloadEnd, DownloadId, FEED_URL, Failure, InstallBlock, Platform, REPOSITORY, Release, RestartPlan, ServiceEvent,

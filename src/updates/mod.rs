@@ -3,6 +3,7 @@
 pub mod application;
 mod domain;
 mod infrastructure;
+pub mod ui;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

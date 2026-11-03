@@ -252,6 +252,11 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, None)
 }
 
+/// A `primary_button` at a small button's size, for the one step a settings row offers, such as Download 0.2.0.
+pub fn small_primary_button(ui: &mut Ui, text: &str) -> Response {
+    press(ui, text, Look::Primary, SMALL, None)
+}
+
 pub fn danger_button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Danger, NORMAL, None)
 }

@@ -1064,15 +1064,15 @@ const NOTES: ReleaseNotes = ReleaseNotes {
     notes_label: "What changed in 0.2.0",
     trust: "From the GitHub release. Its links and images do not open here.",
     slip: None,
-    primary: "Download 0.2.0",
+    primary: Some("Download 0.2.0"),
     primary_wait: None,
     size: Some("14.2 MB"),
-    open_page: "Open the release page",
+    open_page: Some("Open the release page"),
     esc_note: "Nothing installs until you choose Restart to update. Esc closes.",
 };
 const READY_NOTES: ReleaseNotes = ReleaseNotes {
     slip: Some("Jobdesk closes, installs 0.2.0 and opens again with the same folder and settings. Restart waits while a task is open."),
-    primary: "Restart to update",
+    primary: Some("Restart to update"),
     primary_wait: Some(RESTART_WAITS),
     size: None,
     esc_note: "Esc closes",

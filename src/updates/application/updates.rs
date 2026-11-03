@@ -6,7 +6,8 @@ use crate::updates::application::words::{
     self, AUTO_OFF, AUTO_ON, CHECK_FAILED, CHECKING, NOT_CHECKED, NOTES_FOOT, RELEASE_PAGE, RESTART, TRUST_LINE, UP_TO_DATE, WHATS_NEW,
 };
 use crate::updates::domain::{
-    CHECK_EVERY, Check, Download, InstallBlock, Platform, Release, RestartPlan, ServiceEvent, UpdateService, UpdateState, Version, due, percent, release_page,
+    ApplyFailed, CHECK_EVERY, Check, Download, InstallBlock, Platform, Release, RestartPlan, ServiceEvent, UpdateService, UpdateState, Version, due, percent,
+    release_page,
 };
 
 /// The colour of the square that leads the update group: news, good, or failed. Ink is the screen's to pick.
@@ -75,6 +76,8 @@ pub struct NotesView {
     pub meta: String,
     /// Markdown from the network. It is drawn only as text, with no link and no image.
     pub notes: String,
+    /// What a screen reader calls the notes: `What changed in 0.2.0`.
+    pub notes_label: String,
     pub trust: &'static str,
     pub foot: &'static str,
     /// `14.2 MB`.
@@ -86,7 +89,7 @@ pub struct NotesView {
     pub action: Option<NotesAction>,
     /// Why this copy cannot install it, in place of the action.
     pub blocked: Option<String>,
-    /// What went wrong with the download, when it did.
+    /// What went wrong with the download, or with the last Restart to update, when it did.
     pub problem: Option<String>,
     /// What Restart to update does, once the download is ready.
     pub slip: Option<String>,
@@ -152,6 +155,8 @@ pub struct Updates {
     last_attempt: Option<NaiveDateTime>,
     /// The time of the last `poll` or `check_now`, which the words say a check relative to.
     now: Option<NaiveDateTime>,
+    /// The release the last Restart to update did not install, until a download starts or the release is gone.
+    apply_failed: Option<ApplyFailed>,
 }
 
 impl Updates {
@@ -171,12 +176,29 @@ impl Updates {
             None => Some(InstallBlock::UnreadableVersion),
             Some(_) => block.or_else(|| platform.is_none().then_some(InstallBlock::NoBuild)),
         };
-        Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None }
+        Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None, apply_failed: None }
     }
 
     /// Whether this copy knows its own version, so a release can be told newer or older.
     fn comparable(&self) -> bool {
         self.state.block != Some(InstallBlock::UnreadableVersion)
+    }
+
+    /// Takes why the last Restart to update did not install a release, as the launch read it. The bar says it in the
+    /// failed look until a download starts again. A release no newer than this copy was installed after all, or is gone,
+    /// so it is dropped.
+    pub fn apply_failed(&mut self, failed: ApplyFailed) {
+        if self.comparable() && failed.version > self.state.current {
+            self.apply_failed = Some(failed);
+        }
+    }
+
+    /// The failed Restart to update the screens say, while nothing took its place: no other release found, and no
+    /// download started since.
+    fn apply_failure(&self) -> Option<ApplyFailed> {
+        let failed = self.apply_failed?;
+        let same = self.state.release.as_ref().is_none_or(|release| release.version == failed.version);
+        (same && self.state.download == Download::Idle).then_some(failed)
     }
 
     /// Follows the setting. It is cheap, so it may run every frame.
@@ -195,6 +217,10 @@ impl Updates {
                     // A release that is gone takes its download with it, and the service deletes the file.
                     if self.state.checked(result, now) {
                         self.service.cancel();
+                    }
+                    // The release that did not install is no longer the latest, so there is nothing left to retry.
+                    if matches!(self.state.check, Check::UpToDate { .. }) {
+                        self.apply_failed = None;
                     }
                 }
                 ServiceEvent::Progress { id, done, total } => self.state.progress(id, done, total),
@@ -222,6 +248,7 @@ impl Updates {
     /// Starts the download of the release found, when it may start: Download and Retry.
     pub fn download(&mut self) {
         if let Some((release, id)) = self.state.start_download() {
+            self.apply_failed = None;
             self.service.download(&release, id);
         }
     }
@@ -255,6 +282,11 @@ impl Updates {
     }
 
     fn bar(&self) -> Option<BarGroup> {
+        if let Some(failed) = self.apply_failure() {
+            // Retry once the release is known again, which the next check tells.
+            let action = (self.state.release.is_some() && self.state.block.is_none()).then_some(BarAction::Retry);
+            return Some(BarGroup { mark: Mark::Failed, words: words::bar_apply_failed(failed.version, failed.failure), action, progress: None });
+        }
         let release = self.state.release.as_ref()?;
         let version = release.version;
         let group = |mark, words, action| BarGroup { mark, words, action, progress: None };
@@ -280,8 +312,16 @@ impl Updates {
         let release = self.state.release.as_ref()?;
         let version = release.version;
         let step = |action: BarAction, label: String| Some(NotesAction { action, label });
+        let may = self.state.block.is_none();
         let (action, problem, slip) = match &self.state.download {
-            Download::Idle => (self.state.block.is_none().then(|| step(BarAction::Download, words::notes_download(version))).flatten(), None, None),
+            Download::Idle => match self.apply_failure() {
+                Some(failed) => (
+                    may.then(|| step(BarAction::Retry, BarAction::Retry.label().to_owned())).flatten(),
+                    Some(words::bar_apply_failed(failed.version, failed.failure)),
+                    None,
+                ),
+                None => (may.then(|| step(BarAction::Download, words::notes_download(version))).flatten(), None, None),
+            },
             Download::Running { .. } => (step(BarAction::Cancel, BarAction::Cancel.label().to_owned()), None, None),
             Download::Ready { .. } => (step(BarAction::Restart, RESTART.to_owned()), None, self.platform.map(|platform| words::ready_slip(platform, version))),
             Download::Failed { percent, failure } => {
@@ -293,6 +333,7 @@ impl Updates {
             title: words::notes_title(version),
             meta: words::notes_meta(self.state.current, release.released),
             notes: release.notes.clone(),
+            notes_label: words::notes_label(version),
             trust: TRUST_LINE,
             foot: NOTES_FOOT,
             size: words::size_words(release.size),
@@ -320,6 +361,9 @@ impl Updates {
             about.check_now = None;
             about.help.push(line(words::block_words(InstallBlock::UnreadableVersion, self.state.current)));
             return about;
+        }
+        if let (Some(failed), None) = (self.apply_failure(), &self.state.release) {
+            about.help.push(HelpLine { text: words::about_apply_failed(failed.version, self.state.current, failed.failure), failed: true });
         }
         // A release that is known leads, whatever a later check said.
         if let Some(release) = &self.state.release {
@@ -360,6 +404,13 @@ impl Updates {
                 }
                 about.help.push(line(text));
                 about.buttons.push(whats_new);
+                if let Some(failed) = self.apply_failure() {
+                    about.help.push(HelpLine { text: words::about_apply_failed(failed.version, self.state.current, failed.failure), failed: true });
+                    if self.state.block.is_none() {
+                        about.buttons.push(button(AboutAction::Bar(BarAction::Retry), BarAction::Retry.label(), true));
+                    }
+                    return;
+                }
                 match self.state.block {
                     Some(block) => {
                         about.help.push(line(words::block_words(block, version)));
@@ -869,6 +920,61 @@ mod tests {
         advance(&log, 5_400_000, 14_200_000);
         updates.poll(at(9, 6));
         assert_eq!(updates.view().bar.unwrap().progress.unwrap().share, "38%");
+    }
+
+    fn not_installed() -> ApplyFailed {
+        ApplyFailed { version: Version { major: 0, minor: 2, patch: 0 }, failure: crate::updates::domain::ApplyFailure::Replace }
+    }
+
+    #[test]
+    fn a_restart_that_did_not_install_shows_failed_until_a_download_starts() {
+        let (mut updates, log) = desk(None);
+        updates.apply_failed(not_installed());
+        let bar = updates.view().bar.unwrap();
+        assert_eq!((bar.mark, bar.words.as_str(), bar.action), (Mark::Failed, "0.2.0 was not installed: the new copy could not be put in place", None));
+        let about = updates.view().about;
+        assert_eq!(
+            about.help[0],
+            HelpLine { text: "Restart to update did not install 0.2.0: the new copy could not be put in place. You still have 0.1.0.".into(), failed: true }
+        );
+
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(release())));
+        updates.poll(at(9, 0));
+        let view = updates.view();
+        assert_eq!(view.bar.as_ref().map(|bar| (bar.mark, bar.action)), Some((Mark::Failed, Some(BarAction::Retry))), "the release is known again");
+        let notes = view.notes.unwrap();
+        assert_eq!(notes.action, Some(NotesAction { action: BarAction::Retry, label: "Retry".into() }));
+        assert_eq!(notes.problem.as_deref(), Some("0.2.0 was not installed: the new copy could not be put in place"));
+        let buttons: Vec<_> = view.about.buttons.iter().map(|button| button.action).collect();
+        assert_eq!(buttons, [AboutAction::WhatsNew, AboutAction::Bar(BarAction::Retry)]);
+
+        updates.download();
+        assert_eq!(calls(&log), ["check", "download"]);
+        assert_eq!(updates.view().bar.unwrap().words, "Downloading 0.2.0");
+        updates.cancel();
+        assert_eq!(updates.view().bar.unwrap().words, "Jobdesk 0.2.0 is out", "the failure is not said again");
+    }
+
+    #[test]
+    fn a_restart_failure_of_a_release_no_newer_than_this_copy_is_dropped() {
+        let (mut updates, _log) = desk_of("0.2.0", None, Some(Platform::MacArm));
+        updates.apply_failed(not_installed());
+        assert_eq!(updates.view().bar, None, "the release went in after all");
+
+        let (mut updates, log) = desk(None);
+        updates.apply_failed(not_installed());
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() })));
+        updates.poll(at(9, 0));
+        assert_eq!(updates.view().bar, None, "the release is gone");
+        assert!(!updates.view().about.help.iter().any(|line| line.failed));
+    }
+
+    #[test]
+    fn the_notes_are_named_for_a_screen_reader() {
+        let (updates, _log) = found();
+        assert_eq!(updates.view().notes.unwrap().notes_label, "What changed in 0.2.0");
     }
 
     #[test]

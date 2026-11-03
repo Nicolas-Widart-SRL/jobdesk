@@ -39,7 +39,7 @@ Download the installer for your system from the [latest release](https://github.
 - **macOS** (Apple silicon): open `Jobdesk-vX.Y.Z-macos-arm64.dmg` and drag Jobdesk to Applications.
 - **Windows**: run `Jobdesk-vX.Y.Z-windows-x64-setup.exe`.
 
-The builds are not signed yet, so both systems warn on first open:
+The Windows installer is not signed yet, and the macOS app is ad-hoc signed but not notarized, so both systems warn on first open:
 
 - **macOS** blocks the first open. Try to open Jobdesk once, then go to System Settings, Privacy & Security, and click Open Anyway. On macOS 15 and later, right-click Open no longer bypasses this.
 - **Windows** SmartScreen shows a warning. Click More info, then Run anyway.

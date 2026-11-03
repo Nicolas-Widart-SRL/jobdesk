@@ -17,7 +17,8 @@ Builders write every line of code, tests and snapshots included.
 - Send every code change to a builder through one of those skills, even a one-line fix or a review finding.
 - Send every docs-only change to `docs-writer` through one of those skills in the same way, and write no docs yourself.
   A docs-only change touches only `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or files in `docs/`.
-  Docs that come with a code step stay with a builder, and so do `CHANGELOG.md`, `.claude/`, `mockups/` and `tests/`.
+  Docs that come with a code step stay with a builder.
+  A change that also touches `CHANGELOG.md`, `.claude/`, `mockups/` or `tests/` is not docs-only: it goes to its usual agent.
 - Send every review to `reviewer` through the `ship` or `quick-fix` skill.
 - Decide review rounds and review fixes yourself. Ask the user only for product, security or data choices.
 - The main checkout stays on `main` and clean. Never edit, commit, check out or reset there,

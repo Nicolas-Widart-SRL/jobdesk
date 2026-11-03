@@ -56,7 +56,7 @@ then run `scripts/cleanup.sh <change>`.
 Tell the user in one line that the design is on `<change>`, and ask whether to plan and build it now, in this session.
 The default is yes. On yes, go on with `ship` from its step 2, on the same branch,
 with the canvas paths and every changed handoff file (see Other agents on call in `ship`).
-The planner reads those files and puts their doc changes in a docs step, which also deletes the Doc changes section from each file after applying it.
+The planner reads those files and puts their doc changes in a handoff step, which also deletes the Doc changes section from each file after applying it.
 
 ## Claude Design
 

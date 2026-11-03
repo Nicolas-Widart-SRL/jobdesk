@@ -46,6 +46,11 @@ Never write a value from a real job search in it.
    the files, the types, the signatures and the test cases are all in the step.
    The lead sends written-down steps to `builder-sonnet` and the rest to `builder`.
    A step that needs UI layout or visual judgment is never written down: it goes to `builder`.
+   Mark each step **docs** when it changes only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`.
+   The lead sends a docs step to `docs-writer`, whether it is written down or not.
+   A code step keeps the doc updates it needs (`build-step` step 5), for its builder.
+   A step that also touches `CHANGELOG.md`, `.claude/`, `mockups/` or `tests/` is not a docs step.
+   That is the handoff step: it applies a design handoff's Doc changes and deletes them, and it goes to a builder.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.
@@ -57,7 +62,7 @@ Never write a value from a real job search in it.
 
 - **Goal**: one sentence.
 - **Steps**: numbered. Each step has a title as a Conventional Commits subject, the files,
-  what to change, the check, and the written-down and risky marks when they apply.
+  what to change, the check, and the written-down, docs and risky marks when they apply.
 - **Waves**: which steps build in parallel, for example `Wave 1: 1, 2. Wave 2: 3.`
 - **Docs**: which of `README.md`, `docs/guide.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
 - **Defaults**: each question with a conventional answer, and the answer you chose. Decide these yourself.

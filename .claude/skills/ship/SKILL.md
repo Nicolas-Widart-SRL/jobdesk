@@ -1,6 +1,6 @@
 ---
 name: ship
-description: The lead's workflow for a code change, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or a fix that does not qualify for `quick-fix`, or to answer CodeRabbit on a pull request.
+description: The lead's workflow for a code or docs change, from plan to pull request, with the subagent team. Use when the user asks to implement a feature, a plan or a fix that does not qualify for `quick-fix`, or to answer CodeRabbit on a pull request.
 argument-hint: "<feature or task>"
 ---
 
@@ -9,6 +9,7 @@ argument-hint: "<feature or task>"
 The main session is the lead, defined in `.claude/agents/lead.md`.
 It reads the notes, writes each subagent's brief and merges steps into the change's branch.
 It writes no code itself, not even a one-line fix: a builder writes every line.
+A docs-only step (a step the planner marked docs) goes to `docs-writer` instead, as step 3 says. In this skill, what a builder does for its step, the docs-writer does for a docs-only step: its brief, its findings and its fixes.
 Each subagent's model and effort live in its file in `.claude/agents/`, so do not override them in the call.
 The user's words in the task win over this workflow, for example "do it yourself" or "skip the planner".
 
@@ -71,9 +72,9 @@ which print one line per check. Read a subagent's report once, then keep only it
    Write the plan to the change's plan file.
    Show the user the waves in a few lines, and say which defaults the planner and the lead chose.
    Stop there only when the planner's Open questions hold a question for the user. Otherwise go on.
-   For a one-step fix, skip the planner: write the one step yourself, with its files and its check, and go on.
+   For a one-step fix, skip the planner: write the one step yourself, with its files and its check, mark it docs when step 5 of `planner.md` would, and go on.
 3. **Build wave by wave.** A builder builds one step in its own git worktree and commits it.
-   Use `builder-sonnet` only when the planner marked the step written down. Use `builder` for every other step.
+   Use `docs-writer` when the planner marked the step docs. Otherwise use `builder-sonnet` only when the planner marked the step written down, and `builder` for every other step.
    Spawn every builder of a wave in one message. Start the next wave once the current one has merged.
 4. **Review a risky step** with `reviewer` (see Briefs). Send all risky steps of a wave to `reviewer` in one message, in parallel.
    Send each step's findings to its builder with SendMessage.
@@ -139,7 +140,7 @@ which print one line per check. Read a subagent's report once, then keep only it
    Never wait for a pull request with sleep, a loop, `gh --watch`, Monitor or ScheduleWakeup.
 
 A change with one step skips the step review: the change review is its only review.
-A docs-only step is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
+A docs-only step, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
 A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
 It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
 
@@ -248,6 +249,7 @@ It never reruns the builder for a finding that has a fixed SHA.
    From then on the finding is handled, even if the session stops before the reply.
    Mark a review id handled once every finding in its body has a verdict.
 5. Send the valid findings with no fixed SHA to one `builder` as a single step.
+   This holds even for docs-only findings, because the same step writes the escape list under `.claude/`.
    Write them in your own words, each with `file:line` and a check.
    The same brief tells it to append one line per valid finding to `.claude/agent-memory/reviewer/MEMORY.md`,
    in the form `PR <n> <file>: <what the review missed>. Class: <class>.`
@@ -314,6 +316,7 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
   merge it with `NO_CHECK=1 scripts/merge-step.sh <design-branch> <change>`.
   Give the planner the change's branch, the canvas paths, the index and every changed handoff file of the canvases' folder
   (`mockups/README.md` and `mockups/handoff/` by default). It reads them with `git show <change>:<path>`.
-  The planner puts the handoff files' Doc changes in a docs step, and that step deletes the section from each file after applying it.
+  The planner puts the handoff files' Doc changes in a handoff step, and that step deletes the section from each file after applying it.
+  The handoff step goes to a builder (`builder` or `builder-sonnet`, as step 3 says), never to `docs-writer`, because it edits `mockups/handoff/`, which `docs-writer` may not edit.
 
 Use cheap models only for work that is fully written down.

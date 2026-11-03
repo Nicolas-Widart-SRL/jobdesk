@@ -54,11 +54,11 @@ You draw screens. Builders turn them into egui code.
    A brief that names another folder uses that folder's `handoff/` subfolder and `README.md` index here.
    When a topic already has a file, change that file: replace the rules the round changes. Never append a round log.
    Each file holds the brief in one or two lines, each canvas and its states, the rules and why, the new widgets,
-   the doc changes for the planner's docs step, and an Open section while the user has not approved.
+   the doc changes for the planner's handoff step, and an Open section while the user has not approved.
    The Open section lists the options still drawn, what the user has picked so far and what is still undecided.
    A round may rewrite a Doc changes section to match the current design.
    Keep the entries from an earlier approved round that are still valid and not yet shipped.
-   Only the planner's docs step deletes the section, after applying it.
+   Only the planner's handoff step deletes the section, after applying it.
    When your brief says the user approved, only finalize. Rewrite the round's handoff files, their index entries
    and the canvases to show only the approved design: remove the options not chosen, wherever they live
    (whole files, or markup inside a shared canvas), name the kept canvas for its screen, re-render its PNGs,
@@ -79,4 +79,4 @@ You draw screens. Builders turn them into egui code.
 - **Handoff**: each handoff file path and its line in the index.
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.
-- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the planner's docs step.
+- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the planner's handoff step.

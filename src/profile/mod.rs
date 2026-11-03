@@ -213,6 +213,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         let identity = view.topics.into_iter().find(|topic| topic.id == TopicId::Identity).unwrap().sections.remove(0).block;
         assert_eq!(identity.heading, "Identity", "the heading on line 1 is read");
+        assert!(identity.text.starts_with("## Identity\n") && identity.body.starts_with("- **Name:**"), "{:?}", identity.body);
         let mut editor = open_editor(dir.path());
         editor.open(identity.key, identity.text.clone());
         *editor.draft_mut().unwrap() = identity.text.replace("Namur, Belgium", "Dinant, Belgium");

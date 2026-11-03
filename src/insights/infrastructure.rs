@@ -40,7 +40,7 @@ fn is_aggregate(name: &str) -> bool {
 }
 
 fn parse_report(file_name: String, text: &str) -> SkillGapReport {
-    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: text.to_owned(), ..Default::default() };
+    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: text.replace("\r\n", "\n"), ..Default::default() };
     let mut section = "";
     let mut bullets_into_new = false;
     for line in text.lines() {

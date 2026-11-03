@@ -200,9 +200,9 @@ pub fn lines_with_endings(text: &str) -> Vec<&str> {
     lines
 }
 
-/// An ATX heading is one to six `#`, then a space or the end of the line. A byte order mark before it does not count.
+/// An ATX heading is one to six `#`, then a space or the end of the line.
 pub fn is_atx(line: &str) -> bool {
-    let line = line[bom_len(line)..].trim_start();
+    let line = line.trim_start();
     let rest = line.trim_start_matches('#');
     (1..=6).contains(&(line.len() - rest.len())) && (rest.trim_end_matches(['\r', '\n']).is_empty() || rest.starts_with([' ', '\t']))
 }
@@ -409,8 +409,8 @@ mod tests {
         assert_eq!(replace(text, found[0].range.clone(), "## A\nz"), "\u{feff}## A\nz\n## B\ny\n");
         let fronted = "\u{feff}---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## How\nx\n";
         assert_eq!(blocks(fronted).iter().map(|block| block.heading.as_str()).collect::<Vec<_>>(), ["How"]);
-        assert!(is_atx("\u{feff}## A\n"));
-        assert_eq!(heading_len("\u{feff}## A\nbody\n"), 8);
+        assert_eq!(heading_len(&text[found[0].range.clone()]), 5);
+        assert!(!is_atx("x\u{feff}## A\n") && blocks("x\n\u{feff}## A\n").is_empty(), "a mark inside the text is kept as text");
         assert_eq!(insert_at("\u{feff}", 3, "## N"), "\u{feff}## N\n");
     }
 

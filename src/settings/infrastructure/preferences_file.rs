@@ -10,6 +10,7 @@ use crate::settings::domain::{
     ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SkipReasons,
     SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
 };
+use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
 const FILE: &str = "settings.json";
@@ -113,7 +114,7 @@ impl PreferencesStore for PreferencesFile {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(LoadError::new(FILE, error)),
         };
-        let record: Record = serde_json::from_str(&text).map_err(|error| LoadError::new(FILE, error))?;
+        let record: Record = serde_json::from_str(without_bom(&text)).map_err(|error| LoadError::new(FILE, error))?;
         Ok(Some(preferences_from(record)))
     }
 
@@ -339,6 +340,15 @@ mod tests {
         file.save(&preferences).unwrap();
         assert_eq!(file.load().unwrap(), Some(preferences));
         assert!(!file.path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_still_loads() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        write(&file, "\u{feff}{\"theme\": \"dark\", \"open_on\": \"applications\"}\r\n");
+        let loaded = file.load().unwrap().unwrap();
+        assert_eq!((loaded.theme, loaded.open_on), (ThemeChoice::Dark, StartScreen::Applications));
     }
 
     fn dollars(text: &str) -> Dollars {

@@ -35,7 +35,7 @@ impl JobRepository for SeenJobsFile {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(LoadError::new(SOURCE, error)),
         };
-        parse(&text).map_err(|error| LoadError::new(SOURCE, error))
+        parse(without_bom(&text)).map_err(|error| LoadError::new(SOURCE, error))
     }
 }
 

@@ -32,15 +32,14 @@ fn copy_tree(from: &Path, to: &Path, kind: Text) {
         let text = match kind {
             Text::Lf => lf,
             Text::Crlf => lf.replace('\n', "\r\n"),
-            Text::Bom if matches!(extension.as_str(), "md" | "csv") => format!("\u{feff}{lf}"),
+            Text::Bom if matches!(extension.as_str(), "md" | "csv" | "json") => format!("\u{feff}{lf}"),
             Text::Bom => lf,
         };
         fs::write(&target, text).unwrap();
     }
 }
 
-/// What the screens read from a snapshot of the sample copied as `kind`. Line endings in the texts become LF and the
-/// temporary folder becomes `<root>`, so only the parse is compared.
+/// What the screens read from a snapshot of the sample copied as `kind`. The temporary folder becomes `<root>`.
 fn load(kind: Text) -> Vec<(&'static str, String)> {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ai-job-search");
@@ -57,7 +56,8 @@ fn load(kind: Text) -> Vec<(&'static str, String)> {
     archives.sort_by_key(|(folder, _)| *folder);
     let root = format!("{root:?}").trim_matches('"').to_owned();
     [
-        ("topics", format!("{:?}", snapshot.profile)),
+        // A block's text keeps the file's own bytes, because Save compares it with the block on disk.
+        ("topics", format!("{:?}", snapshot.profile).replace("\\r\\n", "\\n")),
         ("topic counts", format!("{:?}", topic_counts(&snapshot.profile))),
         ("jobs and lanes", format!("{:?}", snapshot.board)),
         ("terms", format!("{:?}", snapshot.terms)),
@@ -68,7 +68,7 @@ fn load(kind: Text) -> Vec<(&'static str, String)> {
         ("workspace", format!("{:?}", snapshot.workspace)),
     ]
     .into_iter()
-    .map(|(part, shown)| (part, shown.replace("\\r\\n", "\\n").replace(&root, "<root>")))
+    .map(|(part, shown)| (part, shown.replace(&root, "<root>")))
     .collect()
 }
 

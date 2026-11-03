@@ -58,27 +58,45 @@ pub trait ArchiveRepository {
 /// a `..` part, and a part, the first included, that starts with an ASCII letter and a `:`
 /// (`C:` or `C:x`). On Windows such a part replaces the path built so far.
 /// Refused on Windows only: any `:` in a part, which names an alternate data stream
-/// (`a.pdf:stream`). Elsewhere `:` is an ordinary character, as in `acme:-labs.json`
-/// or a Finder-renamed `CV 10:2024`.
+/// (`a.pdf:stream`). Elsewhere `:` is an ordinary character apart from the drive form above,
+/// as in `acme:-labs.json` or a Finder-renamed `CV 10:2024`. A company `X: Labs` gives
+/// `x:-labs.json`, which is refused on every system: an accepted trade-off.
+/// Refused on Windows only: a part named like a device (`con.json`), which Windows opens as the
+/// device, not as a file.
+/// A path with no normal part resolves to the root itself and is refused, so a caller that
+/// changes its extension never reaches a file beside the workspace.
 pub fn within_workspace(root: &Path, relative: &str) -> Option<PathBuf> {
     let relative = relative.trim();
     if relative.is_empty() || relative.starts_with(['/', '\\']) {
         return None;
     }
     let mut path = root.to_path_buf();
+    let mut normal = false;
     for part in relative.split(['/', '\\']) {
         let bytes = part.as_bytes();
         let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-        if drive || (cfg!(windows) && part.contains(':')) {
+        if drive || (cfg!(windows) && (part.contains(':') || is_device_name(part))) {
             return None;
         }
         match part {
             ".." => return None,
             "" | "." => {}
-            part => path.push(part),
+            part => {
+                normal = true;
+                path.push(part);
+            }
         }
     }
-    Some(path)
+    normal.then_some(path)
+}
+
+/// Whether Windows reads the part as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`),
+/// whatever its extension or case: the stem before the first `.` decides.
+fn is_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default().trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper.ends_with(|c: char| c.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -104,7 +122,32 @@ mod tests {
             "cv\\C:\\x",
             "cv/C:/x",
             "a/z:/x",
+            ".",
+            "./",
+            ".\\",
+            "",
+            "./.",
+            "company_research/x:-labs.json",
         ] {
+            assert_eq!(within_workspace(root, bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn device_names_are_told_by_the_stem_in_any_case() {
+        for device in ["con", "CON", "Con.json", "nul.tar.gz", "aux", "PRN.txt", "com1", "COM0.json", "lpt9", "Lpt3.x", "con .json"] {
+            assert!(is_device_name(device), "{device}");
+        }
+        for plain in ["acme.json", "console.json", "com10", "com", "lpt", "com1x", "xcon", "", "a.con", "comma"] {
+            assert!(!is_device_name(plain), "{plain}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_device_name_is_refused_on_windows() {
+        let root = Path::new("/w");
+        for bad in ["company_research/con.json", "company_research\\NUL.json", "aux", "cv/Com1.tex"] {
             assert_eq!(within_workspace(root, bad), None, "{bad}");
         }
     }

@@ -3,8 +3,8 @@ use chrono::NaiveDate;
 use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
-    CapReached, CommandDefault, Dollars, KeyTest, Page, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen,
-    StartValues, TextSize, ThemeChoice, drawn_index,
+    CapReached, ComingUp, CommandDefault, Dollars, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention,
+    RunDefaults, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index,
 };
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
@@ -128,6 +128,52 @@ impl Settings {
 
     pub fn set_key_test(&mut self, key_test: Option<KeyTest>) {
         self.change(|preferences| &mut preferences.key_test, key_test);
+    }
+
+    pub fn set_coming_up(&mut self, coming_up: ComingUp) {
+        self.change(|preferences| &mut preferences.queue.coming_up, coming_up);
+    }
+
+    pub fn set_later(&mut self, later: LaterLasts) {
+        self.change(|preferences| &mut preferences.queue.later, later);
+    }
+
+    /// Adds a reason at the end of the list. A refused reason changes and saves nothing.
+    pub fn add_skip_reason(&mut self, text: &str) -> Result<(), ReasonRefusal> {
+        self.preferences.queue.skip_reasons.add(text)?;
+        self.save();
+        Ok(())
+    }
+
+    pub fn remove_skip_reason(&mut self, text: &str) {
+        if self.preferences.queue.skip_reasons.remove(text) {
+            self.save();
+        }
+    }
+
+    pub fn set_hide_below_floor(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.below_floor, hide);
+    }
+
+    pub fn set_hide_too_far(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.too_far, hide);
+    }
+
+    pub fn set_hide_language(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.language, hide);
+    }
+
+    pub fn set_hide_flagged(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.flagged, hide);
+    }
+
+    pub fn set_hide_under_score(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.under_score, hide);
+    }
+
+    /// The score the "under" filter hides jobs below, kept between 0 and 100.
+    pub fn set_score_floor(&mut self, score: u8) {
+        self.change(|preferences| &mut preferences.jobs_view.score, score.min(100));
     }
 
     /// Saves only a changed value. The new value stays in use when the save fails.
@@ -404,6 +450,80 @@ mod tests {
         assert_eq!(saved.len(), 4);
         assert_eq!((saved[1].sign_in, saved[1].key_test), (SignIn::ApiKey, Some(test)));
         assert_eq!((saved[3].sign_in, saved[3].key_test), (SignIn::ApiKey, None));
+    }
+
+    #[test]
+    fn the_queue_and_jobs_view_setters_save_once_and_only_on_a_change() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        settings.set_coming_up(ComingUp::TwoWeeks);
+        settings.set_later(LaterLasts::Tomorrow);
+        settings.set_hide_below_floor(false);
+        settings.set_hide_too_far(false);
+        settings.set_hide_language(false);
+        settings.set_hide_flagged(false);
+        settings.set_hide_under_score(false);
+        settings.set_score_floor(60);
+        assert!(shared.saved.borrow().is_empty(), "the defaults again change nothing");
+
+        settings.set_coming_up(ComingUp::Month);
+        settings.set_coming_up(ComingUp::Month);
+        settings.set_later(LaterLasts::UntilMonday);
+        settings.set_later(LaterLasts::UntilMonday);
+        settings.set_hide_below_floor(true);
+        settings.set_hide_below_floor(true);
+        settings.set_hide_too_far(true);
+        settings.set_hide_too_far(true);
+        settings.set_hide_language(true);
+        settings.set_hide_language(true);
+        settings.set_hide_flagged(true);
+        settings.set_hide_flagged(true);
+        settings.set_hide_under_score(true);
+        settings.set_hide_under_score(true);
+        settings.set_score_floor(75);
+        settings.set_score_floor(75);
+        assert_eq!(shared.saved.borrow().len(), 8);
+        let saved = shared.saved.borrow();
+        let last = saved.last().unwrap();
+        assert_eq!((last.queue.coming_up, last.queue.later), (ComingUp::Month, LaterLasts::UntilMonday));
+        let view = last.jobs_view;
+        assert_eq!((view.below_floor, view.too_far, view.language, view.flagged, view.under_score, view.score), (true, true, true, true, true, 75));
+    }
+
+    #[test]
+    fn the_score_floor_stays_between_0_and_100() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        settings.set_score_floor(250);
+        assert_eq!(settings.preferences().jobs_view.score, 100);
+        settings.set_score_floor(100);
+        settings.set_score_floor(0);
+        assert_eq!(settings.preferences().jobs_view.score, 0);
+        assert_eq!(shared.saved.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_skip_reason_saves_once_and_a_refused_one_saves_nothing() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        assert_eq!(settings.add_skip_reason("  Culture "), Ok(()));
+        assert_eq!(shared.saved.borrow().len(), 1);
+        assert_eq!(settings.add_skip_reason("culture"), Err(ReasonRefusal::Taken));
+        assert_eq!(settings.add_skip_reason("   "), Err(ReasonRefusal::Empty));
+        assert_eq!(settings.add_skip_reason(&"x".repeat(41)), Err(ReasonRefusal::TooLong));
+        assert_eq!(shared.saved.borrow().len(), 1);
+        settings.remove_skip_reason("Nothing like it");
+        assert_eq!(shared.saved.borrow().len(), 1);
+        settings.remove_skip_reason("rate");
+        assert_eq!(shared.saved.borrow().len(), 2);
+        assert_eq!(settings.preferences().queue.skip_reasons.list(), ["Scope", "Domain", "Location", "Culture"]);
+        assert_eq!(shared.saved.borrow()[1].queue.skip_reasons.list(), settings.preferences().queue.skip_reasons.list());
+        for n in 0..4 {
+            settings.add_skip_reason(&format!("Extra {n}")).unwrap();
+        }
+        let saves = shared.saved.borrow().len();
+        assert_eq!(settings.add_skip_reason("One more"), Err(ReasonRefusal::Full));
+        assert_eq!(shared.saved.borrow().len(), saves);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::settings::domain::job_search::{JobFilters, TodayQueue};
 use crate::settings::domain::run_defaults::{PermissionMode, Retention, RunDefaults, SpendCap};
 use crate::settings::domain::sign_in::KeyTest;
 use crate::shared_kernel::{LoadError, SignIn};
@@ -101,6 +102,8 @@ pub struct Preferences {
     pub sign_in: SignIn,
     /// The last check of the saved API key, kept so the page can say when it passed.
     pub key_test: Option<KeyTest>,
+    pub queue: TodayQueue,
+    pub jobs_view: JobFilters,
 }
 
 pub trait PreferencesStore {
@@ -149,5 +152,7 @@ mod tests {
         assert_eq!(preferences.retention, Retention::Forever, "nothing is deleted until the user says so");
         assert_eq!(preferences.sign_in, SignIn::ClaudeSignIn, "tasks bill the Claude plan until the user picks a key");
         assert_eq!(preferences.key_test, None);
+        assert_eq!(preferences.queue, TodayQueue::default());
+        assert_eq!(preferences.jobs_view, JobFilters::default());
     }
 }

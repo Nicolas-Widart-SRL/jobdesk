@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -1428,8 +1429,12 @@ pub fn install_look(ctx: &egui::Context) {
 
 /// `--workspace <path>` wins over `JOBDESK_WORKSPACE`, which wins over the last folder used.
 fn requested_workspace() -> Option<PathBuf> {
-    let mut args = std::env::args().skip(1);
-    args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or_else(|| std::env::var("JOBDESK_WORKSPACE").ok()).map(PathBuf::from)
+    requested_workspace_from(std::env::args_os().skip(1), std::env::var_os("JOBDESK_WORKSPACE"))
+}
+
+/// Takes `OsString`s, so a path that is not Unicode arrives whole.
+fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Option<OsString>) -> Option<PathBuf> {
+    args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
 }
 
 pub fn run() -> eframe::Result {
@@ -1902,5 +1907,28 @@ mod tests {
         assert!(sent.contains(&egui::ViewportCommand::Close), "Keep editing, then the close comes back");
         close_frame(&ctx, &mut shell);
         assert_eq!(shell.away, Some((Pending::Quit, true)), "and asks about the draft");
+    }
+
+    fn os_args(list: &[&str]) -> std::vec::IntoIter<OsString> {
+        list.iter().map(OsString::from).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_environment() {
+        let env = Some(OsString::from("/from/env"));
+        assert_eq!(requested_workspace_from(os_args(&["--workspace", "/from/flag"]), env.clone()), Some(PathBuf::from("/from/flag")));
+        assert_eq!(requested_workspace_from(os_args(&[]), env), Some(PathBuf::from("/from/env")));
+        assert_eq!(requested_workspace_from(os_args(&["--workspace"]), None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_utf8_arrives_whole() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let raw = OsString::from_vec(vec![b'/', b'w', 0xFF, b'x']);
+        let from_flag = vec![OsString::from("--workspace"), raw.clone()].into_iter();
+        assert_eq!(requested_workspace_from(from_flag, None), Some(PathBuf::from(raw.clone())));
+        assert_eq!(requested_workspace_from(os_args(&[]), Some(raw.clone())), Some(PathBuf::from(raw)));
     }
 }

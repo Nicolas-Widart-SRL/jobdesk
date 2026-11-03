@@ -15,13 +15,6 @@ pub struct RenderedPages {
     pub total: usize,
 }
 
-impl RenderedPages {
-    /// Whether the render stopped before the document's last page.
-    pub fn cut(&self) -> bool {
-        self.total > self.pages.len()
-    }
-}
-
 pub trait PageRasterizer: Send + Sync {
     fn render(&self, path: &Path) -> Result<RenderedPages, String>;
 }

@@ -175,15 +175,15 @@ fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown:
     chosen
 }
 
-/// One document: its label, cut to the row with the whole on hover, and its tag when it is not Current. A PDF the store
-/// could not render says so.
+/// One document: its label, cut to the row with the whole on hover and on focus, and its tag when it is not Current.
+/// A PDF the store could not render says so.
 fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDateTime) -> Response {
     let mark = Some(state_line(doc, failed, now).tag).filter(|&tag| tag != CvTag::Current);
     let spoken = match mark {
         Some(tag) => format!("{}, {}", doc.label, tag.word()),
         None => doc.label.clone(),
     };
-    spoken_pick_row(ui, on, &spoken, None, |ui| {
+    let response = spoken_pick_row(ui, on, &spoken, Some(&doc.label), |ui| {
         row_words(ui, |ui| {
             if let Some(tag) = mark {
                 row_tag(ui, tag.word(), tone(tag));
@@ -192,8 +192,9 @@ fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDate
                 ui.add(Label::new(rich(ui, &doc.label, Type::BODY, Ink::Text)).truncate().show_tooltip_when_elided(false));
             });
         });
-    })
-    .on_hover_text(&doc.label)
+    });
+    // The focus tip and a hover tip share one popup, so a focused row shows only the focus tip.
+    if response.has_focus() { response } else { response.on_hover_text(&doc.label) }
 }
 
 /// What the head knows of the render: how many pages it gave, whether it is still going, and whether the renderer

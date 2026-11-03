@@ -4696,6 +4696,19 @@ fn cv_documents_list_masters_then_applications() {
     assert!(is_shown(&harness, CV_SHOWS));
 }
 
+/// A row cuts a long label, and keyboard focus on the row shows the whole label, as the pointer does.
+#[test]
+fn a_cut_cv_label_shows_in_full_on_focus() {
+    let mut harness = tray_harness(cv_shell("profile_cv_focus_tip").0);
+    open_cv(&mut harness);
+    let label = "Granite cloud staff engineer";
+    let before = harness.query_all_by_label(label).count();
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, label).focus();
+    harness.run_steps(4);
+    assert!(harness.get_by_role_and_label(egui::accesskit::Role::Button, label).is_focused());
+    assert_eq!(harness.query_all_by_label(label).count(), before + 1, "the tooltip shows the whole label");
+}
+
 /// Rebuild the PDF… opens the launcher with the document's stem, and the user starts the run there.
 #[test]
 fn rebuild_opens_the_launcher_and_starts_nothing() {

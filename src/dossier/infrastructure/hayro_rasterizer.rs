@@ -72,9 +72,8 @@ mod tests {
     fn a_long_pdf_renders_its_first_pages_and_counts_them_all() {
         let rendered = render_pages(pdf(8)).unwrap();
         assert_eq!((rendered.pages.len(), rendered.total), (MAX_PAGES, 8));
-        assert!(rendered.cut());
         let short = render_pages(pdf(2)).unwrap();
-        assert_eq!((short.pages.len(), short.total, short.cut()), (2, 2, false));
+        assert_eq!((short.pages.len(), short.total), (2, 2));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::thread;
 use crate::dossier::domain::{PageRasterizer, PdfDocument, RenderedPages};
 
 /// What a render that gives no page says instead.
-pub const NO_PAGES: &str = "This PDF has no pages.";
+const NO_PAGES: &str = "This PDF has no pages.";
 
 /// How many rendered documents stay in memory. Each page is a few megabytes, and the dossier shows two or three at once.
 const KEPT: usize = 8;

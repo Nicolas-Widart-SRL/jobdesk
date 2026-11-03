@@ -8,6 +8,7 @@ use crate::shared_kernel::visible_text::visible_chars;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStamp {
     pub name: String,
+    /// The file under the checkout's root, links unresolved, as the dossier names it, so its pages render once for both.
     pub path: PathBuf,
     /// Seconds since the epoch.
     pub modified: u64,

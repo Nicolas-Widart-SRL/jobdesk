@@ -66,9 +66,11 @@ impl CvFolder {
         Ok(groups.into_values().collect())
     }
 
+    /// The file's stamp. Its path is the one under the checkout's root, links unresolved, as the dossier names the same
+    /// PDF, so both screens key its pages alike. What it weighs and when it changed come from the resolved file.
     fn stamp(&self, name: &str) -> Option<FileStamp> {
-        let path = self.checked(name)?;
-        let metadata = fs::metadata(&path).ok()?;
+        let (path, resolved) = self.named(name)?;
+        let metadata = fs::metadata(&resolved).ok()?;
         let moment = metadata.modified().ok()?;
         let modified = moment.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         Some(FileStamp { name: name.to_owned(), path, modified, at: DateTime::<Local>::from(moment).naive_local(), bytes: metadata.len() })
@@ -86,6 +88,12 @@ impl CvFolder {
     /// which sits inside the resolved checkout.
     /// A link to a device, a folder or anything outside `cv/` gives `None`, and so does a name that is not one plain part.
     fn checked(&self, name: &str) -> Option<PathBuf> {
+        self.named(name).map(|(_, resolved)| resolved)
+    }
+
+    /// The file `name` names in `cv/` as the checkout's root reaches it, links unresolved, then as `checked` gives it.
+    /// `None` wherever `checked` gives `None`.
+    fn named(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
         let folder = self.folder();
         let path = within_workspace(&self.root, &format!("{FOLDER}/{name}"))?;
         // `within_workspace` trims and splits: only a path that is exactly the name, one part down, is the name asked for.
@@ -94,7 +102,7 @@ impl CvFolder {
         }
         let inside = self.resolved_folder()?;
         let resolved = fs::canonicalize(&path).ok()?;
-        (resolved.starts_with(&inside) && fs::metadata(&resolved).ok()?.is_file()).then_some(resolved)
+        (resolved.starts_with(&inside) && fs::metadata(&resolved).ok()?.is_file()).then_some((path, resolved))
     }
 
     /// The PDF to open, only when the file the name leads to is a PDF itself and not a link to something else.

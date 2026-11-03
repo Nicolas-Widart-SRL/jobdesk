@@ -662,8 +662,23 @@ impl Shell {
             self.updates.set_auto(auto);
         }
         self.updates.poll(now);
+        self.drop_gone_restart();
         if let Some(wait) = self.updates.next_due(now) {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    /// A release withdrawn while Restart to update waits takes its download with it, so the restart is off. The draft ask
+    /// it raised closes, and an agreed quit is taken back, so the window stays rather than quit a Jobdesk that would not
+    /// open again. A close already on its way stops at the draft, which asks again.
+    fn drop_gone_restart(&mut self) {
+        if !self.restart_pending || self.updates.restart_plan().is_some() {
+            return;
+        }
+        self.restart_pending = false;
+        self.quit_agreed = false;
+        if matches!(self.away, Some((Pending::Quit, _))) {
+            self.away = None;
         }
     }
 
@@ -2142,11 +2157,17 @@ mod tests {
 
     /// Updates that found 0.2.0 and downloaded it, as a Mac copy of 0.1.0, so Restart to update has a plan.
     fn ready_updates() -> Updates {
+        ready_updates_then(Vec::new())
+    }
+
+    /// As `ready_updates`, with `later` answering the checks that come after.
+    fn ready_updates_then(later: Vec<crate::updates::application::ServiceEvent>) -> Updates {
         use crate::updates::application::{DownloadEnd, DownloadId, Platform, ServiceEvent};
-        let script = vec![
+        let mut script = vec![
             ServiceEvent::Checked(Ok(release_020())),
             ServiceEvent::Ended { id: DownloadId(0), end: DownloadEnd::Done(PathBuf::from("/fictional/updates/Jobdesk.app.tar.gz")) },
         ];
+        script.extend(later);
         let mut updates = updates::scripted_updates("0.1.0", script, None, true, Some(Platform::MacArm));
         updates.poll(update_time());
         updates.poll(update_time());
@@ -2217,6 +2238,54 @@ mod tests {
         assert_eq!(plan, shell.updates.restart_plan().unwrap());
         let open = shell.workspace.as_ref().unwrap().path().as_os_str().to_owned();
         assert_eq!(args, [OsString::from("--verbose"), OsString::from("--workspace"), open]);
+    }
+
+    /// A shell whose ready 0.2.0 the next check finds withdrawn, with an unsaved draft.
+    fn withdrawn_with_draft(ctx: &egui::Context, data: &Path, folder: &tempfile::TempDir) -> Shell {
+        let mut shell = ready_with_draft(ctx, data, folder);
+        let withdrawn =
+            crate::updates::application::Release { version: crate::updates::application::Version { major: 0, minor: 1, patch: 0 }, ..release_020() };
+        shell.updates = ready_updates_then(vec![crate::updates::application::ServiceEvent::Checked(Ok(withdrawn))]);
+        shell
+    }
+
+    /// A release withdrawn while the draft asks takes Restart to update with it: the ask closes and the window and the
+    /// draft stay, so Discard can never quit a Jobdesk that would not open again.
+    #[test]
+    fn a_release_withdrawn_while_the_draft_asks_keeps_the_window() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = withdrawn_with_draft(&ctx, data.path(), &folder);
+        restart(&ctx, &mut shell);
+        close_frame(&ctx, &mut shell);
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "the draft asks first");
+
+        shell.updates.check_now(update_time());
+        shell.follow_updates(&ctx, update_time());
+        assert_eq!(shell.updates.restart_plan(), None, "the download went with the release");
+        assert_eq!(shell.away, None, "the ask closes, with nothing left to restart for");
+        assert!(!shell.restart_pending && shell.draft_unsaved(), "the window and the draft stay");
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None);
+    }
+
+    /// A release withdrawn between Discard and the close does not quit Jobdesk silently: the close stops and the draft
+    /// asks again, now for a plain quit.
+    #[test]
+    fn a_release_withdrawn_after_discard_stops_the_close() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = withdrawn_with_draft(&ctx, data.path(), &folder);
+        restart(&ctx, &mut shell);
+        close_frame(&ctx, &mut shell);
+        let sent = commands(ctx.run_ui(egui::RawInput::default(), |ui| shell.settle_away(ui.ctx(), true)));
+        assert!(sent.contains(&egui::ViewportCommand::Close), "Discard closes the window");
+
+        shell.updates.check_now(update_time());
+        shell.follow_updates(&ctx, update_time());
+        assert!(close_frame(&ctx, &mut shell).contains(&egui::ViewportCommand::CancelClose), "the close stops");
+        assert_eq!(shell.away, Some((Pending::Quit, true)), "and the draft asks again");
+        assert!(!shell.restart_pending && shell.draft_unsaved());
     }
 
     /// A gateway that hands its sink to the test, so a session can end its turn and wait for a reply.

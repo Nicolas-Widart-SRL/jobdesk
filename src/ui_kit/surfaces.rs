@@ -1020,7 +1020,8 @@ pub struct ReleaseNotes<'a> {
     pub slip: Option<&'a str>,
     /// The primary action, such as "Download 0.2.0" or "Restart to update". `None` when there is no step to take.
     pub primary: Option<&'a str>,
-    /// Why the primary action waits, said on hover while it is disabled. `None` while it can go.
+    /// Why the primary action waits, said in the slip and on hover while it is disabled, so the keyboard learns it too.
+    /// `None` while it can go.
     pub primary_wait: Option<&'a str>,
     /// The size beside the primary action, such as "14.2 MB".
     pub size: Option<&'a str>,
@@ -1043,7 +1044,7 @@ pub enum NotesAction {
 /// its line over a hairline, the notes on paper at a fixed height with the scroll bar shown at rest, the trust line, the
 /// slip once there is one, then the primary action, the size and the release page link, and the Esc note.
 /// The caller flips `open` when `anchor` is clicked. Each time it opens, the primary action takes the focus, so Enter
-/// acts, unless it waits: then it is disabled and says why on hover. Esc, a click outside and the primary action close
+/// acts, unless it waits: then it is disabled and says why in the slip and on hover. Esc, a click outside and the primary action close
 /// it. Returns what was picked this frame.
 pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &ReleaseNotes, cache: &mut CommonMarkCache) -> Option<NotesAction> {
     let popup = Popup::from_response(anchor);
@@ -1053,6 +1054,9 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
     let opening = anchor.ctx.read_response(id).is_none();
     let mut focus = opening || anchor.ctx.data(|data| data.get_temp::<bool>(focus_id)).unwrap_or(false);
     let mut picked = None;
+    // A primary action that waits says why under the slip's words, or in a slip of its own.
+    let wait = notes.primary.and(notes.primary_wait);
+    let slip = notes.slip.is_some() || wait.is_some();
     let frame = Frame::popup(&anchor.ctx.global_style()).inner_margin(0);
     popup
         .open_bool(open)
@@ -1108,23 +1112,30 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                 }
                 ui.add_space(ROW_GAP);
                 ui.add(egui::Label::new(rich(ui, notes.trust, Type::SMALL, Ink::Faint)).wrap());
-                if let Some(slip) = notes.slip {
+                if slip {
                     ui.add_space(NOTES_GAP);
                     Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(margin(NOTES_SLIP_PADDING)).show(
                         ui,
                         |ui| {
                             ui.set_width(ui.available_width());
-                            ui.add(egui::Label::new(rich(ui, slip, Type::NOTE, Ink::Text)).wrap());
+                            if let Some(slip) = notes.slip {
+                                ui.add(egui::Label::new(rich(ui, slip, Type::NOTE, Ink::Text)).wrap());
+                            }
+                            if let Some(wait) = wait {
+                                if notes.slip.is_some() {
+                                    ui.add_space(SETTING_HELP_GAP);
+                                }
+                                ui.add(egui::Label::new(rich(ui, wait, Type::NOTE, Ink::Muted)).wrap());
+                            }
                         },
                     );
                 }
             });
-            let bottom = if notes.slip.is_some() { NOTES_HEAD_PADDING.0 } else { NOTES_GAP as i8 };
+            let bottom = if slip { NOTES_HEAD_PADDING.0 } else { NOTES_GAP as i8 };
             Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = STATUS_PROGRESS_GAP;
-                    let wait = notes.primary_wait;
                     if let Some(label) = notes.primary {
                         let primary = enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| primary_button(ui, label));
                         if focus && !ui.is_sizing_pass() && wait.is_none() {
@@ -1144,7 +1155,7 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                             picked = Some(NotesAction::OpenPage);
                         }
                     };
-                    if notes.slip.is_some() {
+                    if slip {
                         open_page(ui);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| add_text(ui, notes.esc_note, Type::SMALL, Ink::Faint));
                     } else {
@@ -1154,7 +1165,7 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                         ui.with_layout(Layout::right_to_left(Align::Center), open_page);
                     }
                 });
-                if notes.slip.is_none() {
+                if !slip {
                     ui.add_space(ROW_GAP);
                     ui.add(egui::Label::new(rich(ui, notes.esc_note, Type::SMALL, Ink::Faint)).wrap());
                 }

@@ -34,7 +34,7 @@ The right of the status bar is Jobdesk's own: the update group, a `status_divide
 - `status_action` is the group's one step, such as Download. It is the one bordered control in the bar, and it is never cut.
 - `status_progress` replaces the square and words while a download runs: the words, a bar, then the share and size in figures of equal width, so the strip holds still as they count.
 - The square is `text` for news, `hired` when the download is ready and `closed` when something failed. An update does not wait on the user, so it never takes the stamp ink.
-- `release_notes_popover` opens above the group, right edges level. Its primary action takes the focus on open, unless it waits: then the notes take it. Esc, a click outside and the primary action close it.
+- `release_notes_popover` opens above the group, right edges level. Its primary action takes the focus on open, unless it waits: then the notes take it, and the slip says why, as the hover does. Esc, a click outside and the primary action close it.
 - `release_markdown` draws the notes, as [Trust](trust.md#rendering-untrusted-text) says.
 - `small_primary_button` and `setting_row_lines` serve Settings › About: the one step a row offers, and help of several lines, each in its own ink.
 

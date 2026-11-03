@@ -162,7 +162,7 @@ pub struct Updates {
 impl Updates {
     /// `current` is the version this copy runs, as `CARGO_PKG_VERSION` gives it. `block` is why it cannot replace itself.
     /// `auto` is the setting as it is saved, so no check starts against the user's choice before the first `set_auto`.
-    /// A copy that runs on a computer with no published build is blocked as well.
+    /// A copy that runs on a computer with no published build has no feed entry to read: it checks nothing and says why.
     /// A copy whose version cannot be read has nothing to compare: it checks nothing and offers nothing.
     pub fn new(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool) -> Self {
         Self::with_platform(service, current, block, auto, Platform::current())
@@ -172,9 +172,11 @@ impl Updates {
     /// the same on every computer.
     pub fn with_platform(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool, platform: Option<Platform>) -> Self {
         let version = Version::parse(current);
-        let block = match version {
-            None => Some(InstallBlock::UnreadableVersion),
-            Some(_) => block.or_else(|| platform.is_none().then_some(InstallBlock::NoBuild)),
+        // Neither of these two can ever find a release, so each outweighs whatever else the caller found.
+        let block = match (version, platform) {
+            (None, _) => Some(InstallBlock::UnreadableVersion),
+            (Some(_), None) => Some(InstallBlock::NoBuild),
+            (Some(_), Some(_)) => block,
         };
         Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None, apply_failed: None }
     }
@@ -182,6 +184,12 @@ impl Updates {
     /// Whether this copy knows its own version, so a release can be told newer or older.
     fn comparable(&self) -> bool {
         self.state.block != Some(InstallBlock::UnreadableVersion)
+    }
+
+    /// Why no check could ever find a release, if none could: this copy does not know its version, or Jobdesk publishes
+    /// no build for it. Then no check starts and About says why.
+    fn never_checks(&self) -> Option<InstallBlock> {
+        self.state.block.filter(|block| matches!(block, InstallBlock::UnreadableVersion | InstallBlock::NoBuild))
     }
 
     /// Takes why the last Restart to update did not install a release, as the launch read it. The bar says it in the
@@ -211,8 +219,8 @@ impl Updates {
         self.now = Some(now);
         while let Some(event) = self.service.poll() {
             match event {
-                // With no version of its own to compare, whatever the feed says is not taken.
-                ServiceEvent::Checked(_) if !self.comparable() => {}
+                // With no version of its own to compare, or no build to take, whatever the feed says is not taken.
+                ServiceEvent::Checked(_) if self.never_checks().is_some() => {}
                 ServiceEvent::Checked(result) => {
                     // A release that is gone takes its download with it, and the service deletes the file.
                     if self.state.checked(result, now) {
@@ -239,7 +247,7 @@ impl Updates {
     }
 
     fn start_check(&mut self, manual: bool, now: NaiveDateTime) {
-        if self.comparable() && self.state.start_check(manual) {
+        if self.never_checks().is_none() && self.state.start_check(manual) {
             self.last_attempt = Some(now);
             self.service.check();
         }
@@ -268,7 +276,7 @@ impl Updates {
 
     /// How long until the next automatic check is due, so the window can wake then. `None` when none will be.
     pub fn next_due(&self, now: NaiveDateTime) -> Option<Duration> {
-        if !self.auto || self.state.is_checking() || !self.comparable() {
+        if !self.auto || self.state.is_checking() || self.never_checks().is_some() {
             return None;
         }
         let Some(last) = self.last_attempt else { return Some(Duration::ZERO) };
@@ -357,9 +365,9 @@ impl Updates {
             buttons: Vec::new(),
         };
         let line = |text: String| HelpLine { text, failed: false };
-        if !self.comparable() {
+        if let Some(block) = self.never_checks() {
             about.check_now = None;
-            about.help.push(line(words::block_words(InstallBlock::UnreadableVersion, self.state.current)));
+            about.help.push(line(words::block_words(block, self.state.current)));
             return about;
         }
         if let (Some(failed), None) = (self.apply_failure(), &self.state.release) {
@@ -875,26 +883,28 @@ mod tests {
     }
 
     #[test]
-    fn a_computer_with_no_published_build_says_so_and_offers_no_page() {
-        let (mut updates, log) = desk_of("0.1.0", None, None);
-        updates.poll(at(9, 0));
-        answer(&log, ServiceEvent::Checked(Ok(release())));
-        updates.poll(at(9, 0));
-        updates.download();
-        assert_eq!(calls(&log), ["check"]);
-        let view = updates.view();
-        assert_eq!(view.bar.unwrap().action, None);
-        let notes = view.notes.unwrap();
-        assert_eq!(notes.blocked.as_deref(), Some("Jobdesk publishes no build for this computer, so it cannot update itself."));
-        assert_eq!((notes.action, notes.release_page), (None, None));
-        let buttons: Vec<_> = view.about.buttons.iter().map(|button| button.action).collect();
-        assert_eq!(buttons, [AboutAction::WhatsNew], "no release page to send the user to");
-        assert!(!view.about.help.iter().any(|line| line.text.contains("release page")));
+    fn a_computer_with_no_published_build_checks_nothing_and_says_so() {
+        for block in [None, Some(InstallBlock::ReadOnly), Some(InstallBlock::NoKey)] {
+            let (mut updates, log) = desk_of("0.1.0", block, None);
+            updates.poll(at(9, 0));
+            updates.check_now(at(9, 1));
+            assert!(calls(&log).is_empty(), "{block:?}: the feed has no build for this computer");
+            assert_eq!(updates.next_due(at(9, 1)), None);
+            // The feed's answer, had a check started all the same.
+            answer(&log, ServiceEvent::Checked(Err(Failure::NoBuild)));
+            updates.poll(at(9, 2));
+            let view = updates.view();
+            assert_eq!((view.bar, view.notes), (None, None));
+            assert_eq!(view.rail_word, ("0.1.0".to_owned(), false), "{block:?}: nothing failed");
+            let about = view.about;
+            assert_eq!(about.help, [HelpLine { text: "Jobdesk publishes no build for this computer, so it cannot update itself.".into(), failed: false }]);
+            assert_eq!((about.tag, about.check_now, about.checking, about.buttons.is_empty()), (None, None, false, true));
+        }
     }
 
     #[test]
     fn a_block_the_caller_gave_is_kept() {
-        let (mut updates, log) = desk_of("0.1.0", Some(InstallBlock::ReadOnly), None);
+        let (mut updates, log) = desk_of("0.1.0", Some(InstallBlock::ReadOnly), Some(Platform::WindowsX64));
         updates.poll(at(9, 0));
         answer(&log, ServiceEvent::Checked(Ok(release())));
         updates.poll(at(9, 0));

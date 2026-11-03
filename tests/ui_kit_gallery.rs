@@ -1389,9 +1389,11 @@ fn release_notes_popover_opens_on_its_primary_action() {
     let primary = harness.get_by_label("Download 0.2.0");
     assert!(primary.accesskit_node().is_disabled() && !primary.accesskit_node().is_focused(), "a waiting action takes no focus");
     assert!(harness.get_by_label("What changed in 0.2.0").accesskit_node().is_focused(), "the notes take it, inside the popover");
+    let why = |harness: &Harness| harness.query_all_by_label(RESTART_WAITS).count();
+    assert_eq!(why(&harness), 1, "a waiting action says why in the slip, for the keyboard");
     primary.hover();
     harness.run_steps(4);
-    assert!(harness.query_by_label_contains("A task is running").is_some(), "a waiting action says why");
+    assert_eq!(why(&harness), 2, "and on hover");
     harness.key_press(egui::Key::Escape);
     harness.run();
 

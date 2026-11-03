@@ -97,6 +97,8 @@ fn notes_button(ui: &mut Ui, screen: &mut UpdateScreen, group: &BarGroup, notes:
     let action = notes.action.as_ref();
     // A slip says what Restart does, or why there is no step to take.
     let slip = notes.slip.as_deref().or(notes.problem.as_deref()).or(notes.blocked.as_deref());
+    // A Restart that waits says why in the slip too, so the keyboard learns it as well as the pointer.
+    let primary_wait = action.filter(|action| action.action == BarAction::Restart).and(restart_wait);
     let words = ReleaseNotes {
         title: &notes.title,
         released: &notes.meta,
@@ -105,10 +107,10 @@ fn notes_button(ui: &mut Ui, screen: &mut UpdateScreen, group: &BarGroup, notes:
         trust: notes.trust,
         slip,
         primary: action.map(|action| action.label.as_str()),
-        primary_wait: action.filter(|action| action.action == BarAction::Restart).and(restart_wait),
+        primary_wait,
         size: Some(&notes.size),
         open_page: notes.release_page.as_ref().map(|_| notes.release_page_label),
-        esc_note: if slip.is_some() { ESC_CLOSES } else { notes.foot },
+        esc_note: if slip.is_some() || primary_wait.is_some() { ESC_CLOSES } else { notes.foot },
     };
     match release_notes_popover(&mark, &mut screen.notes_open, &words, &mut screen.cache)? {
         NotesAction::Primary => action.map(|action| UpdateRequest::Act(action.action)),

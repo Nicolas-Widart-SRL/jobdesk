@@ -76,7 +76,12 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> (Opti
     setting_section(ui, updates, None, query);
     let update = view.update;
     setting_check(ui, auto, check_auto, update.auto_help, query);
-    let help: Vec<(&str, Ink)> = update.help.iter().map(|line| (line.text.as_str(), if line.failed { Tone::Closed.into() } else { Ink::Muted })).collect();
+    let mut help: Vec<(&str, Ink)> = update.help.iter().map(|line| (line.text.as_str(), if line.failed { Tone::Closed.into() } else { Ink::Muted })).collect();
+    // A Restart to update that waits says why under it as well as on hover, so the keyboard learns it too.
+    let restart = update.buttons.iter().any(|button| button.action == AboutAction::Bar(BarAction::Restart));
+    if let Some(wait) = view.restart_wait.filter(|_| restart) {
+        help.push((wait, Ink::Muted));
+    }
     let mut request = None;
     setting_row_lines(ui, latest, &help, query, |ui| request = latest_controls(ui, update, view.restart_wait));
     setting_section(ui, read_more, None, query);
@@ -123,7 +128,7 @@ fn latest_controls(ui: &mut Ui, update: &AboutUpdate, restart_wait: Option<&str>
 }
 
 /// One of About's update steps: What's new and the release page as links, Cancel as a plain button, the step to take
-/// as the primary one. Restart to update waits while a task is open.
+/// as the primary one. Restart to update waits while a task is open, and says why on hover and in the help.
 fn about_button(ui: &mut Ui, button: &AboutButton, restart_wait: Option<&str>) -> Response {
     let label = button.label.as_str();
     match button.action {

@@ -6,7 +6,7 @@
 #   scripts/update-feed.sh VERSION NOTES_FILE DIR > latest.json
 #
 # VERSION is X.Y.Z, with or without the v. DIR holds both builds under their release names,
-# each beside the .sig that cargo packager wrote for it:
+# each beside its .sig: the minisign signature the release's sign job made of it under that name, in base64 on one line:
 #   Jobdesk-vX.Y.Z-macos-arm64.app.tar.gz and Jobdesk-vX.Y.Z-macos-arm64.app.tar.gz.sig
 #   Jobdesk-vX.Y.Z-windows-x64-setup.exe and Jobdesk-vX.Y.Z-windows-x64-setup.exe.sig
 # PUB_DATE sets the release time, RFC 3339 in UTC, so a test fixture comes out the same each time.

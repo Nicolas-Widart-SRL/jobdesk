@@ -4084,9 +4084,11 @@ fn about_ready_waits(name: &str, theme: Theme) {
     assert!(is_shown(&harness, "A task waits for you") && is_shown(&harness, "0.2.0 ready"));
     let about_restart = harness.get_all_by_label("Restart to update").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
     assert!(about_restart.accesskit_node().is_disabled());
+    let why = |harness: &Harness| harness.query_all_by_label("A task waits for your reply in Tasks. End its session there, then restart.").count();
+    assert_eq!(why(&harness), 1, "the help says why, for the keyboard");
     about_restart.hover();
     harness.run_steps(8);
-    assert!(is_shown(&harness, "A task waits for your reply in Tasks. End its session there, then restart."));
+    assert_eq!(why(&harness), 2, "and the hover");
     compare(&mut harness, name);
 }
 

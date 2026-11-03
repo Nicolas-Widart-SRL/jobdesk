@@ -95,7 +95,7 @@ Up to date, checking and a failed check show nothing there: Settings › About s
 
 Download only downloads and checks the file's signature, and nothing installs until you choose Restart to update. A download stays until Jobdesk next opens. If you quit without restarting, Jobdesk deletes it then, and you download it again.
 
-Restart to update closes Jobdesk the usual way, so an unsaved Profile edit asks first, and Keep editing calls the restart off. It waits while a Claude session is open, and its reason shows on hover: a task running, a task waiting for your answer, or a task waiting for your reply. Jobdesk then checks the file's signature again, installs it and opens again with the same folder and settings. On macOS it replaces the app where it is. On Windows the installer shows its progress in a small window for a moment, and it closes any other Jobdesk window that is still open.
+Restart to update closes Jobdesk the usual way, so an unsaved Profile edit asks first, and Keep editing calls the restart off. If the release is withdrawn while that ask shows, the ask closes and Jobdesk stays open with your edit. It waits while a Claude session is open, and its reason shows on hover, in the release notes and under Latest version in About: a task running, a task waiting for your answer, or a task waiting for your reply. Jobdesk then checks the file's signature again, installs it and opens again with the same folder and settings. On macOS it replaces the app where it is. On Windows the installer shows its progress in a small window for a moment, and it closes any other Jobdesk window that is still open.
 
 If Restart to update could not install, Jobdesk opens the old version again where it can, and at its next launch the status bar says why, such as "0.2.0 was not installed: the new copy could not be put in place". The other reasons are that the downloaded file was gone or no longer matched its signature, that this copy was not installed by a Jobdesk installer, or that the new copy did not start. Retry shows once the next check finds that release again.
 
@@ -104,7 +104,7 @@ Some copies cannot update themselves. In place of Download, the notes and About 
 - "Jobdesk cannot replace itself where it is installed." On macOS, a copy that runs from the disk image, or that macOS moved aside to open, says this.
 - "This copy was not installed by a Jobdesk installer, so it cannot update itself."
 - "This build has no update key, so it cannot check a download." Builds say this until the real update key is in place.
-- "Jobdesk publishes no build for this computer, so it cannot update itself."
+- "Jobdesk publishes no build for this computer, so it cannot update itself." Such a copy checks nothing, and About says this under Latest version.
 - "This copy has no version number Jobdesk can read, so it cannot tell whether a newer one is out." Such a copy checks nothing, and the word beside About reads Version unknown.
 
 The first three add "Install 0.2.0 from the release page." and offer Open the release page.

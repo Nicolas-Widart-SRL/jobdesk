@@ -77,19 +77,33 @@ pub fn finish(data: &Path, plan: &RestartPlan, args: &[OsString]) {
         Some(Platform::WindowsX64) => install_windows::apply(plan, &exe, args, key.as_ref()),
         _ => Err(ApplyFailure::NotInstalled),
     };
+    let setup_reopens = Platform::current() == Some(Platform::WindowsX64);
+    after_apply(applied, setup_reopens, &note, &|| exe.is_file(), &mut || reopen(&exe, args));
+}
+
+/// What follows an apply that ended as `applied`: the note for the next launch, and the copy to open again.
+/// `setup_reopens` is a Windows setup that started, which opens the new copy itself. `present` tells whether the
+/// program is still a file, as late as it can, and `reopen` starts it.
+fn after_apply(
+    applied: Result<(), ApplyFailure>,
+    setup_reopens: bool,
+    note: &dyn Fn(ApplyFailure),
+    present: &dyn Fn() -> bool,
+    reopen: &mut dyn FnMut() -> std::io::Result<()>,
+) {
     match applied {
         // The setup opens the new copy itself once it has installed it.
-        Ok(()) if Platform::current() == Some(Platform::WindowsX64) => {}
+        Ok(()) if setup_reopens => {}
         Ok(()) => {
-            if !exe.is_file() || reopen(&exe, args).is_err() {
+            if !present() || reopen().is_err() {
                 note(ApplyFailure::Start);
             }
         }
         // Noted before this copy opens again, so its launch finds the note.
         Err(failure) => {
             note(failure);
-            if exe.is_file() {
-                let _ = reopen(&exe, args);
+            if present() {
+                let _ = reopen();
             }
         }
     }
@@ -143,5 +157,66 @@ mod tests {
     fn a_scripted_state_reads_the_same_on_every_computer() {
         assert!(ready_slip(Platform::MacArm).contains("installs 0.2.0"));
         assert!(ready_slip(Platform::WindowsX64).contains("the installer shows its progress"));
+    }
+
+    /// A computer with no published build starts no check, whose feed would answer only that it has no build. About
+    /// says so, and the rail keeps the version, through the same updates a launch makes.
+    #[test]
+    fn a_computer_with_no_published_build_never_asks_the_feed() {
+        let script = vec![ServiceEvent::Checked(Err(crate::updates::application::Failure::NoBuild))];
+        let mut updates = scripted_updates("0.1.0", script, None, true, None);
+        let now = NaiveDate::from_ymd_opt(2026, 11, 3).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        updates.poll(now);
+        updates.check_now(now);
+        updates.poll(now);
+        let view = updates.view();
+        assert_eq!(view.rail_word, ("0.1.0".to_owned(), false), "no check failed");
+        assert_eq!(view.about.tag, None);
+        assert_eq!(view.about.check_now, None);
+        let help: Vec<_> = view.about.help.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(help, ["Jobdesk publishes no build for this computer, so it cannot update itself."]);
+        assert_eq!(updates.next_due(now), None, "and the window never wakes for one");
+    }
+
+    /// What `after_apply` did, in order: `note <failure>`, `present` and `reopen`.
+    fn steps(applied: Result<(), ApplyFailure>, setup_reopens: bool, present: bool, reopens: bool) -> Vec<String> {
+        let log = std::cell::RefCell::new(Vec::new());
+        after_apply(
+            applied,
+            setup_reopens,
+            &|failure| log.borrow_mut().push(format!("note {failure:?}")),
+            &|| {
+                log.borrow_mut().push("present".to_owned());
+                present
+            },
+            &mut || {
+                log.borrow_mut().push("reopen".to_owned());
+                if reopens { Ok(()) } else { Err(std::io::Error::other("fictional")) }
+            },
+        );
+        log.into_inner()
+    }
+
+    #[test]
+    fn a_failed_apply_is_noted_before_this_copy_opens_again() {
+        assert_eq!(steps(Err(ApplyFailure::Replace), false, true, true), ["note Replace", "present", "reopen"]);
+        assert_eq!(steps(Err(ApplyFailure::Replace), true, true, false), ["note Replace", "present", "reopen"], "on Windows too");
+    }
+
+    #[test]
+    fn a_program_that_is_no_longer_a_file_is_never_started() {
+        assert_eq!(steps(Err(ApplyFailure::BadSignature), false, false, true), ["note BadSignature", "present"]);
+        assert_eq!(steps(Ok(()), false, false, true), ["present", "note Start"], "the note is all that is left");
+    }
+
+    #[test]
+    fn a_started_windows_setup_opens_the_new_copy_itself() {
+        assert!(steps(Ok(()), true, true, true).is_empty());
+    }
+
+    #[test]
+    fn a_good_swap_that_does_not_open_notes_start() {
+        assert_eq!(steps(Ok(()), false, true, false), ["present", "reopen", "note Start"]);
+        assert_eq!(steps(Ok(()), false, true, true), ["present", "reopen"], "nothing to note once it opens");
     }
 }

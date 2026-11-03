@@ -101,15 +101,25 @@ pub fn ready_slip(platform: Platform, version: Version) -> String {
     }
 }
 
-/// Why this copy cannot install `version` by itself, and where to get it.
+/// Why this copy cannot install `version` by itself, and where to get it when the release page has a build for it.
 pub fn block_words(block: InstallBlock, version: Version) -> String {
     let get = format!("Install {version} from the release page.");
     match block {
         InstallBlock::ReadOnly => format!("Jobdesk cannot replace itself where it is installed. {get}"),
         InstallBlock::NotInstalled => format!("This copy was not installed by a Jobdesk installer, so it cannot update itself. {get}"),
         InstallBlock::NoKey => format!("This build has no update key, so it cannot check a download. {get}"),
+        InstallBlock::NoBuild => "Jobdesk publishes no build for this computer, so it cannot update itself.".to_owned(),
+        InstallBlock::UnreadableVersion => "This copy has no version number Jobdesk can read, so it cannot tell whether a newer one is out.".to_owned(),
     }
 }
+
+/// Whether the release page has a build this copy could be replaced with.
+pub fn release_page_helps(block: InstallBlock) -> bool {
+    !matches!(block, InstallBlock::NoBuild | InstallBlock::UnreadableVersion)
+}
+
+/// The word beside About on the settings rail when this copy has no readable version.
+pub const RAIL_UNREADABLE: &str = "Version unknown";
 
 /// What a Claude session open in Tasks means for Restart to update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +279,21 @@ mod tests {
         assert!(block_words(InstallBlock::NotInstalled, v(2)).starts_with("This copy was not installed by a Jobdesk installer, so it cannot update itself."));
         assert!(block_words(InstallBlock::NoKey, v(2)).starts_with("This build has no update key, so it cannot check a download."));
         assert!(block_words(InstallBlock::NoKey, v(2)).ends_with("Install 0.2.0 from the release page."));
+    }
+
+    #[test]
+    fn a_copy_with_no_build_or_no_version_gives_no_advice_it_cannot_follow() {
+        let no_build = block_words(InstallBlock::NoBuild, v(2));
+        assert_eq!(no_build, "Jobdesk publishes no build for this computer, so it cannot update itself.");
+        let unreadable = block_words(InstallBlock::UnreadableVersion, v(2));
+        assert_eq!(unreadable, "This copy has no version number Jobdesk can read, so it cannot tell whether a newer one is out.");
+        for words in [&no_build, &unreadable] {
+            assert!(!words.contains("release page") && !words.contains("0.2.0"), "{words}");
+        }
+        for block in [InstallBlock::ReadOnly, InstallBlock::NotInstalled, InstallBlock::NoKey] {
+            assert!(release_page_helps(block), "{block:?}");
+        }
+        assert!(!release_page_helps(InstallBlock::NoBuild) && !release_page_helps(InstallBlock::UnreadableVersion));
     }
 
     #[test]

@@ -108,6 +108,10 @@ pub enum InstallBlock {
     NotInstalled,
     /// The build carries no update key, so a download cannot be checked.
     NoKey,
+    /// Jobdesk publishes no build for this computer.
+    NoBuild,
+    /// The version of this copy cannot be read, so no release can be told newer or older. Nothing is checked or offered.
+    UnreadableVersion,
 }
 
 /// What Restart to update applies: the file of this version, and the signature of this release.
@@ -124,6 +128,19 @@ pub struct RestartPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DownloadId(pub u64);
 
+impl DownloadId {
+    /// The name this download gives the file it keeps, such as `3-Jobdesk-v0.2.0-windows-x64-setup.exe`.
+    /// The asset name stays at the end, so the file keeps its extension.
+    pub fn file_name(self, asset: &str) -> String {
+        format!("{}-{asset}", self.0)
+    }
+
+    /// The name of the file while this download still writes it.
+    pub fn part_name(self, asset: &str) -> String {
+        format!("{}.part", self.file_name(asset))
+    }
+}
+
 /// What the service reports back, in the order it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceEvent {
@@ -139,8 +156,13 @@ pub trait UpdateService: Send {
     /// Downloads the build of `release` from the address built from its version, and checks its signature.
     /// `id` is the number of this download: every `Progress` and `Ended` it reports must carry it back unchanged.
     /// Events of an older download, which a cancel left running, carry the older number and are ignored.
+    ///
+    /// Each download owns its files. It writes to `DownloadId::part_name` and keeps the finished file under
+    /// `DownloadId::file_name`, so two downloads of the same asset never share a path, and the `Done` path is its own.
     fn download(&mut self, release: &Release, id: DownloadId);
-    /// Stops the download and deletes what it wrote, a finished file too.
+    /// Stops the download that runs, or drops the one that is ready, and deletes only the files of that download.
+    /// A cancelled worker never creates, renames over or deletes a path of another download, even when it is still
+    /// winding down as the next download starts.
     fn cancel(&mut self);
     /// The next thing that happened, if anything did.
     fn poll(&mut self) -> Option<ServiceEvent>;
@@ -169,6 +191,15 @@ mod tests {
             asset_url(&v020(), Platform::MacArm),
             "https://github.com/Nicolas-Widart-SRL/jobdesk/releases/download/v0.2.0/Jobdesk-v0.2.0-macos-arm64.app.tar.gz"
         );
+    }
+
+    #[test]
+    fn each_download_names_its_own_files() {
+        let asset = Platform::WindowsX64.asset_name(&v020());
+        assert_eq!(DownloadId(3).file_name(&asset), "3-Jobdesk-v0.2.0-windows-x64-setup.exe");
+        assert_eq!(DownloadId(3).part_name(&asset), "3-Jobdesk-v0.2.0-windows-x64-setup.exe.part");
+        assert_ne!(DownloadId(3).file_name(&asset), DownloadId(4).file_name(&asset));
+        assert_ne!(DownloadId(3).part_name(&asset), DownloadId(13).part_name(&asset));
     }
 
     #[test]

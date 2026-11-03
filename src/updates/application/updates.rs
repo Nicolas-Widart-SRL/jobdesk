@@ -80,7 +80,8 @@ pub struct NotesView {
     /// `14.2 MB`.
     pub size: String,
     /// Built from the version tag, never read from the feed or the notes.
-    pub release_page: String,
+    /// `None` when the release page has no build this copy could use.
+    pub release_page: Option<String>,
     pub release_page_label: &'static str,
     pub action: Option<NotesAction>,
     /// Why this copy cannot install it, in place of the action.
@@ -156,16 +157,26 @@ pub struct Updates {
 impl Updates {
     /// `current` is the version this copy runs, as `CARGO_PKG_VERSION` gives it. `block` is why it cannot replace itself.
     /// `auto` is the setting as it is saved, so no check starts against the user's choice before the first `set_auto`.
-    /// A copy whose version cannot be read, or that runs on a computer with no published build, is blocked as well.
+    /// A copy that runs on a computer with no published build is blocked as well.
+    /// A copy whose version cannot be read has nothing to compare: it checks nothing and offers nothing.
     pub fn new(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool) -> Self {
         Self::with_platform(service, current, block, auto, Platform::current())
     }
 
-    fn with_platform(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool, platform: Option<Platform>) -> Self {
+    /// As `new`, for the platform given instead of the one this runs on. For tests and previews, so each state looks
+    /// the same on every computer.
+    pub fn with_platform(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool, platform: Option<Platform>) -> Self {
         let version = Version::parse(current);
-        // Without a version to compare, every release would read as newer, even an older one.
-        let block = block.or_else(|| (version.is_none() || platform.is_none()).then_some(InstallBlock::NotInstalled));
+        let block = match version {
+            None => Some(InstallBlock::UnreadableVersion),
+            Some(_) => block.or_else(|| platform.is_none().then_some(InstallBlock::NoBuild)),
+        };
         Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None }
+    }
+
+    /// Whether this copy knows its own version, so a release can be told newer or older.
+    fn comparable(&self) -> bool {
+        self.state.block != Some(InstallBlock::UnreadableVersion)
     }
 
     /// Follows the setting. It is cheap, so it may run every frame.
@@ -178,6 +189,8 @@ impl Updates {
         self.now = Some(now);
         while let Some(event) = self.service.poll() {
             match event {
+                // With no version of its own to compare, whatever the feed says is not taken.
+                ServiceEvent::Checked(_) if !self.comparable() => {}
                 ServiceEvent::Checked(result) => {
                     // A release that is gone takes its download with it, and the service deletes the file.
                     if self.state.checked(result, now) {
@@ -200,7 +213,7 @@ impl Updates {
     }
 
     fn start_check(&mut self, manual: bool, now: NaiveDateTime) {
-        if self.state.start_check(manual) {
+        if self.comparable() && self.state.start_check(manual) {
             self.last_attempt = Some(now);
             self.service.check();
         }
@@ -228,7 +241,7 @@ impl Updates {
 
     /// How long until the next automatic check is due, so the window can wake then. `None` when none will be.
     pub fn next_due(&self, now: NaiveDateTime) -> Option<Duration> {
-        if !self.auto || self.state.is_checking() {
+        if !self.auto || self.state.is_checking() || !self.comparable() {
             return None;
         }
         let Some(last) = self.last_attempt else { return Some(Duration::ZERO) };
@@ -283,7 +296,7 @@ impl Updates {
             trust: TRUST_LINE,
             foot: NOTES_FOOT,
             size: words::size_words(release.size),
-            release_page: release_page(&version),
+            release_page: self.state.block.is_none_or(words::release_page_helps).then(|| release_page(&version)),
             release_page_label: RELEASE_PAGE,
             action,
             blocked: self.state.block.map(|block| words::block_words(block, version)),
@@ -303,6 +316,11 @@ impl Updates {
             buttons: Vec::new(),
         };
         let line = |text: String| HelpLine { text, failed: false };
+        if !self.comparable() {
+            about.check_now = None;
+            about.help.push(line(words::block_words(InstallBlock::UnreadableVersion, self.state.current)));
+            return about;
+        }
         // A release that is known leads, whatever a later check said.
         if let Some(release) = &self.state.release {
             about.check_now = None;
@@ -345,7 +363,9 @@ impl Updates {
                 match self.state.block {
                     Some(block) => {
                         about.help.push(line(words::block_words(block, version)));
-                        about.buttons.push(button(AboutAction::ReleasePage, RELEASE_PAGE, false));
+                        if words::release_page_helps(block) {
+                            about.buttons.push(button(AboutAction::ReleasePage, RELEASE_PAGE, false));
+                        }
                     }
                     None => {
                         about.buttons.push(AboutButton { action: AboutAction::Bar(BarAction::Download), label: words::notes_download(version), primary: true })
@@ -375,6 +395,9 @@ impl Updates {
 
     /// The word beside About on the rail: the version in use, or the news, or that a check failed.
     fn rail_word(&self) -> (String, bool) {
+        if !self.comparable() {
+            return (words::RAIL_UNREADABLE.to_owned(), false);
+        }
         if let Some(release) = &self.state.release {
             let version = release.version;
             return match self.state.download {
@@ -600,7 +623,7 @@ mod tests {
         assert_eq!(notes.trust, "From the GitHub release. Its links and images do not open here.");
         assert_eq!(notes.foot, "Nothing installs until you choose Restart to update. Esc closes.");
         assert_eq!(notes.size, "14.2 MB");
-        assert_eq!(notes.release_page, "https://github.com/Nicolas-Widart-SRL/jobdesk/releases/tag/v0.2.0");
+        assert_eq!(notes.release_page.as_deref(), Some("https://github.com/Nicolas-Widart-SRL/jobdesk/releases/tag/v0.2.0"));
         assert_eq!(notes.action, Some(NotesAction { action: BarAction::Download, label: "Download 0.2.0".into() }));
         assert_eq!((notes.blocked, notes.problem, notes.slip), (None, None, None));
     }
@@ -776,22 +799,32 @@ mod tests {
     }
 
     #[test]
-    fn a_version_that_cannot_be_read_never_offers_a_download() {
+    fn a_version_that_cannot_be_read_checks_nothing_and_offers_nothing() {
         for current in ["0.3.0-rc.1", "", "v1", "banana"] {
-            let (mut updates, log) = desk_of(current, None, Some(Platform::MacArm));
-            updates.poll(at(9, 0));
-            answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() })));
-            updates.poll(at(9, 0));
-            assert_eq!(updates.view().bar.map(|bar| bar.action), Some(None), "{current:?}: an older release is not offered either");
-            updates.download();
-            assert_eq!(calls(&log), ["check"], "{current:?}");
-            let notes = updates.view().notes.unwrap();
-            assert_eq!((notes.action, notes.blocked.is_some()), (None, true), "{current:?}");
+            for release in [release(), Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() }] {
+                let (mut updates, log) = desk_of(current, Some(InstallBlock::ReadOnly), Some(Platform::MacArm));
+                updates.poll(at(9, 0));
+                updates.check_now(at(9, 1));
+                assert!(calls(&log).is_empty(), "{current:?}: the feed has nothing to be compared with");
+                answer(&log, ServiceEvent::Checked(Ok(release)));
+                updates.poll(at(9, 2));
+                updates.download();
+                assert!(calls(&log).is_empty(), "{current:?}");
+                let view = updates.view();
+                assert_eq!((view.bar, view.notes), (None, None), "{current:?}: no release is ever set");
+                assert_eq!(view.rail_word, ("Version unknown".to_owned(), false));
+                let about = view.about;
+                assert_eq!(about.help.len(), 1);
+                assert_eq!(about.help[0].text, "This copy has no version number Jobdesk can read, so it cannot tell whether a newer one is out.");
+                assert_eq!((about.tag, about.check_now, about.checking, about.buttons.is_empty()), (None, None, false, true));
+                assert_eq!(updates.next_due(at(9, 2)), None);
+                assert_eq!(updates.restart_plan(), None);
+            }
         }
     }
 
     #[test]
-    fn a_computer_with_no_published_build_never_offers_a_download() {
+    fn a_computer_with_no_published_build_says_so_and_offers_no_page() {
         let (mut updates, log) = desk_of("0.1.0", None, None);
         updates.poll(at(9, 0));
         answer(&log, ServiceEvent::Checked(Ok(release())));
@@ -800,12 +833,17 @@ mod tests {
         assert_eq!(calls(&log), ["check"]);
         let view = updates.view();
         assert_eq!(view.bar.unwrap().action, None);
-        assert!(view.notes.unwrap().blocked.is_some());
+        let notes = view.notes.unwrap();
+        assert_eq!(notes.blocked.as_deref(), Some("Jobdesk publishes no build for this computer, so it cannot update itself."));
+        assert_eq!((notes.action, notes.release_page), (None, None));
+        let buttons: Vec<_> = view.about.buttons.iter().map(|button| button.action).collect();
+        assert_eq!(buttons, [AboutAction::WhatsNew], "no release page to send the user to");
+        assert!(!view.about.help.iter().any(|line| line.text.contains("release page")));
     }
 
     #[test]
     fn a_block_the_caller_gave_is_kept() {
-        let (mut updates, log) = desk_of("banana", Some(InstallBlock::ReadOnly), None);
+        let (mut updates, log) = desk_of("0.1.0", Some(InstallBlock::ReadOnly), None);
         updates.poll(at(9, 0));
         answer(&log, ServiceEvent::Checked(Ok(release())));
         updates.poll(at(9, 0));

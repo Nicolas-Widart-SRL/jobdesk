@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn a_download_is_refused_while_blocked_or_running() {
-        for block in [InstallBlock::ReadOnly, InstallBlock::NotInstalled, InstallBlock::NoKey] {
+        for block in [InstallBlock::ReadOnly, InstallBlock::NotInstalled, InstallBlock::NoKey, InstallBlock::NoBuild, InstallBlock::UnreadableVersion] {
             let mut blocked = UpdateState::new(version(1), Some(block));
             blocked.checked(Ok(release(2)), at(9, 0));
             assert!(!blocked.may_download(), "{block:?}");

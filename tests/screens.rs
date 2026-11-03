@@ -4222,6 +4222,12 @@ fn profile_view_dark() {
     render_profile(shell(Screen::Profile, "profile_view_dark"), None, Theme::Dark, "profile_view_dark");
 }
 
+/// Identity holds the Languages table, which takes the paper's width beside its Edit.
+#[test]
+fn profile_identity_light() {
+    render_profile(shell(Screen::Profile, "profile_identity_light"), Some("Identity and languages"), Theme::Light, "profile_identity_light");
+}
+
 #[test]
 fn profile_empty_light() {
     render_profile(shell(Screen::Profile, "profile_empty_light"), Some("Goals and deal-breakers"), Theme::Light, "profile_empty_light");

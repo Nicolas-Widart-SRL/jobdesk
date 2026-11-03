@@ -141,21 +141,23 @@ impl KeyCache {
     }
 
     /// The held key, or the keychain's answer when nothing is held. A read under way on another thread is waited for and shared,
-    /// so two callers at once read the keychain once, and its failure is the answer of each. A wait on a turn held without a read,
-    /// such as the page's look at an old failure, shares nothing and reads again. The window must not call this.
+    /// so two callers at once read the keychain once, and its failure is the answer of each. Only a read that ended during this call
+    /// shares its failure: a turn held without a read, such as the page's look at an old failure, shares nothing, and this reads again.
+    /// The window must not call this.
     fn read_waiting(&self) -> Result<Option<ApiKey>, KeyStoreError> {
-        let (turn, waited) = match self.turn.try_lock() {
-            Ok(turn) => (turn, None),
-            Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), None),
+        // Counted before the turn is tried, so a read that ends between the try and the wait still counts as ended during the call.
+        let before = self.cell().reads;
+        let turn = match self.turn.try_lock() {
+            Ok(turn) => turn,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             Err(TryLockError::WouldBlock) => {
-                let before = self.cell().reads;
                 self.waiting.fetch_add(1, Ordering::SeqCst);
                 let turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
                 self.waiting.fetch_sub(1, Ordering::SeqCst);
-                (turn, Some(before))
+                turn
             }
         };
-        if let Some(before) = waited {
+        {
             let cell = self.cell();
             if let (true, None, Some(message)) = (cell.reads != before, cell.held.answer(), &cell.failure) {
                 return Err(KeyStoreError { message: message.clone() });

@@ -70,8 +70,8 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
-  # Fails on a verified or unverified secret anywhere in the git history. It runs on every change,
-  # Markdown too, because a secret can sit in any file.
+  # Fails on a verified, unverified or unknown (check failed) secret anywhere in the git history.
+  # It runs on every change, Markdown too, because a secret can sit in any file.
   secrets:
     name: Scan for secrets
     runs-on: ubuntu-latest
@@ -87,7 +87,7 @@ jobs:
           base: ''
           head: HEAD
           version: 3.99.8
-          extra_args: --results=verified,unknown
+          extra_args: --results=verified,unknown,unverified
 
   # rustfmt.toml holds the style. Run `cargo fmt` before you commit.
   fmt:

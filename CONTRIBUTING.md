@@ -81,7 +81,7 @@ When the audit job fails on an advisory, update the dependency if a fixed releas
 ignore = ["RUSTSEC-…"]  # why it does not apply
 ```
 
-TruffleHog scans the whole git history for secrets in CI, and fails on a verified or unverified one. To run it locally: `trufflehog git file://. --results=verified,unknown --fail --no-update`.
+TruffleHog scans the whole git history for secrets in CI, and fails on a verified, unverified or unknown (check failed) one. To run it locally: `trufflehog git file://. --results=verified,unknown,unverified --fail --no-update`.
 
 ## Before you commit
 

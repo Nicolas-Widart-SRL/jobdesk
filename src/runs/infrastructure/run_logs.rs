@@ -488,6 +488,17 @@ mod tests {
         assert!(final_estimate() > estimate_usd(&Tokens { input: 6, output: 2, cache_write: 1500, cache_read: 20000 }, "claude-haiku-4-5"));
     }
 
+    /// Were the delta's `api_message_id` not the id of the message's other lines, the run must still price the message once.
+    #[test]
+    fn a_replayed_delta_under_another_id_does_not_double_the_message() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "/w", "a", &[&[&captured::message_start("m1", "null", 2), &captured::message_delta("other", "null", 48)]]);
+
+        let shown = replayed(dir.path()).shown_cost();
+
+        assert_eq!(shown.usd, estimate_usd(&Tokens { input: 6, output: 2, cache_write: 1500, cache_read: 20000 }, "claude-haiku-4-5"));
+    }
+
     #[test]
     fn a_replayed_resume_adds_the_processes_together() {
         let dir = tempfile::tempdir().unwrap();

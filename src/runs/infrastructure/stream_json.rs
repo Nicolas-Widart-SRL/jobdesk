@@ -86,7 +86,13 @@ fn usage_event(id: &str, model: &str, usage: &Value) -> Option<AgentEvent> {
     if id.is_empty() {
         return None;
     }
-    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    // A message that took several calls lists each in `iterations`. The larger of the total and their sum stands.
+    let iterations = usage.get("iterations").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    let count = |key: &str| {
+        let total = usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let summed = iterations.iter().fold(0u64, |sum, call| sum.saturating_add(call.get(key).and_then(Value::as_u64).unwrap_or(0)));
+        total.max(summed)
+    };
     let tokens = Tokens {
         input: count("input_tokens"),
         output: count("output_tokens"),
@@ -109,18 +115,22 @@ pub struct StreamReader {
 
 impl StreamReader {
     pub fn read(&mut self, line: &str) -> Vec<AgentEvent> {
-        let events = parse_line(line);
-        events
+        parse_line(line)
             .into_iter()
-            .map(|event| match event {
+            .filter_map(|event| match event {
                 AgentEvent::MessageUsage { id, model, tokens } => self.remember(id, model, tokens),
-                other => other,
+                other => Some(other),
             })
             .collect()
     }
 
     /// A message's figures only grow, so the larger of each one stands. A model not named is the one seen before.
-    fn remember(&mut self, id: String, model: String, tokens: Tokens) -> AgentEvent {
+    /// Figures for a message whose model was never named are dropped, because nothing could price them: the id may not be
+    /// the one its lines were seen under, and a guess would count the message twice.
+    fn remember(&mut self, id: String, model: String, tokens: Tokens) -> Option<AgentEvent> {
+        if model.is_empty() && !self.seen.contains_key(&id) {
+            return None;
+        }
         if self.seen.len() >= MESSAGES_KEPT && !self.seen.contains_key(&id) {
             self.seen.clear();
         }
@@ -134,7 +144,7 @@ impl StreamReader {
             cache_write: known.cache_write.max(tokens.cache_write),
             cache_read: known.cache_read.max(tokens.cache_read),
         };
-        AgentEvent::MessageUsage { id, model: known_model.clone(), tokens: *known }
+        Some(AgentEvent::MessageUsage { id, model: known_model.clone(), tokens: *known })
     }
 }
 
@@ -508,9 +518,52 @@ mod tests {
     }
 
     #[test]
-    fn the_reader_leaves_the_model_empty_for_a_message_it_never_saw_start() {
+    fn the_reader_drops_figures_for_a_message_it_never_saw_named() {
         let mut reader = StreamReader::default();
-        assert_eq!(reader.read(&captured::message_delta("msg_zz", "null", 48)), [used("msg_zz", "", 48)]);
+        assert_eq!(reader.read(&captured::message_delta("msg_zz", "null", 48)), []);
+        assert!(reader.seen.is_empty(), "nothing is kept for it either");
+    }
+
+    /// If `api_message_id` were not the id of the message's other lines, the delta would price a second message.
+    #[test]
+    fn a_delta_under_another_id_adds_nothing() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+
+        assert_eq!(reader.read(&captured::message_delta("msg_other", "null", 48)), []);
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", HAIKU, 48)], "the real one still counts");
+    }
+
+    #[test]
+    fn a_delta_after_the_reader_cleared_its_memory_is_dropped_not_priced() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        for n in 0..MESSAGES_KEPT {
+            reader.read(&captured::message_start(&format!("msg_n{n}"), "null", 1));
+        }
+
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), []);
+    }
+
+    #[test]
+    fn a_delta_takes_the_larger_of_its_total_and_its_calls_summed() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        let delta = |iterations: &str| {
+            format!(
+                r#"{{"type":"stream_event","event":{{"type":"message_delta","usage":{{"input_tokens":6,"output_tokens":10,"cache_creation_input_tokens":1500,"cache_read_input_tokens":20000,"iterations":{iterations}}}}},"parent_tool_use_id":null,"api_message_id":"msg_a1"}}"#
+            )
+        };
+        let calls = r#"[{"input_tokens":4,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":9000},{"input_tokens":3,"output_tokens":20,"cache_read_input_tokens":12000}]"#;
+
+        let expected = Tokens { input: 7, output: 50, cache_write: 1500, cache_read: 21000 };
+        assert_eq!(reader.read(&delta(calls)), [AgentEvent::MessageUsage { id: "msg_a1".into(), model: HAIKU.into(), tokens: expected }]);
+
+        for odd in ["null", r#""none""#, "[]", r#"[null, 5, {"output_tokens":"a"}, {"output_tokens":-1}]"#, "{}"] {
+            let mut fresh = StreamReader::default();
+            fresh.read(&captured::message_start("msg_a1", "null", 2));
+            assert_eq!(fresh.read(&delta(odd)), [used("msg_a1", HAIKU, 10)], "{odd}");
+        }
     }
 
     #[test]
@@ -524,6 +577,7 @@ mod tests {
             reader.read(&captured::message_start(&format!("msg_n{n}"), "null", 1));
         }
         assert!(reader.seen.len() <= MESSAGES_KEPT);
+        assert_eq!(reader.read(&captured::message_delta("msg_a2", "null", 9)), [], "cleared with the rest");
     }
 
     #[test]

@@ -121,6 +121,29 @@ fn a_full_session_works() {
     let after = log.lines().skip(resume_at).find_map(result_cost).expect("a result after the resume");
     assert!(after < before, "the resumed process reports its own total: {after} after {before}");
 
+    // A `message_delta` names its message only by the line's `api_message_id`. The cost estimate relies on that being the
+    // id of a `message_start` of the same process, so check it here.
+    let (mut started, mut deltas) = (std::collections::HashSet::new(), 0);
+    for line in log.lines() {
+        if line == r#"{"type":"jobdesk_resume"}"# {
+            started.clear();
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match value.pointer("/event/type").and_then(|kind| kind.as_str()) {
+            Some("message_start") if value["type"] == "stream_event" => {
+                started.insert(value.pointer("/event/message/id").and_then(|id| id.as_str()).unwrap_or_default().to_owned());
+            }
+            Some("message_delta") if value["type"] == "stream_event" => {
+                deltas += 1;
+                let id = value["api_message_id"].as_str().unwrap_or_default();
+                assert!(!id.is_empty() && started.contains(id), "a message_delta names a message this process started: {id:?} in {started:?}");
+            }
+            _ => {}
+        }
+    }
+    assert!(deltas > 0, "the log holds message_delta lines to check");
+
     // Usage adds up both processes from the log.
     let tasks = runs::usage_logs(logs, &workspace).tasks();
     println!("usage {tasks:?}");

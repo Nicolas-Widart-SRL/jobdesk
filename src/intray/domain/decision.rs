@@ -21,37 +21,19 @@ impl Outcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkipReason {
-    Rate,
-    Scope,
-    Domain,
-    Location,
-}
-
-impl SkipReason {
-    pub const ALL: [Self; 4] = [Self::Rate, Self::Scope, Self::Domain, Self::Location];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Rate => "Rate",
-            Self::Scope => "Scope",
-            Self::Domain => "Domain",
-            Self::Location => "Location",
-        }
-    }
-}
-
 /// What the user did with a card. Cards are derived, so this is the only tray state stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub key: String,
     pub name: String,
     pub outcome: Outcome,
-    pub reason: Option<SkipReason>,
+    /// Why a card was skipped, as the user picked it. A reason later taken off the list stays.
+    pub reason: Option<String>,
     /// The key of the task a followed card opened. See `task_name`.
     pub task: Option<String>,
     pub on: NaiveDate,
+    /// The day a card set aside with Later comes back. None means the day after `on`.
+    pub until: Option<NaiveDate>,
 }
 
 impl Decision {
@@ -64,9 +46,14 @@ impl Decision {
         }
     }
 
-    /// Later is not a decision on the card, so it clears nothing and is never logged.
+    /// The day a card set aside comes back.
+    pub fn returns_on(&self) -> NaiveDate {
+        self.until.unwrap_or_else(|| self.on.succ_opt().unwrap_or(self.on))
+    }
+
+    /// Later is not a decision on the card, so it clears nothing and is never logged. It holds from its day until the card comes back.
     pub fn sets_aside(&self, today: NaiveDate) -> bool {
-        self.outcome == Outcome::Later && self.on == today
+        self.outcome == Outcome::Later && self.on <= today && today < self.returns_on()
     }
 
     pub fn is_logged_on(&self, today: NaiveDate) -> bool {
@@ -78,16 +65,26 @@ impl Decision {
         if self.outcome == Outcome::Followed {
             return self.task.as_deref().and_then(task_name).map_or_else(|| verb.to_owned(), |name| format!("{verb}: {name}"));
         }
-        self.reason.map_or_else(|| verb.to_owned(), |reason| format!("{verb} for {}", reason.label().to_lowercase()))
+        self.reason.as_ref().map_or_else(|| verb.to_owned(), |reason| format!("{verb} for {}", reason.to_lowercase()))
     }
 
     /// What the undo row shows, and what a screen reader hears of it.
     pub fn note(&self) -> String {
-        match (self.outcome, self.reason) {
-            (Outcome::Later, _) => "Set aside until tomorrow".to_owned(),
+        match (self.outcome, &self.reason) {
+            (Outcome::Later, _) => format!("Set aside until {}", until_words(self.on, self.returns_on())),
             (Outcome::Skipped, None) => "Skipped. Why? Optional.".to_owned(),
             _ => self.label(),
         }
+    }
+}
+
+/// When a card comes back, said from `on`: "tomorrow", "Monday", "next Monday", or a date further out.
+pub fn until_words(on: NaiveDate, until: NaiveDate) -> String {
+    match (until - on).num_days() {
+        1 => "tomorrow".to_owned(),
+        2..=6 => until.format("%A").to_string(),
+        7 => until.format("next %A").to_string(),
+        _ => until.format("%-d %B").to_string(),
     }
 }
 
@@ -111,13 +108,17 @@ pub trait DecisionStore {
 mod tests {
     use super::*;
 
+    fn day(month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, month, day).unwrap()
+    }
+
     fn decided(outcome: Outcome) -> Decision {
-        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, task: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
+        Decision { key: "k".into(), name: "Acme".into(), outcome, reason: None, task: None, on: day(10, 31), until: None }
     }
 
     #[test]
     fn a_followed_card_returns_the_next_day_and_a_skipped_one_never() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let today = day(10, 31);
         let tomorrow = today.succ_opt().unwrap();
         assert!(decided(Outcome::Followed).clears_card(today));
         assert!(!decided(Outcome::Followed).clears_card(tomorrow));
@@ -128,27 +129,58 @@ mod tests {
 
     #[test]
     fn later_sets_aside_for_the_day_and_clears_nothing() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let today = day(10, 31);
         let later = decided(Outcome::Later);
         assert!(later.sets_aside(today));
         assert!(!later.sets_aside(today.succ_opt().unwrap()));
+        assert!(!later.sets_aside(today.pred_opt().unwrap()));
         assert!(!later.clears_card(today));
         assert!(!later.is_logged_on(today));
         assert!(decided(Outcome::Skipped).is_logged_on(today));
     }
 
     #[test]
+    fn later_holds_until_its_day() {
+        let later = Decision { until: Some(day(11, 3)), ..decided(Outcome::Later) };
+        assert!(later.sets_aside(day(10, 31)));
+        assert!(later.sets_aside(day(11, 2)));
+        assert!(!later.sets_aside(day(11, 3)));
+        assert!(!later.sets_aside(day(10, 30)));
+    }
+
+    #[test]
     fn label_names_the_reason() {
-        let skipped = Decision { reason: Some(SkipReason::Rate), ..decided(Outcome::Skipped) };
+        let skipped = Decision { reason: Some("Rate".into()), ..decided(Outcome::Skipped) };
         assert_eq!(skipped.label(), "Skipped for rate");
+        let custom = Decision { reason: Some("Agency, not the client".into()), ..decided(Outcome::Skipped) };
+        assert_eq!(custom.label(), "Skipped for agency, not the client");
     }
 
     #[test]
     fn the_note_tells_what_is_still_open_to_the_user() {
         assert_eq!(decided(Outcome::Later).note(), "Set aside until tomorrow");
         assert_eq!(decided(Outcome::Skipped).note(), "Skipped. Why? Optional.");
-        assert_eq!(Decision { reason: Some(SkipReason::Scope), ..decided(Outcome::Skipped) }.note(), "Skipped for scope");
+        assert_eq!(Decision { reason: Some("Scope".into()), ..decided(Outcome::Skipped) }.note(), "Skipped for scope");
         assert_eq!(decided(Outcome::Kept).note(), "Kept");
+    }
+
+    #[test]
+    fn the_note_names_the_day_a_card_comes_back() {
+        let until = |until| Decision { until: Some(until), ..decided(Outcome::Later) }.note();
+        assert_eq!(until(day(11, 1)), "Set aside until tomorrow");
+        assert_eq!(until(day(11, 2)), "Set aside until Monday");
+        assert_eq!(until(day(11, 3)), "Set aside until Tuesday");
+        assert_eq!(until(day(11, 7)), "Set aside until next Saturday");
+        assert_eq!(until(day(11, 6)), "Set aside until Friday");
+        assert_eq!(until(day(11, 8)), "Set aside until 8 November");
+    }
+
+    #[test]
+    fn until_words_count_from_the_day_given() {
+        assert_eq!(until_words(day(11, 2), day(11, 9)), "next Monday");
+        assert_eq!(until_words(day(11, 1), day(11, 2)), "tomorrow");
+        assert_eq!(until_words(day(10, 31), day(11, 2)), "Monday");
+        assert_eq!(until_words(day(10, 31), day(11, 6)), "Friday");
     }
 
     #[test]

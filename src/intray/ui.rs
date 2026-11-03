@@ -1,9 +1,7 @@
 use chrono::NaiveDate;
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
-use crate::intray::application::{
-    Action, AgendaRow, Body, Card, CardKind, GateRow, HORIZON_WORDS, InTray, Queue, Request, Returning, RowState, SkipReason, UndoOffer,
-};
+use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, ComingUp, GateRow, InTray, Queue, Request, Returning, RowState, UndoOffer};
 use crate::ui_kit::tokens::{
     BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL,
 };
@@ -28,7 +26,7 @@ enum Pressed {
     Later,
     Skip,
     Undo,
-    Reason(SkipReason),
+    Reason(String),
     Bring(String),
     BringAll,
 }
@@ -127,13 +125,13 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
             let room = ui.available_rect_before_wrap();
             match top {
-                Some(card) => stack(ui, card, queue.cards.len(), &mut screen.command_open, &mut pressed),
+                Some(card) => stack(ui, card, queue.cards.len(), queue.horizon, &mut screen.command_open, &mut pressed),
                 None => {
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
                 }
             }
             if let Some(gone) = &screen.departing {
-                departed(ui, gone, room, now);
+                departed(ui, gone, room, now, queue.horizon);
             }
         });
     });
@@ -234,7 +232,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
     let today = queue.today;
     match pressed {
         Pressed::Undo => tray.undo(today),
-        Pressed::Reason(reason) => tray.give_reason(reason, today),
+        Pressed::Reason(reason) => tray.give_reason(&reason, today),
         Pressed::Bring(key) => tray.pull_forward(&key, today),
         Pressed::BringAll => tray.bring_back_all(today),
         Pressed::Later => tray.later(top?, today),
@@ -246,7 +244,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
 
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
 /// The card takes the height left, so its actions stay in view however long its body is.
-fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<String>, pressed: &mut Option<Pressed>) {
+fn stack(ui: &mut Ui, card: &Card, pending: usize, horizon: ComingUp, command_open: &mut Option<String>, pressed: &mut Option<Pressed>) {
     let (kind, ink) = kind_look(card.kind);
     ui.spacing_mut().item_spacing.y = 0.0;
     let tab = ui
@@ -254,7 +252,7 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
             let tab = card_tab(ui, kind, ink, card.when.as_str());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 desk_label(ui, format!("1 of {pending}"), Type::NOTE, Ink::Muted).on_hover_ui(|ui| {
-                    ui.label(format!("Claude's questions come first, then deadlines in the next {}, then the rest.", HORIZON_WORDS.1));
+                    ui.label(format!("Claude's questions come first, then deadlines in the next {}, then the rest.", horizon.words().1));
                 });
             });
             tab
@@ -265,10 +263,10 @@ fn stack(ui: &mut Ui, card: &Card, pending: usize, command_open: &mut Option<Str
 }
 
 /// The decided card, drawn from its copy over the next one. Its actions go nowhere.
-fn departed(ui: &Ui, gone: &Departing, room: Rect, now: f64) {
+fn departed(ui: &Ui, gone: &Departing, room: Rect, now: f64, horizon: ComingUp) {
     let time = motion_time(ui.ctx());
     let part = if time > 0.0 { ((now - gone.since) as f32 / time).clamp(0.0, 1.0) } else { 1.0 };
-    departing(ui, room, part, |ui| stack(ui, &gone.card, gone.pending, &mut None, &mut None));
+    departing(ui, room, part, |ui| stack(ui, &gone.card, gone.pending, horizon, &mut None, &mut None));
 }
 
 /// Any string here may come from a posting, a note or a report, so each shows as a plain label.
@@ -463,13 +461,13 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
                     command_action(ui, &format!("Score {jobs}"), "/rank");
                 }
             });
-            if !queue.set_aside.is_empty() {
-                let n = queue.set_aside.len();
-                let (cards, verb, back) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
+            if let Some(returning) = queue.returning() {
+                let n = returning.count;
+                let (cards, verb, bring) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.label(rich(ui, format!("{n} {cards} set aside with Later {verb} back tomorrow. "), Type::NOTE, Ink::Muted));
-                    if link(ui, back).clicked() {
+                    ui.label(rich(ui, format!("{n} {cards} set aside with Later {verb} back {}. ", returning.back), Type::NOTE, Ink::Muted));
+                    if link(ui, bring).clicked() {
                         *pressed = Some(Pressed::BringAll);
                     }
                 });
@@ -532,7 +530,7 @@ fn done_today(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
     let agenda = queue.agenda();
     slip(ui, |ui| {
-        panel_header(ui, "Coming up", Some(HORIZON_WORDS.0));
+        panel_header(ui, "Coming up", Some(queue.horizon.words().0));
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -562,7 +560,8 @@ fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&st
 fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Option<Pressed>) {
     let n = returning.count;
     let (verb, pronoun) = if n == 1 { ("comes", "it") } else { ("come", "them") };
-    let label = format!("{n} set aside, back tomorrow: {}. Bring {pronoun} back now.", returning.names.join(", "));
+    let back = &returning.back;
+    let label = format!("{n} set aside, back {back}: {}. Bring {pronoun} back now.", returning.names.join(", "));
     let day = returning.on.format("%a %-d").to_string();
     let press = agenda_return(ui, &day, &format!("{n} {verb} back"), "Bring back", &label, active, |ui| {
         strong(ui, "Set aside with Later");
@@ -570,7 +569,7 @@ fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Op
             ui.label(name.as_str());
         }
         ui.add_space(4.0);
-        ui.label(rich(ui, format!("Back in the tray tomorrow. Bring {pronoun} back to decide today."), Type::NOTE, Ink::Muted));
+        ui.label(rich(ui, format!("Back in the tray {back}. Bring {pronoun} back to decide today."), Type::NOTE, Ink::Muted));
     });
     if press.row || press.button {
         *pressed = Some(Pressed::BringAll);
@@ -599,12 +598,11 @@ fn agenda_line(ui: &mut Ui, row: &AgendaRow, first: bool, pressed: &mut Option<P
 
 /// The reasons show only on a skip. `last` rounds the row's foot when no log row follows it.
 fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed>) {
-    let reasons = SkipReason::ALL.map(|reason| (reason.label(), offer.reason == Some(reason)));
-    let toggles: &[(&str, bool)] = if offer.asks_reason { &reasons } else { &[] };
-    let press = undo_row(ui, &offer.name, &offer.note, &offer.spoken, toggles, last);
+    let toggles: Vec<(&str, bool)> = offer.reasons.iter().map(|(reason, on)| (reason.as_str(), *on)).collect();
+    let press = undo_row(ui, &offer.name, &offer.note, &offer.spoken, &toggles, last);
     if press.undo {
         *pressed = Some(Pressed::Undo);
-    } else if let Some(index) = press.toggle {
-        *pressed = Some(Pressed::Reason(SkipReason::ALL[index]));
+    } else if let Some((reason, _)) = press.toggle.and_then(|index| offer.reasons.get(index)) {
+        *pressed = Some(Pressed::Reason(reason.clone()));
     }
 }

@@ -4,7 +4,8 @@ use chrono::NaiveDate;
 
 use crate::discovery::application::Lane;
 use crate::intray::application::compose::{Sources, derive_cards, guarded_job};
-use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, HORIZON_DAYS, HORIZON_WORDS, Outcome, SkipReason, Subject, rank};
+use crate::intray::domain::{Action, Card, CardKind, Decision, DecisionStore, Effect, Outcome, Subject, rank, until_words};
+use crate::settings::application::{ComingUp, TodayQueue};
 use crate::shared_kernel::{LoadError, WebUrl};
 
 /// What a card asks of the rest of the app.
@@ -67,13 +68,24 @@ pub struct AgendaRow {
     pub state: RowState,
 }
 
-/// The cards set aside, which come back on the next day.
+/// The cards set aside, and when they come back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Returning {
+    /// The first day a card comes back.
     pub on: NaiveDate,
     pub count: usize,
     /// Each company once, in the order they first appear.
     pub names: Vec<String>,
+    /// When they come back, to follow "back": "tomorrow", "on Monday", "next Monday", or "from …" when the days differ.
+    pub back: String,
+}
+
+/// A card set aside with Later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetAside {
+    pub name: String,
+    /// The day it comes back.
+    pub until: NaiveDate,
 }
 
 /// What Coming up shows: the return row, the dated rows, and the line that closes the list.
@@ -88,8 +100,8 @@ pub struct Agenda {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Queue {
     pub cards: Vec<Card>,
-    /// One name per card set aside. These cards are neither pending nor cleared.
-    pub set_aside: Vec<String>,
+    /// One per card set aside. These cards are neither pending nor cleared.
+    pub set_aside: Vec<SetAside>,
     /// Today's log, newest first.
     pub cleared: Vec<Cleared>,
     /// Today's last decision, while it can be undone. Dealt with the log, so a logged one is always its newest entry.
@@ -97,18 +109,34 @@ pub struct Queue {
     pub marks: Vec<Mark>,
     pub unranked: usize,
     pub today: NaiveDate,
+    /// How far ahead Coming up looks, and dates rank as deadlines.
+    pub horizon: ComingUp,
 }
 
 impl Queue {
     /// Two cards of one company are named once, in the order they first appear.
     pub fn set_aside_distinct(&self) -> Vec<&str> {
         let mut names: Vec<&str> = Vec::new();
-        for name in &self.set_aside {
-            if !names.contains(&name.as_str()) {
-                names.push(name);
+        for aside in &self.set_aside {
+            if !names.contains(&aside.name.as_str()) {
+                names.push(&aside.name);
             }
         }
         names
+    }
+
+    /// The cards set aside, from the first day one comes back.
+    pub fn returning(&self) -> Option<Returning> {
+        let on = self.set_aside.iter().map(|aside| aside.until).min()?;
+        let words = until_words(self.today, on);
+        let back = if self.set_aside.iter().any(|aside| aside.until != on) {
+            format!("from {words}")
+        } else if words == "tomorrow" || words.starts_with("next ") {
+            words
+        } else {
+            format!("on {words}")
+        };
+        Some(Returning { on, count: self.set_aside.len(), names: self.set_aside_distinct().into_iter().map(str::to_owned).collect(), back })
     }
 
     /// Pending cards whose date has passed. A card due today is not overdue.
@@ -216,20 +244,15 @@ impl Queue {
         let mut rows: Vec<AgendaRow> = late.into_iter().chain(dated).collect();
         let cut = rows.len().saturating_sub(AGENDA_ROWS);
         rows.truncate(AGENDA_ROWS);
-        let until = (self.today + chrono::Duration::days(HORIZON_DAYS - 1)).format("%a %-d %b");
+        let until = (self.today + chrono::Duration::days(self.horizon.days() - 1)).format("%a %-d %b");
         let closing = if rows.is_empty() {
-            format!("No deadlines in the next {}.", HORIZON_WORDS.1)
+            format!("No deadlines in the next {}.", self.horizon.words().1)
         } else if cut > 0 {
             format!("{cut} more before {until}.")
         } else {
             format!("Nothing else dated before {until}.")
         };
-        let returning = (!self.set_aside.is_empty()).then(|| Returning {
-            on: self.today + chrono::Duration::days(1),
-            count: self.set_aside.len(),
-            names: self.set_aside_distinct().into_iter().map(str::to_owned).collect(),
-        });
-        Agenda { returning, rows, closing }
+        Agenda { returning: self.returning(), rows, closing }
     }
 }
 
@@ -243,7 +266,9 @@ pub struct UndoOffer {
     /// Whether the decision is also in today's log. Later never is.
     pub logged: bool,
     pub asks_reason: bool,
-    pub reason: Option<SkipReason>,
+    /// The reasons to offer on a skip, each with whether it is the one given. Empty for any other decision.
+    /// The user's list, then the skip's own reason when the list lacks it.
+    pub reasons: Vec<(String, bool)>,
 }
 
 /// What waits in Today, so the Jobs and Applications screens can mark it. Build it only where one of them is drawn.
@@ -286,6 +311,8 @@ pub struct InTray {
     undo_returned: bool,
     /// Kept as a `LoadError`, whose text is already stripped of hidden characters.
     issue: Option<LoadError>,
+    /// What the user set for the queue: how far Coming up looks, how long Later lasts, and the skip reasons.
+    rules: TodayQueue,
 }
 
 impl InTray {
@@ -299,7 +326,24 @@ impl InTray {
 
     /// Decisions last until the window closes. For a machine with no app data folder, and tests.
     pub fn unsaved() -> Self {
-        Self { store: None, decisions: Vec::new(), can_undo: false, reading: None, returned: Vec::new(), returned_on: None, undo_returned: false, issue: None }
+        Self {
+            store: None,
+            decisions: Vec::new(),
+            can_undo: false,
+            reading: None,
+            returned: Vec::new(),
+            returned_on: None,
+            undo_returned: false,
+            issue: None,
+            rules: TodayQueue::default(),
+        }
+    }
+
+    /// Takes the user's queue settings. Called each frame, so it copies them only when they change.
+    pub fn set_rules(&mut self, rules: &TodayQueue) {
+        if &self.rules != rules {
+            self.rules = rules.clone();
+        }
     }
 
     pub fn issue(&self) -> Option<&LoadError> {
@@ -334,6 +378,12 @@ impl InTray {
         self.decisions.iter().any(|decision| decision.key == key && decision.sets_aside(today))
     }
 
+    /// The day a card set aside comes back: the latest, should it have been set aside twice.
+    fn returns_on(&self, key: &str, today: NaiveDate) -> NaiveDate {
+        let aside = self.decisions.iter().filter(|decision| decision.key == key && decision.sets_aside(today));
+        aside.map(Decision::returns_on).max().unwrap_or_else(|| today.succ_opt().unwrap_or(today))
+    }
+
     /// The key of every job whose flagged ad the user kept, so Jobs words it as Today does.
     pub fn kept_jobs(&self) -> HashSet<String> {
         let kept = self.decisions.iter().filter(|decision| decision.outcome == Outcome::Kept);
@@ -360,10 +410,11 @@ impl InTray {
     /// The card being read stays on top of them all, so new work lands behind it.
     pub fn queue(&self, sources: &Sources) -> Queue {
         let today = sources.today;
+        let horizon = self.rules.coming_up;
         let derived = derive_cards(sources, |key| self.was_kept(key));
         let marks = derived
             .iter()
-            .filter(|card| card.is_on_horizon(today))
+            .filter(|card| card.is_on_horizon(today, horizon.days()))
             .filter_map(|card| {
                 let due = card.due.as_ref()?;
                 Some(Mark {
@@ -378,8 +429,8 @@ impl InTray {
             .collect();
         let (aside, mut cards): (Vec<Card>, Vec<Card>) =
             derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
-        let set_aside = aside.into_iter().map(|card| card.name).collect();
-        rank(&mut cards, today);
+        let set_aside = aside.into_iter().map(|card| SetAside { until: self.returns_on(&card.key, today), name: card.name }).collect();
+        rank(&mut cards, today, horizon.days());
         let returned = self.returned(today);
         cards.sort_by_key(|card| {
             if card.pauses_a_run() {
@@ -400,7 +451,7 @@ impl InTray {
             .filter(|decision| decision.is_logged_on(today))
             .map(|decision| Cleared { name: decision.name.clone(), label: decision.label() })
             .collect();
-        Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked: sources.board.count(Lane::New), today }
+        Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked: sources.board.count(Lane::New), today, horizon }
     }
 
     /// Puts this card on top and keeps it there until it is decided.
@@ -415,8 +466,9 @@ impl InTray {
         self.reading = None;
     }
 
-    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<SkipReason>, task: Option<String>, today: NaiveDate) {
-        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, task, on: today });
+    fn record(&mut self, card: &Card, outcome: Outcome, reason: Option<String>, task: Option<String>, today: NaiveDate) {
+        let until = (outcome == Outcome::Later).then(|| self.rules.later.until(today));
+        self.decisions.push(Decision { key: card.key.clone(), name: card.name.clone(), outcome, reason, task, on: today, until });
         self.can_undo = true;
         self.reading = None;
         self.forget_returns_before(today);
@@ -461,6 +513,7 @@ impl InTray {
         self.reading = None;
     }
 
+    /// Sets the card aside for as long as the user's Later setting says.
     pub fn later(&mut self, card: &Card, today: NaiveDate) {
         self.record(card, Outcome::Later, None, None, today);
     }
@@ -479,7 +532,7 @@ impl InTray {
                 Some(Request::Command(line.clone()))
             }
             Effect::Skip(reason) => {
-                self.record(card, Outcome::Skipped, Some(*reason), None, today);
+                self.record(card, Outcome::Skipped, Some((*reason).to_owned()), None, today);
                 None
             }
             Effect::Keep => {
@@ -503,7 +556,19 @@ impl InTray {
         let asks_reason = last.outcome == Outcome::Skipped;
         let note = last.note();
         let spoken = format!("Last decision on {}: {}. Press U to undo.", last.name, note.trim_end_matches('.'));
-        Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reason: last.reason })
+        let reasons = if asks_reason { self.reasons_for(last.reason.as_deref()) } else { Vec::new() };
+        Some(UndoOffer { name: last.name.clone(), note, spoken, logged: last.is_logged_on(today), asks_reason, reasons })
+    }
+
+    /// The user's reasons, each marked when it is `given`, then `given` itself when the list lacks it. Case does not matter.
+    fn reasons_for(&self, given: Option<&str>) -> Vec<(String, bool)> {
+        let given_lower = given.map(str::to_lowercase);
+        let is_given = |reason: &str| given_lower.as_ref().is_some_and(|given| *given == reason.to_lowercase());
+        let mut reasons: Vec<(String, bool)> = self.rules.skip_reasons.list().iter().map(|reason| (reason.clone(), is_given(reason))).collect();
+        if let Some(given) = given.filter(|_| !reasons.iter().any(|(_, on)| *on)) {
+            reasons.push((given.to_owned(), true));
+        }
+        reasons
     }
 
     /// The card returns to the top, the way it was before the decision.
@@ -521,12 +586,12 @@ impl InTray {
     }
 
     /// Names why the last skip was made, while undo still offers it.
-    pub fn give_reason(&mut self, reason: SkipReason, today: NaiveDate) {
+    pub fn give_reason(&mut self, reason: &str, today: NaiveDate) {
         if self.undoable(today).is_none_or(|last| last.outcome != Outcome::Skipped) {
             return;
         }
         if let Some(last) = self.decisions.last_mut() {
-            last.reason = Some(reason);
+            last.reason = Some(reason.to_owned());
             self.save();
         }
     }
@@ -541,6 +606,7 @@ mod tests {
     use crate::discovery::application::{FreelanceGates, Gate, GateReading, JobBoard, JobView, LaneView};
     use crate::intray::domain::{Body, Due};
     use crate::runs::application::{AgentEvent, Prompt, PromptKind, Run, RunRequest};
+    use crate::settings::application::{LaterLasts, SkipReasons};
     use crate::shared_kernel::LoadError;
     use crate::tracking::application::{ApplicationCard, Pipeline, PipelineLane, ReachedStage, StatusBucket};
 
@@ -714,11 +780,11 @@ mod tests {
         let mut tray = InTray::new(Box::new(memory.clone()));
         tray.skip(&top(&tray, &jobs), today());
         assert!(tray.undo_offer(today()).unwrap().asks_reason);
-        tray.give_reason(SkipReason::Domain, today());
+        tray.give_reason("Domain", today());
 
         let reopened = InTray::new(Box::new(memory.clone()));
         assert!(dealt(&reopened, &jobs).is_empty());
-        assert_eq!(memory.0.borrow()[0].reason, Some(SkipReason::Domain));
+        assert_eq!(memory.0.borrow()[0].reason.as_deref(), Some("Domain"));
         assert_eq!(queue(&reopened, &jobs, today()).cleared[0].label, "Skipped for domain");
     }
 
@@ -811,7 +877,7 @@ mod tests {
 
         let aside = queue(&tray, &jobs, today());
         assert!(aside.cards.is_empty() && aside.cleared.is_empty());
-        assert_eq!(aside.set_aside, ["Acme"]);
+        assert_eq!(aside.set_aside_distinct(), ["Acme"]);
         assert_eq!(aside.today_headline(&[]), "All done for today");
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Acme", "Set aside until tomorrow"));
@@ -827,7 +893,7 @@ mod tests {
         tray.pull_forward("triage:acme", today());
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Gamma"]);
-        assert_eq!(queue(&tray, &jobs, today()).set_aside, ["Beta"]);
+        assert_eq!(queue(&tray, &jobs, today()).set_aside_distinct(), ["Beta"]);
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!((offer.name.as_str(), offer.note.as_str()), ("Beta", "Set aside until tomorrow"), "the last decision still stands");
     }
@@ -1036,10 +1102,11 @@ mod tests {
         tray.skip(&top(&tray, &jobs), today());
         assert_eq!(tray.undo_offer(today()).unwrap().note, "Skipped. Why? Optional.");
 
-        tray.give_reason(SkipReason::Scope, today());
+        tray.give_reason("Scope", today());
         let offer = tray.undo_offer(today()).unwrap();
         assert_eq!(offer.note, "Skipped for scope");
-        assert_eq!(offer.reason, Some(SkipReason::Scope));
+        let on: Vec<&str> = offer.reasons.iter().filter(|(_, on)| *on).map(|(reason, _)| reason.as_str()).collect();
+        assert_eq!(on, ["Scope"]);
         assert_eq!(offer.spoken, "Last decision on Acme: Skipped for scope. Press U to undo.");
     }
 
@@ -1125,7 +1192,7 @@ mod tests {
         tray.skip(&top(&tray, &jobs), today());
         tray.undo(today());
 
-        tray.give_reason(SkipReason::Rate, today());
+        tray.give_reason("Rate", today());
         assert_eq!(tray.decisions.len(), 1);
         assert_eq!(tray.decisions[0].name, "Acme");
         assert_eq!(tray.decisions[0].reason, None, "undo has moved on, so the reason has nothing to name");
@@ -1243,7 +1310,7 @@ mod tests {
 
     #[test]
     fn set_aside_names_are_listed_once() {
-        let aside = Queue { set_aside: vec!["A".into(), "A".into(), "B".into()], ..Default::default() };
+        let aside = Queue { set_aside: asides(&["A", "A", "B"]), ..Default::default() };
         assert_eq!(aside.set_aside_distinct(), ["A", "B"]);
     }
 
@@ -1254,13 +1321,13 @@ mod tests {
     #[test]
     fn a_date_past_the_strip_ranks_with_the_rest_and_has_no_mark() {
         let tray = InTray::unsaved();
-        let far = board(vec![job("Plain", 90), closing_in("Fourteen", 70, HORIZON_DAYS)]);
+        let far = board(vec![job("Plain", 90), closing_in("Fourteen", 70, 14)]);
         let dealt_far = queue(&tray, &far, today());
         assert_eq!(dealt(&tray, &far), ["Plain", "Fourteen"]);
         assert!(dealt_far.marks.is_empty());
         assert_eq!(dealt_far.agenda().closing, "No deadlines in the next two weeks.");
 
-        let near = board(vec![job("Plain", 90), closing_in("Thirteen", 70, HORIZON_DAYS - 1)]);
+        let near = board(vec![job("Plain", 90), closing_in("Thirteen", 70, 13)]);
         let dealt_near = queue(&tray, &near, today());
         assert_eq!(dealt(&tray, &near), ["Thirteen", "Plain"]);
         assert_eq!(dealt_near.marks.iter().map(|mark| mark.key.as_str()).collect::<Vec<_>>(), ["triage:thirteen"]);
@@ -1313,7 +1380,7 @@ mod tests {
 
         let after = dealt(&tray);
         assert_eq!(after.overdue(), 0);
-        assert_eq!(after.set_aside, ["Juniper"]);
+        assert_eq!(after.set_aside_distinct(), ["Juniper"]);
         assert_eq!(after.agenda().closing, "No deadlines in the next two weeks.");
     }
 
@@ -1353,7 +1420,7 @@ mod tests {
     #[test]
     fn today_headline_is_all_done_with_cards_set_aside() {
         assert_eq!(today_queue(vec![]).today_headline(&[]), "All done for today");
-        let aside = Queue { set_aside: vec!["Acme".into()], ..today_queue(vec![]) };
+        let aside = Queue { set_aside: asides(&["Acme"]), ..today_queue(vec![]) };
         assert_eq!(aside.today_headline(&[]), "All done for today");
     }
 
@@ -1419,7 +1486,7 @@ mod tests {
     fn tally_leaves_out_cards_set_aside() {
         let queue = Queue {
             cleared: logged(3),
-            set_aside: vec!["Acme".into(), "Beta".into()],
+            set_aside: asides(&["Acme", "Beta"]),
             ..today_queue(vec![pending(CardKind::Close, None), pending(CardKind::Close, None)])
         };
         assert_eq!(queue.tally(), DayTally { done: 3, total: 5 });
@@ -1478,10 +1545,231 @@ mod tests {
         assert_eq!(agenda.closing, "No deadlines in the next two weeks.");
     }
 
+    fn asides(names: &[&str]) -> Vec<SetAside> {
+        names.iter().map(|name| SetAside { name: (*name).to_owned(), until: day(1) }).collect()
+    }
+
     #[test]
     fn agenda_offers_tomorrows_return_row() {
-        let queue = Queue { set_aside: vec!["Acme".into(), "Beta".into(), "Acme".into()], ..today_queue(vec![]) };
+        let queue = Queue { set_aside: asides(&["Acme", "Beta", "Acme"]), ..today_queue(vec![]) };
         let returning = queue.agenda().returning.unwrap();
-        assert_eq!(returning, Returning { on: day(1), count: 3, names: vec!["Acme".into(), "Beta".into()] });
+        assert_eq!(returning, Returning { on: day(1), count: 3, names: vec!["Acme".into(), "Beta".into()], back: "tomorrow".into() });
+    }
+
+    #[test]
+    fn the_return_row_says_when_the_cards_come_back() {
+        let back = |untils: &[i64]| {
+            let set_aside = untils.iter().map(|offset| SetAside { name: "Acme".into(), until: day(*offset) }).collect();
+            let returning = Queue { set_aside, ..today_queue(vec![]) }.returning().unwrap();
+            (returning.on, returning.back)
+        };
+        assert_eq!(back(&[2]), (day(2), "on Monday".to_owned()));
+        assert_eq!(back(&[3, 3]), (day(3), "on Tuesday".to_owned()));
+        assert_eq!(back(&[7]), (day(7), "next Saturday".to_owned()));
+        assert_eq!(back(&[9]), (day(9), "on 9 November".to_owned()));
+        assert_eq!(back(&[2, 1]), (day(1), "from tomorrow".to_owned()), "the earliest day leads");
+        assert_eq!(back(&[3, 2]), (day(2), "from Monday".to_owned()));
+        assert_eq!(Queue { set_aside: vec![], ..today_queue(vec![]) }.returning(), None);
+    }
+
+    fn later_lasting(later: LaterLasts) -> TodayQueue {
+        TodayQueue { later, ..TodayQueue::default() }
+    }
+
+    fn on(month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, month, day).unwrap()
+    }
+
+    /// Sets Acme aside on `pressed` and checks it stays away until `back`, the day it deals again.
+    fn holds_until(later: LaterLasts, pressed: NaiveDate, back: NaiveDate) -> InTray {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(later));
+        tray.later(&queue(&tray, &jobs, pressed).cards[0], pressed);
+        let mut day = pressed;
+        while day < back {
+            let dealt = queue(&tray, &jobs, day);
+            assert!(dealt.cards.is_empty(), "{later:?} pressed on {pressed} hides the card on {day}");
+            assert_eq!(dealt.set_aside_distinct(), ["Acme"], "{later:?} on {day}");
+            day = day.succ_opt().unwrap();
+        }
+        let returned = queue(&tray, &jobs, back);
+        assert_eq!(returned.cards.len(), 1, "{later:?} pressed on {pressed} returns the card on {back}");
+        assert!(returned.set_aside.is_empty());
+        tray
+    }
+
+    #[test]
+    fn each_later_choice_pressed_on_saturday_holds_the_card_until_its_day() {
+        let saturday = today();
+        let sunday = on(11, 1);
+        holds_until(LaterLasts::Tomorrow, saturday, sunday);
+        holds_until(LaterLasts::ThreeDays, saturday, on(11, 3));
+        holds_until(LaterLasts::UntilMonday, saturday, on(11, 2));
+
+        let jobs = board(vec![job("Acme", 90)]);
+        for (later, note, back) in [
+            (LaterLasts::Tomorrow, "Set aside until tomorrow", "tomorrow"),
+            (LaterLasts::ThreeDays, "Set aside until Tuesday", "on Tuesday"),
+            (LaterLasts::UntilMonday, "Set aside until Monday", "on Monday"),
+        ] {
+            let mut tray = InTray::unsaved();
+            tray.set_rules(&later_lasting(later));
+            tray.later(&top(&tray, &jobs), saturday);
+            assert_eq!(tray.undo_offer(saturday).unwrap().note, note);
+            assert_eq!(queue(&tray, &jobs, saturday).agenda().returning.unwrap().back, back);
+            let hidden_on_sunday = queue(&tray, &jobs, sunday).cards.is_empty();
+            assert_eq!(hidden_on_sunday, later != LaterLasts::Tomorrow, "{later:?} on Sunday");
+        }
+    }
+
+    #[test]
+    fn until_monday_pressed_on_a_monday_waits_a_week() {
+        let monday = on(11, 2);
+        let tray = holds_until(LaterLasts::UntilMonday, monday, on(11, 9));
+        assert_eq!(tray.undo_offer(monday).unwrap().note, "Set aside until next Monday");
+        let jobs = board(vec![job("Acme", 90)]);
+        assert_eq!(queue(&tray, &jobs, monday).returning().unwrap().back, "next Monday");
+        assert_eq!(queue(&tray, &jobs, on(11, 4)).returning().unwrap().back, "on Monday", "said from the day it is read");
+    }
+
+    #[test]
+    fn until_monday_pressed_on_a_sunday_returns_the_next_day() {
+        let sunday = on(11, 1);
+        let tray = holds_until(LaterLasts::UntilMonday, sunday, on(11, 2));
+        assert_eq!(tray.undo_offer(sunday).unwrap().note, "Set aside until tomorrow");
+    }
+
+    #[test]
+    fn cards_coming_back_on_different_days_read_from_the_first() {
+        let jobs = board(vec![job("Acme", 90), job("Beta", 80)]);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(LaterLasts::UntilMonday));
+        tray.later(&top(&tray, &jobs), today());
+        tray.set_rules(&later_lasting(LaterLasts::Tomorrow));
+        tray.later(&top(&tray, &jobs), today());
+
+        let returning = queue(&tray, &jobs, today()).returning().unwrap();
+        assert_eq!((returning.on, returning.back.as_str(), returning.count), (on(11, 1), "from tomorrow", 2));
+        assert_eq!(dealt(&tray, &jobs), Vec::<String>::new());
+        assert_eq!(queue(&tray, &jobs, on(11, 1)).cards.len(), 1, "Beta is back on Sunday, Acme on Monday");
+    }
+
+    #[test]
+    fn bring_them_back_returns_cards_set_aside_on_an_earlier_day() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(LaterLasts::ThreeDays));
+        tray.later(&top(&tray, &jobs), today());
+        let sunday = on(11, 1);
+
+        tray.bring_back_all(sunday);
+
+        assert_eq!(queue(&tray, &jobs, sunday).cards.len(), 1);
+    }
+
+    #[test]
+    fn coming_up_sets_which_dates_rank_as_deadlines() {
+        let jobs = board(vec![job("Plain", 90), closing_in("Ten", 70, 10)]);
+        for (span, ranked, rows, closing) in [
+            (ComingUp::Week, ["Plain", "Ten"], 0, "No deadlines in the next week."),
+            (ComingUp::TwoWeeks, ["Ten", "Plain"], 1, "Nothing else dated before Fri 13 Nov."),
+            (ComingUp::Month, ["Ten", "Plain"], 1, "Nothing else dated before Sun 29 Nov."),
+        ] {
+            let mut tray = InTray::unsaved();
+            tray.set_rules(&TodayQueue { coming_up: span, ..TodayQueue::default() });
+            assert_eq!(dealt(&tray, &jobs), ranked, "{span:?}");
+            let dealt = queue(&tray, &jobs, today());
+            assert_eq!(dealt.horizon, span);
+            let agenda = dealt.agenda();
+            assert_eq!((agenda.rows.len(), agenda.closing.as_str()), (rows, closing), "{span:?}");
+        }
+    }
+
+    fn reasons_without(reason: &str) -> TodayQueue {
+        let mut skip_reasons = SkipReasons::default();
+        assert!(skip_reasons.remove(reason));
+        TodayQueue { skip_reasons, ..TodayQueue::default() }
+    }
+
+    fn offered(tray: &InTray) -> Vec<(String, bool)> {
+        tray.undo_offer(today()).unwrap().reasons
+    }
+
+    fn reasons(list: &[(&str, bool)]) -> Vec<(String, bool)> {
+        list.iter().map(|(reason, on)| ((*reason).to_owned(), *on)).collect()
+    }
+
+    #[test]
+    fn a_skip_offers_the_users_reasons() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        let mut custom = SkipReasons::default();
+        custom.add("Agency, not the client").unwrap();
+        tray.set_rules(&TodayQueue { skip_reasons: custom, ..TodayQueue::default() });
+        tray.skip(&top(&tray, &jobs), today());
+        assert_eq!(offered(&tray), reasons(&[("Rate", false), ("Scope", false), ("Domain", false), ("Location", false), ("Agency, not the client", false)]));
+
+        tray.give_reason("Agency, not the client", today());
+
+        assert_eq!(offered(&tray).last().unwrap(), &("Agency, not the client".to_owned(), true));
+        assert_eq!(queue(&tray, &jobs, today()).cleared[0].label, "Skipped for agency, not the client");
+    }
+
+    #[test]
+    fn a_past_skip_keeps_its_reason_after_the_list_drops_it() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        tray.skip(&top(&tray, &jobs), today());
+        tray.give_reason("Domain", today());
+
+        tray.set_rules(&reasons_without("Domain"));
+
+        assert_eq!(queue(&tray, &jobs, today()).cleared[0].label, "Skipped for domain");
+        assert_eq!(offered(&tray), reasons(&[("Rate", false), ("Scope", false), ("Location", false), ("Domain", true)]));
+    }
+
+    #[test]
+    fn a_suggested_skip_records_its_reason_even_off_the_list() {
+        let failing = JobView {
+            freelance: FreelanceGates { day_rate: GateReading { gate: Gate::Fail, value: "x".into() }, ..job("Acme", 90).freelance },
+            ..job("Acme", 90)
+        };
+        let jobs = board(vec![failing]);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&reasons_without("Rate"));
+        let card = top(&tray, &jobs);
+
+        tray.follow(&card, card.primary.as_ref().unwrap(), today());
+
+        assert_eq!(tray.decisions[0].reason.as_deref(), Some("Rate"));
+        assert_eq!(offered(&tray), reasons(&[("Scope", false), ("Domain", false), ("Location", false), ("Rate", true)]));
+    }
+
+    #[test]
+    fn an_old_lowercase_reason_matches_the_list() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        tray.skip(&top(&tray, &jobs), today());
+        tray.give_reason("rate", today());
+        assert_eq!(offered(&tray), reasons(&[("Rate", true), ("Scope", false), ("Domain", false), ("Location", false)]));
+    }
+
+    #[test]
+    fn only_a_skip_offers_reasons() {
+        let jobs = board(vec![job("Acme", 90)]);
+        let mut tray = InTray::unsaved();
+        tray.later(&top(&tray, &jobs), today());
+        assert!(offered(&tray).is_empty());
+    }
+
+    #[test]
+    fn set_rules_keeps_what_it_is_given() {
+        let mut tray = InTray::unsaved();
+        assert_eq!(tray.rules, TodayQueue::default());
+        let month = TodayQueue { coming_up: ComingUp::Month, ..TodayQueue::default() };
+        tray.set_rules(&month);
+        tray.set_rules(&month);
+        assert_eq!(tray.rules, month);
     }
 }

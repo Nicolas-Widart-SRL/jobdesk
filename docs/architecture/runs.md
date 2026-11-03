@@ -57,7 +57,12 @@ Tasks sign in one of two ways, the sign-in method `settings` keeps:
 
 ### How a task gets the method
 
-`Providers` reads the keychain once per launch, for the mask and the method, and never per frame. Under the key method:
+`Providers` reads the keychain at most once per launch, and never per frame. The first of Providers showing, a key test and a task's start under the key reads it. The key then stays in process memory for the session, and the mask, Test connection and every task use it:
+
+- Save key replaces the key held, and Remove drops it, even when the keychain item cannot be deleted.
+- A read that fails is not held, so the next one asks the keychain again, until one succeeds. No key saved is an answer, and is held.
+
+Under the key method:
 
 - a key not read yet, or unreadable, still gives the key, so a task fails with the reason instead of quietly billing the Claude plan;
 - a key known to be absent gives the Claude sign-in.
@@ -68,7 +73,7 @@ The shell gives every desk it opens the method through `RunDesk::set_sign_in`. T
 
 `RunRequest` carries the method only, never the key.
 
-- The gateway reads the key through the shell's `KeyReader` on the supervisor thread, right before it spawns the process, once per process.
+- The gateway gets the key through the shell's `KeyReader` on the supervisor thread, right before it spawns the process, once per process. The reader gives the key `Providers` holds, and reads the keychain only when nothing read it yet this launch.
 - After the spawn it keeps the key only to mask it in the process's output. It drops the key once the process ended and its output was read.
 - A key that is gone or cannot be read ends the run with the reason, and that process never starts. It never falls back to the Claude sign-in.
 
@@ -88,7 +93,7 @@ It takes no data folder, so it writes no run log: Tasks never lists it and Usage
 
 It waits while a task or another test runs, so one Claude process runs at a time.
 
-A test of the key reads it from the keychain when the user starts the test. A test of the Claude sign-in passes no key and changes no method.
+A test of the key uses the key held in memory, or reads it from the keychain when nothing read it yet this launch. A test of the Claude sign-in passes no key and changes no method.
 
 ## When Claude waits on the user
 

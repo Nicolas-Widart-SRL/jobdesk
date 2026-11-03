@@ -67,13 +67,14 @@ The checks run once, before the work they guard. So, as for a profile save:
 
 ## The API key
 
-The API key has one path: the system keychain, then the environment of that task's `claude` process, as `ANTHROPIC_API_KEY`. When the key is read in a run is in [runs](runs.md#the-key-in-a-run). Test connection passes it the same way, in its own process's environment only.
+The API key has one path: the system keychain, read at most once per launch, then Jobdesk's process memory for the session, then the environment of that task's `claude` process, as `ANTHROPIC_API_KEY`. When the key is read is in [runs](runs.md#how-a-task-gets-the-method). Test connection passes it the same way, in its own process's environment only.
 
 - The key never goes on the command line, into a run log's `jobdesk_meta` line, or into `settings.json`.
 - A saved key never goes onto the screen, which shows only `sk-ant-`, dots and, for a key long enough, its last four characters.
 - The one exception is the key being typed in `secret_field`, shown in full only while the user presses Show.
 - `secret_field` never copies its text to the clipboard and keeps no undo history.
 - `ApiKey` in `shared_kernel` has no `Clone` and no `Display`, and its `Debug` prints no text, so a log line or a panic cannot carry it.
+- The key held in memory is an `ApiKey` in `Providers`, never serialized. Remove drops it.
 
 ### Masking
 
@@ -94,6 +95,8 @@ The API key has one path: the system keychain, then the environment of that task
    - An `http` URL on this machine is refused as well when `HTTP_PROXY`, `http_proxy`, `ALL_PROXY` or `all_proxy` is set and not empty, whatever `NO_PROXY` says.
 
    When a key is passed, the provider switches and `ANTHROPIC_AUTH_TOKEN`, which would outrank the key, are also removed from the environment. `ENV_THAT_OUTRANKS_THE_KEY` in `shared_kernel` lists them.
+5. After the first read, the key stays in Jobdesk's memory until Remove or quit, so a process of the same user that can read Jobdesk's memory can read it. That spares a keychain prompt at each task.
+6. On macOS the keychain may still ask once per launch, until the user chooses Always Allow. Jobdesk is ad-hoc signed, so Always Allow may not survive an update. The legacy keychain prompt offers no Touch ID.
 
 ## Tool permissions
 

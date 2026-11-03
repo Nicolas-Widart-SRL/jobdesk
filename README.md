@@ -15,18 +15,16 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 
 ## What it does
 
-- **Today** deals your decisions one card at a time: Y opens the suggested task, L sets it aside until tomorrow, N skips, U undoes.
+- **Today** deals your decisions one card at a time: Y opens the suggested task, L sets it aside (until tomorrow by default), N skips, U undoes.
 - **Jobs, Applications and Insights** update live as commands change your files.
 - **Tasks** starts any slash command and shows its progress, Claude's questions, the cost and the history.
 - **Profile** shows what Claude reads about you, topic by topic, opens the setup task for one topic, and lets you edit a block in place.
 - **Application dossiers** gather the PDFs, verification, keyword coverage, evaluation, prep packs and follow-ups of each application.
+- **Settings** shows what your tasks cost and the terms Jobs checks against. It sets the theme, the Today queue, the Jobs view filters, how tasks sign in, run defaults, a monthly cap, tool permissions and how long run logs stay.
 - **Nothing runs until you start it**, and Jobdesk changes your checkout only when you save a Profile edit.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="tests/snapshots/intray_dark.png">
-    <img src="tests/snapshots/intray_light.png" alt="The Today screen, with one decision card and the Coming up deadlines." width="800">
-  </picture>
+  <img src="tests/snapshots/intray_light.png" alt="The Today screen in the light theme, with one decision card, Done today and the Coming up deadlines." width="800">
 </p>
 
 ## Install
@@ -54,7 +52,7 @@ Slash commands write your checkout, and Jobdesk writes only the profile block yo
 
 ## Authentication
 
-Jobdesk runs your installed Claude Code CLI. Tasks use Claude Code's own sign-in, or an Anthropic Console API key you paste in Settings › Providers, kept in the system keychain and passed only to the Claude Code process of each task. It is not made or endorsed by Anthropic. Read [docs/auth-review.md](docs/auth-review.md) before distributing it.
+Jobdesk runs your installed Claude Code CLI. Tasks use Claude Code's own sign-in, or an Anthropic Console API key you paste in Settings › Providers, kept in the system keychain and passed only to the Claude Code process of each task. It is not made or endorsed by Anthropic.
 
 ## More
 

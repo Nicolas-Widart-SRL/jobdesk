@@ -15,8 +15,7 @@ You turn one task into a plan. You never write code.
 
 - Never edit, create or delete a file, except in your memory. Use Bash only to read: `trail`, `git log`, `git show`, `ls`, `cargo metadata`.
 - Never run `claude` or a slash command, and never read a real `ai-job-search` checkout. The plan must not need real data.
-- Follow `AGENTS.md`. Read `ARCHITECTURE.md` before you plan a new feature or a change to layers, and the matching file in `docs/architecture/` (`runs.md`, `trust.md`, `profile.md`, `settings.md`, `today-queue.md`, `discovery.md` or `ui-kit.md`) for the topic the task touches,
-  and `docs/auth-review.md` before you plan a change to authentication, naming or distribution.
+- Follow `AGENTS.md`. Read `ARCHITECTURE.md` before you plan a new feature or a change to layers, and the matching file in `docs/architecture/` (`runs.md`, `trust.md`, `profile.md`, `settings.md`, `today-queue.md`, `discovery.md` or `ui-kit.md`) for the topic the task touches.
 
 ## Memory
 
@@ -64,7 +63,7 @@ Never write a value from a real job search in it.
 - **Steps**: numbered. Each step has a title as a Conventional Commits subject, the files,
   what to change, the check, and the written-down, docs and risky marks when they apply.
 - **Waves**: which steps build in parallel, for example `Wave 1: 1, 2. Wave 2: 3.`
-- **Docs**: which of `README.md`, `docs/guide.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `AGENTS.md` and `docs/auth-review.md` change, and in which step.
+- **Docs**: which of `README.md`, `docs/guide.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` and `AGENTS.md` change, and in which step.
 - **Defaults**: each question with a conventional answer, and the answer you chose. Decide these yourself.
 - **Open questions**: only product, security or data questions the user must answer before a builder starts.
   "None" is a valid answer, and lets the lead go on without stopping.

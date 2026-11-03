@@ -1239,7 +1239,7 @@ mod tests {
         harness.get_by_label("About Jobdesk");
         harness.get_by_label("2.1.4");
         assert!(harness.get_by_label("Show licences").accesskit_node().is_disabled(), "there is no licence file to show yet");
-        assert!(!harness.get_by_label("Open the review").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Open the changelog").accesskit_node().is_disabled());
     }
 
     #[test]

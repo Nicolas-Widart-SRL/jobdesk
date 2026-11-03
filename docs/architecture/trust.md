@@ -85,7 +85,7 @@ By default `RunDesk` allows every tool permission itself and records each one as
 This trades away the prompt as a check against injected posting text. Postings rely on `posting_guard` in the workspace instead.
 
 - Questions from `AskUserQuestion` always reach the user.
-- With `ask_permission` on, which Settings › Permissions exposes, every `can_use_tool` request reaches the user with its input, marked as shortened past 20 KB.
+- The shell hands Settings › Permissions to `RunDesk::set_asks_permission`, which holds from the next poll on. With prompts on, every other `can_use_tool` request reaches the user as a permission prompt. Its detail shows a `Bash` command, or any other tool's input as JSON, cut past 20,000 bytes with a note of how many bytes it left out. The answer sends the complete input back.
 - The CLI suggests saving allow rules to project settings. So `stream_json` rewrites every remembered rule to session scope, to keep the checkout unchanged.
 
 ## Notices

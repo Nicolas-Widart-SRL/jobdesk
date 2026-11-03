@@ -51,3 +51,11 @@ PR 40 docs/architecture/settings.md: "the theme and zoom eframe restored are kep
 PR 40 docs/architecture/today-queue.md: the rank order left out that an overdue date ranks before the rest, ahead of dates in the Coming up range. Class: copy says less than the code does.
 PR 40 docs/architecture/trust.md: did not say `within_workspace` is lexical and resolves no symlink, so an in-workspace link can lead a dossier read outside the workspace. Class: copy claims more than the code does.
 PR 40 docs/architecture/trust.md: said the mask holds no quote or backslash, but it copies a long key's last four and `ApiKey::parse` accepts `"` and `\`. Class: copy claims more than the code does.
+PR 39 CONTRIBUTING.md: "Re-run failed jobs builds the same commit" mixed a noun form with a verb and a wrong tense. Class: grammar.
+PR 39 CONTRIBUTING.md: the `scripts/release.sh` prerequisites left out `perl`, which the script runs. Class: undocumented prerequisite.
+PR 39 CONTRIBUTING.md: "Every other assertion in those files runs on every system" claimed more than the files hold. Class: overclaim.
+PR 39 docs/guide.md: "Cmd+, , Ctrl+, on Windows" had a stray comma and named no platform for Cmd. Class: platform wording.
+PR 39 docs/guide.md: the Today section said the range is 7 or 30 days while the code and the Settings section offer 7, 14 or 30. Class: inconsistent values.
+PR 39 ARCHITECTURE.md: said every `can_use_tool` request shows its input shortened past 20 KB, while `AskUserQuestion` becomes a question prompt and only a permission prompt's displayed detail is cut at 20,000 bytes, the answer keeping the full input. Class: overclaim.
+PR 39 CONTRIBUTING.md: gave only the branch-run installer names with a commit segment, while a tag release names them after the tag with no commit. Class: incomplete naming.
+PR 39 mockups/Settings.html: canvas row for removed About row not updated with the code change. Class: stale mockup.

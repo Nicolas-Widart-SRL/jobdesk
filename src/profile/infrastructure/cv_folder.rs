@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,10 @@ impl CvFolder {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(LoadError::new("cv/", error)),
         };
+        // A `cv/` that leads out of the checkout has nothing safe to show, and that is no failure to read it.
+        if self.resolved_folder().is_none() {
+            return Ok(Vec::new());
+        }
         let mut names: Vec<String> = entries.flatten().filter_map(|entry| entry.file_name().into_string().ok()).filter(|name| listed(name)).collect();
         names.sort();
         // Two stems that differ only in case are one document: on a case-insensitive disk they could not both exist.
@@ -69,7 +74,16 @@ impl CvFolder {
         Some(FileStamp { name: name.to_owned(), path, modified, at: DateTime::<Local>::from(moment).naive_local(), bytes: metadata.len() })
     }
 
-    /// The file `name` names in `cv/`, with every link resolved: a regular file that sits inside the resolved `cv/`.
+    /// `cv/` with every link resolved, only when it sits inside the resolved checkout: a `cv` committed as a link to a folder
+    /// elsewhere shows nothing.
+    fn resolved_folder(&self) -> Option<PathBuf> {
+        let root = fs::canonicalize(&self.root).ok()?;
+        let folder = fs::canonicalize(self.folder()).ok()?;
+        folder.starts_with(&root).then_some(folder)
+    }
+
+    /// The file `name` names in `cv/`, with every link resolved: a regular file that sits inside the resolved `cv/`,
+    /// which sits inside the resolved checkout.
     /// A link to a device, a folder or anything outside `cv/` gives `None`, and so does a name that is not one plain part.
     fn checked(&self, name: &str) -> Option<PathBuf> {
         let folder = self.folder();
@@ -78,7 +92,7 @@ impl CvFolder {
         if path.parent() != Some(folder.as_path()) || path.file_name().and_then(|part| part.to_str()) != Some(name) {
             return None;
         }
-        let inside = fs::canonicalize(&folder).ok()?;
+        let inside = self.resolved_folder()?;
         let resolved = fs::canonicalize(&path).ok()?;
         (resolved.starts_with(&inside) && fs::metadata(&resolved).ok()?.is_file()).then_some(resolved)
     }
@@ -94,62 +108,117 @@ impl CvFolder {
 
     /// Opens the PDF in the system's viewer. The check runs again now, and a name that fails it does nothing.
     /// The path is one argument and no shell reads it. When the program is missing there is nothing to show, and nothing to report.
+    ///
+    /// The check runs once, before the spawn. A running task can replace the file with a link between the two, so this narrows
+    /// the window and does not close it: the same limit as the check before a profile save.
     pub fn open_pdf(&self, name: &str) {
         let Some(path) = self.pdf_to_open(name) else { return };
-        let program = if cfg!(target_os = "macos") {
-            PathBuf::from("open")
-        } else if cfg!(windows) {
-            system_program(std::env::var_os("SystemRoot").as_deref(), &["explorer.exe"])
-        } else {
-            PathBuf::from("xdg-open")
-        };
-        run(program, |command| {
-            command.arg(shell_path(&path));
-        });
+        run(open_command(Host::current(), std::env::var_os("SystemRoot").as_deref(), &path));
     }
 
-    /// Shows the file in Finder or Explorer, selected. The desktop's file manager gets its folder. The check runs again now.
+    /// Shows the file in Finder or Explorer, selected. The desktop's file manager gets its folder. The check runs again now,
+    /// with the same limit as `open_pdf`: a file replaced by a link after the check is not caught.
     pub fn reveal(&self, name: &str) {
         let Some(path) = self.file_to_reveal(name) else { return };
-        let path = shell_path(&path);
-        if cfg!(target_os = "macos") {
-            run(PathBuf::from("open"), |command| {
-                command.arg("-R").arg(&path);
-            });
-        } else if cfg!(windows) {
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                let explorer = system_program(std::env::var_os("SystemRoot").as_deref(), &["explorer.exe"]);
-                // A file name cannot hold a quote on Windows, so the quoted path cannot be cut short.
-                run(explorer, |command| {
-                    command.raw_arg(format!("/select,\"{}\"", path.display()));
-                });
-            }
-        } else if let Some(folder) = path.parent() {
-            run(PathBuf::from("xdg-open"), |command| {
-                command.arg(folder);
-            });
+        if let Some(spawn) = reveal_command(Host::current(), std::env::var_os("SystemRoot").as_deref(), &path) {
+            run(spawn);
         }
     }
 }
 
-/// Starts `program` with the arguments `arguments` adds, with no input and no output, and does not wait for it.
+/// The systems that open a file differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Host {
+    Mac,
+    Windows,
+    Other,
+}
+
+impl Host {
+    fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Host::Mac
+        } else if cfg!(windows) {
+            Host::Windows
+        } else {
+            Host::Other
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Arg {
+    /// One argument, quoted by the standard library as needed.
+    Plain(OsString),
+    /// A command line piece passed as it is. Explorer reads a comma as its own separator unless the path is quoted.
+    Raw(String),
+}
+
+/// A program and its arguments, before anything starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Spawn {
+    program: PathBuf,
+    args: Vec<Arg>,
+}
+
+fn explorer(system_root: Option<&OsStr>) -> PathBuf {
+    system_program(system_root, &["explorer.exe"])
+}
+
+/// The path in quotes for Explorer. A file name cannot hold a quote on Windows, so the quoted path cannot be cut short.
+fn quoted(path: &Path) -> String {
+    format!("\"{}\"", shell_path(path).display())
+}
+
+fn open_command(host: Host, system_root: Option<&OsStr>, path: &Path) -> Spawn {
+    match host {
+        Host::Mac => Spawn { program: PathBuf::from("open"), args: vec![Arg::Plain(path.into())] },
+        Host::Windows => Spawn { program: explorer(system_root), args: vec![Arg::Raw(quoted(path))] },
+        Host::Other => Spawn { program: PathBuf::from("xdg-open"), args: vec![Arg::Plain(path.into())] },
+    }
+}
+
+/// `None` only when there is no folder to give the desktop's file manager.
+fn reveal_command(host: Host, system_root: Option<&OsStr>, path: &Path) -> Option<Spawn> {
+    match host {
+        Host::Mac => Some(Spawn { program: PathBuf::from("open"), args: vec![Arg::Plain("-R".into()), Arg::Plain(path.into())] }),
+        Host::Windows => Some(Spawn { program: explorer(system_root), args: vec![Arg::Raw(format!("/select,{}", quoted(path)))] }),
+        Host::Other => Some(Spawn { program: PathBuf::from("xdg-open"), args: vec![Arg::Plain(path.parent()?.into())] }),
+    }
+}
+
+/// Starts the program with no input and no output, and does not wait for it.
 /// Explorer is a window program and ignores `no_window`, which only keeps a console program from opening a console.
-fn run(program: PathBuf, arguments: impl FnOnce(&mut Command)) {
-    let mut command = Command::new(program);
-    arguments(&mut command);
+fn run(spawn: Spawn) {
+    let mut command = Command::new(spawn.program);
+    for arg in spawn.args {
+        match arg {
+            Arg::Plain(arg) => {
+                command.arg(arg);
+            }
+            #[cfg(windows)]
+            Arg::Raw(text) => {
+                std::os::windows::process::CommandExt::raw_arg(&mut command, text);
+            }
+            #[cfg(not(windows))]
+            Arg::Raw(text) => {
+                command.arg(text);
+            }
+        }
+    }
     no_window(&mut command);
     let _ = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
-/// Windows resolves a link to the `\\?\C:\...` form, which Explorer and the viewers do not all read: it goes without the prefix.
+/// Windows resolves a link to the `\\?\C:\...` form, or `\\?\UNC\server\share\...` for a network share. Explorer and the viewers
+/// do not all read those: they go without the prefix, as `C:\...` and `\\server\share\...`.
 fn shell_path(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
-        _ => path.to_owned(),
+    let Some(rest) = text.strip_prefix(r"\\?\") else { return path.to_owned() };
+    if let Some(share) = rest.strip_prefix(r"UNC\") {
+        return PathBuf::from(format!(r"\\{share}"));
     }
+    if rest.as_bytes().get(1) == Some(&b':') { PathBuf::from(rest) } else { path.to_owned() }
 }
 
 fn is_extension(name: &str, wanted: &str) -> bool {
@@ -344,9 +413,69 @@ mod tests {
     }
 
     #[test]
-    fn the_extended_prefix_is_dropped_from_a_drive_path() {
+    fn the_extended_prefix_is_dropped_from_a_drive_or_share_path() {
         assert_eq!(shell_path(Path::new(r"\\?\C:\w\cv\a.pdf")), PathBuf::from(r"C:\w\cv\a.pdf"));
-        assert_eq!(shell_path(Path::new(r"\\?\UNC\host\share\a.pdf")), PathBuf::from(r"\\?\UNC\host\share\a.pdf"));
+        assert_eq!(shell_path(Path::new(r"\\?\UNC\host\share\cv\a.pdf")), PathBuf::from(r"\\host\share\cv\a.pdf"));
+        assert_eq!(shell_path(Path::new(r"\\?\Volume{1}\a.pdf")), PathBuf::from(r"\\?\Volume{1}\a.pdf"));
         assert_eq!(shell_path(Path::new("/w/cv/a.pdf")), PathBuf::from("/w/cv/a.pdf"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cv_that_is_a_link_out_of_the_checkout_shows_nothing() {
+        use std::os::unix::fs::symlink;
+        let (dir, cv) = folder();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.pdf"), b"secret").unwrap();
+        symlink(outside.path(), dir.path().join("cv")).unwrap();
+        assert_eq!(cv.list(), Ok(Vec::new()));
+        assert_eq!(cv.checked("secret.pdf"), None);
+        assert_eq!(cv.pdf_to_open("secret.pdf"), None);
+        assert_eq!(cv.file_to_reveal("secret.pdf"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cv_that_is_a_link_to_a_folder_inside_the_checkout_is_read() {
+        use std::os::unix::fs::symlink;
+        let (dir, cv) = folder();
+        fs::create_dir_all(dir.path().join("documents")).unwrap();
+        fs::write(dir.path().join("documents/main_a.pdf"), b"x").unwrap();
+        symlink(dir.path().join("documents"), dir.path().join("cv")).unwrap();
+        assert_eq!(cv.list().unwrap().len(), 1);
+        assert!(cv.checked("main_a.pdf").is_some());
+    }
+
+    #[test]
+    fn mac_and_the_desktop_open_a_pdf_with_the_path_as_one_argument() {
+        let path = Path::new("/w/cv/CV, final.pdf");
+        let plain = |text: &str| Arg::Plain(text.into());
+        let mac = open_command(Host::Mac, None, path);
+        assert_eq!((mac.program, mac.args), (PathBuf::from("open"), vec![plain("/w/cv/CV, final.pdf")]));
+        let other = open_command(Host::Other, None, path);
+        assert_eq!((other.program, other.args), (PathBuf::from("xdg-open"), vec![plain("/w/cv/CV, final.pdf")]));
+    }
+
+    #[test]
+    fn explorer_gets_a_path_with_a_comma_in_quotes() {
+        let path = Path::new(r"\\?\C:\w\cv\CV, final.pdf");
+        let root = OsStr::new(r"D:\Win");
+        let open = open_command(Host::Windows, Some(root), path);
+        assert_eq!(open.program, explorer(Some(root)));
+        assert_eq!(open.args, [Arg::Raw(r#""C:\w\cv\CV, final.pdf""#.to_owned())]);
+        let reveal = reveal_command(Host::Windows, Some(root), path).unwrap();
+        assert_eq!(reveal.program, explorer(Some(root)));
+        assert_eq!(reveal.args, [Arg::Raw(r#"/select,"C:\w\cv\CV, final.pdf""#.to_owned())]);
+    }
+
+    #[test]
+    fn each_system_shows_a_file_its_own_way() {
+        let path = Path::new("/w/cv/a.pdf");
+        let plain = |text: &str| Arg::Plain(text.into());
+        let mac = reveal_command(Host::Mac, None, path).unwrap();
+        assert_eq!((mac.program, mac.args), (PathBuf::from("open"), vec![plain("-R"), plain("/w/cv/a.pdf")]));
+        let other = reveal_command(Host::Other, None, path).unwrap();
+        assert_eq!((other.program, other.args), (PathBuf::from("xdg-open"), vec![plain("/w/cv")]));
+        assert_eq!(reveal_command(Host::Other, None, Path::new("/")), None, "a path with no folder gives nothing to show");
     }
 }

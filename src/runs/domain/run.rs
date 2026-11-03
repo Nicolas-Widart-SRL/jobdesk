@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
-use crate::runs::domain::{AgentEvent, Decision, Prompt, PromptKind, RunRequest, StepRail, Usage};
+use crate::runs::domain::{AgentEvent, Decision, Elapsed, Prompt, PromptKind, RunRequest, StepRail, Usage, estimate_usd};
 use crate::shared_kernel::SignIn;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +61,14 @@ pub struct Activity {
     pub step: Option<usize>,
 }
 
+/// What a run has cost so far, and whether part of it is still a guess.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CostFigure {
+    pub usd: f64,
+    /// True while some of it is priced from tokens, because the CLI has not reported its own figure yet.
+    pub estimated: bool,
+}
+
 /// One command from start to finish, and any replies after it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
@@ -88,6 +97,15 @@ pub struct Run {
     /// Spend of earlier processes. Each process reports its own running total.
     cost_of_ended_processes: f64,
     pub duration_ms: u64,
+    /// How long the run has worked by the clock, which Claude's `duration_ms` is not.
+    pub elapsed: Elapsed,
+    /// When the stream last said anything. None before the first word.
+    pub last_heard: Option<Instant>,
+    /// What each message of the turn under way would cost at list price, by message id.
+    /// The turn's result replaces them with the CLI's own figure.
+    turn_estimates: Vec<(String, f64)>,
+    /// The estimates of earlier processes that ended without a result to replace them.
+    estimate_of_ended_processes: f64,
     pub steps: Option<StepRail>,
     pub files_changed: Vec<String>,
     pub usage: Usage,
@@ -127,6 +145,10 @@ impl Run {
             cost_usd: 0.0,
             cost_of_ended_processes: 0.0,
             duration_ms: 0,
+            elapsed: Elapsed::default(),
+            last_heard: None,
+            turn_estimates: Vec::new(),
+            estimate_of_ended_processes: 0.0,
             steps,
             files_changed: Vec::new(),
             usage: Usage::default(),
@@ -147,6 +169,27 @@ impl Run {
     /// Background subagents count too: they can still write after the turn ended.
     pub fn is_busy(&self) -> bool {
         matches!(self.status, RunStatus::Starting | RunStatus::Working | RunStatus::Stopping) || self.background_agents > 0
+    }
+
+    /// The cost to show: what the CLI reported, plus the estimate of what it has not reported yet.
+    pub fn shown_cost(&self) -> CostFigure {
+        let estimate: f64 = self.turn_estimates.iter().map(|(_, usd)| usd).sum();
+        CostFigure {
+            usd: self.cost_usd + self.estimate_of_ended_processes + estimate,
+            estimated: self.estimate_of_ended_processes > 0.0 || !self.turn_estimates.is_empty(),
+        }
+    }
+
+    /// The stream said something at `now`.
+    pub fn heard(&mut self, now: Instant) {
+        self.last_heard = Some(now);
+    }
+
+    /// A new process continues the run, and its running total starts again from zero.
+    /// What the old one spent is kept, and so is the estimate of what it never reported.
+    pub fn note_new_process(&mut self) {
+        self.cost_of_ended_processes = self.cost_usd;
+        self.estimate_of_ended_processes += self.turn_estimates.drain(..).map(|(_, usd)| usd).sum::<f64>();
     }
 
     pub fn needs_user(&self) -> bool {
@@ -243,6 +286,7 @@ impl Run {
         self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
+        self.elapsed = Elapsed::restored(self.duration_ms);
         if !matches!(self.status, RunStatus::Failed(_) | RunStatus::Stopped) {
             self.status = RunStatus::Closed;
         }
@@ -290,6 +334,9 @@ impl Run {
             AgentEvent::PromptRaised(prompt) => self.prompts.push_back(prompt),
             AgentEvent::PromptWithdrawn { request_id } => self.prompts.retain(|prompt| prompt.request_id != request_id),
             AgentEvent::UsageChanged(usage) => self.usage = usage,
+            AgentEvent::MessageUsage { id, model, tokens } => self.message_used(id, estimate_usd(&tokens, &model)),
+            // The desk stamps the time, because the run never reads the clock.
+            AgentEvent::Heard => {}
             AgentEvent::BackgroundTasksChanged { count } => self.background_agents = count,
             AgentEvent::TurnEnded { failed, message, cost_usd, duration_ms } => self.turn_ended(failed, message, cost_usd, duration_ms),
             AgentEvent::ProcessExited { failure } => self.process_exited(failure),
@@ -312,9 +359,18 @@ impl Run {
         self.push(ActivityKind::Tool { id, name, summary, state: ToolState::Running }, nested);
     }
 
+    /// A message the CLI repeats keeps the larger of its figures, never both.
+    fn message_used(&mut self, id: String, usd: f64) {
+        match self.turn_estimates.iter_mut().find(|(known, _)| *known == id) {
+            Some((_, known)) => *known = known.max(usd),
+            None => self.turn_estimates.push((id, usd)),
+        }
+    }
+
     fn turn_ended(&mut self, failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64) {
         self.streaming_text.clear();
         self.cost_usd = self.cost_of_ended_processes + cost_usd;
+        self.turn_estimates.clear();
         self.duration_ms += duration_ms;
         // A background subagent can still be waiting on a prompt after the main turn ends.
         if self.status == RunStatus::Stopping {
@@ -331,7 +387,7 @@ impl Run {
     }
 
     fn process_exited(&mut self, failure: Option<String>) {
-        self.cost_of_ended_processes = self.cost_usd;
+        self.note_new_process();
         self.prompts.clear();
         self.background_agents = 0;
         self.streaming_text.clear();
@@ -353,7 +409,7 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::PromptKind;
+    use crate::runs::domain::{PromptKind, Tokens};
 
     fn run(line: &str) -> Run {
         Run::new(&RunRequest {
@@ -446,6 +502,94 @@ mod tests {
         run.note_reply("again");
         run.apply(turn(0.25));
         assert_eq!(run.cost_usd, 1.0);
+    }
+
+    fn used(id: &str, output: u64) -> AgentEvent {
+        AgentEvent::MessageUsage { id: id.into(), model: "claude-opus-4-5".into(), tokens: Tokens { output, ..Tokens::default() } }
+    }
+
+    #[test]
+    fn a_repeated_message_counts_once() {
+        let mut run = run("/rank");
+        run.apply(used("m1", 1_000_000));
+        run.apply(used("m1", 1_000_000));
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.0, estimated: true });
+        run.apply(used("m1", 2_000_000));
+        run.apply(used("m1", 1_000_000));
+        assert_eq!(run.shown_cost().usd, 50.0, "the larger figure stays");
+        run.apply(used("m2", 1_000_000));
+        assert_eq!(run.shown_cost().usd, 75.0);
+    }
+
+    #[test]
+    fn the_result_replaces_the_estimate() {
+        let mut run = run("/rank");
+        assert_eq!(run.shown_cost(), CostFigure { usd: 0.0, estimated: false });
+        run.apply(used("m1", 1_000_000));
+        run.apply(turn(0.5));
+        assert_eq!(run.shown_cost(), CostFigure { usd: 0.5, estimated: false });
+    }
+
+    #[test]
+    fn a_later_turn_adds_its_estimate_to_what_the_result_reported() {
+        let mut run = run("/rank");
+        run.apply(turn(0.5));
+        run.note_reply("more");
+        run.apply(used("m2", 1_000_000));
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.5, estimated: true });
+    }
+
+    #[test]
+    fn a_process_that_exits_without_a_result_keeps_its_estimate() {
+        let mut run = run("/rank");
+        run.apply(used("m1", 1_000_000));
+        run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.0, estimated: true });
+        run.note_reply("again");
+        run.apply(used("m2", 1_000_000));
+        assert_eq!(run.shown_cost().usd, 50.0, "the new process adds its own");
+    }
+
+    #[test]
+    fn a_new_process_keeps_the_old_total_and_adds_its_own() {
+        let mut run = run("/apply x");
+        run.apply(turn(0.5));
+        run.note_new_process();
+        assert_eq!(run.status, RunStatus::AwaitingReply, "the status stays");
+        run.apply(turn(0.25));
+        assert_eq!(run.cost_usd, 0.75);
+        assert_eq!(run.shown_cost(), CostFigure { usd: 0.75, estimated: false });
+    }
+
+    #[test]
+    fn a_new_process_keeps_the_estimate_of_a_turn_without_a_result() {
+        let mut run = run("/apply x");
+        run.apply(used("m1", 1_000_000));
+        run.note_new_process();
+        run.note_new_process();
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.0, estimated: true }, "once, however often it is noted");
+        run.apply(turn(0.25));
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.25, estimated: true });
+    }
+
+    #[test]
+    fn hearing_stamps_the_time_and_a_heard_event_changes_nothing() {
+        let mut run = run("/rank");
+        assert_eq!(run.last_heard, None);
+        let now = Instant::now();
+        run.heard(now);
+        run.apply(AgentEvent::Heard);
+        assert_eq!(run.last_heard, Some(now));
+        assert_eq!(run.status, RunStatus::Starting);
+    }
+
+    #[test]
+    fn a_restored_run_shows_the_time_claude_reported() {
+        let mut run = run("/rank");
+        run.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.5, duration_ms: 860_000 });
+        run.settle_after_restore();
+        assert!(!run.elapsed.is_running());
+        assert_eq!(run.elapsed.total(Instant::now()), std::time::Duration::from_millis(860_000));
     }
 
     #[test]

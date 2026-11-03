@@ -70,6 +70,25 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
+  # Fails on a verified, unverified or unknown (check failed) secret anywhere in the git history.
+  # It runs on every change, Markdown too, because a secret can sit in any file.
+  secrets:
+    name: Scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # An empty base with a head scans the whole history, so a push never compares a commit with itself.
+      # The action already passes --fail and --no-update, and a repeated flag is an error.
+      - uses: trufflesecurity/trufflehog@v3.99.8
+        with:
+          base: ''
+          head: HEAD
+          version: 3.99.8
+          extra_args: --results=verified,unknown,unverified
+
   # rustfmt.toml holds the style. Run `cargo fmt` before you commit.
   fmt:
     name: Check formatting

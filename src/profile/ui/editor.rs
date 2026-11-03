@@ -3,6 +3,7 @@ use egui::{Id, Label, Modal, Ui};
 use egui_commonmark::CommonMarkCache;
 
 use crate::profile::application::{ProfileEditor, SaveOutcome, TopicId};
+use crate::profile::ui::rail::Pick;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::ITEM_GAP;
 use crate::ui_kit::{
@@ -244,11 +245,11 @@ fn shown_lines(lines: &[(String, bool)]) -> (Vec<(String, bool)>, Part) {
     (lines[from..to].to_vec(), part)
 }
 
-/// What waits on the discard ask: Cancel, another topic, another tab, another folder, or quitting.
+/// What waits on the discard ask: Cancel, another topic or CV documents, another tab, another folder, or quitting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ask {
     Cancel,
-    Topic(TopicId),
+    Pick(Pick),
     Tab,
     Folder,
     Quit,
@@ -266,7 +267,8 @@ pub(super) fn discard_ask(ctx: &egui::Context, ask: Ask, noun: Noun, focus: &mut
     let noun = noun.word();
     let then = match ask {
         Ask::Cancel => "Cancel drops them.",
-        Ask::Topic(_) => "Opening another topic drops them.",
+        Ask::Pick(Pick::Topic(_)) => "Opening another topic drops them.",
+        Ask::Pick(Pick::CvDocuments) => "Opening CV documents drops them.",
         Ask::Tab => "Leaving Profile drops them.",
         Ask::Folder => "Opening another folder drops them.",
         Ask::Quit => "Quitting drops them.",

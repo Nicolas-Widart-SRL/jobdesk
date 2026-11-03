@@ -4,7 +4,7 @@ use std::sync::mpsc::Sender;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Paths whose changes can alter what the screens show.
-const WATCHED: [(&str, RecursiveMode); 12] = [
+const WATCHED: [(&str, RecursiveMode); 13] = [
     (".", RecursiveMode::NonRecursive),
     ("job_scraper", RecursiveMode::Recursive),
     ("documents/applications", RecursiveMode::Recursive),
@@ -15,6 +15,7 @@ const WATCHED: [(&str, RecursiveMode); 12] = [
     ("company_research", RecursiveMode::Recursive),
     (".agents/skills", RecursiveMode::Recursive),
     (".claude/skills", RecursiveMode::Recursive),
+    (".claude/commands", RecursiveMode::NonRecursive),
     ("templates", RecursiveMode::Recursive),
     ("gmail_sync", RecursiveMode::Recursive),
 ];

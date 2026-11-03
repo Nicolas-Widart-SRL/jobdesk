@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{JobBoard, YourTerms};
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
-use crate::profile::application::{ProfileView, topic_counts};
+use crate::profile::application::{CvShelf, ProfileView, topic_counts};
 use crate::runs::application::UsageReport;
 use crate::shared_kernel::{LoadError, Source};
 use crate::tracking::application::Pipeline;
@@ -27,6 +27,8 @@ pub struct Snapshot {
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
     pub profile: ProfileView,
+    /// The CV documents of `cv/`, or that the folder could not be read.
+    pub cv_documents: CvShelf,
     pub usage: UsageReport,
     /// Whether the run logs were read into `usage`. False until then, so Usage statistics says it is reading.
     pub usage_read: bool,
@@ -81,12 +83,33 @@ impl Snapshot {
             .collect();
         let (profile, errors) = profile::load(root);
         issues.extend(errors.into_iter().map(|error| Issue { source: Source::Profile, error }));
+        let cv_documents = profile::load_cv(root).unwrap_or_else(|error| {
+            issues.push(Issue { source: Source::CvDocuments, error });
+            CvShelf::Unread
+        });
         let workspace = workspace_view(&workspace::inspect(root), &board, &profile);
         let insights = search_insights(&pipeline);
         let counts = topic_counts(&profile);
         let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
         let (usage, usage_read, usage_asked) = (UsageReport::default(), false, 0);
-        Self { archives, workspace, profile, insights, band, board, terms, pipeline, skill_gaps, usage, usage_read, usage_asked, issues, today, read_at }
+        Self {
+            archives,
+            workspace,
+            profile,
+            cv_documents,
+            insights,
+            band,
+            board,
+            terms,
+            pipeline,
+            skill_gaps,
+            usage,
+            usage_read,
+            usage_asked,
+            issues,
+            today,
+            read_at,
+        }
     }
 }
 
@@ -94,6 +117,7 @@ impl Snapshot {
 mod tests {
     use super::*;
     use crate::discovery::application::TermPart;
+    use crate::profile::application::{CvTag, Freshness, state_line};
 
     #[test]
     fn load_fills_your_terms_from_the_checkout() {
@@ -101,5 +125,47 @@ mod tests {
         let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
         assert_eq!(snapshot.terms.floor, TermPart::Read(Some(700)));
         assert_eq!(snapshot.terms.gates().commute.len(), 4);
+    }
+
+    #[test]
+    fn load_reads_the_cv_documents_of_the_sample() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace");
+        let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
+        let CvShelf::Read { documents, build_cv } = &snapshot.cv_documents else { panic!("cv/ reads") };
+        let mut stems: Vec<&str> = documents.iter().map(|doc| doc.stem.as_str()).collect();
+        stems.sort();
+        assert_eq!(stems, ["main_harbor", "main_tessel_group_solution_architect"]);
+        // With no `.tex` beside it, a PDF has no source to be older than, so its tag reads Current.
+        assert!(documents.iter().all(|doc| doc.tex.is_none() && doc.freshness == Freshness::NoSource), "the sample holds no .tex");
+        let now = snapshot.today.and_hms_opt(9, 0, 0).unwrap();
+        assert!(documents.iter().all(|doc| state_line(doc, false, *build_cv, now).tag == CvTag::Current));
+        assert!(!build_cv, "the sample holds no /build-cv");
+    }
+
+    /// Whether the folder has `/build-cv` comes with the CV documents, read again on each load.
+    #[test]
+    fn load_says_whether_the_folder_has_build_cv() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let build_cv = |root: &Path| match Snapshot::load(root, today).cv_documents {
+            CvShelf::Read { build_cv, .. } => build_cv,
+            CvShelf::Unread => panic!("cv/ reads"),
+        };
+        assert!(!build_cv(dir.path()));
+        std::fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        std::fs::write(dir.path().join(".claude/commands/build-cv.md"), "Build a CV.\n").unwrap();
+        assert!(build_cv(dir.path()));
+    }
+
+    #[test]
+    fn a_cv_folder_that_cannot_be_read_is_one_issue_and_an_unread_shelf() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cv"), b"").unwrap();
+        let snapshot = Snapshot::load(dir.path(), NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert_eq!(snapshot.cv_documents, CvShelf::Unread);
+        let issues: Vec<(Source, &str)> =
+            snapshot.issues.iter().filter(|issue| issue.source == Source::CvDocuments).map(|i| (i.source, i.error.source.as_str())).collect();
+        assert_eq!(issues, [(Source::CvDocuments, "cv/")]);
     }
 }

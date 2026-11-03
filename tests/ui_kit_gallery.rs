@@ -6,19 +6,20 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
 use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
+use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, RUN_SIDE, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, Palette, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field, attention_count,
-    bar, blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, confirm_popover, copy_button,
-    danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state,
-    enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane,
-    lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
-    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry,
-    ruled_note_with_command, score, search_field, secret_field, segmented, select_row, setting_check, setting_check_amount, setting_check_number,
-    setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button,
-    small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
-    status_waits, step_line, strong, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, undo_row,
+    KnotState, NodeMarks, PageSet, Palette, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field,
+    attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row,
+    confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, desk_label, divider,
+    document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, fitted_pages, flow_band, folder_tab,
+    index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body,
+    panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone,
+    rail_title, reveal_command, rich, role_entry, row_tag, ruled_note_with_command, score, search_field, secret_field, segmented, select_row, setting_check,
+    setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
+    skeleton_lines, slip, slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle, solid_tag, split_paper,
+    stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally,
+    tally_strip, text_field, toggle_group, turn_band, undo_row,
 };
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
@@ -784,15 +785,155 @@ fn gallery(ui: &mut Ui) {
     });
 }
 
+/// The CV documents in the list column: label, and the tag's word and tone when the document is not current.
+const CV_MASTERS: [(&str, Option<(&str, Tone)>); 2] = [("Master CV", None), ("Master CV, engineer", None)];
+const CV_APPLICATIONS: [(&str, Option<(&str, Tone)>); 5] = [
+    ("Halyard labs tech lead", Some(("Not built yet", Tone::Interview))),
+    ("Tessel platform lead", Some(("Source newer", Tone::Interview))),
+    ("Brightwell eng manager", Some(("Render failed", Tone::Closed))),
+    ("Ardent backend engineer", None),
+    ("Granite cloud staff engineer", None),
+];
+
+/// The room the list beside the pages takes on the sheet, and the room for the loading pages and the blank page.
+const CV_PAPER: [f32; 2] = [952.0, 640.0];
+const CV_ROOM: [f32; 2] = [420.0, 320.0];
+
+/// A stand-in for a rendered CV page: white, with a dark name block on the first page and grey lines of text.
+fn cv_page(first: bool) -> egui::ColorImage {
+    let [width, height] = [210, 297];
+    let mut image = egui::ColorImage::filled([width, height], egui::Color32::WHITE);
+    let mut bar = |left: usize, top: usize, right: usize, bottom: usize, color: egui::Color32| {
+        for y in top..bottom {
+            for x in left..right {
+                image.pixels[y * width + x] = color;
+            }
+        }
+    };
+    let ink = egui::Color32::from_rgb(0x1f, 0x2d, 0x3d);
+    let grey = egui::Color32::from_rgb(0xd4, 0xdc, 0xe6);
+    let mut top = 24;
+    if first {
+        bar(20, top, 140, top + 14, ink);
+        top += 30;
+    }
+    for line in 0..16 {
+        let y = top + line * 13;
+        if line % 5 == 0 {
+            bar(20, y, 80, y + 5, ink);
+        } else {
+            bar(20, y, 190 - (line % 3) * 25, y + 4, grey);
+        }
+    }
+    image
+}
+
+fn cv_list(ui: &mut Ui) {
+    let rows = |ui: &mut Ui, title: &str, documents: &[(&str, Option<(&str, Tone)>)], picked: Option<usize>| {
+        rail_title(ui, title);
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 0)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (index, (label, tagged)) in documents.iter().enumerate() {
+                pick_row(ui, picked == Some(index), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(rich(ui, *label, Type::BODY, Ink::Text));
+                        if let Some((word, tone)) = tagged {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| row_tag(ui, *word, *tone));
+                        }
+                    });
+                });
+            }
+        });
+    };
+    ui.add_space(4.0);
+    rows(ui, "Masters", &CV_MASTERS, Some(0));
+    rows(ui, "For applications", &CV_APPLICATIONS, None);
+}
+
+/// The CV documents' widgets: the list beside two fitted pages, then three pages with the third wrapped under the first
+/// two, the pages while they render, and the blank page of a `.tex` with no PDF yet.
+fn cv_documents(ui: &mut Ui) {
+    // The pages load once and are kept, as the screen keeps a document's.
+    let id = egui::Id::NULL.with("gallery_cv_pages");
+    let pages = ui.ctx().data(|data| data.get_temp::<Vec<egui::TextureHandle>>(id)).unwrap_or_else(|| {
+        let loaded: Vec<egui::TextureHandle> =
+            (0..3).map(|index| ui.ctx().load_texture(format!("gallery_cv_page_{index}"), cv_page(index == 0), egui::TextureOptions::LINEAR)).collect();
+        ui.ctx().data_mut(|data| data.insert_temp(id, loaded.clone()));
+        loaded
+    });
+    ui.allocate_ui(egui::Vec2::from(CV_PAPER), |ui| {
+        split_paper(
+            ui,
+            RUN_SIDE,
+            cv_list,
+            |ui| {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 16)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(rich(ui, "Master CV", Type::DEAL, Ink::Text));
+                    ui.horizontal(|ui| {
+                        faint_mono(ui, "main_example.pdf");
+                        muted(ui, "2 pages, 84 KB, built 3 days ago");
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        tag(ui, "Source newer", Tone::Interview);
+                        muted(ui, "Its .tex changed today.");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            small_command_action_hinted(
+                                ui,
+                                "Rebuild the PDF…",
+                                "/build-cv main_example",
+                                "Opens the launcher with /build-cv main_example. Nothing runs until you start it there.",
+                            );
+                            enabled_when(ui, false, "Another run is active. One run at a time keeps your files safe.", |ui| {
+                                small_command_action_hinted(ui, "Build the PDF…", "/build-cv main_example", "Opens the launcher.")
+                            });
+                        });
+                    });
+                });
+                divider(ui);
+                ScrollArea::vertical().id_salt("cv_pages").auto_shrink([false, false]).show(ui, |ui| {
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 16)).show(ui, |ui| {
+                        fitted_pages(ui, PageSet::Ready { pages: &pages[..2], of: 2, alt: "Master CV" });
+                    });
+                });
+            },
+            |ui| {
+                desk_label(ui, "Kept in ", Type::NOTE, Ink::Muted);
+                faint_mono(ui, "cv/");
+                desk_label(ui, ", beside the .tex each PDF is built from", Type::NOTE, Ink::Muted);
+            },
+        );
+    });
+    ui.add_space(16.0);
+    paper(ui, false, |ui| {
+        egui::Frame::new().inner_margin(16).show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(24.0, 24.0);
+                ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| fitted_pages(ui, PageSet::Ready { pages: &pages, of: pages.len(), alt: "Master CV" }));
+                ui.vertical(|ui| {
+                    ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| fitted_pages(ui, PageSet::Loading(2)));
+                    ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| blank_page(ui, "No PDF yet. It shows here once /build-cv has built it."));
+                });
+            });
+        });
+    });
+}
+
 fn profile_gallery(ui: &mut Ui) {
     ui.set_width(ui.available_width());
     ui.heading("Profile");
     ui.add_space(6.0);
     profile(ui);
+    ui.add_space(24.0);
+    ui.heading("CV documents");
+    ui.add_space(6.0);
+    cv_documents(ui);
 }
 
 /// The height of the Profile sheet. The main sheet is near the 8192px a texture holds, so these parts take a sheet of their own.
-const PROFILE_HEIGHT: f32 = 2200.0;
+const PROFILE_HEIGHT: f32 = 3560.0;
 
 fn render_profile(theme: Theme, name: &str) {
     let mut harness =

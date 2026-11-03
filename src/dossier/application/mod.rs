@@ -6,6 +6,6 @@ pub use page_store::{PageState, PageStore};
 
 pub use crate::dossier::domain::{
     ApplicationRef, ArchiveContents, ArchiveRepository, CheckItem, CheckResult, KeywordRow, NamedText, PageImage, PageRasterizer, PdfDocument, PostingText,
-    ResearchNote, RunFindings,
+    RenderedPages, ResearchNote, RunFindings,
 };
 pub use crate::tracking::application::{OutcomeRecord, Stage, StatusBucket};

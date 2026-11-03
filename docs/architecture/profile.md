@@ -1,6 +1,6 @@
 # Profile
 
-This page covers how the profile reaches the `Snapshot` as topics, how Save writes one block, and how Updated marks are set. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features). How profile text renders is in [trust](trust.md#profile-text).
+This page covers how the profile reaches the `Snapshot` as topics, how Save writes one block, how Updated marks are set, and how CV documents are read. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features). How profile text renders is in [trust](trust.md#profile-text).
 
 ## Topics
 
@@ -80,3 +80,41 @@ Updated marks compare the profile in the `Snapshot` when a run starts working wi
 - A Save never is, because Save waits through the run and that read.
 - `UpdatedMarks` keeps the marks in memory only.
 - Opening a topic clears its rail mark.
+
+## CV documents
+
+CV documents reach the `Snapshot` as `cv_documents`, a `CvShelf`, which `profile::load_cv` reads beside the profile files. `CvFolder`, in `profile`'s infrastructure, gives:
+
+- the `.tex` and `.pdf` files of `cv/`, grouped by stem, each with its modification time and size. Subfolders are not entered, and two stems that differ only in case are one document.
+- whether `.claude/commands/build-cv.md` exists. Only that it exists is read, never what it holds, and a check that fails counts as missing. It is one fact for the whole folder.
+
+A missing `cv/` is an empty shelf. A `cv/` that cannot be read gives `CvShelf::Unread` and one issue from `Source::CvDocuments`, and the topics still show. The watcher watches `cv/` and `.claude/commands`, so a build or a checkout that gains `/build-cv` reaches the screen on the next snapshot. Which names are listed, and how links are resolved, is in [trust](trust.md#cv-files).
+
+### Freshness and tags
+
+`freshness` in `profile`'s domain compares only the two modification times, in whole seconds:
+
+| Freshness | When | Tag |
+| --- | --- | --- |
+| `Current` | The PDF is as new as its `.tex` or newer, equal seconds included. | Current |
+| `NoSource` | A PDF with no `.tex`. | Current |
+| `SourceNewer` | The `.tex` is newer than the PDF. | Source newer |
+| `NotBuilt` | A `.tex` with no PDF. | Not built yet |
+
+`tag` turns `Current` or `NoSource` into Render failed when the page cache already failed that PDF. `SourceNewer` and `NotBuilt` keep their tag, because a build may fix both. The list never starts a render: only the picked document renders, the first one until the user picks another. So Render failed shows on a row only for a PDF opened since Jobdesk started. How pages render and are kept is in [ARCHITECTURE.md](../../ARCHITECTURE.md#pdf-pages).
+
+The rail row counts `SourceNewer` and `NotBuilt` as out of date.
+
+### Order and labels
+
+Masters are the stems that start with `main_example`, read without hidden characters. They come first, by stem. Applications follow, newest first by the later of the two times, ties by stem. `label` drops hidden characters. A master reads "Master CV", plus the rest of its stem after a comma. An application reads its stem without `main_`, with spaces for underscores and a capital first letter.
+
+### The build action
+
+`build_line` gives `/build-cv <stem>` only when all hold:
+
+- the document is `SourceNewer` or `NotBuilt`;
+- the folder has `.claude/commands/build-cv.md`;
+- the stem is ASCII letters, digits, `_` and `-`, and does not start with `-`, so it reads as no option.
+
+The action only opens the launcher, and it is disabled while a run works. Without the command, the state line says the folder has no `/build-cv` command and shows no action.

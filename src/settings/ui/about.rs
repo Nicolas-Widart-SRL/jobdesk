@@ -20,9 +20,12 @@ pub struct AboutView<'a> {
 }
 
 /// The two versions with Copy details, the links to read more, then who makes Jobdesk. No logo shows anywhere.
-pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
-    let &[this_copy, jobdesk, jobdesk_help, claude, claude_help, read_more, changed, changed_help, licences, licences_help, maker] = index(Page::About) else {
-        return;
+/// Returns true when Open Providers is clicked, so Settings switches to Providers.
+pub fn body(ui: &mut Ui, view: AboutView, query: &str) -> bool {
+    let &[this_copy, jobdesk, jobdesk_help, claude, claude_help, read_more, sign_in, sign_in_help, changed, changed_help, licences, licences_help, maker] =
+        index(Page::About)
+    else {
+        return false;
     };
     setting_section(ui, this_copy, None, query);
     setting_row(ui, jobdesk, jobdesk_help, query, |ui| {
@@ -44,6 +47,9 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
         }
     });
     setting_section(ui, read_more, None, query);
+    // An in-app jump: no browser, no run and no setting change.
+    let mut providers = false;
+    setting_row(ui, sign_in, sign_in_help, query, |ui| providers = link(ui, "Open Providers").clicked());
     setting_row(ui, changed, changed_help, query, |ui| open(ui, "Open the changelog", CHANGELOG_URL));
     setting_row(ui, licences, licences_help, query, |ui| {
         // A link paints no disabled look of its own, so it fades here.
@@ -51,6 +57,7 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
         enabled_when(ui, false, NO_LICENCES, |ui| link(ui, "Show licences"));
     });
     page_note(ui, maker, query);
+    providers
 }
 
 /// A link that opens `url` in the browser on click, with the address on hover.

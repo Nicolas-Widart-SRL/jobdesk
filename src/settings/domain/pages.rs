@@ -264,14 +264,23 @@ const DATA: [&str; 11] = [
     "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
 ];
 
+/// Who holds the sign-in, on About. Windows keeps the key in Credential Manager, as Providers says.
+const SIGN_IN_HELP: &str = if cfg!(windows) {
+    "Claude Code signs in on its own. Jobdesk keeps only an optional API key, in Credential Manager."
+} else {
+    "Claude Code signs in on its own. Jobdesk keeps only an optional API key, in your keychain."
+};
+
 /// The versions, the links, then the line on who makes Jobdesk.
-const ABOUT: [&str; 11] = [
+const ABOUT: [&str; 13] = [
     "This copy",
     "Jobdesk",
     "Version and build, for a bug report.",
     "Claude Code",
     "The program each task runs, installed on its own.",
     "Read more",
+    "How tasks sign in",
+    SIGN_IN_HELP,
     "What changed",
     "Every release, newest first.",
     "Licences",

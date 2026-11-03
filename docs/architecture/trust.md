@@ -46,6 +46,8 @@ On Windows only, it also refuses:
 - any `:`, which names an alternate data stream;
 - a part named like a device, such as `con.json`.
 
+The check reads only the text of the path and never asks the file system. So the path it returns names a place under the workspace folder, but symbolic links are not resolved. The dossier's archive readers, and the PDF pages they lead to, follow links when they open the file, so a link inside the workspace, at the file or at a folder on its path, can lead the read outside the workspace.
+
 ## The API key
 
 The API key has one path: the system keychain, then the environment of that task's `claude` process, as `ANTHROPIC_API_KEY`. When the key is read in a run is in [runs](runs.md#the-key-in-a-run). Test connection passes it the same way, in its own process's environment only.
@@ -59,7 +61,7 @@ The API key has one path: the system keychain, then the environment of that task
 ### Masking
 
 - Each line a task's process prints on stdout has the whole key it was given replaced by the mask, before the run log and the events see it. So does its failure from stderr.
-- The mask holds no quote or backslash, so a stream-json line stays JSON.
+- The mask's dots and `sk-ant-` hold no quote or backslash, but for a long key its last four characters are the key's own. So a stream-json line stays JSON for a key with no `"` or `\` in it. `ApiKey::parse` does not reject those two, as it accepts any visible ASCII.
 - Test connection's error, what Claude Code said, renders as plain text with hidden characters removed and the key masked wherever it appears, cut to 8 lines and 500 characters.
 - A part of the key, or the key encoded some other way, is not caught.
 

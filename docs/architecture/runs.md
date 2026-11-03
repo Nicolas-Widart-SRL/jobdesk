@@ -1,10 +1,13 @@
 # Runs
 
-This page covers a task's `claude` process: how it starts, stops and signs in, how Test connection differs, and when Claude waits on the user. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers a task's `claude` processes: how one starts, stops and signs in, how Test connection differs, and when Claude waits on the user. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 ## The child process
 
-Each run owns one `claude -p` child process, with the stream-json protocol over stdin and stdout.
+A run's `claude -p` child process speaks the stream-json protocol over stdin and stdout. A run has at most one process at a time, but not always the same one:
+
+- A reply while the run's process is up goes to that process.
+- A reply to a finished run starts a new process, which resumes the same Claude session with `--resume`.
 
 - A supervisor thread owns the child, and a reader thread turns stdout lines into domain events.
 - The UI thread applies them once per frame through `RunDesk::poll`.
@@ -65,7 +68,7 @@ The shell gives every desk it opens the method through `RunDesk::set_sign_in`. T
 
 - The gateway reads the key through the shell's `KeyReader` on the supervisor thread, right before it spawns the process, once per process.
 - After the spawn it keeps the key only to mask it in the process's output. It drops the key once the process ended and its output was read.
-- A key that is gone or cannot be read ends the run with the reason before any process exists. It never falls back to the Claude sign-in.
+- A key that is gone or cannot be read ends the run with the reason, and that process never starts. It never falls back to the Claude sign-in.
 
 Where else the key may go, and how it is masked: [trust](trust.md#the-api-key).
 

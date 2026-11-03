@@ -10,7 +10,7 @@ No card action runs anything by itself. Y opens the launcher on the slash comman
 
 The queue is derived, never stored. `intray` deals cards from the latest snapshot and the live runs on every frame, then hides what the user decided.
 
-- Paused runs rank first, then dates within the Coming up range, then the rest.
+- Paused runs rank first, then cards dated within the Coming up range or already overdue, by date, so overdue ones lead, then the rest.
 - The card being read stays on top, so new work lands behind it.
 - Cards brought back from later are the one exception: they deal on top, right after paused runs, in rank order among themselves, until each is decided. That lasts only for that day and lives in memory, not in `decisions.json`.
 - Card keys change when the underlying state moves on, so a decision never outlives what it decided.

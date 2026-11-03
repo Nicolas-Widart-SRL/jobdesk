@@ -80,9 +80,11 @@ The UI never reads from disk.
 A feature that fails to load reports an issue, and the others keep working. Its tab carries a mark, and an alert names what failed and what still works.
 
 - Until the first snapshot arrives, every screen shows a loading view, not an empty one.
-- A screen whose source failed shows the alert under its head and says its content is hidden, never that it is empty.
+- A screen whose source failed shows the alert and says its content is hidden, never that it is empty.
 
-The shell tells each screen both through `ScreenState`: whether its source is still being read, failed or ready, and which `Source`s failed, for a screen fed by more than one.
+Jobs, Applications, Insights, Profile and Setup learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, for a screen fed by more than one. They draw the alert under their head. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
+
+Tasks, the launcher and Dossier take no `ScreenState`: the shell draws the alert above their head. For Dossier the shell also draws the loading view and, when the tracker failed, the note that the application is hidden.
 
 ### PDF pages
 

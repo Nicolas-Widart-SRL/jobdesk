@@ -12,7 +12,7 @@ Preferences live in `settings.json` in the app's data folder and apply at once:
 
 They reach the window at launch and when one changes, as Appearance changes it, never on every frame.
 
-- With no file yet, as on the first launch after the theme left the status bar, the theme and zoom eframe restored are kept and saved.
+- With no file yet, as on the first launch after the theme left the status bar, Jobdesk keeps and saves the theme and zoom that `eframe` restored.
 - A file that cannot be read gives the defaults and stays until the next change replaces it. The rail's foot tells that apart from a change that could not be saved.
 
 ### Today queue rules and Jobs view filters

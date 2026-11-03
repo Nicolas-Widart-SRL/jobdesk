@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::shared_kernel::byte_order_mark::without_bom;
+use crate::shared_kernel::file_text::without_bom;
 use crate::workspace::domain::{PortalInfo, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
 
 const ASSISTANT: &str = ".claude/skills/job-application-assistant";

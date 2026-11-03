@@ -10,7 +10,7 @@ use crate::settings::domain::{
     ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SkipReasons,
     SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
 };
-use crate::shared_kernel::byte_order_mark::without_bom;
+use crate::shared_kernel::file_text::without_bom;
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
 const FILE: &str = "settings.json";

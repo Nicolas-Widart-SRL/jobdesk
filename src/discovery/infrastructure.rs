@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::discovery::domain::{CommuteTier, FetchFailure, FitLevel, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
-use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::parse_iso_date;
+use crate::shared_kernel::file_text::without_bom;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{LoadError, WebUrl};
 

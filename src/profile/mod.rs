@@ -192,14 +192,53 @@ mod tests {
     #[test]
     fn a_crlf_file_stays_crlf() {
         let dir = sample();
-        let file = path(dir.path(), ProfileFile::Candidate);
-        let before = fs::read_to_string(&file).unwrap().replace('\n', "\r\n");
-        fs::write(&file, &before).unwrap();
-        let mut editor = edit(dir.path(), "Junior Developer", |text| format!("{}\n- Ran the studio's first accessibility audit.", text.replace("\r\n", "\n")));
+        let file = crlf(dir.path(), ProfileFile::Candidate);
+        let before = fs::read_to_string(&file).unwrap();
+        let role = role(dir.path(), "Junior Developer");
+        assert!(!role.text.contains('\r') && !role.body.contains('\r'), "{:?}", role.text);
+        let mut editor = edit(dir.path(), "Junior Developer", |text| format!("{text}\n- Ran the studio's first accessibility audit."));
+        assert!(!editor.draft_mut().unwrap().contains('\r'), "the field shows no CR");
         assert_eq!(editor.save(false, false), SaveOutcome::Saved);
         let after = fs::read_to_string(&file).unwrap();
         assert!(after.contains("venues.\r\n- Ran the studio's first accessibility audit.\r\n\r\n## Independent Projects"), "{after:?}");
-        assert!(!after.replace("\r\n", "").contains('\n'), "every line still ends in CRLF");
+        assert!(!after.replace("\r\n", "").contains(['\n', '\r']), "every line still ends in CRLF");
+        let start = before.find(&role.text.replace('\n', "\r\n")).unwrap();
+        let end = start + role.text.replace('\n', "\r\n").len();
+        assert_eq!(&after[..start], &before[..start], "the blocks before keep their bytes");
+        assert_eq!(&after[after.len() - (before.len() - end)..], &before[end..], "the blocks after keep their bytes");
+    }
+
+    /// Rewrites `file` of the sample with CRLF line endings, and gives its path.
+    fn crlf(root: &Path, file: ProfileFile) -> PathBuf {
+        let path = path(root, file);
+        fs::write(&path, fs::read_to_string(&path).unwrap().replace("\r\n", "\n").replace('\n', "\r\n")).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_block_changed_on_disk_in_a_crlf_file_is_still_a_conflict() {
+        let dir = sample();
+        let file = crlf(dir.path(), ProfileFile::Candidate);
+        let mut editor = edit(dir.path(), "Lead Software Engineer", |text| text.replace("[PLACEHOLDER]", "EUR 1.2M a year"));
+        let theirs = fs::read_to_string(&file).unwrap().replace("Antwerp. Freelance.", "Antwerp. Freelance, four days a week.");
+        fs::write(&file, &theirs).unwrap();
+        let SaveOutcome::Changed { now } = editor.save(false, false) else { panic!("the block changed") };
+        assert!(now.contains("four days a week") && !now.contains('\r'), "{now:?}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), theirs, "nothing was written");
+        assert_eq!(editor.save(false, true), SaveOutcome::Saved);
+        let after = fs::read_to_string(&file).unwrap();
+        assert!(after.contains("EUR 1.2M a year") && !after.replace("\r\n", "").contains(['\n', '\r']), "{after:?}");
+    }
+
+    #[test]
+    fn a_block_that_differs_only_in_line_endings_is_no_conflict() {
+        let dir = sample();
+        let mut editor = edit(dir.path(), "Lead Software Engineer", |text| text.replace("[PLACEHOLDER]", "EUR 1.2M a year"));
+        let file = crlf(dir.path(), ProfileFile::Candidate);
+        let before = fs::read_to_string(&file).unwrap();
+        assert_eq!(editor.save(false, false), SaveOutcome::Saved);
+        let after = fs::read_to_string(&file).unwrap();
+        assert_eq!(after, before.replacen("[PLACEHOLDER]", "EUR 1.2M a year", 1));
     }
 
     #[test]

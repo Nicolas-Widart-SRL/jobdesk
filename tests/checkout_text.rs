@@ -56,8 +56,7 @@ fn load(kind: Text) -> Vec<(&'static str, String)> {
     archives.sort_by_key(|(folder, _)| *folder);
     let root = format!("{root:?}").trim_matches('"').to_owned();
     [
-        // A block's text keeps the file's own bytes, because Save compares it with the block on disk.
-        ("topics", format!("{:?}", snapshot.profile).replace("\\r\\n", "\\n")),
+        ("topics", format!("{:?}", snapshot.profile)),
         ("topic counts", format!("{:?}", topic_counts(&snapshot.profile))),
         ("jobs and lanes", format!("{:?}", snapshot.board)),
         ("terms", format!("{:?}", snapshot.terms)),

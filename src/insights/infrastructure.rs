@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::insights::domain::{SkillGap, SkillGapReport, SkillGapSource, StudyItem};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::iso_dates_in;
+use crate::shared_kernel::file_text::{with_lf, without_bom};
 
 const SOURCE: &str = "upskill";
 
@@ -40,7 +40,7 @@ fn is_aggregate(name: &str) -> bool {
 }
 
 fn parse_report(file_name: String, text: &str) -> SkillGapReport {
-    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: text.replace("\r\n", "\n"), ..Default::default() };
+    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: with_lf(text), ..Default::default() };
     let mut section = "";
     let mut bullets_into_new = false;
     for line in text.lines() {

@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::profile::domain::document::{BlockKey, find, heading_len};
+use crate::shared_kernel::file_text::with_lf;
 use crate::shared_kernel::placeholders::{placeholder_count, shows_content};
 
 /// How much of a topic the user has written.
@@ -52,11 +53,12 @@ pub enum SaveCheck {
     Gone,
 }
 
-/// `opened_with` is the text of the block when the user opened it.
+/// `opened_with` is the text of the block when the user opened it. Both sides are compared with LF line endings, so a block
+/// that differs only in them is the same, and `now` comes with LF endings, as the editor shows it.
 pub fn check(now_text: &str, key: &BlockKey, opened_with: &str) -> SaveCheck {
     let Some(range) = find(now_text, key) else { return SaveCheck::Gone };
-    let now = now_text[range.clone()].trim_end();
-    if now == opened_with.trim_end() { SaveCheck::Same(range) } else { SaveCheck::Changed { now: now.to_owned() } }
+    let now = with_lf(now_text[range.clone()].trim_end());
+    if now == with_lf(opened_with.trim_end()) { SaveCheck::Same(range) } else { SaveCheck::Changed { now } }
 }
 
 #[cfg(test)]
@@ -129,5 +131,15 @@ mod tests {
         assert_eq!(check(&edited, &key, &opened), SaveCheck::Changed { now: "## B\nbeta changed".to_owned() });
         let deleted = "## A\nalpha\n\n## C\ngamma\n";
         assert_eq!(check(deleted, &key, &opened), SaveCheck::Gone);
+    }
+
+    #[test]
+    fn line_endings_alone_are_no_change() {
+        let (key, opened) = key_of("## A\nalpha\n\n## B\nbeta\nmore\n\n## C\n", "B");
+        let crlf = "## A\r\nalpha\r\n\r\n## B\r\nbeta\r\nmore\r\n\r\n## C\r\n";
+        assert!(matches!(check(crlf, &key, &opened), SaveCheck::Same(_)));
+        assert!(matches!(check(&crlf.replace("\r\n", "\r"), &key, &opened), SaveCheck::Same(_)));
+        let edited = crlf.replace("beta", "beta changed");
+        assert_eq!(check(&edited, &key, &opened), SaveCheck::Changed { now: "## B\nbeta changed\nmore".to_owned() });
     }
 }

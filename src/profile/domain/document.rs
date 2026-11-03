@@ -3,7 +3,7 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::profile::domain::topic::{ProfileFile, SectionRef};
-use crate::shared_kernel::byte_order_mark::without_bom;
+use crate::shared_kernel::file_text::{with_lf, without_bom};
 use crate::shared_kernel::markdown;
 
 /// A `##` or `###` of a file and everything under it.
@@ -150,7 +150,7 @@ fn line_ending(text: &str, at: usize) -> &'static str {
 }
 
 fn with_ending(draft: &str, ending: &str) -> String {
-    let unix = draft.replace("\r\n", "\n").replace('\r', "\n");
+    let unix = with_lf(draft);
     if ending == "\n" { unix } else { unix.replace('\n', ending) }
 }
 
@@ -410,7 +410,7 @@ mod tests {
         let fronted = "\u{feff}---\nframework_version: 1.1.1\n---\n\n# Behavioral Profile\n\n## How\nx\n";
         assert_eq!(blocks(fronted).iter().map(|block| block.heading.as_str()).collect::<Vec<_>>(), ["How"]);
         assert_eq!(heading_len(&text[found[0].range.clone()]), 5);
-        assert!(!is_atx("x\u{feff}## A\n") && blocks("x\n\u{feff}## A\n").is_empty(), "a mark inside the text is kept as text");
+        assert_eq!(heading_len("\u{feff}# x\n---\nbody\n"), 11, "a mark that does not start the file is text, here of a setext heading");
         assert_eq!(insert_at("\u{feff}", 3, "## N"), "\u{feff}## N\n");
     }
 

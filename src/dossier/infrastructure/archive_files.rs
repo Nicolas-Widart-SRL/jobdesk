@@ -5,8 +5,8 @@ use std::time::UNIX_EPOCH;
 use chrono::NaiveDate;
 
 use crate::dossier::domain::{ApplicationRef, ArchiveContents, ArchiveRepository, NamedText, PdfDocument, PostingText, ResearchNote, within_workspace};
-use crate::shared_kernel::byte_order_mark::without_bom;
 use crate::shared_kernel::dates::{days_from, parse_iso_date};
+use crate::shared_kernel::file_text::{with_lf, without_bom};
 
 const GUARD_HEADING: &str = "## posting_guard";
 const RESEARCH_TTL_DAYS: i64 = 30;
@@ -56,7 +56,7 @@ impl ArchiveRepository for ArchiveFiles {
 
 /// An archived text as the dossier shows it: no byte order mark, and LF line endings, which every label lays out.
 fn shown_text(text: &str) -> String {
-    without_bom(text).replace("\r\n", "\n")
+    with_lf(without_bom(text))
 }
 
 fn split_posting(text: &str) -> PostingText {

@@ -2,6 +2,7 @@ use crate::profile::domain::{
     Block, BlockKey, Fill, Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec, blocks, heading_len, role_heading, select, topic_fill,
 };
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::file_text::with_lf;
 use crate::shared_kernel::placeholders::{Piece, heading_content, placeholder_count, shown_pieces};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -40,9 +41,9 @@ pub struct SectionView {
 pub struct BlockView {
     pub key: BlockKey,
     pub heading: String,
-    /// The block as it stands in the file, without the blank lines after it.
+    /// The block as it stands in the file, without the blank lines after it, and with LF line endings.
     pub text: String,
-    /// The block without its heading line. For a `##` with children it stops before the first child.
+    /// The block without its heading line, with LF line endings. For a `##` with children it stops before the first child.
     pub body: String,
     pub role: Option<Role>,
     /// The open tokens the page shows, in the heading line and `body`. A child counts its own, so the blocks of a topic
@@ -157,11 +158,11 @@ fn block_view(text: &str, file: ProfileFile, block: &Block, own_end: usize) -> B
     let body_start = (block.range.start + heading_len(full)).min(own_end);
     let own = &text[block.range.start..own_end];
     let role = if block.level == 3 { role_of(own) } else { None };
-    let body = text[body_start..own_end].trim().to_owned();
+    let body = with_lf(text[body_start..own_end].trim());
     BlockView {
         key: BlockKey { file, level: block.level, heading: block.heading.clone(), parent: block.parent.clone(), nth: block.nth },
         heading: block.heading.clone(),
-        text: full.to_owned(),
+        text: with_lf(full),
         placeholders: placeholder_count(own),
         body,
         role,

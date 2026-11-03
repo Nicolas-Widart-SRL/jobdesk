@@ -1,5 +1,6 @@
 use crate::profile::domain::{BlockKey, ProfileStore, SaveCheck, blocks, check, find, insert_at, replace};
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::file_text::with_lf;
 
 /// What a save did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,8 +62,10 @@ impl ProfileEditor {
         Self { store, open: None }
     }
 
-    /// Opens the block `key` names, as `text`, which is how the user saw it.
+    /// Opens the block `key` names, as `text`, which is how the user saw it. The draft holds LF line endings, because a
+    /// text field draws a CR as nothing, and a save writes the file's own.
     pub fn open(&mut self, key: BlockKey, text: String) {
+        let text = with_lf(&text);
         self.open = Some(Open { key, draft: text.clone(), opened_with: text, new: false, seen: None });
     }
 

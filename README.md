@@ -62,3 +62,7 @@ Jobdesk runs your installed Claude Code CLI. Tasks use Claude Code's own sign-in
 - [CONTRIBUTING.md](CONTRIBUTING.md): build, package, release and test.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the code is structured.
 - [CHANGELOG.md](CHANGELOG.md): what changed in each release.
+
+## License
+
+Jobdesk is released under the [MIT License](LICENSE).

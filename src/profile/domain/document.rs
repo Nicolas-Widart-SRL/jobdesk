@@ -412,6 +412,8 @@ mod tests {
         assert_eq!(heading_len(&text[found[0].range.clone()]), 5);
         assert_eq!(heading_len("\u{feff}# x\n---\nbody\n"), 11, "a mark that does not start the file is text, here of a setext heading");
         assert_eq!(insert_at("\u{feff}", 3, "## N"), "\u{feff}## N\n");
+        assert!(blocks("x\n\u{feff}## A\n").is_empty(), "a mark that starts a later line is text");
+        assert_eq!(blocks("## A\n\u{feff}## B\n").iter().map(|block| block.heading.as_str()).collect::<Vec<_>>(), ["A"]);
     }
 
     #[test]

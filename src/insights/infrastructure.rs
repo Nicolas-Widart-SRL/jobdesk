@@ -40,7 +40,8 @@ fn is_aggregate(name: &str) -> bool {
 }
 
 fn parse_report(file_name: String, text: &str) -> SkillGapReport {
-    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, raw: with_lf(text), ..Default::default() };
+    let text = with_lf(text);
+    let mut report = SkillGapReport { dated: iso_dates_in(&file_name).first().copied(), file_name, ..Default::default() };
     let mut section = "";
     let mut bullets_into_new = false;
     for line in text.lines() {
@@ -70,6 +71,7 @@ fn parse_report(file_name: String, text: &str) -> SkillGapReport {
             }
         }
     }
+    report.raw = text;
     report
 }
 
@@ -99,6 +101,13 @@ mod tests {
         assert_eq!(report.study_order[0].time, "20h");
         assert_eq!(report.total_time.as_deref(), Some("Total estimated time: ~20h"));
         assert_eq!((report.gaps_closed.len(), report.new_gaps.len()), (1, 1));
+    }
+
+    #[test]
+    fn a_report_with_lone_carriage_returns_reads_like_its_raw_view() {
+        let report = parse_report("report-2026-10-28.md".into(), &REPORT.replace('\n', "\r"));
+        assert_eq!(report, parse_report("report-2026-10-28.md".into(), REPORT));
+        assert!(report.mode.starts_with("Aggregate") && report.raw == REPORT);
     }
 
     #[test]

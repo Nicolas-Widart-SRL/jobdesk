@@ -15,8 +15,12 @@ const PAUSE: Duration = Duration::from_millis(40);
 /// Only for files whose last writer wins anyway. A file that is compared before it is replaced must not wait here, or a
 /// program that writes it during the wait would be overwritten unseen.
 pub fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
-    let held = |error: &io::Error| cfg!(windows) && is_transient(error.raw_os_error(), is_writable_file(to));
-    retried(|| std::fs::rename(from, to), held, ATTEMPTS, PAUSE)
+    retried(|| std::fs::rename(from, to), |error| is_held(error, to), ATTEMPTS, PAUSE)
+}
+
+/// Whether a failed rename over `to` is tried again: only on Windows, and only for an error `is_transient` names.
+fn is_held(error: &io::Error, to: &Path) -> bool {
+    cfg!(windows) && is_transient(error.raw_os_error(), is_writable_file(to))
 }
 
 /// Whether `path` is an existing file that its read-only attribute does not lock.
@@ -25,8 +29,9 @@ fn is_writable_file(path: &Path) -> bool {
 }
 
 /// Whether a Windows error from a rename names a file another program holds, which clears in a moment. A sharing
-/// violation (32) and a lock violation (33) do. Access denied (5) does only while the target is a writable file: a
-/// read-only attribute, an access list that denies the write and a folder in the target's place never clear.
+/// violation (32) and a lock violation (33) do. Access denied (5) does only while the target is a regular file without
+/// the read-only attribute: that attribute and a folder in the target's place never clear, so they fail at once. An
+/// access list that denies the write is not told apart from a held file, so it waits out the 5 tries before it fails.
 fn is_transient(code: Option<i32>, target_is_writable_file: bool) -> bool {
     match code {
         Some(32 | 33) => true,
@@ -121,6 +126,18 @@ mod tests {
         assert!(!is_transient(Some(2), true));
         assert!(!is_transient(Some(183), true));
         assert!(!is_transient(None, true));
+    }
+
+    /// Elsewhere these codes mean other errors, and none clears by waiting.
+    #[cfg(not(windows))]
+    #[test]
+    fn no_error_is_tried_again_off_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "text").unwrap();
+        for code in [5, 32, 33] {
+            assert!(!is_held(&io::Error::from_raw_os_error(code), &file), "{code}");
+        }
     }
 
     #[test]

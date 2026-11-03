@@ -368,6 +368,27 @@ mod tests {
 
     /// A role renamed on disk is gone under its old key. Saving would add a second copy, so it asks first.
     #[test]
+    fn the_draft_of_a_crlf_block_holds_no_cr() {
+        let (_, mut editor) = editor(&TEXT.replace('\n', "\r\n"));
+        editor.open(key(2, "Education", None), "## Education\r\nMSc\r\n".to_owned());
+        assert_eq!(editor.draft_mut().map(|draft| draft.clone()).as_deref(), Some("## Education\nMSc\n"));
+        assert!(!editor.is_dirty());
+    }
+
+    /// A text field draws a pasted lone CR as nothing, and the file gets it as one break in its own line ending.
+    #[test]
+    fn a_pasted_lone_cr_saves_as_one_break_in_the_files_ending() {
+        for ending in ["\n", "\r\n"] {
+            let text = TEXT.replace('\n', ending);
+            let (memory, mut editor) = editor(&text);
+            editor.open(key(2, "Education", None), "## Education\nMSc".to_owned());
+            *editor.draft_mut().unwrap() = "## Education\nMSc\rPhD".to_owned();
+            assert_eq!(editor.save(false, false), SaveOutcome::Saved);
+            assert_eq!(file(&memory), text.replace(&format!("MSc{ending}"), &format!("MSc{ending}PhD{ending}")), "{ending:?}");
+        }
+    }
+
+    #[test]
     fn a_gone_block_is_written_back_only_when_asked() {
         let (memory, mut editor) = editor(TEXT);
         editor.open(key(3, "Lead - Calder (2021 – now)", Some("Professional Experience")), "### Lead - Calder (2021 – now)\nShipped.".to_owned());

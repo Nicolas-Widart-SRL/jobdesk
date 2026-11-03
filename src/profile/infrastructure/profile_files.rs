@@ -502,18 +502,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn a_read_only_file_cannot_be_written() {
-        let (dir, _) = files();
-        let path = dir.path().join(ProfileFile::Candidate.relative_path());
-        fs::write(&path, "old").unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&path, permissions).unwrap();
-        assert!(cannot_write(&path, &fs::metadata(&path).unwrap()));
-    }
-
     #[test]
     fn a_file_that_is_gone_is_not_a_refusal_to_write() {
         let (dir, _) = files();

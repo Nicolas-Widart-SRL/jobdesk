@@ -74,7 +74,7 @@ The API key has one path: the system keychain, read once per launch until a read
 - The one exception is the key being typed in `secret_field`, shown in full only while the user presses Show.
 - `secret_field` never copies its text to the clipboard and keeps no undo history.
 - `ApiKey` in `shared_kernel` has no `Clone` and no `Display`, and its `Debug` prints no text, so a log line or a panic cannot carry it.
-- The key held in memory is an `ApiKey` in `Providers`, never serialized. Remove drops it once the keychain deleted it.
+- The key held in memory is an `ApiKey` in `Providers`, never serialized. Remove drops it once the keychain has deleted it.
 - The held key follows no change made to the keychain outside Jobdesk until it quits.
 
 ### Masking

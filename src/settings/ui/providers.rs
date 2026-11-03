@@ -28,6 +28,8 @@ const NOT_YET: &str = "Not available yet.";
 /// Why a test waits for one the page no longer shows: of the other method, or one the user turned away from.
 const OTHER_TEST: &str = "Another test is still finishing.";
 const BLANK: &str = "Paste a key first.";
+/// While a task's start reads the keychain, perhaps behind its prompt, the page does not know yet whether a key is saved.
+const KEYCHAIN_WAIT: &str = "Waiting for the keychain…";
 const TEST: &str = "Test connection";
 const USE_FOR_TASKS: &str = "Use for tasks";
 const NO_TASK_YET: &str = "The sign-in each task uses shows here after your first task. Claude Code reports it itself.";
@@ -534,6 +536,10 @@ fn key_detail(
             _ => saved_key(ui, screen, settings, providers, view, Ok(&mask), in_use),
         },
         Saved::Unreadable(why) if !screen.replacing => saved_key(ui, screen, settings, providers, view, Err(&why), in_use),
+        // No action until the keychain answers, so a key saved there is never replaced unseen.
+        Saved::NotRead => {
+            ui.add(Label::new(rich(ui, KEYCHAIN_WAIT, Type::BODY, Ink::Muted)).wrap());
+        }
         _ => key_entry(ui, screen, settings, providers, view),
     }
     problem_line(ui, screen);

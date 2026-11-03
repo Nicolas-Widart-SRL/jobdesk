@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
@@ -123,11 +124,13 @@ struct KeyCache {
     keys: Arc<dyn KeyStore>,
     cell: Mutex<Cell>,
     turn: Mutex<()>,
+    /// How many readers wait for another's read to end, so a test can tell one waits.
+    waiting: AtomicUsize,
 }
 
 impl KeyCache {
     fn new(keys: Arc<dyn KeyStore>) -> Self {
-        Self { keys, cell: Mutex::new(Cell { held: Held::NotRead, failure: None, generation: 0 }), turn: Mutex::new(()) }
+        Self { keys, cell: Mutex::new(Cell { held: Held::NotRead, failure: None, generation: 0 }), turn: Mutex::new(()), waiting: AtomicUsize::new(0) }
     }
 
     /// The held key, or the keychain's answer when nothing is held. A read under way on another thread is waited for and shared,
@@ -136,7 +139,12 @@ impl KeyCache {
         let (turn, waited) = match self.turn.try_lock() {
             Ok(turn) => (turn, false),
             Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), false),
-            Err(TryLockError::WouldBlock) => (self.turn.lock().unwrap_or_else(PoisonError::into_inner), true),
+            Err(TryLockError::WouldBlock) => {
+                self.waiting.fetch_add(1, Ordering::SeqCst);
+                let turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
+                self.waiting.fetch_sub(1, Ordering::SeqCst);
+                (turn, true)
+            }
         };
         if waited {
             let cell = self.cell();
@@ -328,7 +336,11 @@ impl Providers {
     /// It serves Test connection, Test again and Use for tasks on the key alike.
     pub fn test_key(&mut self, task_running: bool) -> Result<(), String> {
         self.gate(task_running)?;
-        let Some(read) = self.key.read_now() else { return Err(KEY_BUSY.to_owned()) };
+        // A key held already needs no turn, so a task's start that holds it a moment never makes this wait.
+        let read = match self.key.known() {
+            Some(Ok(held)) => Ok(held),
+            _ => self.key.read_now().ok_or_else(|| KEY_BUSY.to_owned())?,
+        };
         let key = match read {
             Ok(Some(key)) => key,
             Ok(None) => {
@@ -507,7 +519,7 @@ pub fn task_wait_reason(working: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -647,6 +659,15 @@ mod tests {
         /// What the keychain holds, read past the counter.
         fn stored(&self) -> Option<String> {
             self.keys.inner.read().unwrap().map(|key| key.expose().to_owned())
+        }
+
+        /// Waits until `count` readers wait for a read under way.
+        fn wait_for_waiters(&self, count: usize) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.providers.key.waiting.load(Ordering::SeqCst) < count {
+                assert!(Instant::now() < deadline, "no reader waits");
+                thread::yield_now();
+            }
         }
 
         fn failure(&self) -> Option<(Outcome, &str)> {
@@ -979,6 +1000,7 @@ mod tests {
             let reader = f.providers.key_reader();
             move || reader().map(|key| key.map(|key| key.expose().to_owned()))
         });
+        f.wait_for_waiters(1);
         // The window, meanwhile, never waits on the prompt the task's start opened.
         assert!(f.providers.read_once(), "the page looks again later");
         assert_eq!(f.providers.saved(), &Saved::NotRead);
@@ -1003,15 +1025,45 @@ mod tests {
         f.keys.wait_for_reads(1);
         let reader = f.providers.key_reader();
         let second = thread::spawn(move || reader().map(|key| key.is_some()));
+        f.wait_for_waiters(1);
         answer.send(()).unwrap();
         assert_eq!(first.join().unwrap(), Err("access denied".to_owned()));
-        let second = second.join().unwrap();
-        // The second reader either waited on the denied read or came after it and asked again itself.
-        assert_eq!(second, Err("access denied".to_owned()));
-        assert!(f.keys.reads() <= 2);
+        assert_eq!(second.join().unwrap(), Err("access denied".to_owned()), "the waiting reader takes the denial");
+        assert_eq!(f.keys.reads(), 1, "and does not ask again");
         f.providers.read_once();
         assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()), "the page takes the denial without a prompt");
-        assert!(f.keys.reads() <= 2);
+        assert_eq!(f.keys.reads(), 1);
+    }
+
+    #[test]
+    fn a_read_that_fails_while_a_key_is_saved_leaves_the_new_key() {
+        let mut f = fixture(Some(FAKE));
+        f.keys.fail_reads.store(true, Ordering::SeqCst);
+        let answer = f.keys.prompt();
+        let reading = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.map(|key| key.expose().to_owned()))
+        });
+        f.keys.wait_for_reads(1);
+        f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
+        answer.send(()).unwrap();
+        assert_eq!(reading.join().unwrap().unwrap().as_deref(), Some(OTHER), "the failure is not the answer once a key is held");
+        assert!(f.providers.key.cell().failure.is_none(), "nor is it kept");
+        f.providers.read_once();
+        assert!(matches!(f.providers.saved(), Saved::Present(_)));
+        assert_eq!(f.keys.reads(), 1);
+    }
+
+    #[test]
+    fn a_test_of_a_held_key_never_waits_for_the_read_turn() {
+        let mut f = fixture(Some(FAKE));
+        f.providers.read_once();
+        let key = Arc::clone(&f.providers.key);
+        let turn = key.turn.lock().unwrap();
+        f.providers.test_key(false).unwrap();
+        drop(turn);
+        assert_eq!(f.tester.last_key().as_deref(), Some(FAKE));
+        assert_eq!(f.keys.reads(), 1);
     }
 
     #[test]

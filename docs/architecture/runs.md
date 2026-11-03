@@ -61,7 +61,7 @@ Tasks sign in one of two ways, the sign-in method `settings` keeps:
 
 - A read that fails, such as a denied prompt, is not held, so the next task's start or test asks the keychain again. Providers showing does not: it shows the failure. No key saved is an answer, and is held.
 - Two reads at once ask the keychain once and share its answer.
-- The lock on the held key is never kept across a keychain call. While a task's start reads, Providers shows nothing yet and looks again a little later, and a test of the key says to wait, so the window never waits on that prompt.
+- The lock on the held key is never kept across a keychain call. While a task's start reads, the API key section of Providers says Waiting for the keychain…, offers no Save key, Replace, Remove or test, and looks again a little later. A test of a key not held yet says to wait. So the window never waits on that prompt, and a key saved in the keychain is never replaced unseen.
 - Save key replaces the key held, and Remove drops it once the keychain item is deleted. Both write the keychain, so they may prompt too.
 - A read that ends after a save or a remove leaves what they wrote in place.
 

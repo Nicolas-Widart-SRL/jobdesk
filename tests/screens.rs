@@ -6167,6 +6167,56 @@ fn a_refused_keychain_write_still_empties_the_field() {
     assert_never_shown(&harness, FAKE_KEY);
 }
 
+/// A keychain whose first read says it started, then waits for the test's answer, as behind its prompt.
+struct PromptKeychain {
+    asked: Mutex<std::sync::mpsc::Sender<()>>,
+    answered: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl KeyStore for PromptKeychain {
+    fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
+        let _ = self.asked.lock().unwrap().send(());
+        let answered = self.answered.lock().unwrap().take();
+        if let Some(answered) = answered {
+            answered.recv().unwrap();
+        }
+        Ok(ApiKey::parse(FAKE_KEY))
+    }
+
+    fn write(&self, _: &ApiKey) -> Result<(), KeyStoreError> {
+        Ok(())
+    }
+
+    fn delete(&self) -> Result<(), KeyStoreError> {
+        Ok(())
+    }
+}
+
+/// While a task's start reads the keychain, Providers does not know yet whether a key is saved, so it offers nothing to do.
+#[test]
+fn providers_waits_for_a_keychain_read_a_task_started() {
+    let (asked, started) = std::sync::mpsc::channel();
+    let (answer, answered) = std::sync::mpsc::channel();
+    let keys = PromptKeychain { asked: Mutex::new(asked), answered: Mutex::new(Some(answered)) };
+    let providers = open_providers(Arc::new(keys), idle_tester());
+    let reader = providers.key_reader();
+    let task = std::thread::spawn(move || reader().map(|key| key.is_some()));
+    started.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    let mut harness = tray_harness(providers_shell("providers_keychain_waits", providers, ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Waiting for the keychain…"));
+    for action in ["Save key", "Replace", "Remove", "Test connection", "Use for tasks"] {
+        assert!(!is_shown(&harness, action), "{action}");
+    }
+    assert!(harness.query_by_role(egui::accesskit::Role::PasswordInput).is_none(), "no field to paste a key over the saved one");
+    answer.send(()).unwrap();
+    assert_eq!(task.join().unwrap(), Ok(true));
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Waiting for the keychain…"));
+    assert!(is_shown(&harness, "Remove") && !is_shown(&harness, "Save key"), "the saved key shows once the keychain answers");
+}
+
 /// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too. Its
 /// reason says how to free it, as a working task's cannot.
 #[test]

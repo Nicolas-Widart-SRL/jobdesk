@@ -340,6 +340,18 @@ pub fn cost_text(run: &Run) -> String {
     format!("{about}${:.2} of ${:.2}", cost.usd, run.budget_usd)
 }
 
+/// The line under the cost while it reads About, or `None` when it is exact.
+/// The estimate of a process that ended without its result never turns exact, so the line does not promise it will.
+pub fn cost_note(run: &Run) -> Option<&'static str> {
+    if !run.shown_cost().estimated {
+        None
+    } else if run.keeps_an_ended_estimate() {
+        Some("Includes an estimate: a session ended without its final cost.")
+    } else {
+        Some("Estimated until Claude's turn ends.")
+    }
+}
+
 /// A tool's path as the folder and the file, with the workspace root cut from the front.
 /// A path that climbs out with `..` stays whole, so it cannot pass for one inside the workspace.
 /// The folder keeps its closing slash.
@@ -522,6 +534,26 @@ mod tests {
         assert_eq!(cost_text(&run), "About $1.00 of $1.00");
         ends_turn(&mut run);
         assert_eq!(cost_text(&run), "$0.50 of $1.00", "the result replaces the estimate");
+    }
+
+    #[test]
+    fn the_cost_note_says_what_the_estimate_holds() {
+        let used = |run: &mut Run, id: &str| {
+            let tokens = Tokens { output: 4_000, ..Tokens::default() };
+            run.apply(AgentEvent::MessageUsage { id: id.into(), model: "claude-opus-4-5".into(), tokens });
+        };
+        let mut run = started("/rank");
+        assert_eq!(cost_note(&run), None, "an exact cost");
+        used(&mut run, "m1");
+        assert_eq!(cost_note(&run), Some("Estimated until Claude's turn ends."), "a live turn");
+        run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
+        run.note_reply("again");
+        run.note_process_start(crate::shared_kernel::SignIn::ClaudeSignIn);
+        ends_turn(&mut run);
+        assert!(cost_text(&run).starts_with("About "), "{}", cost_text(&run));
+        assert_eq!(cost_note(&run), Some("Includes an estimate: a session ended without its final cost."));
+        used(&mut run, "m2");
+        assert_eq!(cost_note(&run), Some("Includes an estimate: a session ended without its final cost."), "the part that never turns exact wins");
     }
 
     fn at_draft_working() -> Run {

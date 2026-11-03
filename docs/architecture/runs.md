@@ -149,7 +149,7 @@ The Tasks screen shows three figures that change while a run works: the time sin
 ### The last update
 
 - Any line the CLI writes counts as an update, whatever it holds.
-- `claude_gateway` sends `AgentEvent::Heard` for a line that gives no event of its own, at most once a second, so a stream of silent lines does not flood the channel. `RunDesk` stamps `Run::last_heard` on every event it receives, and on a send or a reply.
+- `claude_gateway` sends `AgentEvent::Heard` for a line that gives no event of its own, at most once a second, so a stream of silent lines does not flood the channel. `RunDesk` stamps `Run::last_heard` on every event it receives, and on a send, a reply or an answer to a prompt (`decide`), which also settles the clock.
 - `runs::domain::quiet` ranks the time since then: fresh under 30 s, quiet from 30 s, long quiet from 2 min. The band's Whose turn cell and its sweep follow that rank.
 - The cell's screen reader label names the rank without a number ("Last update under 30 seconds ago"), so it changes only when the rank does, not each second.
 
@@ -158,16 +158,17 @@ The Tasks screen shows three figures that change while a run works: the time sin
 - `Elapsed` measures the clock from the user's send to the run's end, in spans. It never reads the clock: `RunDesk` passes `now` from its own clock, which a test can script.
 - The clock runs while the run is busy or `wants_reply` holds, so it runs on while Claude waits on the user. It holds when the turn ends done for now, and when the run fails, stops or closes.
 - A later reply opens a new span and adds it to the held figure.
-- A run read back from its log starts from the sum of its turns' `duration_ms`, which Claude reports, and has no open span until the user replies.
+- A run read back from its log starts from the sum of its turns' `duration_ms`, which Claude reports, and has no open span until the user replies. The log keeps no timestamps, so the clock time of the user's turns and of the gaps is lost: a run that read 9:31 live can read less after a restart or a folder switch, and a run left waiting overnight drops from hours to Claude's minutes. A later reply adds clock time on top of the restored figure.
 - The screen shows it as `m:ss`, or `h:mm:ss` from an hour.
 
 ### Cost
 
-- `StreamReader` estimates each message from its token use and the model's list price: Opus, Sonnet or Haiku by family, and Opus, the dearest, for a model of no known family.
+- `StreamReader` estimates each message from its token use and one list price per family: Opus, Sonnet or Haiku, whatever the version, and Opus for a model of no known family. The estimate is approximate in either direction: an older Opus with a higher price reads low, a cheaper unknown model reads high. The CLI's figure replaces it at the turn's result.
 - The tokens come from `message_start`, `assistant` and `message_delta` lines. The reader merges them by message id and keeps the larger figure of each count, because a message's figures only grow. The final usage of a message arrives in its `message_delta`, which names no model, so the reader prices it by the model it saw for the id. A `message_delta` for a message the reader never saw start is dropped, so the estimate can read low there but never counts a message twice.
-- `Run::shown_cost` adds what the CLI reported, the estimates of earlier processes that ended without a result, and the estimates of the turn under way. It is marked an estimate while any estimate is in it, and the screen shows "About $X" with the line "Estimated until Claude's turn ends."
+- `Run::shown_cost` adds what the CLI reported, the estimates of earlier processes that ended without a result, and the estimates of the turn under way. It is marked an estimate while any estimate is in it, and the screen shows "About $X". `story::cost_note` picks the line under it: "Includes an estimate: a session ended without its final cost." while an ended process's estimate is in the figure, since that part never turns exact, and otherwise "Estimated until Claude's turn ends."
 - A turn's result replaces that turn's estimates with the CLI's cost.
 - A process that ends with no result keeps its estimate. A resumed run adds the cost of each process, because each process reports its own running total from zero.
+- A run read back from its log has no live process, so `settle_after_restore` counts its last process as ended, and a reply that starts a new process notes the old one's end again (`Run::note_process_start`), which is safe to repeat. The cost then adds up the same live and after the next restart.
 
 ### Frames
 

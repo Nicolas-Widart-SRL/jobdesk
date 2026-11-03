@@ -244,8 +244,13 @@ impl RunDesk {
         Ok(())
     }
 
+    /// An answer to a prompt is a send: the last update is now, and the clock follows whose turn it is.
     pub fn decide(&mut self, id: &str, request_id: &str, decision: Decision) {
-        let Some(prompt) = self.run_mut(id).and_then(|run| run.resolve_prompt(request_id, &decision)) else { return };
+        let now = self.now();
+        let Some(run) = self.run_mut(id) else { return };
+        let Some(prompt) = run.resolve_prompt(request_id, &decision) else { return };
+        run.heard(now);
+        settle_clock(run, now);
         if let Some(session) = self.sessions.get_mut(id) {
             session.respond(&prompt, &decision);
         }
@@ -631,6 +636,69 @@ mod tests {
         at(90);
         desk.reply(&id, "yes").unwrap();
         assert_eq!(desk.run(&id).unwrap().last_heard, Some(base + secs(90)), "a reply");
+    }
+
+    #[test]
+    fn a_decision_resets_the_quiet_and_the_clock_keeps_ticking() {
+        let (mut desk, base, at) = desk_on_a_scripted_clock();
+        let secs = Duration::from_secs;
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        let prompt = Prompt { request_id: "r".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None };
+        desk.sink_for(&id)(AgentEvent::PromptRaised(prompt));
+        desk.poll();
+        at(180);
+        desk.decide(&id, "r", Decision::Allow { remember: false });
+        let run = desk.run(&id).unwrap();
+        assert_eq!(run.last_heard, Some(base + secs(180)), "the answer is an update");
+        assert!(run.elapsed.is_running(), "Claude's turn again");
+        at(200);
+        assert_eq!(desk.run(&id).unwrap().elapsed.total(desk.now()), secs(200));
+        at(210);
+        desk.decide(&id, "r", Decision::Deny);
+        assert_eq!(desk.run(&id).unwrap().last_heard, Some(base + secs(180)), "no prompt, no send");
+    }
+
+    struct Restored(Run);
+
+    impl RunHistory for Restored {
+        fn recent(&self, _: usize) -> Vec<Run> {
+            vec![self.0.clone()]
+        }
+    }
+
+    /// A Closed `/apply` read back from its log, its last turn's result $1.31, and an estimate its last process left without one.
+    fn restored_apply(estimate: bool) -> Run {
+        let mut run = Run::new(&RunRequest {
+            run_id: "old".into(),
+            line: "/apply x".into(),
+            model: None,
+            budget_usd: 3.0,
+            started_at: String::new(),
+            resume_session: Some("s0".into()),
+            sign_in: SignIn::ClaudeSignIn,
+        });
+        run.apply(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 1.31, duration_ms: 1 });
+        if estimate {
+            let tokens = crate::runs::domain::Tokens { output: 4_000, ..Default::default() };
+            run.apply(AgentEvent::MessageUsage { id: "m9".into(), model: "claude-opus-4-5".into(), tokens });
+        }
+        run.settle_after_restore();
+        run
+    }
+
+    #[test]
+    fn a_reply_to_a_restored_run_adds_its_cost_to_the_old() {
+        for estimate in [false, true] {
+            let (mut desk, _) = desk();
+            desk.restore(&Restored(restored_apply(estimate)));
+            let before = desk.run("old").unwrap().shown_cost();
+            desk.reply("old", "continue").unwrap();
+            desk.sink_for("old")(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.2, duration_ms: 1 });
+            desk.poll();
+            let shown = desk.run("old").unwrap().shown_cost();
+            assert!((shown.usd - (before.usd + 0.2)).abs() < 1e-9, "{} after {}", shown.usd, before.usd);
+            assert_eq!(shown.estimated, estimate, "an estimate the old process left stays");
+        }
     }
 
     #[test]

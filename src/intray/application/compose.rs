@@ -85,7 +85,8 @@ fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> 
         over: None,
         subject: Subject::Run(run.id.clone()),
         title: words.title,
-        subtitle: format!("{line} {}, ${:.2} of ${:.2} spent", words.status, run.cost_usd, run.budget_usd),
+        // The cost Tasks shows, estimate included, so the two screens agree.
+        subtitle: format!("{line} {}, ${:.2} of ${:.2} spent", words.status, run.shown_cost().usd, run.budget_usd),
         take: words.take.into(),
         when: words.when.into(),
         due: None,
@@ -767,6 +768,14 @@ mod tests {
 
     fn says(run: &mut Run, text: &str) {
         run.apply(AgentEvent::AssistantText { text: text.into(), nested: false });
+    }
+
+    #[test]
+    fn a_run_card_spends_the_cost_tasks_shows() {
+        let mut run = paused(PromptKind::Questions(vec![]));
+        let tokens = crate::runs::application::Tokens { output: 40_000, ..Default::default() };
+        run.apply(AgentEvent::MessageUsage { id: "m1".into(), model: "claude-opus-4-5".into(), tokens });
+        assert_eq!(turn_card_of(&run).unwrap().subtitle, "/apply x is paused, $1.00 of $3.00 spent", "the estimate counts before the result");
     }
 
     #[test]

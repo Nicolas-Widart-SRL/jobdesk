@@ -11,8 +11,8 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
     Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine,
-    StepState, Sweep, ToolState, action_noun, band, closing_question, cost_text, elapsed_text, first_line, notice_text, short_path, step_lines, stop_point,
-    wants_reply,
+    StepState, Sweep, ToolState, action_noun, band, closing_question, cost_note, cost_text, elapsed_text, first_line, notice_text, short_path, step_lines,
+    stop_point, wants_reply,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
@@ -58,7 +58,6 @@ const DETAIL_GAP: f32 = 4.0;
 const SWEEP_FRAME: Duration = Duration::from_millis(33);
 /// The Whose turn cell, which carries the sweep.
 const WHO_CELL: usize = 1;
-const ESTIMATE_NOTE: &str = "Estimated until Claude's turn ends.";
 
 /// What the run screen asks of the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -864,12 +863,12 @@ impl RunScreen {
                 panel_body(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = ROW_GAP;
-                    // Cost counts up from each message's tokens, marked About until the turn's result gives the real figure.
+                    // Cost counts up from each message's tokens, marked About while any of it is an estimate, and the line under it says why.
                     let cost = run.shown_cost();
                     fact(ui, "Cost", &cost_text(run));
                     slip_bar(ui, (cost.usd / run.budget_usd.max(0.01)) as f32, Ink::Text);
-                    if cost.estimated {
-                        estimate_note(ui, ESTIMATE_NOTE);
+                    if let Some(note) = cost_note(run) {
+                        estimate_note(ui, note);
                     }
                     // By the clock, from the send to the run's end: it runs on through the user's turn and holds once the run ends.
                     fact(ui, "Elapsed", &elapsed_text(run.elapsed.total(now).as_millis() as u64));

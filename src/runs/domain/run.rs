@@ -180,6 +180,11 @@ impl Run {
         }
     }
 
+    /// Whether part of the shown cost is the estimate of a process that ended without its result, so it never turns exact.
+    pub fn keeps_an_ended_estimate(&self) -> bool {
+        self.estimate_of_ended_processes > 0.0
+    }
+
     /// The stream said something at `now`.
     pub fn heard(&mut self, now: Instant) {
         self.last_heard = Some(now);
@@ -187,6 +192,7 @@ impl Run {
 
     /// A new process continues the run, and its running total starts again from zero.
     /// What the old one spent is kept, and so is the estimate of what it never reported.
+    /// Noting the same end twice changes nothing.
     pub fn note_new_process(&mut self) {
         self.cost_of_ended_processes = self.cost_usd;
         self.estimate_of_ended_processes += self.turn_estimates.drain(..).map(|(_, usd)| usd).sum::<f64>();
@@ -222,7 +228,9 @@ impl Run {
     }
 
     /// A new process continues the run, signed in with `sign_in`, which holds once it reports.
+    /// The one before it has ended, even when no exit was seen, as for a run read back from its log.
     pub fn note_process_start(&mut self, sign_in: SignIn) {
+        self.note_new_process();
         self.starting_sign_in = Some(sign_in);
     }
 
@@ -280,8 +288,9 @@ impl Run {
         }
     }
 
-    /// A run read back from its log has no live process.
+    /// A run read back from its log has no live process: its last one has ended, with what it spent and any estimate kept.
     pub fn settle_after_restore(&mut self) {
+        self.note_new_process();
         self.prompts.clear();
         self.background_agents = 0;
         self.streaming_text.clear();
@@ -570,6 +579,47 @@ mod tests {
         assert_eq!(run.shown_cost(), CostFigure { usd: 25.0, estimated: true }, "once, however often it is noted");
         run.apply(turn(0.25));
         assert_eq!(run.shown_cost(), CostFigure { usd: 25.25, estimated: true });
+    }
+
+    /// A restored run, replied to: its new process starts without an exit of the last one seen.
+    fn resumed_after_restore(run: &mut Run) {
+        run.settle_after_restore();
+        run.note_reply("again");
+        run.note_process_start(crate::shared_kernel::SignIn::ClaudeSignIn);
+    }
+
+    #[test]
+    fn a_restored_run_adds_its_next_process_to_the_exact_cost() {
+        let mut run = run("/apply x");
+        run.apply(turn(1.31));
+        resumed_after_restore(&mut run);
+        assert_eq!(run.shown_cost(), CostFigure { usd: 1.31, estimated: false }, "the reply alone changes nothing");
+        run.apply(turn(0.2));
+        assert!((run.cost_usd - 1.51).abs() < 1e-9, "{}", run.cost_usd);
+        assert!(!run.shown_cost().estimated);
+    }
+
+    #[test]
+    fn a_restored_run_keeps_the_estimate_its_last_process_left() {
+        let mut run = run("/apply x");
+        run.apply(turn(0.5));
+        run.apply(used("m1", 1_000_000));
+        run.settle_after_restore();
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.5, estimated: true });
+        assert!(run.keeps_an_ended_estimate(), "its process has ended");
+        run.note_reply("again");
+        run.note_process_start(crate::shared_kernel::SignIn::ClaudeSignIn);
+        run.apply(turn(0.25));
+        assert_eq!(run.shown_cost(), CostFigure { usd: 25.75, estimated: true }, "the old estimate stays, the new result adds up");
+    }
+
+    #[test]
+    fn a_live_turn_estimate_is_not_an_ended_one() {
+        let mut run = run("/rank");
+        run.apply(used("m1", 1_000_000));
+        assert!(!run.keeps_an_ended_estimate());
+        run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
+        assert!(run.keeps_an_ended_estimate());
     }
 
     #[test]

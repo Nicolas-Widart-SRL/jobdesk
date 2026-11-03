@@ -79,8 +79,9 @@ pub struct Price {
     pub cache_read: f64,
 }
 
-/// The list price of a model's family. A model of no known family, or none named, is priced as Opus, the dearest,
-/// so a message of an unknown model is not under-priced.
+/// The list price of a model's family, one price per family whatever its version. A model of no known family, or none named,
+/// is priced as Opus. So the estimate is approximate either way: an older Opus priced higher reads low, and a cheaper unknown
+/// model reads high. The CLI's own figure replaces it when the turn ends.
 pub fn price_for(model: &str) -> Price {
     match model_family(model).as_str() {
         "Sonnet" => Price { input: 3.0, output: 15.0, cache_write: 3.75, cache_read: 0.30 },

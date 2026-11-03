@@ -55,15 +55,23 @@ pub trait ArchiveRepository {
 /// Tracker cells are free text, so a stored path may only point inside the workspace.
 /// Both separators count on every system, so a `..\` path is refused on macOS too.
 /// Refused on every system: an empty path, a leading `/` or `\` (which covers a UNC start `\\`),
-/// a `..` part, and any `:` anywhere. A `:` marks a drive (`C:`), which on Windows replaces
-/// the path built so far, or an alternate data stream (`a.pdf:stream`).
+/// a `..` part, and a part, the first included, that starts with an ASCII letter and a `:`
+/// (`C:` or `C:x`). On Windows such a part replaces the path built so far.
+/// Refused on Windows only: any `:` in a part, which names an alternate data stream
+/// (`a.pdf:stream`). Elsewhere `:` is an ordinary character, as in `acme:-labs.json`
+/// or a Finder-renamed `CV 10:2024`.
 pub fn within_workspace(root: &Path, relative: &str) -> Option<PathBuf> {
     let relative = relative.trim();
-    if relative.is_empty() || relative.contains(':') || relative.starts_with(['/', '\\']) {
+    if relative.is_empty() || relative.starts_with(['/', '\\']) {
         return None;
     }
     let mut path = root.to_path_buf();
     for part in relative.split(['/', '\\']) {
+        let bytes = part.as_bytes();
+        let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+        if drive || (cfg!(windows) && part.contains(':')) {
+            return None;
+        }
         match part {
             ".." => return None,
             "" | "." => {}
@@ -96,8 +104,25 @@ mod tests {
             "cv\\C:\\x",
             "cv/C:/x",
             "a/z:/x",
-            "file.pdf:stream",
         ] {
+            assert_eq!(within_workspace(root, bad), None, "{bad}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_colon_is_an_ordinary_character_off_windows() {
+        let root = Path::new("/w");
+        for ok in ["file.pdf:stream", "company_research/acme:-labs.json", "CV 10:2024"] {
+            assert_eq!(within_workspace(root, ok), Some(root.join(ok)), "{ok}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn any_colon_is_refused_on_windows() {
+        let root = Path::new("/w");
+        for bad in ["file.pdf:stream", "company_research/acme:-labs.json", "CV 10:2024"] {
             assert_eq!(within_workspace(root, bad), None, "{bad}");
         }
     }

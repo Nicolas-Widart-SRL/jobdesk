@@ -6,10 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::profile::application::{
-    BlockKey, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UNREADABLE, UpdatedMarks, topic_counts,
+    BlockKey, CvShelf, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UNREADABLE, UpdatedMarks, rail_word,
+    topic_counts,
 };
+use crate::profile::ui::cv::cv_paper;
 use crate::profile::ui::editor::{Answer, Ask, Edit, Hold, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
-use crate::profile::ui::rail::{UPDATED_HOVER, loading_rail, rail};
+use crate::profile::ui::rail::{Pick, UPDATED_HOVER, loading_rail, rail};
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{BUTTON_GAP, DEAL_PADDING, GUTTER, ITEM_GAP, ROLE_DATES, ROLE_PADDING, RUN_SIDE, SCREEN_GAP, SKELETON_GAP, SKELETON_LINE};
 use crate::ui_kit::{
@@ -21,8 +23,8 @@ use crate::ui_kit::{
 /// What the head says under the title once the profile is read.
 const SUBTITLE: &str = "Claude reads this before it scores a job or writes a CV or a letter.";
 const CLAUDE: &str = "Update with Claude…";
-/// Why Update with Claude… waits while a run works.
-const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
+/// Why Update with Claude… and a CV build wait while a run works.
+pub(super) const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
 /// What the paper says of a topic a file hid.
 const HIDDEN: &str = "Jobdesk could not read a file that holds this topic, so it is not shown. Nothing in the file was changed. Jobdesk reads it again as soon as the file changes.";
 /// Why Write it myself waits when the file lacks the topic's section.
@@ -30,11 +32,12 @@ const NO_SECTION: &str = "This topic's section is not in the file. Update with C
 /// The same for a topic `/setup` has no section for.
 const NO_SECTION_BY_HAND: &str = "This topic's section is not in the file, so there is nothing to edit yet.";
 
-/// What stays between frames: the topic on paper, whether its empty state shows its command, the rendered Markdown, the
-/// one edit on show, and the ask that waits on it.
+/// What stays between frames: the topic or CV documents on paper, the CV document picked by its stem, whether a topic's
+/// empty state shows its command, the rendered Markdown, the one edit on show, and the ask that waits on it.
 #[derive(Default)]
 pub struct ProfileScreen {
-    picked: Option<TopicId>,
+    picked: Option<Pick>,
+    cv_picked: Option<String>,
     show_command: bool,
     markdown: CommonMarkCache,
     edit: Option<Edit>,
@@ -119,14 +122,17 @@ impl Moment {
 }
 
 /// The rail of topics beside the one picked, on paper. Until a topic is picked, the first with something left to fill opens.
-/// A picked topic is open, so its rail mark clears, and picking another leaves it, so its head line goes.
+/// A picked topic is open, so its rail mark clears, and picking another leaves it, so its head line goes. The CV documents
+/// row under the topics opens `cv` on paper instead.
 /// One block at a time opens in the editor. Unsaved text asks before it goes, and Save waits while a run works.
-/// Every Claude action only opens the launcher: nothing here starts a run.
+/// Every Claude action and every build only opens the launcher: nothing here starts a run.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     screen: &mut ProfileScreen,
     state: &ScreenState,
     view: &ProfileView,
+    cv: &CvShelf,
     editor: &mut ProfileEditor,
     marks: &mut UpdatedMarks,
     moment: Moment,
@@ -149,7 +155,7 @@ pub fn show(
                 match ask {
                     // The shell asks these over every screen, with `ask_away`.
                     Ask::Cancel | Ask::Folder | Ask::Quit => {}
-                    Ask::Topic(next) => screen.switch(next, marks),
+                    Ask::Pick(next) => screen.switch(next, marks),
                     Ask::Tab => request = Some(ProfileRequest::Leave),
                 }
             }
@@ -170,31 +176,42 @@ pub fn show(
             no_profile(ui);
             return;
         }
-        let Some(picked) = screen.picked.or_else(|| first_to_fill(view)) else { return };
+        let Some(picked) = screen.picked.or_else(|| first_to_fill(view).map(Pick::Topic)) else { return };
         screen.picked = Some(picked);
-        marks.open(picked);
-        let Some(topic) = view.topics.iter().find(|topic| topic.id == picked) else { return };
+        let topic = match picked {
+            Pick::Topic(id) => {
+                marks.open(id);
+                let Some(topic) = view.topics.iter().find(|topic| topic.id == id) else { return };
+                Some(topic)
+            }
+            Pick::CvDocuments => None,
+        };
         let mut chosen = None;
         let mut intent = None;
         columns(
             ui,
-            |ui| chosen = rail(ui, view, counts, picked, marks),
-            |ui| {
-                ui.push_id(("profile topic", picked), |ui| {
-                    let open = Open { updated: marks.head_line(picked), busy: moment.busy, now: moment.now };
-                    let edit = screen.edit.as_mut().filter(|edit| edit.topic == picked);
-                    let mut paper = Paper { cache: &mut screen.markdown, editor: &mut *editor, edit, hold: moment.hold(), intent: None };
-                    topic_paper(ui, &mut paper, &mut screen.show_command, topic, &open);
-                    intent = paper.intent;
-                });
+            |ui| chosen = rail(ui, view, counts, picked, marks, rail_word(cv)),
+            |ui| match topic {
+                Some(topic) => {
+                    ui.push_id(("profile topic", topic.id), |ui| {
+                        let open = Open { updated: marks.head_line(topic.id), busy: moment.busy, now: moment.now };
+                        let edit = screen.edit.as_mut().filter(|edit| edit.topic == topic.id);
+                        let mut paper = Paper { cache: &mut screen.markdown, editor: &mut *editor, edit, hold: moment.hold(), intent: None };
+                        topic_paper(ui, &mut paper, &mut screen.show_command, topic, &open);
+                        intent = paper.intent;
+                    });
+                }
+                None => {
+                    ui.push_id("profile cv documents", |ui| cv_paper(ui, cv, &mut screen.cv_picked, moment.busy, moment.now));
+                }
             },
         );
-        if let Some(intent) = intent {
-            request = request.or(screen.follow(intent, picked, editor, moment));
+        if let (Some(intent), Some(topic)) = (intent, topic) {
+            request = request.or(screen.follow(intent, topic.id, editor, moment));
         }
         if let Some(next) = chosen.filter(|&next| next != picked) {
             if editor.is_dirty() {
-                screen.ask = Some((Ask::Topic(next), true));
+                screen.ask = Some((Ask::Pick(next), true));
             } else {
                 editor.cancel();
                 screen.edit = None;
@@ -221,12 +238,14 @@ enum Intent {
 }
 
 impl ProfileScreen {
-    /// Leaves the topic on paper for `next`, which clears its rail mark and drops the last one's head line.
-    fn switch(&mut self, next: TopicId, marks: &mut UpdatedMarks) {
-        if let Some(picked) = self.picked {
+    /// Leaves what is on paper for `next`. Leaving a topic drops its head line, and opening one clears its rail mark.
+    fn switch(&mut self, next: Pick, marks: &mut UpdatedMarks) {
+        if let Some(Pick::Topic(picked)) = self.picked {
             marks.leave(picked);
         }
-        marks.open(next);
+        if let Pick::Topic(next) = next {
+            marks.open(next);
+        }
         self.picked = Some(next);
         self.show_command = false;
     }

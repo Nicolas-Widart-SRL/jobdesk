@@ -4147,7 +4147,11 @@ fn rewrite(root: &Path, relative: &str, from: &str, to: &str) {
 
 /// The sample on Profile, with a `/setup` run working and the feed that hands the shell snapshots, as the folder watcher does.
 fn profile_with_run(name: &str) -> (Shell, std::path::PathBuf, SharedSink, std::sync::mpsc::Sender<Snapshot>) {
-    let root = sample_root(name);
+    profile_with_run_on(sample_root(name))
+}
+
+/// The same on a folder a test has prepared.
+fn profile_with_run_on(root: std::path::PathBuf) -> (Shell, std::path::PathBuf, SharedSink, std::sync::mpsc::Sender<Snapshot>) {
     let mut shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
     let feed = shell.snapshot_feed();
     let sink = SharedSink::default();
@@ -4500,6 +4504,205 @@ fn profile_updated_light() {
     feed.send(Snapshot::load(&root, day())).unwrap();
     harness.run_steps(3);
     compare(&mut harness, "profile_updated_light");
+}
+
+const CV_DOCUMENTS: &str = "CV documents";
+const REBUILD: &str = "Rebuild the PDF…";
+const CV_SHOWS: &str = "Jobdesk shows these PDFs. /build-cv builds them.";
+
+/// The moment the CV documents' ages count to.
+fn cv_now() -> NaiveDateTime {
+    run_started()
+}
+
+/// The canvas's nine CV documents, by stem: hours before `cv_now` their `.tex` and PDF were last changed, if they exist,
+/// and the PDF's size. Halyard has no PDF yet, Tessel's `.tex` changed after its PDF, and Linden has no `.tex`.
+const CV_FILES: [(&str, Option<i64>, Option<i64>, usize); 9] = [
+    ("main_example", Some(5 * 24), Some(3 * 24), 84_000),
+    ("main_example_engineer", Some(14 * 24), Some(12 * 24), 97_000),
+    ("main_halyard_labs_tech_lead", Some(1), None, 0),
+    ("main_tessel_platform_lead", Some(3), Some(2 * 24), 91_000),
+    ("main_brightwell_eng_manager", Some(3 * 24), Some(24), 88_000),
+    ("main_ardent_backend_engineer", Some(6 * 24), Some(4 * 24), 86_000),
+    ("main_granite_cloud_staff_engineer", Some(10 * 24), Some(9 * 24), 102_000),
+    ("main_orchard_systems_architect", Some(16 * 24), Some(14 * 24), 83_000),
+    ("main_linden_analytics_data_lead", None, Some(35 * 24), 79_000),
+];
+
+/// Writes `bytes` to `path`, changed `hours` before `cv_now`.
+fn write_aged(path: &Path, bytes: &[u8], hours: i64) {
+    use chrono::TimeZone;
+    fs::write(path, bytes).unwrap();
+    let at = chrono::Local.from_local_datetime(&(cv_now() - chrono::Duration::hours(hours))).unwrap();
+    fs::File::options().write(true).open(path).unwrap().set_modified(at.into()).unwrap();
+}
+
+/// Empties the sample's `cv/`.
+fn empty_cv(root: &Path) {
+    for entry in fs::read_dir(root.join("cv")).unwrap().flatten() {
+        fs::remove_file(entry.path()).unwrap();
+    }
+}
+
+/// Puts the canvas's nine documents in place of the sample's `cv/`. Each PDF is the sample's, padded to its size.
+fn fill_cv(root: &Path) {
+    let pdf = fs::read(root.join("cv/main_harbor.pdf")).unwrap();
+    empty_cv(root);
+    for (stem, tex, built, size) in CV_FILES {
+        if let Some(hours) = tex {
+            write_aged(&root.join(format!("cv/{stem}.tex")), b"\\documentclass{article}\n\\begin{document}\nSample Candidate\n\\end{document}\n", hours);
+        }
+        if let Some(hours) = built {
+            let mut bytes = pdf.clone();
+            bytes.resize(size, b'\n');
+            write_aged(&root.join(format!("cv/{stem}.pdf")), &bytes, hours);
+        }
+    }
+}
+
+/// The sample with the canvas's nine CV documents, on Profile, its ages counted to `cv_now`.
+fn cv_shell(name: &str) -> (Shell, std::path::PathBuf) {
+    let root = sample_root(name);
+    fill_cv(&root);
+    let snapshot = Snapshot::load(&root, day());
+    assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
+    (Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), snapshot).with_now(cv_now()), root)
+}
+
+/// Opens CV documents from the rail.
+fn open_cv(harness: &mut Harness) {
+    pick_topic(harness, CV_DOCUMENTS);
+}
+
+/// The row under the topics counts what a build would help, and the sample's two PDFs with no `.tex` read as documents.
+#[test]
+fn the_cv_row_says_how_many_are_out_of_date() {
+    let harness = tray_harness(cv_shell("profile_cv_row").0);
+    assert!(is_shown(&harness, "CV documents, 2 out of date"));
+    assert!(harness.query_all_by_label("7 of 11 filled").count() > 0, "the row stays out of the count");
+    let harness = tray_harness(shell(Screen::Profile, "profile_cv_row_sample"));
+    assert!(is_shown(&harness, "CV documents, 2 documents"));
+}
+
+/// Masters come first, then applications newest first, and only a tag that is not Current shows on a row.
+#[test]
+fn cv_documents_list_masters_then_applications() {
+    let mut harness = tray_harness(cv_shell("profile_cv_list").0);
+    open_cv(&mut harness);
+    let rows = [
+        "Master CV",
+        "Master CV, engineer",
+        "Halyard labs tech lead, Not built yet",
+        "Tessel platform lead, Source newer",
+        "Brightwell eng manager",
+        "Ardent backend engineer",
+        "Granite cloud staff engineer",
+        "Orchard systems architect",
+        "Linden analytics data lead",
+    ];
+    let tops: Vec<f32> = rows.iter().map(|row| harness.get_by_role_and_label(egui::accesskit::Role::Button, row).rect().top()).collect();
+    assert!(tops.is_sorted(), "{tops:?}");
+    assert!(is_shown(&harness, "main_example.pdf"), "the first document opens");
+    assert!(is_shown(&harness, "84 KB, built 3 days ago"));
+    assert!(is_shown(&harness, "Built after its .tex last changed."));
+    assert!(is_shown(&harness, CV_SHOWS));
+}
+
+/// Rebuild the PDF… opens the launcher with the document's stem, and the user starts the run there.
+#[test]
+fn rebuild_opens_the_launcher_and_starts_nothing() {
+    let calls = SharedCalls::default();
+    let (mut shell, _root) = cv_shell("profile_cv_rebuild");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(&calls))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Its .tex changed 3 hours ago, after this PDF was built. Run /build-cv in the launcher to build it again."));
+    let rebuild = harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD);
+    rebuild.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Opens the launcher with /build-cv main_tessel_platform_lead. Nothing runs until you start it there."));
+
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert_eq!(calls.lock().unwrap().starts, 0, "no run starts");
+}
+
+/// While a run works, the build waits and says why.
+#[test]
+fn rebuild_waits_while_a_run_works() {
+    let root = sample_root("profile_cv_busy");
+    fill_cv(&root);
+    let (shell, _root, _sink, _feed) = profile_with_run_on(root);
+    let mut harness = tray_harness(shell.with_now(cv_now()));
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    let rebuild = harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD);
+    assert!(rebuild.accesskit_node().is_disabled(), "a run works");
+    rebuild.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Another run is active. One run at a time keeps your files safe."));
+}
+
+/// A stem that would not read as one word on the command line gets no build to open.
+#[test]
+fn a_stem_that_cannot_be_typed_gets_no_build() {
+    let root = sample_root("profile_cv_bad_stem");
+    empty_cv(&root);
+    write_aged(&root.join("cv/main_bad name.tex"), b"\\documentclass{article}\n", 1);
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day())).with_now(cv_now());
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Bad name, Not built yet"), "the document is listed");
+    assert!(is_shown(&harness, "Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one."));
+    assert!(harness.query_by_label("Build the PDF…").is_none(), "no build for a stem with a space");
+}
+
+/// A draft with unsaved changes asks before CV documents open in its place.
+#[test]
+fn a_draft_asks_before_cv_documents_open() {
+    let (shell, _root) = profile_at("profile_edit_leave_for_cv");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, DISCARD_ASK));
+    assert!(harness.query_by_label_contains("Opening CV documents drops them.").is_some());
+    button(&harness, "Keep editing").click();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
+    assert!(!is_shown(&harness, CV_SHOWS));
+
+    open_cv(&mut harness);
+    button(&harness, "Discard changes").click();
+    harness.run_steps(3);
+    assert!(!editing(&harness));
+    assert!(is_shown(&harness, CV_SHOWS), "CV documents opened");
+}
+
+/// No `.tex` or PDF in `cv/`: no list, and a note on what fills it.
+#[test]
+fn profile_cv_empty_light() {
+    let root = sample_root("profile_cv_empty_light");
+    empty_cv(&root);
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "No CV documents in your folder yet"));
+    assert!(is_shown(&harness, "CV documents, None yet"));
+    compare(&mut harness, "profile_cv_empty_light");
+}
+
+/// `cv/` cannot be read: the alert, the row Hidden, and hidden, not gone on paper.
+#[test]
+fn profile_cv_unread_light() {
+    let mut harness = probed_wgpu(probed(broken_shell(Screen::Profile, "profile_cv_unread_light", &[Source::CvDocuments]), FixedTools), Theme::Light);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Your CV documents are hidden, not gone"));
+    assert!(is_shown(&harness, "CV documents, Hidden"));
+    compare(&mut harness, "profile_cv_unread_light");
 }
 
 /// The last line of the sample's first role, and the same with its blank filled in.

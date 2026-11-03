@@ -305,7 +305,7 @@ impl Shell {
         Self { providers, ..self }
     }
 
-    /// Reads `now` as the time for every age Providers shows, so snapshots never move with the wall clock.
+    /// Reads `now` as the time for every age Providers and Profile show, so snapshots never move with the wall clock.
     pub fn with_now(self, now: NaiveDateTime) -> Self {
         Self { now: Some(now), ..self }
     }
@@ -1020,9 +1020,18 @@ impl Shell {
                 // arrives. A save in between would be marked as the run's, so Save waits for that load too, for
                 // `RUN_READ_WAIT` at most.
                 let reading = self.save_waits_for_load();
-                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: Local::now().naive_local() };
+                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: self.now() };
                 let asked = match self.profile_editor.as_mut() {
-                    Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
+                    Some(editor) => profile::ui::show(
+                        ui,
+                        &mut self.profile_screen,
+                        &state(whole),
+                        &snapshot.profile,
+                        &snapshot.cv_documents,
+                        editor,
+                        &mut self.marks,
+                        moment,
+                    ),
                     None => None,
                 };
                 match asked {

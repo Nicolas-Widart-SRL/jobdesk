@@ -22,7 +22,7 @@ use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
 use jobdesk::shell::{Screen, Shell, Snapshot, Source, install_look};
 use jobdesk::ui_kit::tokens::{BODY_PADDING, HAIRLINE, HEADER_PADDING, HEAT_LABELS, SCREEN_PADDING, STATUS_DOT, STATUS_PADDING, TALLY_GAP_Y};
-use jobdesk::updates::application::{DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, Version};
+use jobdesk::updates::application::{ApplyFailed, ApplyFailure, DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, Version};
 use jobdesk::updates::scripted_updates;
 use jobdesk::workspace::application::{EnvironmentChecks, ToolProber, ToolSpec};
 
@@ -4131,6 +4131,22 @@ fn the_notes_open_over_settings_and_esc_closes_them_first() {
     harness.key_press(Key::Escape);
     harness.run_steps(3);
     assert!(!shared.borrow().settings_open(), "a second Esc leaves Settings");
+}
+
+/// After a Restart to update that did not install, and before a check finds the release again, the bar says why in plain
+/// words: there are no notes to open, so nothing there is a button or takes the focus.
+#[test]
+fn a_restart_that_did_not_install_says_why_in_words_that_take_no_focus() {
+    let mut updates = scripted_updates("0.1.0", Vec::new(), None, true, Some(Platform::MacArm));
+    updates.apply_failed(ApplyFailed { version: Version { major: 0, minor: 2, patch: 0 }, failure: ApplyFailure::Replace });
+    let mut harness = tray_harness(shell(Screen::InTray, "update_apply_failed").with_updates(updates));
+    let words = "0.2.0 was not installed: the new copy could not be put in place";
+    assert_eq!(harness.get_by_label(words).accesskit_node().role(), egui::accesskit::Role::Label);
+    for _ in 0..40 {
+        harness.key_press(Key::Tab);
+        harness.run_steps(1);
+        assert!(!harness.get_by_label(words).accesskit_node().is_focused(), "Tab never stops on the words");
+    }
 }
 
 /// In the smallest window, with Settings open and a task waiting, the group's words are cut first: Retry and Settings

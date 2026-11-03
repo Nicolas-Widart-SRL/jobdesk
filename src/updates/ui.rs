@@ -5,7 +5,7 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::ui_kit::tokens::ITEM_GAP;
 use crate::ui_kit::{
-    Ink, NotesAction, ReleaseNotes, Tone, enabled_when, release_notes_popover, status_action, status_button, status_divider, status_mark_button,
+    Ink, NotesAction, ReleaseNotes, Tone, enabled_when, release_notes_popover, status_action, status_button, status_divider, status_mark, status_mark_button,
     status_progress,
 };
 use crate::updates::application::{BarAction, BarGroup, ESC_CLOSES, Mark, NotesView, UpdateView};
@@ -83,9 +83,11 @@ fn notes_button(ui: &mut Ui, screen: &mut UpdateScreen, group: &BarGroup, notes:
         Mark::Good => Tone::Hired.into(),
         Mark::Failed => Tone::Closed.into(),
     };
+    // With no notes to open, such as after a Restart to update that did not install and before the release is known
+    // again, the words are plain words that take no focus.
     let Some(notes) = notes else {
         screen.notes_open = false;
-        status_mark_button(ui, square, &group.words, false);
+        status_mark(ui, square, &group.words);
         return None;
     };
     let mark = status_mark_button(ui, square, &group.words, screen.notes_open);

@@ -644,7 +644,20 @@ mod tests {
     }
 
     fn terms_drawn(rate: PartDrawn, commute: PartDrawn) -> Drawn {
-        Drawn { folder_read: true, terms: TermsDrawn { rate, commute } }
+        Drawn { folder_read: true, terms: TermsDrawn { rate, commute }, auto_check: true }
+    }
+
+    /// About's switch has a help for on and one for off, and a search matches only the one it shows.
+    #[test]
+    fn a_search_finds_the_help_the_update_switch_shows() {
+        let off = Drawn { auto_check: false, ..Drawn::folder(true) };
+        let pages = |query, drawn| search(query, drawn).unwrap().pages;
+        assert_eq!(pages("6 hours", Drawn::folder(true)), vec![(Page::About, 1)]);
+        assert!(pages("6 hours", off).is_empty(), "off, the help says nothing of it");
+        assert!(pages("GitHub", off).is_empty());
+        assert_eq!(pages("only when you choose", off), vec![(Page::About, 1)]);
+        assert!(pages("only when you choose", Drawn::folder(true)).is_empty());
+        assert_eq!(pages("updates", off), vec![(Page::About, 2)], "the section and the switch, either way");
     }
 
     #[test]

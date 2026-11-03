@@ -687,24 +687,40 @@ fn status_fill(p: &Palette, response: &Response, on: bool) -> Color32 {
 /// A `status_button` led by a square in `square` ink, its words in `text`, such as the update's news that opens its
 /// notes. `on` while what it opens is open. The words are cut to the room left, with the whole text on hover.
 pub fn status_mark_button(ui: &mut Ui, square: impl Into<Ink>, text: &str, on: bool) -> Response {
+    status_mark_segment(ui, square.into(), text, Some(on))
+}
+
+/// A `status_mark_button` with nothing to open: the same square and words in the same place, which take no click and
+/// no focus. The words are cut to the room left, with the whole text on hover.
+pub fn status_mark(ui: &mut Ui, square: impl Into<Ink>, text: &str) -> Response {
+    status_mark_segment(ui, square.into(), text, None)
+}
+
+/// A square and words at a status segment's size: a button that is `on` or not, or, with `None`, plain words.
+fn status_mark_segment(ui: &mut Ui, square: Ink, text: &str, button: Option<bool>) -> Response {
     let p = Palette::of(ui);
     let enabled = ui.is_enabled();
-    let (square, ink) = (square.into().color(&p), p.text);
+    let (square, ink) = (square.color(&p), p.text);
     let (square, ink) = if enabled { (square, ink) } else { (dimmed(square), dimmed(ink)) };
     let lead = STATUS_DOT + STATUS_MARK_GAP;
     let room = (ui.available_width() - STATUS_SEGMENT_PADDING * 2.0 - lead).max(0.0);
     let label = line(ui, text, Type::SMALL, ink, room);
     let size = vec2(STATUS_SEGMENT_PADDING * 2.0 + lead + label.size().x, STATUS_SEGMENT_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let fill = status_fill(&p, &response, on);
+    let (rect, response) = ui.allocate_exact_size(size, if button.is_some() { Sense::click() } else { Sense::hover() });
+    let fill = button.map_or(Color32::TRANSPARENT, |on| status_fill(&p, &response, on));
     ui.painter().rect_filled(rect, RADIUS_BUTTON, fill);
     let left = rect.left() + STATUS_SEGMENT_PADDING;
     let dot = Rect::from_min_size(egui::pos2(left, rect.center().y - STATUS_DOT / 2.0), vec2(STATUS_DOT, STATUS_DOT));
     ui.painter().rect_filled(dot, 0.0, square);
     let response = cut_hover(response, &label, text);
     paint_text(ui, egui::pos2(left + lead, rect.center().y - label.size().y / 2.0), label, ink, fill);
-    interactive(ui, &response, RADIUS_BUTTON);
-    response.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, text));
+    match button {
+        Some(on) => {
+            interactive(ui, &response, RADIUS_BUTTON);
+            response.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, text));
+        }
+        None => response.widget_info(|| WidgetInfo::labeled(Role::Label, enabled, text)),
+    }
     response
 }
 

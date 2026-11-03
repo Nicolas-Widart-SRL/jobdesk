@@ -662,9 +662,11 @@ impl Shell {
         }
     }
 
-    /// What a Claude session open in Tasks means for Restart to update: one working, one that only waits for a reply, or none.
+    /// What a Claude session open in Tasks means for Restart to update: one that waits on a permission or a question, one
+    /// working, one that only waits for a reply, or none. A run that asks the user still counts as working, so it is named first.
     fn session_state(&self) -> SessionState {
         match &self.desk {
+            Some(desk) if desk.runs().iter().any(|run| run.needs_user()) => SessionState::Asking,
             Some(desk) if desk.is_busy() => SessionState::Working,
             Some(desk) if desk.has_live_process() => SessionState::Open,
             _ => SessionState::None,
@@ -1428,7 +1430,6 @@ impl Shell {
                     settings::reveal_folder(data);
                 }
             }
-            // The tray belongs to the open folder, so other folders keep their decisions. A tray that could not be read clears nothing.
             Some(SettingsRequest::CheckForUpdates) => self.updates.check_now(now),
             Some(SettingsRequest::DownloadUpdate) => self.follow_update(&ctx, UpdateRequest::Act(BarAction::Download)),
             Some(SettingsRequest::CancelUpdate) => self.follow_update(&ctx, UpdateRequest::Act(BarAction::Cancel)),
@@ -1440,6 +1441,7 @@ impl Shell {
                     self.follow_update(&ctx, UpdateRequest::OpenPage(url));
                 }
             }
+            // The tray belongs to the open folder, so other folders keep their decisions. A tray that could not be read clears nothing.
             Some(SettingsRequest::ClearDecisions) => {
                 if self.workspace.is_some()
                     && let Some(tray) = &mut self.tray
@@ -2220,6 +2222,60 @@ mod tests {
         assert_eq!(slot(&shell), None, "an open session never leaves a plan, whatever asked");
         shell.desk = None;
         assert_eq!(shell.restart_wait(), None);
+    }
+
+    /// A run that waits on a permission is still working, but Restart to update names what it waits for: the user's answer.
+    #[test]
+    fn restart_to_update_names_a_prompt_that_waits_on_the_user() {
+        use crate::runs::application::{AgentEvent, PromptKind};
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        shell.updates = ready_updates();
+        let sink = Arc::new(Mutex::new(None));
+        let mut desk = RunDesk::new(Box::new(Sinking(Arc::clone(&sink))), Arc::new(|| {}));
+        desk.set_asks_permission(true);
+        desk.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(desk);
+        let kind = PromptKind::Permission { tool: "Bash".into(), detail: "ls cv".into(), can_remember: true };
+        let prompt = Prompt { request_id: "p".into(), kind, input_json: "{}".into(), suggestions_json: None };
+        sink.lock().unwrap().as_ref().unwrap()(AgentEvent::PromptRaised(prompt));
+        shell.desk.as_mut().unwrap().poll();
+        assert!(shell.desk.as_ref().unwrap().is_busy(), "the run still counts as working");
+        assert_eq!(shell.restart_wait(), Some("A task waits for your answer in Tasks. Answer it, then restart once the task finishes."));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending);
+    }
+
+    /// Keep working in the quit dialog, by click or by Esc, keeps the window, so a Restart to update that waited on it is off.
+    #[test]
+    fn keep_working_ends_a_restart_to_update() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let data = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, None, data.path());
+        shell.updates = ready_updates();
+        (shell.restart_pending, shell.confirm_quit) = (true, true);
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        commands(ctx.run_ui(input, |ui| shell.handle_shortcuts_and_quit(ui.ctx())));
+        assert!(!shell.confirm_quit && !shell.restart_pending, "Esc keeps working");
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None);
+
+        (shell.restart_pending, shell.confirm_quit) = (true, true);
+        let shell = Rc::new(RefCell::new(shell));
+        let inner = Rc::clone(&shell);
+        let mut harness =
+            Harness::builder().with_size([800.0, 600.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().quit_dialog(ui.ctx()));
+        harness.run_steps(2);
+        harness.get_by_label("Keep working").click();
+        harness.run_steps(2);
+        let mut shell = shell.borrow_mut();
+        assert!(!shell.confirm_quit && !shell.restart_pending, "a click on Keep working");
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None);
     }
 
     /// Checking and downloading an update is not a run: no task starts, no run log is written, and Usage counts nothing.

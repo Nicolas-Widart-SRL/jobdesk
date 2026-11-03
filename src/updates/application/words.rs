@@ -156,6 +156,8 @@ pub enum SessionState {
     None,
     /// A run is working.
     Working,
+    /// A run waits for the user to answer a permission or a question, and works on once answered.
+    Asking,
     /// A session only waits for the user's reply.
     Open,
 }
@@ -165,6 +167,7 @@ pub fn restart_wait(session: SessionState) -> Option<&'static str> {
     match session {
         SessionState::None => None,
         SessionState::Working => Some("A task is running. Restart once it finishes, so it is not cut off halfway."),
+        SessionState::Asking => Some("A task waits for your answer in Tasks. Answer it, then restart once the task finishes."),
         SessionState::Open => Some("A task waits for your reply in Tasks. End its session there, then restart."),
     }
 }
@@ -300,6 +303,7 @@ mod tests {
         assert_eq!(restart_wait(SessionState::None), None);
         assert_eq!(restart_wait(SessionState::Working), Some("A task is running. Restart once it finishes, so it is not cut off halfway."));
         assert_eq!(restart_wait(SessionState::Open), Some("A task waits for your reply in Tasks. End its session there, then restart."));
+        assert_eq!(restart_wait(SessionState::Asking), Some("A task waits for your answer in Tasks. Answer it, then restart once the task finishes."));
     }
 
     #[test]

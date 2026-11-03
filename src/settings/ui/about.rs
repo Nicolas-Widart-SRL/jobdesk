@@ -39,6 +39,7 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Optio
         updates,
         check_auto,
         _,
+        _,
         latest,
         read_more,
         changed,

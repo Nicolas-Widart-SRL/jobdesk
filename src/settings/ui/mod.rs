@@ -318,7 +318,10 @@ fn rail(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView) {
             ui.label(rich(ui, "Settings", Type::SLIP_TITLE, Ink::Text));
             search_field(ui, &mut screen.query, "Search settings");
         });
-        let hits = search(&screen.query, Drawn { folder_read: view.folder_read, terms: terms_drawn(view.terms) });
+        let hits = search(
+            &screen.query,
+            Drawn { folder_read: view.folder_read, terms: terms_drawn(view.terms), auto_check: view.settings.preferences().check_updates.is_on() },
+        );
         if let Some(found) = &hits
             && let Some(&(first, _)) = found.pages.first()
             && !found.pages.iter().any(|&(page, _)| page == screen.page)
@@ -903,7 +906,7 @@ mod tests {
             let state = state();
             state.borrow_mut().screen.open_on(page);
             // Your terms draws only one of each part's helps. The other states are checked one by one below.
-            let drawn = Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) };
+            let drawn = Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)), auto_check: true };
             let mut harness = harness(state);
             harness.run();
             // A checkbox's help is its description, as its words are part of it, and the cap's checkbox is named by its sentence.
@@ -1138,7 +1141,7 @@ mod tests {
                 harness.run();
                 let drawn = crate::settings::application::drawn_index(
                     Page::Terms,
-                    Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) },
+                    Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)), auto_check: true },
                 );
                 for &line in index(Page::Terms) {
                     let shown = harness.query_all_by_label(line).next().is_some();

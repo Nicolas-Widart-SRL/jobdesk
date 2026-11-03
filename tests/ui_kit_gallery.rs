@@ -1168,7 +1168,9 @@ fn update_sheet(theme: Theme, name: &str) {
     let mut harness = with_renderer(Harness::builder().with_size(UPDATE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
         .build_ui(move |ui| update_page(ui, &mut open, &mut caches));
     harness.run_steps(4);
-    assert!(harness.get_by_label("Download 0.2.0").accesskit_node().is_focused(), "Download takes the focus first");
+    // Both open on the same frame, and the focus goes to the last: Restart to update waits, so its notes take it.
+    let notes = harness.get_all_by_label("What changed in 0.2.0").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    assert!(notes.accesskit_node().is_focused(), "the ready notes take the focus");
     compare(&mut harness, name);
 }
 
@@ -1193,6 +1195,7 @@ fn release_notes_popover_opens_on_its_primary_action() {
     struct Shown {
         open: bool,
         wait: bool,
+        blocked: bool,
         picked: Vec<NotesAction>,
     }
     let shown = Rc::new(RefCell::new(Shown::default()));
@@ -1206,7 +1209,8 @@ fn release_notes_popover_opens_on_its_primary_action() {
         if mark.clicked() {
             state.open = !state.open;
         }
-        let notes = ReleaseNotes { primary_wait: state.wait.then_some(RESTART_WAITS), ..NOTES };
+        let primary = if state.blocked { None } else { NOTES.primary };
+        let notes = ReleaseNotes { primary, primary_wait: state.wait.then_some(RESTART_WAITS), ..NOTES };
         let Shown { open, picked, .. } = &mut *state;
         picked.extend(release_notes_popover(&mark, open, &notes, &mut cache));
     });
@@ -1243,9 +1247,21 @@ fn release_notes_popover_opens_on_its_primary_action() {
     harness.run();
     let primary = harness.get_by_label("Download 0.2.0");
     assert!(primary.accesskit_node().is_disabled() && !primary.accesskit_node().is_focused(), "a waiting action takes no focus");
+    assert!(harness.get_by_label("What changed in 0.2.0").accesskit_node().is_focused(), "the notes take it, inside the popover");
     primary.hover();
     harness.run_steps(4);
     assert!(harness.query_by_label_contains("A task is running").is_some(), "a waiting action says why");
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+
+    {
+        let mut shown = shown.borrow_mut();
+        (shown.wait, shown.blocked) = (false, true);
+    }
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    assert!(!open(&harness), "no primary action to show");
+    assert!(harness.get_by_label("What changed in 0.2.0").accesskit_node().is_focused(), "with no action at all, the notes take the focus");
 }
 
 /// The notes take a Tab stop and scroll on the keys, and they start at the top each time they open and for each release.

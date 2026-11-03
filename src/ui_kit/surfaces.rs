@@ -1098,6 +1098,11 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                 // The notes hold nothing to click, so they take a Tab stop of their own, read from the keyboard.
                 let region = ui.interact(paper.response.rect, notes_id, Sense::focusable_noninteractive());
                 region.widget_info(|| WidgetInfo::labeled(Role::ScrollView, true, notes.notes_label));
+                // With no primary action to take the focus, the notes take it, so the keys land inside the popover.
+                let primary_takes = notes.primary.is_some() && notes.primary_wait.is_none();
+                if focus && !primary_takes && !ui.is_sizing_pass() {
+                    region.request_focus();
+                }
                 if region.has_focus() {
                     ui.painter().rect_stroke(paper.response.rect, RADIUS_PANEL, Stroke::new(FOCUS_RING, p.active), StrokeKind::Inside);
                 }

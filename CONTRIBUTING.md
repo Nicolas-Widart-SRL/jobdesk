@@ -66,7 +66,7 @@ gh secret set JOBDESK_UPDATE_KEY_PASSWORD
 ```
 
 - Keep an offline backup of the private key and its password. With the key lost, no release can reach the copies already installed, and every user has to install the next one by hand.
-- Copies from before updates, 0.1.x, cannot update themselves, so their users install the first release with updates by hand once.
+- Copies of releases made before the first signed release with updates cannot update themselves, so their users install that release by hand once.
 - To change the key, first merge the new public key into `assets/update/jobdesk-update.pub`, and release with the old key still in the secrets: that release carries the new key and is signed with the old one. Only then replace both secrets with the new key. The release after it is signed with the new key, and the Tag release workflow checks it against the key the previous release carries. Copies that installed the release with the new key check the next ones against it, and the others install by hand.
 - Each signature names the file it signs, such as `Jobdesk-v0.2.0-windows-x64-setup.exe`, and the app checks that name against the version it installs. To sign a file by hand, sign it under its release name: `base64 -d ~/.jobdesk/update.key > update.minisign.key`, then `minisign -S -s update.minisign.key -m Jobdesk-vX.Y.Z-windows-x64-setup.exe`, then delete `update.minisign.key`, and put the `.minisig` in base64 on one line in the `.sig`.
 - These signatures are not code signing. They show a download comes from this repository's releases, and macOS and Windows still warn as [Package](#package) says.

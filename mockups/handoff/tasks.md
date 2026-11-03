@@ -15,7 +15,6 @@ Canvases, in `mockups/`: [Grid-tasks-turn.png](../Grid-tasks-turn.png), an `/app
 - [While the run is open](#while-the-run-is-open): the sweep, live Elapsed and Cost, the quiet state, motion, new widgets
 - [Outside the page](#outside-the-page)
 - [Accessibility](#accessibility)
-- [Doc changes](#doc-changes)
 
 ## Principles
 
@@ -166,12 +165,3 @@ Why: the band is the first thing read, and the cell that says Claude's is where 
 - A knot reads its number and state, such as "2, waiting for you".
 - The sweep is decoration. The Whose turn cell reads "Claude's turn. Last update 3 seconds ago". Screen readers get the change only when the quiet state changes, never each second.
 - Cost reads "About 1 dollar 24 of 10 dollars, estimated until Claude's turn ends". Elapsed is read on focus, never announced as it ticks.
-
-## Doc changes
-
-For the planner's handoff step:
-
-- `docs/guide.md`, Tasks: while Claude works, a short line sweeps along the bottom of the Whose turn cell to show the run is live. Elapsed ticks every second from your send until the run ends, your turn included, and holds once it is done, failed or stopped. Cost counts up as an estimate marked About until Claude's turn ends, then shows the exact cost. When nothing new arrives for a while, the band says for how long: a long write can be quiet for minutes, and Stop run keeps the files so far. Under Appearance, Reduce motion stills the sweep too.
-- `docs/architecture/runs.md`, a new "Live figures" section: the time since the last update counts every stream line, and the quiet thresholds are 30 s and 2 min. Elapsed is measured on the clock from the user's send to the run's end (done for now, finished, failed or stopped), so it runs on while Claude waits on the user, and a later reply adds a new span to the held figure. Cost is estimated from each message's token use and the model's price, replaced by the turn result's cost, and stays an estimate when no result came.
-- `docs/architecture/ui-kit.md`: `live_sweep` and `estimate_note`, and a motion rule: a looping animation is allowed only for a live run's signal, one per screen, only while it shows, and Reduce motion swaps it for a still form. Repaint on a timer only while it shows.
-- `ARCHITECTURE.md`: no change.

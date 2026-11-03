@@ -141,3 +141,34 @@ The technical rows open with "Show N actions", or "Show details" for a step with
 - Quick replies never start a run. They stay disabled while another run works or the reply field holds a draft.
 - `RunDesk::reply` refuses any reply while another run is busy, even on a live session.
 - End session asks first, and Esc keeps the session open.
+
+## Live figures
+
+The Tasks screen shows three figures that change while a run works: the time since the last update, Elapsed and Cost. All three come from `Run` and the `runs::application` story, never from the disk.
+
+### The last update
+
+- Any line the CLI writes counts as an update, whatever it holds.
+- `claude_gateway` sends `AgentEvent::Heard` for a line that gives no event of its own, at most once a second, so a stream of silent lines does not flood the channel. `RunDesk` stamps `Run::last_heard` on every event it receives, and on a send or a reply.
+- `runs::domain::quiet` ranks the time since then: fresh under 30 s, quiet from 30 s, long quiet from 2 min. The band's Whose turn cell and its sweep follow that rank.
+- The cell's screen reader label names the rank without a number ("Last update under 30 seconds ago"), so it changes only when the rank does, not each second.
+
+### Elapsed
+
+- `Elapsed` measures the clock from the user's send to the run's end, in spans. It never reads the clock: `RunDesk` passes `now` from its own clock, which a test can script.
+- The clock runs while the run is busy or `wants_reply` holds, so it runs on while Claude waits on the user. It holds when the turn ends done for now, and when the run fails, stops or closes.
+- A later reply opens a new span and adds it to the held figure.
+- A run read back from its log starts from the sum of its turns' `duration_ms`, which Claude reports, and has no open span until the user replies.
+- The screen shows it as `m:ss`, or `h:mm:ss` from an hour.
+
+### Cost
+
+- `StreamReader` estimates each message from its token use and the model's list price: Opus, Sonnet or Haiku by family, and Opus, the dearest, for a model of no known family.
+- The tokens come from `message_start`, `assistant` and `message_delta` lines. The reader merges them by message id and keeps the larger figure of each count, because a message's figures only grow. The final usage of a message arrives in its `message_delta`, which names no model, so the reader prices it by the model it saw for the id. A `message_delta` for a message the reader never saw start is dropped, so the estimate can read low there but never counts a message twice.
+- `Run::shown_cost` adds what the CLI reported, the estimates of earlier processes that ended without a result, and the estimates of the turn under way. It is marked an estimate while any estimate is in it, and the screen shows "About $X" with the line "Estimated until Claude's turn ends."
+- A turn's result replaces that turn's estimates with the CLI's cost.
+- A process that ends with no result keeps its estimate. A resumed run adds the cost of each process, because each process reports its own running total from zero.
+
+### Frames
+
+The figures repaint only while the run screen shows. The screen asks for a frame about 30 times a second if the sweep moves, and otherwise when the first whole second shown turns over. When nothing on screen counts the seconds, it asks for none.

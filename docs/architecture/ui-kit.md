@@ -26,6 +26,25 @@ Labels are not selectable, so a click on a row's text picks the row. Only these 
 
 None of them sits inside something clickable.
 
+## Motion
+
+- A looping animation is allowed only for a live run's signal, one per screen, and only while it shows. Everything else moves once, for `motion_time`, and stops.
+- Reduce motion swaps the loop for a still form: `motion_time` is zero, so `sweep_moves` is false.
+- A widget never schedules its own frames. It returns whether it moves, and the screen asks for a repaint on a timer only while it shows and the answer is yes.
+
+## The live sweep
+
+`live_sweep` paints the live-run signal along the bottom edge of a band cell, and `turn_band_live` puts it on the Whose turn cell. The caller passes the seconds into the sweep and a `SweepForm`:
+
+- `Working`: an `active` segment crosses the edge in 2.4 s, then rests 0.6 s.
+- `Quiet`: a `muted` segment at half the speed.
+- `LongQuiet`: a still dashed rule in `muted`.
+- `Stopping`: a still solid rule in `muted`.
+
+With motion reduced, `Working` and `Quiet` become a solid rule in their ink. The sweep is decoration, so it adds nothing for screen readers. `band_note_spoken` gives a band note other words for them than it shows, for a note that counts seconds.
+
+`estimate_note` is the one muted line under a figure's bar while the figure is an estimate, such as a live run's Cost.
+
 ## Gallery snapshots
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.

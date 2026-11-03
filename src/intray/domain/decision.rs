@@ -51,9 +51,25 @@ impl Decision {
         self.until.unwrap_or_else(|| self.on.succ_opt().unwrap_or(self.on))
     }
 
+    /// The day a card set aside comes back, given the card's date as it stands now. A date after the day it was set aside
+    /// brings it back on that date when that comes first, so a deadline added or moved while the card is away never
+    /// passes. A date on or before that day changes nothing, because Later then holds the card only until the next day.
+    pub fn returns_by(&self, due: Option<NaiveDate>) -> NaiveDate {
+        let until = self.returns_on();
+        match due {
+            Some(due) if due > self.on => until.min(due),
+            _ => until,
+        }
+    }
+
     /// Later is not a decision on the card, so it clears nothing and is never logged. It holds from its day until the card comes back.
     pub fn sets_aside(&self, today: NaiveDate) -> bool {
-        self.outcome == Outcome::Later && self.on <= today && today < self.returns_on()
+        self.keeps_aside(today, None)
+    }
+
+    /// Whether the card is still away today, given its date as it stands now. See `returns_by`.
+    pub fn keeps_aside(&self, today: NaiveDate, due: Option<NaiveDate>) -> bool {
+        self.outcome == Outcome::Later && self.on <= today && today < self.returns_by(due)
     }
 
     pub fn is_logged_on(&self, today: NaiveDate) -> bool {
@@ -137,6 +153,17 @@ mod tests {
         for outcome in [Outcome::Skipped, Outcome::Kept] {
             assert!(decided(outcome).clears_card(tomorrow));
         }
+    }
+
+    #[test]
+    fn a_date_that_comes_while_the_card_is_away_brings_it_back_that_day() {
+        let later = Decision { until: Some(day(11, 2)), ..decided(Outcome::Later) };
+        assert_eq!(later.returns_by(Some(day(11, 1))), day(11, 1));
+        assert!(later.keeps_aside(day(10, 31), Some(day(11, 1))));
+        assert!(!later.keeps_aside(day(11, 1), Some(day(11, 1))));
+        assert_eq!(later.returns_by(Some(day(11, 5))), day(11, 2), "a later date leaves the stay alone");
+        assert_eq!(later.returns_by(Some(day(10, 31))), day(11, 2), "a date due the day it was set aside changes nothing");
+        assert_eq!(later.returns_by(None), day(11, 2));
     }
 
     #[test]

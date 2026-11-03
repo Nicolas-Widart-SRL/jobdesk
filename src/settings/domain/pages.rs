@@ -140,15 +140,20 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
 /// The figures' labels, then the sections under them.
 const USAGE: [&str; 8] = ["Spent", "Tokens", "Cache hits", "Tasks", "Per application sent", "Every day", "By command", "By model"];
 
-/// The note on where the terms come from, then the fixed rows' words. The floor's help and the tiers come from the
-/// profile, so a search cannot look through them.
-const TERMS: [&str; 6] = [
+/// The note on where the terms come from, the contract and rate's words with the floor's help for a floor stated and for
+/// none, then the commute's words with the row for tiers not stated. The floor's amount and the tiers themselves come from
+/// the profile, so a search cannot look through them. `drawn_index` keeps only the lines the page draws.
+const TERMS: [&str; 10] = [
     "Jobs checks postings against these. The floor and the commute tiers come from your profile, and Jobdesk never changes them. To change one, edit your profile or ask Claude to.",
     "Contract and rate",
     "Contract",
     "Fixed in Jobdesk: jobs that offer only a permanent contract fail this check.",
     "Day-rate floor",
+    "A job that states a lower day rate fails this check.",
+    "Your profile does not state one, so every job's day-rate check reads Unclear instead of guessing.",
     "Commute",
+    "Commute tiers",
+    "Your profile does not state them, so the commute check reads Unclear for a job that is not fully remote, unless the location check ruled it out.",
 ];
 
 /// How Today deals, then the skip reasons. The reasons themselves are the user's, so a search cannot look through them.
@@ -255,7 +260,7 @@ const DATA: [&str; 11] = [
     "Each log holds the whole text of a task, postings and your replies included. Forever keeps them all. A shorter time deletes older ones when Jobdesk starts. Usage statistics count only the logs kept.",
     "Tray decisions",
     "Clear tray decisions",
-    "Forgets this folder's decisions and skip reasons on Today, so Today deals those cards again. Other folders keep theirs, and run logs stay.",
+    "Forgets this folder's decisions on Today and the reasons given for past skips, so Today deals those cards again. Other folders keep theirs, and run logs stay.",
     "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
 ];
 
@@ -315,17 +320,26 @@ pub fn index(page: Page) -> &'static [&'static str] {
 /// How many of Runtime status's lines show before a folder is open and read.
 const RUNTIME_WITHOUT_FOLDER: usize = 7;
 
-/// Which parts of Your terms the page draws, as the profile files read.
+/// How Your terms draws one part, the floor or the commute tiers, as its file read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TermsDrawn {
-    /// No folder, the folder not read yet, or neither file read.
-    Nothing,
-    /// Both files read: the note, the contract and rate, and the commute.
-    Whole,
-    /// Only the profile read: the contract and rate, faded under the alert.
-    RateOnly,
-    /// Only the evaluation read: the commute, faded under the alert.
-    CommuteOnly,
+pub enum PartDrawn {
+    /// No folder, the folder not read yet, or the part's file not read.
+    Hidden,
+    Stated,
+    /// The file read and does not state the part, so its row reads Not stated with a help of its own.
+    NotStated,
+}
+
+/// Which parts of Your terms the page draws. A hidden part takes the note with it, as the alert stands in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermsDrawn {
+    pub rate: PartDrawn,
+    pub commute: PartDrawn,
+}
+
+impl TermsDrawn {
+    pub const NOTHING: Self = Self { rate: PartDrawn::Hidden, commute: PartDrawn::Hidden };
+    pub const STATED: Self = Self { rate: PartDrawn::Stated, commute: PartDrawn::Stated };
 }
 
 /// What the pages draw as things stand, which is all a search may match.
@@ -337,23 +351,41 @@ pub struct Drawn {
 }
 
 impl Drawn {
-    /// A folder read whole, or none: Your terms draws every part, or nothing.
+    /// A folder read whole with every term stated, or none: Your terms draws every part, or nothing.
     pub fn folder(read: bool) -> Self {
-        Self { folder_read: read, terms: if read { TermsDrawn::Whole } else { TermsDrawn::Nothing } }
+        Self { folder_read: read, terms: if read { TermsDrawn::STATED } else { TermsDrawn::NOTHING } }
     }
 }
 
 /// The lines the page draws as things stand: without a folder read, Runtime status leaves out the folder's sections, and
-/// Your terms shows only the parts that read.
-pub fn drawn_index(page: Page, drawn: Drawn) -> &'static [&'static str] {
-    match (page, drawn.terms) {
-        (Page::Runtime, _) if !drawn.folder_read => &RUNTIME[..RUNTIME_WITHOUT_FOLDER],
-        (Page::Terms, TermsDrawn::Nothing) => &[],
-        // The note goes with the alert, and the contract shows only beside the floor.
-        (Page::Terms, TermsDrawn::RateOnly) => &TERMS[1..5],
-        (Page::Terms, TermsDrawn::CommuteOnly) => &TERMS[5..],
-        (page, _) => index(page),
+/// Your terms shows only the parts that read, each with the help for a part stated or not.
+pub fn drawn_index(page: Page, drawn: Drawn) -> Vec<&'static str> {
+    match page {
+        Page::Runtime if !drawn.folder_read => RUNTIME[..RUNTIME_WITHOUT_FOLDER].to_vec(),
+        Page::Terms => terms_index(drawn.terms),
+        page => index(page).to_vec(),
     }
+}
+
+fn terms_index(drawn: TermsDrawn) -> Vec<&'static str> {
+    let [note, section, contract, contract_help, floor, floor_help, no_floor, commute, tiers, no_tiers] = TERMS;
+    let mut lines = Vec::new();
+    // The note goes with the alert, so it shows only while both parts do.
+    if drawn.rate != PartDrawn::Hidden && drawn.commute != PartDrawn::Hidden {
+        lines.push(note);
+    }
+    // The contract shows only beside the floor.
+    match drawn.rate {
+        PartDrawn::Hidden => {}
+        PartDrawn::Stated => lines.extend([section, contract, contract_help, floor, floor_help]),
+        PartDrawn::NotStated => lines.extend([section, contract, contract_help, floor, no_floor]),
+    }
+    match drawn.commute {
+        PartDrawn::Hidden => {}
+        PartDrawn::Stated => lines.push(commute),
+        PartDrawn::NotStated => lines.extend([commute, tiers, no_tiers]),
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -370,17 +402,37 @@ mod tests {
     #[test]
     fn without_a_folder_your_terms_draws_nothing_to_search() {
         assert!(drawn_index(Page::Terms, Drawn::folder(false)).is_empty());
-        assert_eq!(drawn_index(Page::Terms, Drawn::folder(true)), index(Page::Terms));
+        assert_eq!(drawn_index(Page::Terms, Drawn::folder(true)), [&TERMS[..6], &["Commute"]].concat(), "every term stated");
         assert_eq!(drawn_index(Page::Queue, Drawn::folder(false)), index(Page::Queue), "the queue's settings need no folder");
         assert_eq!(drawn_index(Page::JobsView, Drawn::folder(false)), index(Page::JobsView));
     }
 
+    fn terms(rate: PartDrawn, commute: PartDrawn) -> Vec<&'static str> {
+        drawn_index(Page::Terms, Drawn { folder_read: true, terms: TermsDrawn { rate, commute } })
+    }
+
     #[test]
     fn a_failed_file_leaves_only_the_part_still_read_to_search() {
-        let terms = |terms| drawn_index(Page::Terms, Drawn { folder_read: true, terms });
-        assert_eq!(terms(TermsDrawn::RateOnly), ["Contract and rate", "Contract", TERMS[3], "Day-rate floor"]);
-        assert_eq!(terms(TermsDrawn::CommuteOnly), ["Commute"]);
-        assert!(terms(TermsDrawn::Nothing).is_empty(), "both failed");
+        let floor_help = "A job that states a lower day rate fails this check.";
+        assert_eq!(terms(PartDrawn::Stated, PartDrawn::Hidden), ["Contract and rate", "Contract", TERMS[3], "Day-rate floor", floor_help]);
+        assert_eq!(terms(PartDrawn::Hidden, PartDrawn::Stated), ["Commute"]);
+        assert!(terms(PartDrawn::Hidden, PartDrawn::Hidden).is_empty(), "both failed");
+    }
+
+    #[test]
+    fn a_part_not_stated_draws_its_own_help_in_place_of_the_stated_one() {
+        let rate = terms(PartDrawn::NotStated, PartDrawn::Hidden);
+        assert!(rate.contains(&TERMS[6]) && !rate.contains(&TERMS[5]));
+        assert_eq!(terms(PartDrawn::Hidden, PartDrawn::NotStated), ["Commute", "Commute tiers", TERMS[9]]);
+        assert_eq!(terms(PartDrawn::NotStated, PartDrawn::NotStated).len(), 1 + 5 + 3, "the note too");
+    }
+
+    #[test]
+    fn every_terms_line_is_drawn_in_some_state() {
+        let parts = [PartDrawn::Stated, PartDrawn::NotStated];
+        for line in TERMS {
+            assert!(parts.iter().any(|&rate| parts.iter().any(|&commute| terms(rate, commute).contains(&line))), "{line}");
+        }
     }
 
     #[test]

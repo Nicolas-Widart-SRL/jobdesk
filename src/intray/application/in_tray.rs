@@ -392,14 +392,15 @@ impl InTray {
         self.decisions.iter().any(|decision| decision.key == key && decision.clears_card(today))
     }
 
-    fn is_set_aside(&self, key: &str, today: NaiveDate) -> bool {
-        self.decisions.iter().any(|decision| decision.key == key && decision.sets_aside(today))
+    /// Whether the card is away today. `due` is its date as it stands now, which can bring it back sooner.
+    fn is_set_aside(&self, key: &str, due: Option<NaiveDate>, today: NaiveDate) -> bool {
+        self.decisions.iter().any(|decision| decision.key == key && decision.keeps_aside(today, due))
     }
 
     /// The day a card set aside comes back: the latest, should it have been set aside twice.
-    fn returns_on(&self, key: &str, today: NaiveDate) -> NaiveDate {
-        let aside = self.decisions.iter().filter(|decision| decision.key == key && decision.sets_aside(today));
-        aside.map(Decision::returns_on).max().unwrap_or_else(|| today.succ_opt().unwrap_or(today))
+    fn returns_on(&self, key: &str, due: Option<NaiveDate>, today: NaiveDate) -> NaiveDate {
+        let aside = self.decisions.iter().filter(|decision| decision.key == key && decision.keeps_aside(today, due));
+        aside.map(|decision| decision.returns_by(due)).max().unwrap_or_else(|| today.succ_opt().unwrap_or(today))
     }
 
     /// The key of every job whose flagged ad the user kept, so Jobs words it as Today does.
@@ -445,9 +446,11 @@ impl InTray {
                 })
             })
             .collect();
+        // A card's date is read as it stands today, so one that came or moved while the card is away still brings it back.
+        let due = |card: &Card| card.due.as_ref().map(|due| due.on);
         let (aside, mut cards): (Vec<Card>, Vec<Card>) =
-            derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, today));
-        let set_aside = aside.into_iter().map(|card| SetAside { until: self.returns_on(&card.key, today), name: card.name }).collect();
+            derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, due(card), today));
+        let set_aside = aside.into_iter().map(|card| SetAside { until: self.returns_on(&card.key, due(&card), today), name: card.name }).collect();
         rank(&mut cards, today, horizon.days());
         let returned = self.returned(today);
         cards.sort_by_key(|card| {
@@ -512,7 +515,7 @@ impl InTray {
 
     /// Puts a card on top, returning it first if it was set aside.
     pub fn pull_forward(&mut self, key: &str, today: NaiveDate) {
-        if self.is_set_aside(key, today) {
+        if self.is_set_aside(key, None, today) {
             self.take_back(|decision| decision.key == key && decision.sets_aside(today));
         }
         self.read(key);
@@ -1842,6 +1845,24 @@ mod tests {
         assert!(queue(&tray, &jobs, on(11, 4)).cards.is_empty());
         assert_eq!(queue(&tray, &jobs, thursday).cards.len(), 1, "back on the day it is due");
         assert_eq!(tray.undo_offer(monday).unwrap().note, "Set aside until Thursday");
+    }
+
+    #[test]
+    fn a_deadline_that_comes_while_the_card_is_away_brings_it_back_on_its_day() {
+        let friday = on(10, 30);
+        let sunday = on(11, 1);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(LaterLasts::UntilMonday));
+        let undated = board(vec![job("Acme", 90)]);
+        tray.later(&queue(&tray, &undated, friday).cards[0], friday);
+        assert_eq!(tray.decisions[0].until, Some(on(11, 2)));
+
+        // The next scrape gives the job a deadline of Sunday, and the card's key does not hold the date.
+        let dated = board(vec![JobView { deadline: Some(sunday), days_to_deadline: Some(1), ..job("Acme", 90) }]);
+        let saturday = queue(&tray, &dated, today());
+        assert!(saturday.cards.is_empty(), "still away the day before");
+        assert_eq!(saturday.returning().unwrap().back, "tomorrow");
+        assert_eq!(queue(&tray, &dated, sunday).cards.len(), 1, "back on the day it is due");
     }
 
     #[test]

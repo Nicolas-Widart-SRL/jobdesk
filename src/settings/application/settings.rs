@@ -354,6 +354,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::settings::domain::{PartDrawn, TermsDrawn};
 
     #[derive(Default)]
     struct Shared {
@@ -616,22 +617,34 @@ mod tests {
 
     #[test]
     fn a_search_finds_the_job_search_pages() {
-        assert_eq!(
-            search("skip reasons", Drawn::folder(true)).unwrap().pages,
-            vec![(Page::Queue, 1), (Page::Data, 1)],
-            "Clear tray decisions forgets them too"
-        );
+        assert_eq!(search("skip reasons", Drawn::folder(true)).unwrap().pages, vec![(Page::Queue, 1)], "Clear tray decisions leaves the list of reasons alone");
+        assert_eq!(search("past skips", Drawn::folder(true)).unwrap().pages, vec![(Page::Queue, 1), (Page::Data, 1)]);
         assert_eq!(search("Hide jobs scored under", Drawn::folder(true)).unwrap().pages, vec![(Page::JobsView, 1)]);
         assert_eq!(search("commute", Drawn::folder(true)).unwrap().pages, vec![(Page::Terms, 2), (Page::JobsView, 1)]);
         assert_eq!(search("commute", Drawn::folder(false)).unwrap().pages, vec![(Page::JobsView, 1)], "without a folder, Your terms draws no rows");
     }
 
+    fn terms_drawn(rate: PartDrawn, commute: PartDrawn) -> Drawn {
+        Drawn { folder_read: true, terms: TermsDrawn { rate, commute } }
+    }
+
     #[test]
     fn a_search_skips_the_terms_a_failed_file_hides() {
-        let drawn = |terms| Drawn { folder_read: true, terms };
-        assert!(search("contract", drawn(crate::settings::domain::TermsDrawn::CommuteOnly)).unwrap().pages.is_empty(), "the profile failed");
-        assert_eq!(search("commute", drawn(crate::settings::domain::TermsDrawn::RateOnly)).unwrap().pages, vec![(Page::JobsView, 1)], "the evaluation failed");
-        assert_eq!(search("contract", drawn(crate::settings::domain::TermsDrawn::RateOnly)).unwrap().pages, vec![(Page::Terms, 3)]);
+        assert!(search("contract", terms_drawn(PartDrawn::Hidden, PartDrawn::Stated)).unwrap().pages.is_empty(), "the profile failed");
+        assert_eq!(search("commute", terms_drawn(PartDrawn::Stated, PartDrawn::Hidden)).unwrap().pages, vec![(Page::JobsView, 1)], "the evaluation failed");
+        assert_eq!(search("contract", terms_drawn(PartDrawn::Stated, PartDrawn::Hidden)).unwrap().pages, vec![(Page::Terms, 3)]);
+    }
+
+    #[test]
+    fn a_search_finds_the_fixed_terms_lines_only_where_the_page_draws_them() {
+        let pages = |query, drawn| search(query, drawn).unwrap().pages;
+        assert_eq!(pages("lower day rate", Drawn::folder(true)), vec![(Page::Terms, 1)]);
+        assert!(pages("lower day rate", terms_drawn(PartDrawn::NotStated, PartDrawn::Stated)).is_empty(), "no floor, so its help is not drawn");
+        assert!(pages("reads Unclear", Drawn::folder(true)).is_empty());
+        assert_eq!(pages("reads Unclear", terms_drawn(PartDrawn::NotStated, PartDrawn::Stated)), vec![(Page::Terms, 1)]);
+        assert_eq!(pages("reads Unclear", terms_drawn(PartDrawn::NotStated, PartDrawn::NotStated)), vec![(Page::Terms, 2)]);
+        assert_eq!(pages("commute tiers", terms_drawn(PartDrawn::Stated, PartDrawn::NotStated)), vec![(Page::Terms, 2)], "the note and the row");
+        assert_eq!(pages("commute tiers", Drawn::folder(true)), vec![(Page::Terms, 1)], "the note alone");
     }
 
     #[test]

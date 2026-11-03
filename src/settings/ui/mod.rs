@@ -871,10 +871,12 @@ mod tests {
         ] {
             let state = state();
             state.borrow_mut().screen.open_on(page);
+            // Your terms draws only one of each part's helps. The other states are checked one by one below.
+            let drawn = Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) };
             let mut harness = harness(state);
             harness.run();
             // A checkbox's help is its description, as its words are part of it, and the cap's checkbox is named by its sentence.
-            for &line in index(page) {
+            for line in crate::settings::application::drawn_index(page, drawn) {
                 let described = harness.query_all_by(|node| node.description().as_deref() == Some(line)).next().is_some();
                 let in_sentence = harness
                     .query_all_by(|node| node.role() == egui::accesskit::Role::CheckBox && node.label().is_some_and(|label| label.contains(line)))
@@ -1084,28 +1086,33 @@ mod tests {
         assert!(harness.get_by_label("Add reason").accesskit_node().is_focused());
     }
 
-    /// Your terms in each failed state draws every line its search matches, and none it does not.
+    /// Your terms, with each part stated, not stated or failed, draws every line its search matches, and none it does not.
     #[test]
-    fn a_search_matches_only_what_a_failed_terms_page_draws() {
+    fn a_search_matches_only_what_the_terms_page_draws() {
         let failed = |file: &str| crate::shared_kernel::LoadError::new(file, "denied");
-        for (case, floor, commute) in [("profile", true, false), ("evaluation", false, true), ("both", true, true)] {
-            let state = state();
-            if floor {
-                state.borrow_mut().terms.floor = TermPart::Failed(failed("01-candidate-profile.md"));
-            }
-            if commute {
-                state.borrow_mut().terms.commute = TermPart::Failed(failed("04-job-evaluation.md"));
-            }
-            on(&state, Page::Terms);
-            let mut harness = harness(state.clone());
-            harness.run();
-            let drawn = crate::settings::application::drawn_index(
-                Page::Terms,
-                Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) },
-            );
-            for &line in index(Page::Terms) {
-                let shown = harness.query_all_by_label(line).next().is_some();
-                assert_eq!(shown, drawn.contains(&line), "{case}: {line}");
+        let floors =
+            [("floor", TermPart::Read(Some(700))), ("no floor", TermPart::Read(None)), ("profile failed", TermPart::Failed(failed("01-candidate-profile.md")))];
+        let commutes = [
+            ("tiers", terms(None).commute),
+            ("no tiers", TermPart::Read(Commute::default())),
+            ("evaluation failed", TermPart::Failed(failed("04-job-evaluation.md"))),
+        ];
+        for (floor_case, floor) in &floors {
+            for (commute_case, commute) in &commutes {
+                let case = format!("{floor_case}, {commute_case}");
+                let state = state();
+                state.borrow_mut().terms = YourTerms { floor: floor.clone(), commute: commute.clone() };
+                on(&state, Page::Terms);
+                let mut harness = harness(state.clone());
+                harness.run();
+                let drawn = crate::settings::application::drawn_index(
+                    Page::Terms,
+                    Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) },
+                );
+                for &line in index(Page::Terms) {
+                    let shown = harness.query_all_by_label(line).next().is_some();
+                    assert_eq!(shown, drawn.contains(&line), "{case}: {line}");
+                }
             }
         }
     }

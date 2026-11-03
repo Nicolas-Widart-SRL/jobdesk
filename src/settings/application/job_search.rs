@@ -1,5 +1,5 @@
 use crate::discovery::application::{TermPart, YourTerms};
-use crate::settings::domain::{JobFilters, TermsDrawn};
+use crate::settings::domain::{JobFilters, PartDrawn, TermsDrawn};
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// The line Update with Claude… opens the launcher on: `/setup`'s goals, which hold the floor and the commute.
@@ -47,15 +47,21 @@ pub fn terms_word(state: TermsState) -> TermsWord {
     }
 }
 
-/// Which parts of Your terms the page draws, so a search matches only those: a part whose file failed is hidden.
+/// Which parts of Your terms the page draws, so a search matches only those: a part whose file failed is hidden, and a
+/// part not stated draws its own help.
 pub fn terms_drawn(state: TermsState) -> TermsDrawn {
-    let TermsState::Read(terms) = state else { return TermsDrawn::Nothing };
-    match (&terms.floor, &terms.commute) {
-        (TermPart::Read(_), TermPart::Read(_)) => TermsDrawn::Whole,
-        (TermPart::Read(_), TermPart::Failed(_)) => TermsDrawn::RateOnly,
-        (TermPart::Failed(_), TermPart::Read(_)) => TermsDrawn::CommuteOnly,
-        (TermPart::Failed(_), TermPart::Failed(_)) => TermsDrawn::Nothing,
-    }
+    let TermsState::Read(terms) = state else { return TermsDrawn::NOTHING };
+    let rate = match terms.floor {
+        TermPart::Read(Some(_)) => PartDrawn::Stated,
+        TermPart::Read(None) => PartDrawn::NotStated,
+        TermPart::Failed(_) => PartDrawn::Hidden,
+    };
+    let commute = match &terms.commute {
+        TermPart::Read(commute) if commute.tiers.is_empty() => PartDrawn::NotStated,
+        TermPart::Read(_) => PartDrawn::Stated,
+        TermPart::Failed(_) => PartDrawn::Hidden,
+    };
+    TermsDrawn { rate, commute }
 }
 
 /// Text read from the profile or from an error, as plain text: no control, escape, bidi or zero-width characters.

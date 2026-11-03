@@ -17,12 +17,6 @@ const READING_WAIT: &str = "Your profile is still being read.";
 /// The lead while the profile is read, in place of the page's own.
 pub const READING: &str = "Reading your profile…";
 const NOTHING_YET: &str = "Your terms show here once you choose your job search folder.";
-const FLOOR_HELP: &str = "A job that states a lower day rate fails this check.";
-const NO_FLOOR: &str = "Your profile does not state one, so every job's day-rate check reads Unclear instead of guessing.";
-const TIERS: &str = "Commute tiers";
-/// Without tiers a fully remote job still passes the commute check, and a place the location check ruled out still fails it.
-const NO_TIERS: &str =
-    "Your profile does not state them, so the commute check reads Unclear for a job that is not fully remote, unless the location check ruled it out.";
 const NOT_STATED: &str = "Not stated";
 const COULD_NOT: &str = "Your terms could not be read.";
 const HIDDEN_TITLE: &str = "Your terms are hidden, not gone";
@@ -61,12 +55,14 @@ pub fn body(ui: &mut Ui, state: TermsState, show_command: &mut bool, query: &str
         }
         return;
     };
-    let &[note, contract_rate, contract, contract_help, floor, commute] = index(Page::Terms) else { return };
+    let &[note, contract_rate, contract, contract_help, floor, floor_help, no_floor, commute, tiers, no_tiers] = index(Page::Terms) else { return };
+    let rate_words = [contract_rate, contract, contract_help, floor, floor_help, no_floor];
+    let commute_words = [commute, tiers, no_tiers];
     let failures = terms.failures();
     if failures.is_empty() {
         ruled_note_with_command(ui, note, TERMS_LINE, show_command, query);
-        contract_and_rate(ui, terms, [contract_rate, contract, contract_help, floor], query);
-        commute_section(ui, terms, commute, None, query);
+        contract_and_rate(ui, terms, rate_words, query);
+        commute_section(ui, terms, commute_words, None, query);
         return;
     }
     prompt_box_tone(ui, Tone::Closed, |ui| {
@@ -85,24 +81,24 @@ pub fn body(ui: &mut Ui, state: TermsState, show_command: &mut bool, query: &str
     ui.add_space(SETTING_SECTION_GAP.0);
     faded(ui, |ui| {
         if matches!(terms.floor, TermPart::Read(_)) {
-            contract_and_rate(ui, terms, [contract_rate, contract, contract_help, floor], query);
+            contract_and_rate(ui, terms, rate_words, query);
         }
         if matches!(terms.commute, TermPart::Read(_)) {
-            commute_section(ui, terms, commute, Some(ANOTHER_FILE), query);
+            commute_section(ui, terms, commute_words, Some(ANOTHER_FILE), query);
         }
     });
 }
 
 /// The contract, fixed in Jobdesk, and the floor from the profile, or Not stated.
-fn contract_and_rate(ui: &mut Ui, terms: &YourTerms, [section, contract, contract_help, floor]: [&str; 4], query: &str) {
+fn contract_and_rate(ui: &mut Ui, terms: &YourTerms, [section, contract, contract_help, floor, floor_help, no_floor]: [&str; 6], query: &str) {
     setting_section(ui, section, None, query);
     setting_row(ui, contract, contract_help, query, |ui| value(ui, CONTRACT_TERM));
     match terms.floor {
         TermPart::Read(Some(amount)) => {
-            setting_row(ui, floor, FLOOR_HELP, query, |ui| value(ui, &floor_words(amount)));
+            setting_row(ui, floor, floor_help, query, |ui| value(ui, &floor_words(amount)));
         }
         TermPart::Read(None) => {
-            setting_row(ui, floor, NO_FLOOR, query, |ui| {
+            setting_row(ui, floor, no_floor, query, |ui| {
                 tag(ui, NOT_STATED, Tone::Interview);
             });
         }
@@ -112,7 +108,7 @@ fn contract_and_rate(ui: &mut Ui, terms: &YourTerms, [section, contract, contrac
 
 /// Where the tiers are measured from, as the section's note, then one row per tier: its name, its note as the help, and
 /// its places as the profile writes them. `more` follows the note, such as why a part shows while another failed.
-fn commute_section(ui: &mut Ui, terms: &YourTerms, title: &str, more: Option<&str>, query: &str) {
+fn commute_section(ui: &mut Ui, terms: &YourTerms, [title, tiers_label, no_tiers]: [&str; 3], more: Option<&str>, query: &str) {
     let TermPart::Read(Commute { tiers, .. }) = &terms.commute else { return };
     let origin = terms.origin_line().map(|line| plain(&line));
     let note = match (origin, more) {
@@ -120,8 +116,9 @@ fn commute_section(ui: &mut Ui, terms: &YourTerms, title: &str, more: Option<&st
         (origin, more) => origin.or(more.map(str::to_owned)),
     };
     setting_section(ui, title, note.as_deref(), query);
+    // Without tiers a fully remote job still passes the commute check, and a place the location check ruled out still fails it.
     if tiers.is_empty() {
-        setting_row(ui, TIERS, NO_TIERS, query, |ui| {
+        setting_row(ui, tiers_label, no_tiers, query, |ui| {
             tag(ui, NOT_STATED, Tone::Interview);
         });
         return;

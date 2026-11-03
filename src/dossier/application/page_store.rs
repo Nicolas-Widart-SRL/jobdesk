@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -14,6 +14,10 @@ const KEPT: usize = 8;
 
 /// How long after a file changed a failed render of it may only mean the file was still being written.
 const RECENT: u64 = 30;
+
+/// How long a file must stand unchanged before its failed render is tried again, so the one retry reads what the task
+/// finished writing rather than more of the same half.
+const SETTLED: u64 = 2;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum PageState {
@@ -36,6 +40,8 @@ pub struct PageStore {
     rasterizer: Arc<dyn PageRasterizer>,
     repaint: Arc<dyn Fn() + Send + Sync>,
     states: HashMap<Key, Entry>,
+    /// The failed versions already tried again, which `retry_failures` never tries a second time.
+    retried: HashSet<Key>,
     /// Counts the asks, so the least recently asked document is the one to let go.
     asks: u64,
     finished: Receiver<(Key, PageState)>,
@@ -45,7 +51,7 @@ pub struct PageStore {
 impl PageStore {
     pub fn new(rasterizer: Arc<dyn PageRasterizer>, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (finished_sender, finished) = mpsc::channel();
-        Self { rasterizer, repaint, states: HashMap::new(), asks: 0, finished, finished_sender }
+        Self { rasterizer, repaint, states: HashMap::new(), retried: HashSet::new(), asks: 0, finished, finished_sender }
     }
 
     /// Takes the renders that finished. One no longer asked for, such as an older version of a file, is dropped.
@@ -87,12 +93,20 @@ impl PageStore {
         self.states.get(&(document.path.clone(), document.modified)).map(|entry| &entry.state)
     }
 
-    /// Forgets the failed renders of files changed in the last `RECENT` seconds before `now`, in seconds since the epoch,
-    /// so each renders again when next asked for. A file read while a task was still writing it fails, and can be whole
-    /// a moment later with the same modification time to the second, so the shell calls this whenever the folder is read
-    /// again. A file that failed and has not changed since stays failed.
+    /// Forgets a failed render, so it renders again when next asked for, at most once for each version of a file: when
+    /// the file stood unchanged for `SETTLED` seconds before `now`, in seconds since the epoch, and changed no more than
+    /// `RECENT` seconds before it. A file read while a task was still writing it fails, and can be whole a moment later
+    /// with the same modification time to the second, so the shell calls this whenever the folder is read again. A file
+    /// that is truly broken fails once more and then stays failed, and a modification time later than `now` is never due.
     pub fn retry_failures(&mut self, now: u64) {
-        self.states.retain(|(_, modified), entry| !matches!(entry.state, PageState::Failed(_)) || modified.saturating_add(RECENT) < now);
+        let retried = &mut self.retried;
+        self.states.retain(|key, entry| {
+            let modified = key.1;
+            let due = matches!(entry.state, PageState::Failed(_)) && modified.saturating_add(SETTLED) <= now && now <= modified.saturating_add(RECENT);
+            !(due && retried.insert(key.clone()))
+        });
+        // A version past the window is never due again, so it need not be remembered.
+        retried.retain(|(_, modified)| now <= modified.saturating_add(RECENT));
     }
 
     /// Lets go of the rendered documents asked for longest ago, past the `KEPT` most recent.
@@ -183,23 +197,58 @@ mod tests {
         assert_eq!(counting.renders(), 2);
     }
 
-    /// A render that failed while the file was still being written renders again once the folder is read again.
+    /// When the file was written, in seconds since the epoch.
+    const WRITTEN: u64 = 1_000;
+
+    /// A render that failed while the file was still being written renders again once the file has settled.
     #[test]
-    fn a_failed_render_is_tried_again_after_a_retry() {
+    fn a_failed_render_of_a_file_just_written_is_tried_again() {
         let counting = Counting::new(true, 2);
         let mut store = store(&counting);
-        assert!(settled(&mut store, &document(1)) == PageState::Failed("nope".into()));
-        assert!(matches!(store.known(&document(1)), Some(PageState::Failed(_))));
+        assert!(settled(&mut store, &document(WRITTEN)) == PageState::Failed("nope".into()));
         *counting.failing.lock().unwrap() = false;
-        store.retry_failures(1 + RECENT + 1);
-        assert!(store.known(&document(1)).is_some(), "a file that has not changed for a while stays failed");
-        store.retry_failures(1 + RECENT);
-        assert!(store.known(&document(1)).is_none(), "the failure of a file just written is forgotten");
-        assert!(matches!(settled(&mut store, &document(1)), PageState::Ready(pages) if pages.pages.len() == 2));
-        assert_eq!(counting.renders(), 2);
-        store.retry_failures(1);
-        settled(&mut store, &document(1));
+        store.retry_failures(WRITTEN + SETTLED - 1);
+        assert!(store.known(&document(WRITTEN)).is_some(), "a file still being written is not read again yet");
+        store.retry_failures(WRITTEN + RECENT + 1);
+        assert!(store.known(&document(WRITTEN)).is_some(), "a file that has not changed for a while stays failed");
+        store.retry_failures(WRITTEN + SETTLED);
+        assert!(store.known(&document(WRITTEN)).is_none(), "the failure of a file just written is forgotten");
+        assert!(matches!(settled(&mut store, &document(WRITTEN)), PageState::Ready(pages) if pages.pages.len() == 2));
+        store.retry_failures(WRITTEN + SETTLED + 1);
+        settled(&mut store, &document(WRITTEN));
         assert_eq!(counting.renders(), 2, "a render that worked is kept");
+    }
+
+    /// Steps through folder reads every second from `from` to `to`, settling the document after each, as the screen
+    /// asks for it every frame.
+    fn reads(store: &mut PageStore, document: &PdfDocument, from: u64, to: u64) {
+        for now in from..=to {
+            store.retry_failures(now);
+            settled(store, document);
+        }
+    }
+
+    /// A truly broken file modified just now is tried once more, then stays failed however often the folder is read.
+    #[test]
+    fn a_broken_file_is_tried_again_only_once() {
+        let counting = Counting::new(true, 1);
+        let mut store = store(&counting);
+        settled(&mut store, &document(WRITTEN));
+        reads(&mut store, &document(WRITTEN), WRITTEN, WRITTEN + 2 * RECENT);
+        assert_eq!(counting.renders(), 2, "one render, and one retry");
+        assert!(matches!(store.known(&document(WRITTEN)), Some(PageState::Failed(_))));
+    }
+
+    /// A modification time later than now is never due, so a file from a skewed clock does not render over and over.
+    #[test]
+    fn a_file_from_the_future_is_tried_again_at_most_once() {
+        let counting = Counting::new(true, 1);
+        let mut store = store(&counting);
+        let future = document(WRITTEN + 3_600);
+        settled(&mut store, &future);
+        reads(&mut store, &future, WRITTEN, WRITTEN + 2 * RECENT);
+        assert!(counting.renders() <= 2, "{} renders", counting.renders());
+        assert!(matches!(store.known(&future), Some(PageState::Failed(_))));
     }
 
     #[test]

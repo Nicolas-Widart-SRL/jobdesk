@@ -204,12 +204,18 @@ fn textures_for(ui: &Ui, images: &[PageImage]) -> Vec<TextureHandle> {
         .collect()
 }
 
-/// "CV 2 pages, Cover letter 1 page", from the documents that have rendered.
+/// "CV 2 pages, Cover letter 1 page", from the documents that have rendered. A document longer than its render counts
+/// all its pages and says how many show: "CV 8 pages (the first 6 shown)".
 fn page_count_note(documents: &[(&PdfDocument, PageState)]) -> Option<String> {
     let counts: Vec<String> = documents
         .iter()
         .filter_map(|(document, state)| match state {
-            PageState::Ready(images) => Some(format!("{} {} {}", document.label, images.pages.len(), if images.pages.len() == 1 { "page" } else { "pages" })),
+            PageState::Ready(rendered) => {
+                let (shown, total) = (rendered.pages.len(), rendered.total.max(rendered.pages.len()));
+                let pages = if total == 1 { "page" } else { "pages" };
+                let cut = if shown < total { format!(" (the first {shown} shown)") } else { String::new() };
+                Some(format!("{} {total} {pages}{cut}", document.label))
+            }
             _ => None,
         })
         .collect();
@@ -579,6 +585,21 @@ mod tests {
         assert_eq!(note_line("**Feedback** was kind"), Some((None, "**Feedback** was kind")));
         assert_eq!(note_line("- - nested"), Some((None, "- nested")));
         assert_eq!(note_line("* 2026-10-21:  two spaces"), Some((NaiveDate::from_ymd_opt(2026, 10, 21), "two spaces")));
+    }
+
+    /// A PDF longer than its render counts all its pages, and says only the first show.
+    #[test]
+    fn the_page_note_counts_every_page() {
+        let rendered = |shown: usize, total: usize| {
+            let page = PageImage { width: 1, height: 1, rgba: vec![255; 4] };
+            PageState::Ready(std::sync::Arc::new(crate::dossier::application::RenderedPages { pages: vec![page; shown], total }))
+        };
+        let cv = PdfDocument { label: "CV".into(), path: "cv.pdf".into(), modified: 1 };
+        let letter = PdfDocument { label: "Cover letter".into(), path: "letter.pdf".into(), modified: 1 };
+        let note = |cv_state, letter_state| page_count_note(&[(&cv, cv_state), (&letter, letter_state)]);
+        assert_eq!(note(rendered(2, 2), rendered(1, 1)).as_deref(), Some("CV 2 pages, Cover letter 1 page"));
+        assert_eq!(note(rendered(6, 8), rendered(1, 1)).as_deref(), Some("CV 8 pages (the first 6 shown), Cover letter 1 page"));
+        assert_eq!(note(PageState::Loading, PageState::Failed("x".into())), None);
     }
 
     #[test]

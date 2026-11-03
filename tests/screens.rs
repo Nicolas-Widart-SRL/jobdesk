@@ -5002,9 +5002,10 @@ fn a_cv_read_half_written_renders_once_whole() {
     let whole = cv_pdf(2, 84_000);
     let (shell, root) = cv_shell("profile_cv_half_written");
     let path = root.join("cv/main_example.pdf");
-    // Written just now, and read before the task finished writing it.
+    // Written a few seconds ago, and read before the task finished writing it.
+    let written = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
     fs::write(&path, &whole[..whole.len() / 3]).unwrap();
-    let written = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(written).unwrap();
     let mut shell = shell.with_page_store(page_store());
     let feed = shell.snapshot_feed();
     feed.send(Snapshot::load(&root, day())).unwrap();
@@ -5033,6 +5034,32 @@ fn an_old_cv_that_failed_stays_failed() {
     harness.run_steps(3);
     assert!(!is_shown(&harness, RENDERING), "no new render started");
     assert!(is_shown(&harness, NOT_RENDERED));
+}
+
+/// A broken PDF written a few seconds ago is tried once more, then stays failed however often a task makes the folder
+/// read again, so the pages area does not flip between loading and failed.
+#[test]
+fn a_broken_cv_just_written_is_tried_again_only_once() {
+    let (shell, root) = cv_shell("profile_cv_broken_just_written");
+    let path = root.join("cv/main_example.pdf");
+    fs::write(&path, b"%PDF-1.4\nnot a PDF after all\n").unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(5)).unwrap();
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(1);
+    assert!(is_shown(&harness, RENDERING), "the one retry");
+    rendered(&mut harness);
+    for _ in 0..3 {
+        feed.send(Snapshot::load(&root, day())).unwrap();
+        harness.run_steps(1);
+        assert!(!is_shown(&harness, RENDERING), "no second retry");
+        assert!(is_shown(&harness, NOT_RENDERED));
+    }
 }
 
 /// The last line of the sample's first role, and the same with its blank filled in.

@@ -184,7 +184,15 @@ mod tests {
         clear(&dir);
         assert!(other.exists());
         drop(lock);
-        clear(&dir);
+        // A child another test forks may hold a copy of the lock until it execs, which closes it, so `clear` tries a while.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            clear(&dir);
+            if !other.exists() || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert!(!other.exists(), "once its process ends, a folder goes at the next launch");
     }
 

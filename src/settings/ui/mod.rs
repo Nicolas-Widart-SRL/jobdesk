@@ -208,6 +208,8 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             let about = AboutView { version: view.version, claude: view.claude };
             let (_, providers) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
             if providers {
+                // A search that hides Providers would send the rail straight back to its first hit, so the jump clears it.
+                screen.query.clear();
                 screen.page = Page::Providers;
             }
         }
@@ -1256,6 +1258,24 @@ mod tests {
         harness.run();
         assert_eq!(state.borrow().screen.page, Page::Providers);
         assert_eq!(state.borrow().asked, None, "a jump inside Settings asks the shell for nothing");
+        harness.get_by_label(Page::Providers.lead());
+    }
+
+    #[test]
+    fn open_providers_works_during_a_search_that_finds_only_about() {
+        let state = state();
+        on(&state, Page::About);
+        let only_about = "How tasks sign in";
+        let hits = search(only_about, Drawn::folder(true)).expect("a query");
+        assert_eq!(hits.pages.iter().map(|&(page, _)| page).collect::<Vec<_>>(), vec![Page::About]);
+        state.borrow_mut().screen.query = only_about.to_owned();
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Open Providers").click();
+        harness.run();
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::Providers);
+        assert_eq!(state.borrow().screen.query, "", "the jump clears the search, which would hide Providers");
         harness.get_by_label(Page::Providers.lead());
     }
 

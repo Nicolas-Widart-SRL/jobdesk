@@ -26,12 +26,6 @@ Only what is not built yet stays here.
 
 **About**: a link to the licences.
 
-**About, How tasks sign in**: the first setting row under Read more, before What changed. It replaces the old How Jobdesk signs in link to a doc that no longer exists, so About still says who holds the sign-in.
-
-- Title `How tasks sign in`. Help text `Claude Code signs in on its own. Jobdesk keeps only an optional API key, in your keychain.` On Windows the help ends `in Credential Manager.` instead of `in your keychain.` The canvas draws the macOS copy.
-- Control: the link `Open Providers`, in the same link look as Open the changelog. It is an in-app jump, not an external URL: it switches Settings to the Providers page, with Providers selected in the side list, and opens no browser. It starts no run and changes no setting.
-- Why a jump and not more text: Providers already explains sign-in and holds the key, so the row stays one sentence and points there.
-
 ## Code home
 
 - The planner picks the notifications crate and checks it on macOS and Windows.

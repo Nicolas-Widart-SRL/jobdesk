@@ -103,10 +103,22 @@ impl SkipReasons {
         &self.0
     }
 
+    /// No hidden characters, inner whitespace collapsed, ends trimmed.
+    fn tidy(text: &str) -> String {
+        let visible: String = visible_chars(text).collect();
+        visible.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// A reason read back from a file, tidied as a typed one is and cut to `REASON_CHARS`. None when nothing visible is left.
+    pub fn clean(text: &str) -> Option<String> {
+        let cut: String = Self::tidy(text).chars().take(Self::REASON_CHARS).collect();
+        let cut = cut.trim_end();
+        (!cut.is_empty()).then(|| cut.to_owned())
+    }
+
     /// The reason as it would be kept: no hidden characters, inner whitespace collapsed, ends trimmed.
     pub fn check(&self, text: &str) -> Result<String, ReasonRefusal> {
-        let visible: String = visible_chars(text).collect();
-        let clean = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+        let clean = Self::tidy(text);
         if clean.is_empty() {
             return Err(ReasonRefusal::Empty);
         }
@@ -270,6 +282,14 @@ mod tests {
         reasons.add("Pa\u{200b}y\u{202e} low\u{1b}[31m").unwrap();
         assert_eq!(reasons.list().last().map(String::as_str), Some("Pay low"));
         assert_eq!(reasons.add("\u{200b}\u{202e}"), Err(ReasonRefusal::Empty), "only hidden characters is empty");
+    }
+
+    #[test]
+    fn a_read_back_reason_is_tidied_and_cut() {
+        assert_eq!(SkipReasons::clean(" Pa\u{200b}y\u{202e}   low\u{1b}[31m "), Some("Pay low".to_owned()));
+        assert_eq!(SkipReasons::clean(&"a".repeat(50)), Some("a".repeat(40)));
+        assert_eq!(SkipReasons::clean(&format!("{} b", "a".repeat(39))), Some("a".repeat(39)), "a cut never ends in a space");
+        assert_eq!(SkipReasons::clean("\u{200b} \u{202e}"), None);
     }
 
     #[test]

@@ -556,14 +556,14 @@ fn coming_up(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&st
     });
 }
 
-/// Names come from postings, so they show as plain labels only.
+/// Names come from postings, so they show as plain labels only. The row is dated with the first return, so it counts only the cards back that day.
 fn return_row(ui: &mut Ui, returning: &Returning, active: bool, pressed: &mut Option<Pressed>) {
     let n = returning.count;
-    let (verb, pronoun) = if n == 1 { ("comes", "it") } else { ("come", "them") };
+    let pronoun = if n == 1 { "it" } else { "them" };
     let back = &returning.back;
     let label = format!("{n} set aside, back {back}: {}. Bring {pronoun} back now.", returning.names.join(", "));
     let day = returning.on.format("%a %-d").to_string();
-    let press = agenda_return(ui, &day, &format!("{n} {verb} back"), "Bring back", &label, active, |ui| {
+    let press = agenda_return(ui, &day, &returning.on_the_day(), "Bring back", &label, active, |ui| {
         strong(ui, "Set aside with Later");
         for name in &returning.names {
             ui.label(name.as_str());

@@ -65,17 +65,26 @@ impl Decision {
         if self.outcome == Outcome::Followed {
             return self.task.as_deref().and_then(task_name).map_or_else(|| verb.to_owned(), |name| format!("{verb}: {name}"));
         }
-        self.reason.as_ref().map_or_else(|| verb.to_owned(), |reason| format!("{verb} for {}", reason.to_lowercase()))
+        self.reason.as_ref().map_or_else(|| verb.to_owned(), |reason| format!("{verb} for {}", in_sentence(reason)))
     }
 
-    /// What the undo row shows, and what a screen reader hears of it.
-    pub fn note(&self) -> String {
+    /// What the undo row shows, and what a screen reader hears of it. `asks_reason` is whether there are reasons to offer.
+    pub fn note(&self, asks_reason: bool) -> String {
         match (self.outcome, &self.reason) {
             (Outcome::Later, _) => format!("Set aside until {}", until_words(self.on, self.returns_on())),
-            (Outcome::Skipped, None) => "Skipped. Why? Optional.".to_owned(),
+            (Outcome::Skipped, None) if asks_reason => "Skipped. Why? Optional.".to_owned(),
+            (Outcome::Skipped, None) => "Skipped.".to_owned(),
             _ => self.label(),
         }
     }
+}
+
+/// A reason inside a sentence: "Domain" reads "domain", but "IR35" or "Not on LinkedIn" stay as written.
+fn in_sentence(reason: &str) -> String {
+    let mut chars = reason.chars();
+    let Some(first) = chars.next() else { return String::new() };
+    let rest = chars.as_str();
+    if rest.chars().any(char::is_uppercase) { reason.to_owned() } else { first.to_lowercase().chain(rest.chars()).collect() }
 }
 
 /// When a card comes back, said from `on`: "tomorrow", "Monday", "next Monday", or a date further out.
@@ -154,19 +163,35 @@ mod tests {
         assert_eq!(skipped.label(), "Skipped for rate");
         let custom = Decision { reason: Some("Agency, not the client".into()), ..decided(Outcome::Skipped) };
         assert_eq!(custom.label(), "Skipped for agency, not the client");
+        let old = Decision { reason: Some("rate".into()), ..decided(Outcome::Skipped) };
+        assert_eq!(old.label(), "Skipped for rate");
+    }
+
+    #[test]
+    fn a_reason_keeps_the_capitals_it_needs() {
+        let label = |reason: &str| Decision { reason: Some(reason.into()), ..decided(Outcome::Skipped) }.label();
+        assert_eq!(label("IR35"), "Skipped for IR35");
+        assert_eq!(label("Not on LinkedIn"), "Skipped for Not on LinkedIn");
+        assert_eq!(label("Domain"), "Skipped for domain");
+        assert_eq!(label("Écart de salaire"), "Skipped for écart de salaire");
     }
 
     #[test]
     fn the_note_tells_what_is_still_open_to_the_user() {
-        assert_eq!(decided(Outcome::Later).note(), "Set aside until tomorrow");
-        assert_eq!(decided(Outcome::Skipped).note(), "Skipped. Why? Optional.");
-        assert_eq!(Decision { reason: Some("Scope".into()), ..decided(Outcome::Skipped) }.note(), "Skipped for scope");
-        assert_eq!(decided(Outcome::Kept).note(), "Kept");
+        assert_eq!(decided(Outcome::Later).note(true), "Set aside until tomorrow");
+        assert_eq!(decided(Outcome::Skipped).note(true), "Skipped. Why? Optional.");
+        assert_eq!(Decision { reason: Some("Scope".into()), ..decided(Outcome::Skipped) }.note(true), "Skipped for scope");
+        assert_eq!(decided(Outcome::Kept).note(false), "Kept");
+    }
+
+    #[test]
+    fn a_skip_with_no_reasons_to_offer_asks_nothing() {
+        assert_eq!(decided(Outcome::Skipped).note(false), "Skipped.");
     }
 
     #[test]
     fn the_note_names_the_day_a_card_comes_back() {
-        let until = |until| Decision { until: Some(until), ..decided(Outcome::Later) }.note();
+        let until = |until| Decision { until: Some(until), ..decided(Outcome::Later) }.note(false);
         assert_eq!(until(day(11, 1)), "Set aside until tomorrow");
         assert_eq!(until(day(11, 2)), "Set aside until Monday");
         assert_eq!(until(day(11, 3)), "Set aside until Tuesday");

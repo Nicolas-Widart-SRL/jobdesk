@@ -3,10 +3,10 @@
 # Run it from the Actions tab to build the installers of a branch without a release.
 # A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
 # tag-release.yml has no `quick` input, so a release always tests.
-# The installers are not signed with a developer identity: see the Install section of README.md and the Package
-# section of CONTRIBUTING.md. With the update key in the secrets JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD,
-# cargo packager signs the update files, and `dmg` and `setup` carry them and their .sig files too.
-# A release needs the key: with a tag set, a missing key fails the build.
+# The installers are not signed: see the Install section of README.md and the Package section of CONTRIBUTING.md.
+# `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. On Windows that file is
+# the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the sign job
+# of tag-release.yml signs, and only for a release.
 name: Installers
 
 on:
@@ -21,13 +21,6 @@ on:
         type: string
         required: false
         default: ''
-    secrets:
-      JOBDESK_UPDATE_KEY:
-        description: The update signing key, as cargo packager signer generate wrote it.
-        required: false
-      JOBDESK_UPDATE_KEY_PASSWORD:
-        description: The password of the update signing key.
-        required: false
   workflow_dispatch:
     inputs:
       quick:
@@ -118,22 +111,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # update is the file a copy of Jobdesk downloads to update itself, and update_suffix its name.
-          # On Windows it is the setup itself.
+          # bundle is the app a copy of Jobdesk downloads to update itself, packed as update_suffix.
           - os: macos-latest
             formats: app,dmg
             artifact: dmg
             built: '*.dmg'
             suffix: macos-arm64.dmg
-            update: Jobdesk.app.tar.gz
+            bundle: Jobdesk.app
             update_suffix: macos-arm64.app.tar.gz
           - os: windows-latest
             formats: nsis
             artifact: setup
             built: '*-setup.exe'
             suffix: windows-x64-setup.exe
-            update: ''
-            update_suffix: windows-x64-setup.exe
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -145,34 +135,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
-      # cargo packager signs what it builds only when CARGO_PACKAGER_SIGN_PRIVATE_KEY is set, so it is set only with a key.
-      - name: Package
-        env:
-          FORMATS: ${{ matrix.formats }}
-          TAG: ${{ inputs.tag }}
-          UPDATE_KEY: ${{ secrets.JOBDESK_UPDATE_KEY }}
-          UPDATE_KEY_PASSWORD: ${{ secrets.JOBDESK_UPDATE_KEY_PASSWORD }}
-        run: |
-          if [ -n "$UPDATE_KEY" ] && [ -z "$UPDATE_KEY_PASSWORD" ]; then
-            echo "::error::JOBDESK_UPDATE_KEY is set but JOBDESK_UPDATE_KEY_PASSWORD is empty. Set both, as the Release section of CONTRIBUTING.md says."
-            exit 1
-          fi
-          if [ -n "$TAG" ] && [ -z "$UPDATE_KEY" ]; then
-            echo "::error::A release needs the update key. Set the JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD secrets, as the Release section of CONTRIBUTING.md says."
-            exit 1
-          fi
-          if [ -n "$UPDATE_KEY" ]; then
-            export CARGO_PACKAGER_SIGN_PRIVATE_KEY="$UPDATE_KEY"
-            export CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD="$UPDATE_KEY_PASSWORD"
-          fi
-          cargo packager --release --formats "$FORMATS"
-      - name: Name the installer and the update
+      - run: cargo packager --release --formats ${{ matrix.formats }}
+      - name: Name the installer and pack the update
         env:
           BUILT: ${{ matrix.built }}
           NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
-          UPDATE: ${{ matrix.update }}
+          BUNDLE: ${{ matrix.bundle }}
           UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.update_suffix }}
-          SIGNED: ${{ secrets.JOBDESK_UPDATE_KEY != '' }}
         run: |
           # bash 3.2 on macOS has no mapfile; compgen exits 1 on no match.
           files=()
@@ -185,27 +154,14 @@ jobs:
           fi
           mkdir -p dist
           mv "${files[0]}" "dist/$NAME"
-          if [ "$SIGNED" != "true" ]; then
-            exit 0
-          fi
-          # The update and its signature. On macOS the update is the app bundle as a .tar.gz, on Windows the setup itself.
-          if [ -n "$UPDATE" ]; then
-            update="target/packages/$UPDATE"
-            signature="$update.sig"
-          else
-            update="dist/$NAME"
-            signature="${files[0]}.sig"
-          fi
-          for file in "$update" "$signature"; do
-            if [ ! -s "$file" ]; then
-              echo "::error::cargo packager did not write $file."
+          # The app holds one top folder, Jobdesk.app/, with no macOS metadata, as the app's unpacker expects.
+          if [ -n "$BUNDLE" ]; then
+            if [ ! -d "target/packages/$BUNDLE" ]; then
+              echo "::error::No $BUNDLE in target/packages."
               exit 1
             fi
-          done
-          if [ -n "$UPDATE" ]; then
-            mv "$update" "dist/$UPDATE_NAME"
+            COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "dist/$UPDATE_NAME" -C target/packages "$BUNDLE"
           fi
-          mv "$signature" "dist/$UPDATE_NAME.sig"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

@@ -6,8 +6,12 @@
 # For a code failure, merge the fix into main through a normal PR, then run this workflow by hand with the tag.
 # The run by hand builds the current main commit, then tags and publishes the same way.
 # The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
-# installers.yml gets the update key secrets and signs the update files. Before it tags, publish checks both signatures
-# against assets/update/jobdesk-update.pub and writes latest.json, the feed the app reads, with scripts/update-feed.sh.
+#
+# Updates: installers.yml builds with no key. The sign job alone gets the update key, from the two secrets
+# JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD named in its signing step, and runs no build and only actions
+# pinned to commits. It signs the two update files under their release names, so each signature names its version.
+# Before it tags, publish checks both signatures against assets/update/jobdesk-update.pub and writes latest.json,
+# the feed the app reads, with scripts/update-feed.sh.
 name: Tag release
 
 on:
@@ -96,12 +100,70 @@ jobs:
     with:
       ref: ${{ needs.version.outputs.sha }}
       tag: ${{ needs.version.outputs.tag }}
-    # Only JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD are declared there, so only they reach it.
-    secrets: inherit
+
+  # Signs the update files. The key reaches only the Sign step, in its environment, never a command line or a log.
+  # No checkout and no build, so no code from the repository or its dependencies runs beside it.
+  sign:
+    name: Sign the updates
+    needs: [version, installers]
+    runs-on: ubuntu-latest
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dmg
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: setup
+          path: dist
+
+      # Ubuntu's own package, which apt checks against the archive's signing key.
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      # The key file is written to a folder only this user can read, and deleted when the step ends.
+      # minisign reads the password from stdin. The trusted comment names the file, which the app checks.
+      - name: Sign
+        env:
+          UPDATE_KEY: ${{ secrets.JOBDESK_UPDATE_KEY }}
+          UPDATE_KEY_PASSWORD: ${{ secrets.JOBDESK_UPDATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$UPDATE_KEY" ] || [ -z "$UPDATE_KEY_PASSWORD" ]; then
+            echo "::error::A release needs the update key. Set the JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD secrets, as the Release section of CONTRIBUTING.md says."
+            exit 1
+          fi
+          umask 077
+          keys=$(mktemp -d)
+          trap 'rm -rf "$keys"' EXIT
+          printf '%s' "$UPDATE_KEY" | base64 -d > "$keys/update.key"
+          mkdir signatures
+          for name in "Jobdesk-$TAG-macos-arm64.app.tar.gz" "Jobdesk-$TAG-windows-x64-setup.exe"; do
+            if [ ! -s "dist/$name" ]; then
+              echo "::error::dist/$name is missing."
+              exit 1
+            fi
+            printf '%s\n' "$UPDATE_KEY_PASSWORD" | minisign -S -s "$keys/update.key" -m "dist/$name" -x "$keys/$name.minisig" \
+              -c "signature from the Jobdesk update key" -t "timestamp:$(date +%s)"$'\t'"file:$name"
+            base64 -w0 < "$keys/$name.minisig" > "signatures/$name.sig"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signatures
+          path: signatures/*.sig
+          if-no-files-found: error
 
   publish:
     name: Tag and publish release
-    needs: [version, installers]
+    needs: [version, installers, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -142,9 +204,13 @@ jobs:
         with:
           name: setup
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signatures
+          path: dist
 
       # A build the app cannot check must never be published: the public key must be the real one, and both updates
-      # must pass it, before anything is tagged.
+      # must pass it under their own names, before anything is tagged.
       - name: Install minisign
         run: |
           sudo apt-get update
@@ -167,6 +233,10 @@ jobs:
             base64 -d "$update.sig" > "$minisig"
             if ! minisign -V -q -p "$RUNNER_TEMP/jobdesk-update.pub" -m "$update" -x "$minisig"; then
               echo "::error::$update does not match $key."
+              exit 1
+            fi
+            if ! sed -n 's/^trusted comment: //p' "$minisig" | tr '\t' '\n' | grep -qxF "file:$(basename "$update")"; then
+              echo "::error::The signature of $update does not name it."
               exit 1
             fi
           done

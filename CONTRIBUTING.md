@@ -24,7 +24,7 @@ cargo packager --release --formats app,dmg
 
 Output lands in `target/packages`. On Windows use `--formats nsis`. Run the Installers workflow from the Actions tab to build both installers for a branch. It uploads them as the `dmg` and `setup` artifacts, named `Jobdesk-vX.Y.Z-<commit>-macos-arm64.dmg` and `Jobdesk-vX.Y.Z-<commit>-windows-x64-setup.exe`. Its `quick` option skips clippy and tests, and adds `-untested` after the commit in the names. A release build names them after the tag, with no commit: `Jobdesk-vX.Y.Z-macos-arm64.dmg` and `Jobdesk-vX.Y.Z-windows-x64-setup.exe`.
 
-When the `JOBDESK_UPDATE_KEY` and `JOBDESK_UPDATE_KEY_PASSWORD` secrets hold the [update key](#the-update-key), the workflow also signs the files a copy of Jobdesk downloads to update itself. The `dmg` artifact then holds the app as `Jobdesk-…-macos-arm64.app.tar.gz` with its `.sig`, and `setup` holds the setup's `.sig`. A release build fails without the key. To sign a local build, set `CARGO_PACKAGER_SIGN_PRIVATE_KEY` to the private key file and `CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD` to its password before `cargo packager`.
+The `dmg` artifact also holds the app as `Jobdesk-…-macos-arm64.app.tar.gz`, the file a copy of Jobdesk downloads to update itself. On Windows that file is the setup. The Installers workflow never sees the [update key](#the-update-key), so what it builds is never signed for updates, and no copy will install it as an update. Only a release signs.
 
 These builds are not signed with a developer identity. macOS warns on other machines until the app is signed with a Developer ID and notarized. Windows warns because the installer is unsigned, and SmartScreen can keep warning after signing until the certificate builds a reputation. The app icons live in `assets/brand/`.
 
@@ -33,7 +33,7 @@ These builds are not signed with a developer identity. macOS warns on other mach
 1. Run the Release workflow from the Actions tab on `main`. With the `auto` bump, the default, it picks the next version from the Conventional Commits since the last tag. Choose `patch`, `minor` or `major` to force one. It opens a `release/vX.Y.Z` pull request with the new `CHANGELOG.md` section and version.
 2. Review the changelog on that branch, then merge the pull request.
 3. The Tag release workflow tests and builds both installers on the merge commit, then tags it and publishes the GitHub release with the changelog section as its notes and the installers attached.
-   Before it tags, it checks both update signatures against `assets/update/jobdesk-update.pub` with minisign, and `scripts/update-feed.sh` writes `latest.json`, the feed each copy of Jobdesk reads.
+   Between the build and the tag, a separate job signs the two update files under their release names with minisign. It alone gets the update key, and it runs no build. Then, before it tags, the workflow checks both signatures against `assets/update/jobdesk-update.pub`, and `scripts/update-feed.sh` writes `latest.json`, the feed each copy of Jobdesk reads.
    The feed holds the version, the date, the notes, and each build's signature and size. It holds no address: the app builds each address from the version.
 
 A failed build leaves no tag. Rerunning failed jobs rebuilds the same commit, so it helps only with a flaky or infrastructure failure. For a code failure, merge the fix into `main` through a normal pull request, then run the Tag release workflow by hand with the tag. It builds the current `main` commit, then tags and publishes the same way.
@@ -68,6 +68,7 @@ gh secret set JOBDESK_UPDATE_KEY_PASSWORD
 - Keep an offline backup of the private key and its password. With the key lost, no release can reach the copies already installed, and every user has to install the next one by hand.
 - Copies from before updates, 0.1.x, cannot update themselves, so their users install the first release with updates by hand once.
 - To change the key, ship the new public key inside a release signed with the old one, then replace both secrets. Copies that installed that release check the next ones against the new key, and the others install by hand.
+- Each signature names the file it signs, such as `Jobdesk-v0.2.0-windows-x64-setup.exe`, and the app checks that name against the version it installs. To sign a file by hand, sign it under its release name: `base64 -d ~/.jobdesk/update.key > update.minisign.key`, then `minisign -S -s update.minisign.key -m Jobdesk-vX.Y.Z-windows-x64-setup.exe`, then delete `update.minisign.key`, and put the `.minisig` in base64 on one line in the `.sig`.
 - These signatures are not code signing. They show a download comes from this repository's releases, and macOS and Windows still warn as [Package](#package) says.
 
 ## Test

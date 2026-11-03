@@ -2,12 +2,15 @@
 //! Built on every computer, so its tests run everywhere, and called only on Windows.
 
 use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{self, Command};
 
 use crate::shared_kernel::process_tree::no_window;
-use crate::updates::domain::{ApplyFailure, InstallBlock, RestartPlan};
-use crate::updates::infrastructure::signature::{UpdateKey, signed_by};
+use crate::updates::domain::{ApplyFailure, InstallBlock, Platform, RestartPlan};
+use crate::updates::infrastructure::download::{MAX_DOWNLOAD, new_private_file, read_build};
+use crate::updates::infrastructure::signature::{UpdateKey, signs};
 
 /// The file the Jobdesk installer puts beside the program, and so the sign that an installer put it there.
 const UNINSTALLER: &str = "uninstall.exe";
@@ -21,15 +24,53 @@ pub fn block(exe: &Path) -> Option<InstallBlock> {
 }
 
 /// Checks the setup once more, then starts it and returns, so this copy ends and the setup can replace it.
-/// `Err` says why it did not start, and this copy should open again.
+/// What starts is a copy that was checked through the handle that holds it, so it cannot change between the check
+/// and the start. `Err` says why it did not start, and this copy should open again.
 pub fn apply(plan: &RestartPlan, exe: &Path, args: &[OsString], key: Option<&UpdateKey>) -> Result<(), ApplyFailure> {
-    if !key.is_some_and(|key| signed_by(key, &plan.file, &plan.signature).unwrap_or(false)) {
-        return Err(ApplyFailure::BadSignature);
-    }
     if block(exe).is_some() {
         return Err(ApplyFailure::NotInstalled);
     }
-    installer(&plan.file, workspace(args).as_deref()).spawn().map(drop).map_err(|_| ApplyFailure::Start)
+    let (setup, held) = prepare(plan, key)?;
+    let started = installer(&setup, workspace(args).as_deref()).spawn().map(drop).map_err(|_| ApplyFailure::Start);
+    drop(held);
+    started
+}
+
+/// Copies the setup into a folder made just now beside it, opens the copy so that, on Windows, nothing may write or
+/// delete it while the handle is open, and checks the bytes read through that handle. Gives the copy and the handle.
+fn prepare(plan: &RestartPlan, key: Option<&UpdateKey>) -> Result<(PathBuf, File), ApplyFailure> {
+    let asset = Platform::WindowsX64.asset_name(&plan.version);
+    let bytes = read_build(&plan.file).map_err(|_| ApplyFailure::Missing)?;
+    let folder = plan.file.with_file_name(format!("apply-{}", process::id()));
+    let setup = folder.join(&asset);
+    fresh_folder(&folder).and_then(|()| new_private_file(&setup)).and_then(|mut copy| copy.write_all(&bytes)).map_err(|_| ApplyFailure::Start)?;
+    let mut held = hold(&setup).map_err(|_| ApplyFailure::Start)?;
+    let mut checked = Vec::new();
+    (&mut held).take(MAX_DOWNLOAD + 1).read_to_end(&mut checked).map_err(|_| ApplyFailure::Start)?;
+    if !key.is_some_and(|key| signs(key, &checked, &plan.signature, &asset)) {
+        return Err(ApplyFailure::BadSignature);
+    }
+    Ok((setup, held))
+}
+
+/// An empty folder made now, only the user's, in place of whatever had its name.
+fn fresh_folder(folder: &Path) -> io::Result<()> {
+    let _ = fs::remove_dir_all(folder);
+    let mut builder = fs::DirBuilder::new();
+    // Not recursive: a folder that is there already is an error, so the copy always goes in one made now.
+    builder.recursive(false);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(folder)
+}
+
+/// Opens `path` to read. On Windows others may only read it too: no write and no delete while this is open.
+fn hold(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 0x0000_0001); // FILE_SHARE_READ
+    options.open(path)
 }
 
 /// `<setup> /P /R /NS`: passive, so it shows only its progress, then reopens Jobdesk, and adds no shortcut again.
@@ -63,6 +104,13 @@ mod tests {
 
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    /// The signed setup as a download leaves it, in `folder`.
+    fn downloaded(folder: &Path) -> PathBuf {
+        let file = folder.join(format!("1-{WINDOWS}"));
+        fs::copy(fixture(WINDOWS), &file).unwrap();
+        file
     }
 
     fn plan(file: PathBuf) -> RestartPlan {
@@ -106,14 +154,43 @@ mod tests {
         bytes[0] ^= 1;
         fs::write(&setup, bytes).unwrap();
         assert_eq!(apply(&plan(setup), &exe, &[], Some(&fixture_key())), Err(ApplyFailure::BadSignature));
-        assert_eq!(apply(&plan(fixture(WINDOWS)), &exe, &[], None), Err(ApplyFailure::BadSignature), "no key, no apply");
+        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], None), Err(ApplyFailure::BadSignature), "no key, no apply");
+    }
+
+    #[test]
+    fn a_setup_signed_for_another_version_never_starts() {
+        let folder = tempfile::tempdir().unwrap();
+        let older = RestartPlan { signature: fixture_signature("Jobdesk-v0.1.9-windows-x64-setup.exe"), ..plan(downloaded(folder.path())) };
+        assert_eq!(prepare(&older, Some(&fixture_key())).err(), Some(ApplyFailure::BadSignature));
+    }
+
+    #[test]
+    fn a_setup_that_is_gone_is_missing_not_a_bad_signature() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join(UNINSTALLER), "").unwrap();
+        let gone = plan(folder.path().join(WINDOWS));
+        assert_eq!(apply(&gone, &folder.path().join("jobdesk.exe"), &[], Some(&fixture_key())), Err(ApplyFailure::Missing));
+    }
+
+    #[test]
+    fn what_starts_is_the_copy_that_was_checked() {
+        let folder = tempfile::tempdir().unwrap();
+        let original = downloaded(folder.path());
+        let (setup, held) = prepare(&plan(original.clone()), Some(&fixture_key())).unwrap();
+        assert_ne!(setup, original);
+        assert_eq!(setup.parent().unwrap().parent().unwrap(), folder.path(), "the copy sits in a folder of its own beside the download");
+        fs::write(&original, "changed after the check").unwrap();
+        assert_eq!(fs::read(&setup).unwrap(), fs::read(fixture(WINDOWS)).unwrap());
+        #[cfg(windows)]
+        assert!(OpenOptions::new().write(true).open(&setup).is_err(), "nothing may write the held copy");
+        drop(held);
     }
 
     #[test]
     fn a_copy_no_installer_put_in_place_is_not_replaced() {
         let folder = tempfile::tempdir().unwrap();
         let exe = folder.path().join("jobdesk.exe");
-        assert_eq!(apply(&plan(fixture(WINDOWS)), &exe, &[], Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
+        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
     }
 
     // Unix only, so no Windows runner ever tries to start the stand-in.
@@ -123,8 +200,6 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         fs::write(folder.path().join(UNINSTALLER), "").unwrap();
         // The stand-in setup is signed but is no program, so it cannot start.
-        let setup = folder.path().join(WINDOWS);
-        fs::copy(fixture(WINDOWS), &setup).unwrap();
-        assert_eq!(apply(&plan(setup), &folder.path().join("jobdesk.exe"), &[], Some(&fixture_key())), Err(ApplyFailure::Start));
+        assert_eq!(apply(&plan(downloaded(folder.path())), &folder.path().join("jobdesk.exe"), &[], Some(&fixture_key())), Err(ApplyFailure::Start));
     }
 }

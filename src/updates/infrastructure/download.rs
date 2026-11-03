@@ -13,6 +13,10 @@ use crate::updates::infrastructure::signature::{UpdateKey, signed_by};
 pub const MAX_DOWNLOAD: u64 = 200 * 1024 * 1024;
 /// Progress is reported at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// A download that brings less than `SLOWEST` bytes in a whole `PACE_WINDOW` has stalled, even if each read answers in
+/// time, so a server that drips a byte at a time cannot hold the download forever.
+const PACE_WINDOW: Duration = Duration::from_secs(60);
+const SLOWEST: u64 = 16 * 1024;
 
 /// One download and what it owns: its number, its files, and the switch that stops it.
 /// Its worker and a later `cancel` share it, so whichever comes second deletes what the download kept.
@@ -84,6 +88,7 @@ impl Job {
         let mut buffer = vec![0; 64 * 1024];
         let mut done = 0;
         let mut told = Instant::now();
+        let mut pace = Pace::new(told);
         loop {
             if self.is_cancelled() {
                 return DownloadEnd::Cancelled;
@@ -101,6 +106,9 @@ impl Job {
                 return failed(done, Failure::Disk);
             }
             done += read as u64;
+            if pace.stalled(Instant::now(), read as u64) {
+                return failed(done, Failure::TimedOut);
+            }
             if told.elapsed() >= PROGRESS_EVERY {
                 told = Instant::now();
                 progress(done, size);
@@ -113,7 +121,7 @@ impl Job {
             return failed(done, Failure::Disk);
         }
         drop(file);
-        match signed_by(key, part, &self.release.signature) {
+        match signed_by(key, part, &self.release.signature, &self.asset()) {
             Ok(true) => {}
             Ok(false) => return DownloadEnd::BadSignature,
             Err(_) => return failed(done, Failure::Disk),
@@ -136,6 +144,40 @@ impl Job {
         *kept = Some(file.clone());
         DownloadEnd::Done(file)
     }
+}
+
+/// How much a download brought in its current window of `PACE_WINDOW`.
+struct Pace {
+    since: Instant,
+    bytes: u64,
+}
+
+impl Pace {
+    fn new(now: Instant) -> Self {
+        Self { since: now, bytes: 0 }
+    }
+
+    /// Counts `read` bytes at `now`, and says whether the window that just closed brought too little.
+    fn stalled(&mut self, now: Instant, read: u64) -> bool {
+        self.bytes += read;
+        if now.duration_since(self.since) < PACE_WINDOW {
+            return false;
+        }
+        let stalled = self.bytes < SLOWEST;
+        *self = Pace::new(now);
+        stalled
+    }
+}
+
+/// The whole of a downloaded build, read once, so the bytes that are checked are the bytes that are applied.
+/// A file larger than any download may be is an error.
+pub fn read_build(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.take(MAX_DOWNLOAD + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DOWNLOAD {
+        return Err(io::Error::other("larger than any download"));
+    }
+    Ok(bytes)
 }
 
 /// `<data>/updates`, readable only by the user, as the run logs are.
@@ -325,6 +367,24 @@ pub mod tests {
             DownloadEnd::Failed { percent: 0, failure: Failure::Refused(404) }
         );
         assert_eq!(names(data.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_download_that_drips_in_stalls() {
+        let start = Instant::now();
+        let mut pace = Pace::new(start);
+        assert!(!pace.stalled(start + Duration::from_secs(30), 10));
+        assert!(pace.stalled(start + PACE_WINDOW, 10), "20 bytes in a minute is a stall");
+        let next = start + PACE_WINDOW;
+        assert!(!pace.stalled(next + Duration::from_secs(1), SLOWEST));
+        assert!(!pace.stalled(next + PACE_WINDOW, 0), "a window that brought enough is no stall");
+    }
+
+    #[test]
+    fn a_build_is_read_whole_or_not_at_all() {
+        let data = tempfile::tempdir().unwrap();
+        assert!(read_build(&data.path().join("missing")).is_err());
+        assert_eq!(read_build(&fixture(WINDOWS)).unwrap(), windows_build());
     }
 
     #[test]

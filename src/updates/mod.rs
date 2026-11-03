@@ -45,9 +45,15 @@ pub fn install_block() -> Option<InstallBlock> {
 }
 
 /// Empties `updates/` in `data`: what a past session downloaded is never applied by a later one. Call it at launch,
-/// before `last_apply_failure`, which it leaves in place. Errors are ignored, and links are removed, never followed.
+/// before `last_apply_failure`, which it leaves in place. The folder of another Jobdesk that still runs stays.
+/// Errors are ignored, and links are removed, never followed. On macOS it also removes what a Restart to update that
+/// died partway left beside the bundle.
 pub fn clear_downloads(data: &Path) {
     cleanup::clear(&downloads(data));
+    #[cfg(target_os = "macos")]
+    if let Ok(exe) = std::env::current_exe() {
+        infrastructure::install_macos::clear_leftovers(&exe);
+    }
 }
 
 /// Why the last Restart to update did not apply, once: the next call gives `None`.
@@ -58,9 +64,11 @@ pub fn last_apply_failure(data: &Path) -> Option<ApplyFailed> {
 /// Applies `plan` once the window has closed, then opens Jobdesk again with `args`, which `relaunch_args` gives.
 /// It checks the file against the release's signature once more first. On macOS it swaps the bundle and opens the
 /// new copy. On Windows it starts the setup, which closes this copy and opens the new one, and returns at once.
-/// When it cannot apply, it notes why in `updates/` for the next launch and opens this copy again.
-pub fn finish(plan: &RestartPlan, args: &[OsString]) {
-    let Ok(exe) = std::env::current_exe() else { return };
+/// When it cannot apply, it notes why in `updates/` of `data` for the next launch and opens this copy again.
+/// A program that is no longer where it ran from is never started: the note is all that is left.
+pub fn finish(data: &Path, plan: &RestartPlan, args: &[OsString]) {
+    let note = |failure| cleanup::record_apply_failure(&downloads(data), ApplyFailed { version: plan.version, failure });
+    let Ok(exe) = std::env::current_exe() else { return note(ApplyFailure::Start) };
     let key = UpdateKey::embedded();
     let applied = match Platform::current() {
         #[cfg(target_os = "macos")]
@@ -68,23 +76,20 @@ pub fn finish(plan: &RestartPlan, args: &[OsString]) {
         Some(Platform::WindowsX64) => install_windows::apply(plan, &exe, args, key.as_ref()),
         _ => Err(ApplyFailure::NotInstalled),
     };
-    let note = |failure| {
-        if let Some(dir) = plan.file.parent() {
-            cleanup::record_apply_failure(dir, ApplyFailed { version: plan.version, failure });
-        }
-    };
     match applied {
         // The setup opens the new copy itself once it has installed it.
         Ok(()) if Platform::current() == Some(Platform::WindowsX64) => {}
         Ok(()) => {
-            if reopen(&exe, args).is_err() {
+            if !exe.is_file() || reopen(&exe, args).is_err() {
                 note(ApplyFailure::Start);
             }
         }
         // Noted before this copy opens again, so its launch finds the note.
         Err(failure) => {
             note(failure);
-            let _ = reopen(&exe, args);
+            if exe.is_file() {
+                let _ = reopen(&exe, args);
+            }
         }
     }
 }

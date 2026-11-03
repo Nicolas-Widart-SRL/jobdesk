@@ -126,13 +126,15 @@ pub struct RestartPlan {
 /// Why Restart to update did not apply a release. The copy that ran opens again in its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyFailure {
+    /// The downloaded file was gone or could not be read, so there was nothing to check or apply.
+    Missing,
     /// The downloaded file no longer matched the signature of its release, so it was not opened.
     BadSignature,
     /// This copy is not where an installer put it, so there is nothing it may replace.
     NotInstalled,
     /// The new copy could not be unpacked or put in place. The old one is back where it was.
     Replace,
-    /// The installer or the new copy did not start.
+    /// The installer or the new copy did not start, or Jobdesk could not tell where it runs from to start again.
     Start,
 }
 

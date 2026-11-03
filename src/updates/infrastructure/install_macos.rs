@@ -1,8 +1,9 @@
 //! Restart to update on macOS: the signed archive is unpacked beside the bundle, swapped in for it, then opened.
 
-use std::ffi::{OsStr, OsString};
-use std::fs::{self, File};
-use std::io::{self, BufReader};
+use std::ffi::{CString, OsStr, OsString};
+use std::fs;
+use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{self, Command};
 
@@ -10,11 +11,14 @@ use flate2::read::GzDecoder;
 use tar::{Archive, EntryType};
 
 use crate::shared_kernel::process_tree::no_window;
-use crate::updates::domain::{ApplyFailure, InstallBlock, RestartPlan};
-use crate::updates::infrastructure::signature::{UpdateKey, signed_by};
+use crate::updates::domain::{ApplyFailure, InstallBlock, Platform, RestartPlan};
+use crate::updates::infrastructure::download::read_build;
+use crate::updates::infrastructure::signature::{UpdateKey, signs};
 
 /// The one folder the archive may hold, as cargo packager writes it.
 const BUNDLE: &str = "Jobdesk.app";
+/// What Jobdesk makes beside the bundle, each name ending in the id of the process that made it.
+const LEFTOVERS: [&str; 3] = [".Jobdesk.app.update-", ".Jobdesk.app.old-", ".Jobdesk.app.probe-"];
 
 /// The bundle the program at `exe` runs from: `<bundle>.app/Contents/MacOS/<program>`. `None` for a program that
 /// runs outside a bundle, such as a development build.
@@ -39,14 +43,38 @@ pub fn block(exe: &Path) -> Option<InstallBlock> {
     None
 }
 
-/// Checks the archive once more, unpacks it beside the bundle and swaps it in. On any failure the old bundle is back
-/// where it was, and nothing Jobdesk made beside it is left.
+/// Reads the archive once, checks those bytes once more, unpacks the same bytes beside the bundle and swaps them in.
+/// On any failure the old bundle is back where it was, and nothing Jobdesk made beside it is left.
 pub fn apply(plan: &RestartPlan, exe: &Path, key: Option<&UpdateKey>) -> Result<(), ApplyFailure> {
-    if !key.is_some_and(|key| signed_by(key, &plan.file, &plan.signature).unwrap_or(false)) {
+    let archive = read_build(&plan.file).map_err(|_| ApplyFailure::Missing)?;
+    let asset = Platform::MacArm.asset_name(&plan.version);
+    if !key.is_some_and(|key| signs(key, &archive, &plan.signature, &asset)) {
         return Err(ApplyFailure::BadSignature);
     }
     let (Some(bundle), Some(program)) = (bundle_of(exe), exe.file_name()) else { return Err(ApplyFailure::NotInstalled) };
-    replace(&plan.file, &bundle, program).map_err(|_| ApplyFailure::Replace)
+    replace(&archive, &bundle, program).map_err(|_| ApplyFailure::Replace)
+}
+
+/// Removes what an earlier Restart to update left beside the bundle of `exe` when its process died partway.
+/// Only folders of processes that no longer run go, so a Jobdesk that updates now is left alone.
+pub fn clear_leftovers(exe: &Path) {
+    let Some(folder) = bundle_of(exe).and_then(|bundle| bundle.parent().map(Path::to_owned)) else { return };
+    let Ok(entries) = fs::read_dir(&folder) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = LEFTOVERS.iter().find_map(|prefix| name.to_str()?.strip_prefix(prefix)?.parse::<u32>().ok()) else { continue };
+        if pid != process::id() && !runs(pid) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Whether a process with this id runs now.
+fn runs(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else { return false };
+    // SAFETY: signal 0 sends nothing. It only asks whether the process exists.
+    let answer = unsafe { libc::kill(pid, 0) };
+    answer == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// Opens whatever copy is at the bundle of `exe` now, as a new instance, with `args`. A program outside a bundle is
@@ -63,7 +91,7 @@ pub fn reopen(exe: &Path, args: &[OsString]) -> io::Result<()> {
     if status.success() { Ok(()) } else { Err(io::Error::other("open failed")) }
 }
 
-fn replace(archive: &Path, bundle: &Path, program: &OsStr) -> io::Result<()> {
+fn replace(archive: &[u8], bundle: &Path, program: &OsStr) -> io::Result<()> {
     let folder = bundle.parent().ok_or_else(|| io::Error::other("no folder"))?;
     let staging = folder.join(format!(".{BUNDLE}.update-{}", process::id()));
     let aside = folder.join(format!(".{BUNDLE}.old-{}", process::id()));
@@ -84,8 +112,12 @@ fn replace(archive: &Path, bundle: &Path, program: &OsStr) -> io::Result<()> {
     result
 }
 
-/// Moves the old bundle aside and the new one into its place. If the new one does not go in, the old one comes back.
+/// Puts the new bundle in place of the old one. Where the disk can, the two trade places in one step, so there is no
+/// moment with no bundle. Elsewhere the old one moves aside first, and comes back if the new one does not go in.
 fn swap(bundle: &Path, new: &Path, aside: &Path) -> io::Result<()> {
+    if exchange(bundle, new).is_ok() {
+        return Ok(());
+    }
     fs::rename(bundle, aside)?;
     if let Err(error) = fs::rename(new, bundle) {
         fs::rename(aside, bundle)?;
@@ -94,13 +126,22 @@ fn swap(bundle: &Path, new: &Path, aside: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Trades the places of two paths in one step, with `renamex_np` and `RENAME_SWAP`.
+fn exchange(a: &Path, b: &Path) -> io::Result<()> {
+    let a = CString::new(a.as_os_str().as_bytes())?;
+    let b = CString::new(b.as_os_str().as_bytes())?;
+    // SAFETY: both are valid NUL-terminated paths that live until the call returns.
+    let done = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) };
+    if done == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
 /// Unpacks a `.tar.gz` that holds only `Jobdesk.app/` into `into`. Plain files keep their permission bits, without
 /// the set-id bits or group and other write. A path that leaves the bundle or passes through a link, a hard link,
 /// a device, or a link that is absolute or climbs with `..` refuses the whole archive. So every link points down,
 /// and none can lead out of the bundle.
-fn unpack(archive: &Path, into: &Path) -> io::Result<()> {
+fn unpack(archive: &[u8], into: &Path) -> io::Result<()> {
     let refuse = |why: &str| Err(io::Error::other(why.to_owned()));
-    let mut archive = Archive::new(GzDecoder::new(BufReader::new(File::open(archive)?)));
+    let mut archive = Archive::new(GzDecoder::new(archive));
     archive.set_preserve_permissions(false);
     archive.set_mask(0o022);
     archive.set_unpack_xattrs(false);
@@ -171,6 +212,8 @@ fn points_down(target: &Path) -> bool {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
+    use std::fs::File;
+
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use tar::{Builder, Header};
@@ -202,7 +245,7 @@ mod tests {
     }
 
     /// A `.tar.gz` of `(path, kind, data or link target)` entries, written raw so a bad path stays as it is.
-    fn archive(dir: &Path, entries: &[(&str, EntryType, &str)]) -> PathBuf {
+    fn archive(dir: &Path, entries: &[(&str, EntryType, &str)]) -> Vec<u8> {
         let path = dir.join("archive.tar.gz");
         let mut builder = Builder::new(GzEncoder::new(File::create(&path).unwrap(), Compression::default()));
         for (name, kind, data) in entries {
@@ -223,7 +266,7 @@ mod tests {
             }
         }
         builder.into_inner().unwrap().finish().unwrap();
-        path
+        fs::read(path).unwrap()
     }
 
     fn good_entries() -> Vec<(&'static str, EntryType, &'static str)> {
@@ -285,6 +328,17 @@ mod tests {
     }
 
     #[test]
+    fn an_archive_signed_for_another_version_or_gone_is_never_unpacked() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = installed(root.path());
+        let older = RestartPlan { version: Version { major: 0, minor: 1, patch: 9 }, ..plan(fixture(MAC)) };
+        assert_eq!(apply(&older, &exe, Some(&fixture_key())), Err(ApplyFailure::BadSignature), "a 0.2.0 signature is no 0.1.9 one");
+        assert_eq!(apply(&plan(root.path().join(MAC)), &exe, Some(&fixture_key())), Err(ApplyFailure::Missing));
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
+        assert_eq!(names(&root.path().join("Applications")), ["Jobdesk.app"]);
+    }
+
+    #[test]
     fn a_program_outside_a_bundle_is_not_replaced() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(apply(&plan(fixture(MAC)), &root.path().join("jobdesk"), Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
@@ -333,7 +387,7 @@ mod tests {
             assert_eq!(names(&root.path().join("Applications")), ["Jobdesk.app"], "{name}");
             assert!(!root.path().join("evil").exists() && !Path::new("/tmp/jobdesk-evil").exists(), "{name}");
         }
-        assert!(replace(Path::new("/no/such/archive.tar.gz"), &bundle, program).is_err());
+        assert!(replace(b"not an archive", &bundle, program).is_err());
         assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
     }
 
@@ -360,6 +414,44 @@ mod tests {
         assert!(swap(&bundle, &root.path().join("missing/Jobdesk.app"), &aside).is_err());
         assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
         assert!(!aside.exists());
+    }
+
+    #[test]
+    fn the_two_bundles_trade_places_in_one_step() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = installed(root.path());
+        let bundle = bundle_of(&exe).unwrap();
+        let new = root.path().join("staging/Jobdesk.app/Contents/MacOS");
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("jobdesk"), "new").unwrap();
+        let aside = root.path().join("Applications/.Jobdesk.app.old-1");
+        swap(&bundle, &root.path().join("staging/Jobdesk.app"), &aside).unwrap();
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "new");
+        assert_eq!(fs::read_to_string(root.path().join("staging/Jobdesk.app/Contents/MacOS/jobdesk")).unwrap(), "old");
+        assert!(!aside.exists(), "nothing was moved aside");
+    }
+
+    #[test]
+    fn leftovers_of_a_process_that_died_go_and_those_of_one_that_runs_stay() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = installed(root.path());
+        let applications = root.path().join("Applications");
+        let mut ended = Command::new("/usr/bin/true").spawn().unwrap();
+        let dead = ended.id();
+        ended.wait().unwrap();
+        let running = std::os::unix::process::parent_id();
+        for name in [format!(".Jobdesk.app.update-{dead}"), format!(".Jobdesk.app.old-{dead}"), format!(".Jobdesk.app.probe-{dead}")] {
+            fs::create_dir_all(applications.join(name).join("Jobdesk.app")).unwrap();
+        }
+        fs::create_dir(applications.join(format!(".Jobdesk.app.update-{running}"))).unwrap();
+        fs::create_dir(applications.join(format!(".Jobdesk.app.old-{}", process::id()))).unwrap();
+        fs::create_dir(applications.join("Other.app")).unwrap();
+        clear_leftovers(&exe);
+        let mut kept =
+            vec![format!(".Jobdesk.app.old-{}", process::id()), format!(".Jobdesk.app.update-{running}"), "Jobdesk.app".to_owned(), "Other.app".to_owned()];
+        kept.sort();
+        assert_eq!(names(&applications), kept);
+        clear_leftovers(&root.path().join("target/release/jobdesk"));
     }
 
     #[test]

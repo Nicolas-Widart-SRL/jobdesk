@@ -27,11 +27,13 @@ impl UpdateKey {
     }
 }
 
-/// Whether the file at `path` is the one `signature` signs with `key`. `signature` is in cargo packager's form:
-/// a minisign signature file in base64, as the feed carries it. A signature that cannot be read is a mismatch.
+/// Whether the file at `path` is the build `signature` signs with `key`, under the name `asset`.
+/// `signature` is a minisign signature file in base64, as the feed carries it. Its signed trusted comment must name
+/// `asset`, the versioned name of the build being checked, so a signature of another build or another version never
+/// passes. A signature that cannot be read is a mismatch, and only a file that cannot be read is an error.
 /// The file is read in pieces, so a large one never sits in memory whole.
-pub fn signed_by(key: &UpdateKey, path: &Path, signature: &str) -> io::Result<bool> {
-    let Some(signature) = decode_signature(signature) else { return Ok(false) };
+pub fn signed_by(key: &UpdateKey, path: &Path, signature: &str, asset: &str) -> io::Result<bool> {
+    let Some(signature) = decode_signature(signature, asset) else { return Ok(false) };
     let Ok(mut verifier) = key.0.verify_stream(&signature) else { return Ok(false) };
     let mut file = File::open(path)?;
     let mut buffer = vec![0; 64 * 1024];
@@ -45,9 +47,18 @@ pub fn signed_by(key: &UpdateKey, path: &Path, signature: &str) -> io::Result<bo
     Ok(verifier.finalize().is_ok())
 }
 
-fn decode_signature(signature: &str) -> Option<Signature> {
+/// As `signed_by`, for bytes already read, so what is checked is exactly what is then used.
+pub fn signs(key: &UpdateKey, bytes: &[u8], signature: &str, asset: &str) -> bool {
+    decode_signature(signature, asset).is_some_and(|signature| key.0.verify(bytes, &signature, false).is_ok())
+}
+
+/// The signature, when it reads and its trusted comment names `asset` as its one file. The key checks the comment with
+/// the rest of the signature, so it cannot be changed without failing.
+fn decode_signature(signature: &str, asset: &str) -> Option<Signature> {
     let file = String::from_utf8(STANDARD.decode(signature.trim()).ok()?).ok()?;
-    Signature::decode(&file).ok()
+    let signature = Signature::decode(&file).ok()?;
+    let mut files = signature.trusted_comment().split('\t').filter_map(|part| part.strip_prefix("file:"));
+    (files.next() == Some(asset) && files.next().is_none()).then_some(signature)
 }
 
 #[cfg(test)]
@@ -58,8 +69,10 @@ pub mod tests {
     use super::*;
 
     /// The public key of a throwaway pair made only to sign the fixtures. Its secret half was deleted once they were signed.
-    /// `tests/fixtures/updates` holds two stand-in builds signed with `cargo packager signer sign`, and the feed
-    /// `scripts/update-feed.sh` wrote for them with `PUB_DATE=2026-10-30T09:00:00Z`. `other.pub` is a second key.
+    /// `tests/fixtures/updates` holds two stand-in builds signed under their release names with
+    /// `cargo packager signer sign`, and the feed `scripts/update-feed.sh` wrote for them with
+    /// `PUB_DATE=2026-10-30T09:00:00Z`. `Jobdesk-v0.1.9-windows-x64-setup.exe.sig` signs the same bytes as the 0.2.0
+    /// setup, under the 0.1.9 name. `other.pub` is a second key.
     pub fn fixture_key() -> UpdateKey {
         UpdateKey::decode(&fs::read_to_string(fixture("throwaway.pub")).unwrap()).unwrap()
     }
@@ -74,6 +87,7 @@ pub mod tests {
 
     const MAC: &str = "Jobdesk-v0.2.0-macos-arm64.app.tar.gz";
     const WINDOWS: &str = "Jobdesk-v0.2.0-windows-x64-setup.exe";
+    const OLDER: &str = "Jobdesk-v0.1.9-windows-x64-setup.exe";
 
     #[test]
     fn the_placeholder_key_is_no_key_and_a_real_one_reads() {
@@ -86,8 +100,21 @@ pub mod tests {
     #[test]
     fn a_file_signed_with_the_key_passes() {
         let key = fixture_key();
-        assert!(signed_by(&key, &fixture(MAC), &fixture_signature(MAC)).unwrap());
-        assert!(signed_by(&key, &fixture(WINDOWS), &fixture_signature(WINDOWS)).unwrap());
+        assert!(signed_by(&key, &fixture(MAC), &fixture_signature(MAC), MAC).unwrap());
+        assert!(signed_by(&key, &fixture(WINDOWS), &fixture_signature(WINDOWS), WINDOWS).unwrap());
+        assert!(signs(&key, &fs::read(fixture(WINDOWS)).unwrap(), &fixture_signature(WINDOWS), WINDOWS));
+    }
+
+    #[test]
+    fn a_valid_signature_of_another_name_or_version_fails() {
+        let key = fixture_key();
+        let bytes = fs::read(fixture(WINDOWS)).unwrap();
+        assert!(signs(&key, &bytes, &fixture_signature(OLDER), OLDER), "the signature itself is good");
+        assert!(!signs(&key, &bytes, &fixture_signature(OLDER), WINDOWS), "but it names the 0.1.9 build, not 0.2.0");
+        assert!(!signed_by(&key, &fixture(WINDOWS), &fixture_signature(OLDER), WINDOWS).unwrap());
+        assert!(!signed_by(&key, &fixture(WINDOWS), &fixture_signature(WINDOWS), "Jobdesk-v0.2.0-windows-x64-setup").unwrap());
+        assert!(!signs(&key, &bytes, &fixture_signature(WINDOWS), ""));
+        assert!(!signs(&key, &bytes, &fixture_signature(WINDOWS), MAC));
     }
 
     #[test]
@@ -97,27 +124,28 @@ pub mod tests {
         let mut bytes = fs::read(fixture(WINDOWS)).unwrap();
         bytes[0] ^= 1;
         let flipped = dir.path().join(WINDOWS);
-        fs::write(&flipped, bytes).unwrap();
-        assert!(!signed_by(&key, &flipped, &fixture_signature(WINDOWS)).unwrap());
-        assert!(!signed_by(&key, &fixture(MAC), &fixture_signature(WINDOWS)).unwrap(), "a signature fits only its own file");
+        fs::write(&flipped, &bytes).unwrap();
+        assert!(!signed_by(&key, &flipped, &fixture_signature(WINDOWS), WINDOWS).unwrap());
+        assert!(!signs(&key, &bytes, &fixture_signature(WINDOWS), WINDOWS));
+        assert!(!signed_by(&key, &fixture(MAC), &fixture_signature(WINDOWS), WINDOWS).unwrap(), "a signature fits only its own file");
     }
 
     #[test]
     fn a_file_signed_with_another_key_fails() {
         let other = UpdateKey::decode(&fs::read_to_string(fixture("other.pub")).unwrap()).unwrap();
-        assert!(!signed_by(&other, &fixture(WINDOWS), &fixture_signature(WINDOWS)).unwrap());
+        assert!(!signed_by(&other, &fixture(WINDOWS), &fixture_signature(WINDOWS), WINDOWS).unwrap());
     }
 
     #[test]
     fn a_signature_that_cannot_be_read_fails() {
         let key = fixture_key();
         for bad in ["", "sig", "dW50cnVzdGVkIGNvbW1lbnQ6IG5vdGhpbmcK"] {
-            assert!(!signed_by(&key, &fixture(WINDOWS), bad).unwrap(), "{bad:?}");
+            assert!(!signed_by(&key, &fixture(WINDOWS), bad, WINDOWS).unwrap(), "{bad:?}");
         }
     }
 
     #[test]
     fn a_missing_file_is_an_error_not_a_pass() {
-        assert!(signed_by(&fixture_key(), Path::new("/no/such/file"), &fixture_signature(WINDOWS)).is_err());
+        assert!(signed_by(&fixture_key(), Path::new("/no/such/file"), &fixture_signature(WINDOWS), WINDOWS).is_err());
     }
 }

@@ -7,11 +7,15 @@ use ureq::{Agent, Proxy};
 
 use crate::updates::domain::Failure;
 
+/// Finding GitHub's address, then reaching it.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// The whole feed request, from the first byte sent to the last one read.
+/// The whole feed request, redirects and body included, from the first byte sent to the last one read.
 const FEED_TIMEOUT: Duration = Duration::from_secs(20);
 /// The longest a download may wait for its next bytes.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole of one download. A build of the largest size still arrives in time at about 60 KB/s.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_REDIRECTS: u32 = 5;
 
 /// What a request is for, which sets how long it may take.
@@ -49,10 +53,11 @@ impl HttpsTransport {
                 .proxy(Proxy::try_from_env())
                 .http_status_as_error(true)
                 .tls_config(TlsConfig::builder().root_certs(RootCerts::PlatformVerifier).build())
+                .timeout_resolve(Some(RESOLVE_TIMEOUT))
                 .timeout_connect(Some(CONNECT_TIMEOUT));
             let builder = match fetch {
                 Fetch::Feed => builder.timeout_global(Some(FEED_TIMEOUT)),
-                Fetch::Download => builder.timeout_per_read(Some(READ_TIMEOUT)),
+                Fetch::Download => builder.timeout_global(Some(DOWNLOAD_TIMEOUT)).timeout_per_read(Some(READ_TIMEOUT)),
             };
             builder.build().new_agent()
         };

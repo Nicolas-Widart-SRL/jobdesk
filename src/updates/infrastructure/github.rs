@@ -1,9 +1,11 @@
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use crate::updates::domain::{DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, UpdateService};
+use crate::updates::infrastructure::cleanup::claim;
 use crate::updates::infrastructure::download::Job;
 use crate::updates::infrastructure::feed::read_feed;
 use crate::updates::infrastructure::http::Transport;
@@ -28,12 +30,14 @@ pub struct GithubUpdates {
     events: Receiver<ServiceEvent>,
     /// The latest download, running or kept, until a cancel drops it.
     download: Option<Arc<Job>>,
+    /// This process's own folder in `updates/`, claimed at the first download, and the lock that keeps it.
+    own: Option<(PathBuf, File)>,
 }
 
 impl GithubUpdates {
     pub fn new(transport: Arc<dyn Transport>, dir: PathBuf, platform: Option<Platform>, key: Option<UpdateKey>, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (sender, events) = mpsc::channel();
-        Self { shared: Arc::new(Shared { transport, dir, platform, key, repaint }), sender, events, download: None }
+        Self { shared: Arc::new(Shared { transport, dir, platform, key, repaint }), sender, events, download: None, own: None }
     }
 }
 
@@ -50,12 +54,16 @@ impl UpdateService for GithubUpdates {
     fn download(&mut self, release: &Release, id: DownloadId) {
         // A new download replaces the one before, which deletes only its own files.
         self.cancel();
-        let Some(platform) = self.shared.platform else {
-            let _ = self.sender.send(ServiceEvent::Ended { id, end: DownloadEnd::Failed { percent: 0, failure: Failure::NoBuild } });
+        let fail = |failure| {
+            let _ = self.sender.send(ServiceEvent::Ended { id, end: DownloadEnd::Failed { percent: 0, failure } });
             (self.shared.repaint)();
-            return;
         };
-        let job = Job::new(id, release.clone(), platform, self.shared.dir.clone());
+        let Some(platform) = self.shared.platform else { return fail(Failure::NoBuild) };
+        if self.own.is_none() {
+            self.own = claim(&self.shared.dir).ok();
+        }
+        let Some((own, _)) = &self.own else { return fail(Failure::Disk) };
+        let job = Job::new(id, release.clone(), platform, own.clone());
         self.download = Some(Arc::clone(&job));
         let shared = Arc::clone(&self.shared);
         let sender = self.sender.clone();
@@ -128,6 +136,11 @@ mod tests {
         }
     }
 
+    /// The folder this process downloads into.
+    fn own(dir: &std::path::Path) -> PathBuf {
+        dir.join(std::process::id().to_string())
+    }
+
     fn service(transport: Arc<dyn Transport>, dir: PathBuf, repaints: Arc<AtomicUsize>) -> GithubUpdates {
         let repaint = Arc::new(move || {
             repaints.fetch_add(1, Ordering::SeqCst);
@@ -180,7 +193,7 @@ mod tests {
         let mut service = service(Arc::new(Serves(bytes.clone())), data.path().join("updates"), Arc::default());
         service.download(&release(bytes.len() as u64), DownloadId(4));
         let events = wait(&mut service);
-        let file = data.path().join("updates/4-Jobdesk-v0.2.0-windows-x64-setup.exe");
+        let file = own(&data.path().join("updates")).join("4-Jobdesk-v0.2.0-windows-x64-setup.exe");
         assert_eq!(events.last(), Some(&ServiceEvent::Ended { id: DownloadId(4), end: DownloadEnd::Done(file.clone()) }));
         assert!(events.iter().all(|event| matches!(event, ServiceEvent::Progress { id: DownloadId(4), .. } | ServiceEvent::Ended { .. })));
         assert_eq!(fs::read(file).unwrap(), fs::read(fixture(WINDOWS)).unwrap());
@@ -209,13 +222,13 @@ mod tests {
         let mut service = service(transport, dir.clone(), Arc::default());
         service.download(&release(bytes.len() as u64), DownloadId(1));
         first_arrived.recv().unwrap();
-        let first_part = dir.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe.part");
+        let first_part = own(&dir).join("1-Jobdesk-v0.2.0-windows-x64-setup.exe.part");
         assert!(first_part.exists());
         service.cancel();
         // The next download starts while the first still waits on the network, and finishes first.
         service.download(&release(bytes.len() as u64), DownloadId(2));
         let events = wait(&mut service);
-        let second = dir.join("2-Jobdesk-v0.2.0-windows-x64-setup.exe");
+        let second = own(&dir).join("2-Jobdesk-v0.2.0-windows-x64-setup.exe");
         assert_eq!(events.last(), Some(&ServiceEvent::Ended { id: DownloadId(2), end: DownloadEnd::Done(second.clone()) }));
         go.send(()).unwrap();
         let late = wait(&mut service);

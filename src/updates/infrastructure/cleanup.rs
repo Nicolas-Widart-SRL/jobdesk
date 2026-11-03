@@ -1,15 +1,38 @@
-use std::fs;
-use std::io::Write;
-use std::path::Path;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process;
 
 use crate::updates::domain::{ApplyFailed, ApplyFailure, Version};
-use crate::updates::infrastructure::download::new_private_file;
+use crate::updates::infrastructure::download::{new_private_file, private_dir};
 
 /// The file in `updates/` that says why the last Restart to update did not apply. It outlives `clear` until it is read.
 pub const APPLY_FAILED: &str = "apply-failed";
+/// The file each running Jobdesk holds locked in its own folder of `updates/`, so another one leaves that folder alone.
+const LOCK: &str = ".lock";
 
-/// Empties `dir`, the downloads folder, but for the note of a failed apply. Errors are ignored: what stays is tried
-/// again at the next launch. A link is removed and never followed, and so is `dir` itself when it is one.
+/// This process's own folder in `dir`, `updates/<pid>`, and the lock that keeps it while the returned file stays open.
+/// Each Jobdesk downloads only into its own folder, so a second window's `clear` never deletes the first one's build.
+pub fn claim(dir: &Path) -> io::Result<(PathBuf, File)> {
+    let own = dir.join(process::id().to_string());
+    private_dir(&own)?;
+    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(own.join(LOCK))?;
+    lock.try_lock().map_err(io::Error::from)?;
+    Ok((own, lock))
+}
+
+/// Whether a Jobdesk that runs now holds `folder`.
+fn in_use(folder: &Path) -> bool {
+    let lock = folder.join(LOCK);
+    if !fs::symlink_metadata(&lock).is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    File::open(&lock).is_ok_and(|file| matches!(file.try_lock(), Err(TryLockError::WouldBlock)))
+}
+
+/// Empties `dir`, the downloads folder, but for the note of a failed apply and the folders of Jobdesk windows that
+/// still run. Errors are ignored: what stays is tried again at the next launch. A link is removed and never followed,
+/// and so is `dir` itself when it is one.
 pub fn clear(dir: &Path) {
     let Ok(meta) = fs::symlink_metadata(dir) else { return };
     if !meta.is_dir() {
@@ -25,7 +48,9 @@ pub fn clear(dir: &Path) {
         // The type of the entry itself, not of what a link points to.
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => {
-                let _ = fs::remove_dir_all(&path);
+                if !in_use(&path) {
+                    let _ = fs::remove_dir_all(&path);
+                }
             }
             Ok(_) => {
                 let _ = fs::remove_file(&path);
@@ -37,7 +62,7 @@ pub fn clear(dir: &Path) {
 
 /// Notes in `dir` that the release did not apply, for the next launch to say. Only a plain version and a word are written.
 pub fn record_apply_failure(dir: &Path, failed: ApplyFailed) {
-    if let Ok(mut file) = new_private_file(&dir.join(APPLY_FAILED)) {
+    if let Ok(mut file) = private_dir(dir).and_then(|()| new_private_file(&dir.join(APPLY_FAILED))) {
         let _ = writeln!(file, "{} {}", failed.version, word(failed.failure));
     }
 }
@@ -55,6 +80,7 @@ pub fn take_apply_failure(dir: &Path) -> Option<ApplyFailed> {
 
 fn word(failure: ApplyFailure) -> &'static str {
     match failure {
+        ApplyFailure::Missing => "missing",
         ApplyFailure::BadSignature => "signature",
         ApplyFailure::NotInstalled => "not-installed",
         ApplyFailure::Replace => "replace",
@@ -62,10 +88,10 @@ fn word(failure: ApplyFailure) -> &'static str {
     }
 }
 
+const ALL: [ApplyFailure; 5] = [ApplyFailure::Missing, ApplyFailure::BadSignature, ApplyFailure::NotInstalled, ApplyFailure::Replace, ApplyFailure::Start];
+
 fn from_word(word: &str) -> Option<ApplyFailure> {
-    [ApplyFailure::BadSignature, ApplyFailure::NotInstalled, ApplyFailure::Replace, ApplyFailure::Start]
-        .into_iter()
-        .find(|failure| self::word(*failure) == word)
+    ALL.into_iter().find(|failure| self::word(*failure) == word)
 }
 
 #[cfg(test)]
@@ -123,11 +149,37 @@ mod tests {
     }
 
     #[test]
+    fn clear_leaves_the_folder_of_a_jobdesk_that_still_runs() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("updates");
+        let (own, lock) = claim(&dir).unwrap();
+        assert_eq!(own, dir.join(process::id().to_string()));
+        fs::write(own.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe"), "ready").unwrap();
+        let gone = dir.join("1");
+        fs::create_dir_all(&gone).unwrap();
+        fs::write(gone.join(LOCK), "").unwrap();
+        clear(&dir);
+        assert!(own.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe").exists(), "a running window keeps its download");
+        assert!(!gone.exists(), "a folder no one holds goes");
+        drop(lock);
+        clear(&dir);
+        assert!(!own.exists(), "once the window ends, its folder goes at the next launch");
+    }
+
+    #[test]
+    fn a_failed_apply_is_noted_even_with_no_downloads_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("updates");
+        record_apply_failure(&dir, failed(ApplyFailure::Start));
+        assert_eq!(take_apply_failure(&dir), Some(failed(ApplyFailure::Start)));
+    }
+
+    #[test]
     fn a_failed_apply_survives_clear_and_is_read_once() {
         let data = tempfile::tempdir().unwrap();
         let dir = data.path().join("updates");
         fs::create_dir(&dir).unwrap();
-        for failure in [ApplyFailure::BadSignature, ApplyFailure::NotInstalled, ApplyFailure::Replace, ApplyFailure::Start] {
+        for failure in ALL {
             record_apply_failure(&dir, failed(failure));
             clear(&dir);
             assert_eq!(take_apply_failure(&dir), Some(failed(failure)));

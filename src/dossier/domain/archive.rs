@@ -90,13 +90,16 @@ pub fn within_workspace(root: &Path, relative: &str) -> Option<PathBuf> {
     normal.then_some(path)
 }
 
-/// Whether Windows reads the part as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`),
-/// whatever its extension or case: the stem before the first `.` decides.
+/// Whether Windows reads the part as a device (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`, and the superscript
+/// `COM¹-³`, `LPT¹-³`), whatever its extension or case: the stem before the first `.` decides.
 fn is_device_name(part: &str) -> bool {
     let stem = part.split('.').next().unwrap_or_default().trim_end_matches(' ');
     let upper = stem.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (upper.len() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper.ends_with(|c: char| c.is_ascii_digit()))
+        || upper.strip_prefix("COM").or_else(|| upper.strip_prefix("LPT")).is_some_and(|port| {
+            let mut chars = port.chars();
+            matches!((chars.next(), chars.next()), (Some('0'..='9' | '¹' | '²' | '³'), None))
+        })
 }
 
 #[cfg(test)]
@@ -135,10 +138,12 @@ mod tests {
 
     #[test]
     fn device_names_are_told_by_the_stem_in_any_case() {
-        for device in ["con", "CON", "Con.json", "nul.tar.gz", "aux", "PRN.txt", "com1", "COM0.json", "lpt9", "Lpt3.x", "con .json"] {
+        for device in
+            ["con", "CON", "Con.json", "nul.tar.gz", "aux", "PRN.txt", "com1", "COM0.json", "lpt9", "Lpt3.x", "con .json", "COM¹.json", "LPT².txt", "com³"]
+        {
             assert!(is_device_name(device), "{device}");
         }
-        for plain in ["acme.json", "console.json", "com10", "com", "lpt", "com1x", "xcon", "", "a.con", "comma"] {
+        for plain in ["acme.json", "console.json", "com10", "com", "lpt", "com1x", "xcon", "", "a.con", "comma", "COM⁴", "COM¹¹"] {
             assert!(!is_device_name(plain), "{plain}");
         }
     }
@@ -147,7 +152,9 @@ mod tests {
     #[test]
     fn a_device_name_is_refused_on_windows() {
         let root = Path::new("/w");
-        for bad in ["company_research/con.json", "company_research\\NUL.json", "aux", "cv/Com1.tex"] {
+        for bad in
+            ["company_research/con.json", "company_research\\NUL.json", "aux", "cv/Com1.tex", "company_research/COM¹.json", "company_research\\LPT².json"]
+        {
             assert_eq!(within_workspace(root, bad), None, "{bad}");
         }
     }

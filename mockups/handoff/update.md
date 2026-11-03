@@ -8,7 +8,6 @@ Brief: tell the user a new Jobdesk is out, with its notes and a way to download 
 - [Settings › About](#settings--about)
 - [Out of scope](#out-of-scope)
 - [New widgets](#new-widgets)
-- [Doc changes](#doc-changes)
 
 ## Canvases
 
@@ -82,12 +81,3 @@ About holds the updates, because the version already lives there. The section **
 - `status_progress`: words, then `bar` at a fixed width in `text` on `off`, `BAR_HEIGHT` tall, then the share and size in `muted` tabular figures.
 - `release_notes_popover`: the popover above, built like `confirm_popover`.
 - `release_markdown` in `text.rs`: `markdown` with links as words and images as alt text, for the notes only.
-
-## Doc changes
-
-- `ARCHITECTURE.md`: a new feature for updates (feed check, download, signature check, apply), listed in the Features table and in `FEATURES` in `tests/architecture.rs`. The shell draws the bar group and the notes popover, and Settings › About draws the section. The switch is a new key in `settings.json`, on by default.
-- `docs/architecture/trust.md`: a Rendering untrusted text row, "Release notes from the update feed: Markdown with no image loading and no links. A link shows as its words, an image as its alt text." Also say that Open the release page is built from the version tag, and that a file that fails its signature check is deleted and never applied.
-- `docs/guide.md`: in Settings, About's Updates section. In Setup and the status bar, the update group, its states and the notes popover. In One run at a time, Restart to update waits while a Claude session is open, even one only waiting on a reply.
-- `AGENTS.md` Hard rules, with "One run works at a time": an update applies only from Restart to update, and never while a Claude session is open.
-- `docs/architecture/ui-kit.md`: the new status-bar widgets and `release_notes_popover`, and that the bar's right side is Jobdesk's own: the update group, then Settings.
-- **For the planner**: check whether the Windows NSIS installer shows its own window during Restart to update. If it does, the guide should say so, and the popover's ready slip may need to.

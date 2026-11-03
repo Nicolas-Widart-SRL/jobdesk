@@ -5,8 +5,7 @@ use crate::settings::ui::page_note;
 use crate::ui_kit::tokens::DISABLED_OPACITY;
 use crate::ui_kit::{Ink, Type, enabled_when, link, rich, setting_row, setting_section, small_button};
 
-/// Where the review of how Jobdesk signs in, and the changelog, are read. Fixed `https` addresses, never read from a file.
-const REVIEW_URL: &str = "https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/auth-review.md";
+/// Where the changelog is read. A fixed `https` address, never read from a file.
 const CHANGELOG_URL: &str = "https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md";
 /// Why Show licences waits: the repository has no licence file to show yet.
 const NO_LICENCES: &str = "Not available yet.";
@@ -22,9 +21,7 @@ pub struct AboutView<'a> {
 
 /// The two versions with Copy details, the links to read more, then who makes Jobdesk. No logo shows anywhere.
 pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
-    let &[this_copy, jobdesk, jobdesk_help, claude, claude_help, read_more, signs_in, signs_in_help, changed, changed_help, licences, licences_help, maker] =
-        index(Page::About)
-    else {
+    let &[this_copy, jobdesk, jobdesk_help, claude, claude_help, read_more, changed, changed_help, licences, licences_help, maker] = index(Page::About) else {
         return;
     };
     setting_section(ui, this_copy, None, query);
@@ -47,7 +44,6 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) {
         }
     });
     setting_section(ui, read_more, None, query);
-    setting_row(ui, signs_in, signs_in_help, query, |ui| open(ui, "Open the review", REVIEW_URL));
     setting_row(ui, changed, changed_help, query, |ui| open(ui, "Open the changelog", CHANGELOG_URL));
     setting_row(ui, licences, licences_help, query, |ui| {
         // A link paints no disabled look of its own, so it fades here.

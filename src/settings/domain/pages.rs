@@ -265,15 +265,13 @@ const DATA: [&str; 11] = [
 ];
 
 /// The versions, the links, then the line on who makes Jobdesk.
-const ABOUT: [&str; 13] = [
+const ABOUT: [&str; 11] = [
     "This copy",
     "Jobdesk",
     "Version and build, for a bug report.",
     "Claude Code",
     "The program each task runs, installed on its own.",
     "Read more",
-    "How Jobdesk signs in",
-    "Why an API key is the documented route, and what Jobdesk stores.",
     "What changed",
     "Every release, newest first.",
     "Licences",

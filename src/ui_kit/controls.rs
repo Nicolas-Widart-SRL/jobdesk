@@ -445,6 +445,11 @@ pub fn small_command_action(ui: &mut Ui, label: &str, line: &str) -> Response {
     command_action_with(ui, label, line, line, Look::Plain, SMALL)
 }
 
+/// `small_command_action` with its own hover text, such as one saying that nothing runs until the user starts it.
+pub fn small_command_action_hinted(ui: &mut Ui, label: &str, line: &str, hint: &str) -> Response {
+    command_action_with(ui, label, line, hint, Look::Plain, SMALL)
+}
+
 pub fn take_command_request(ctx: &egui::Context) -> Option<String> {
     ctx.data_mut(|data| data.remove_temp(command_request_id()))
 }

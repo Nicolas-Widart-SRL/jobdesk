@@ -3,8 +3,8 @@ use chrono::NaiveDate;
 use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
-    CapReached, ComingUp, CommandDefault, Dollars, Drawn, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention,
-    RunDefaults, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index,
+    AutoCheck, CapReached, ComingUp, CommandDefault, Dollars, Drawn, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal,
+    Retention, RunDefaults, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index,
 };
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
@@ -124,6 +124,11 @@ impl Settings {
 
     pub fn set_sign_in(&mut self, sign_in: SignIn) {
         self.change(|preferences| &mut preferences.sign_in, sign_in);
+    }
+
+    /// Switches the automatic check for a new Jobdesk on or off.
+    pub fn set_check_updates(&mut self, on: bool) {
+        self.change(|preferences| &mut preferences.check_updates, AutoCheck::from_on(on));
     }
 
     pub fn set_key_test(&mut self, key_test: Option<KeyTest>) {
@@ -538,6 +543,20 @@ mod tests {
         assert_eq!(saved.len(), 3);
         let last = &saved[2];
         assert_eq!((last.text_size.percent(), last.reduce_motion, last.open_on), (150, true, StartScreen::Tasks));
+    }
+
+    #[test]
+    fn the_update_switch_saves_only_a_change() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        let before = shared.saved.borrow().len();
+        settings.set_check_updates(true);
+        assert_eq!(shared.saved.borrow().len(), before, "on is what it already was");
+        settings.set_check_updates(false);
+        assert_eq!(settings.preferences().check_updates, AutoCheck::Off);
+        assert_eq!(shared.saved.borrow().last().map(|saved| saved.check_updates), Some(AutoCheck::Off));
+        settings.set_check_updates(true);
+        assert_eq!(settings.preferences().check_updates, AutoCheck::On);
     }
 
     #[test]

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value, json};
 
 use crate::settings::domain::{
-    ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SkipReasons,
-    SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
+    AutoCheck, ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults,
+    SkipReasons, SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
 };
 use crate::shared_kernel::file_text::without_bom;
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
@@ -66,6 +66,8 @@ struct Record {
     hide_under_score: Value,
     #[serde(default)]
     score_floor: Value,
+    #[serde(default)]
+    check_updates: Value,
 }
 
 fn default_text_size() -> i64 {
@@ -164,7 +166,13 @@ fn preferences_from(record: Record) -> Preferences {
             under_score: flag_from(&record.hide_under_score),
             score: score_from(&record.score_floor),
         },
+        check_updates: check_updates_from(&record.check_updates),
     }
+}
+
+/// Only `false` switches it off, so a missing key or one of the wrong type reads as on.
+fn check_updates_from(value: &Value) -> AutoCheck {
+    AutoCheck::from_on(value.as_bool().unwrap_or(true))
 }
 
 /// Only a span the app offers counts, so any other value keeps the two weeks.
@@ -298,6 +306,7 @@ fn record_from(preferences: &Preferences) -> Record {
         hide_flagged: Value::Bool(preferences.jobs_view.flagged),
         hide_under_score: Value::Bool(preferences.jobs_view.under_score),
         score_floor: Value::from(preferences.jobs_view.score),
+        check_updates: Value::Bool(preferences.check_updates.is_on()),
     }
 }
 
@@ -377,6 +386,7 @@ mod tests {
             key_test: Some(key_test(true, 3, 0.04)),
             queue: TodayQueue { coming_up: ComingUp::Month, later: LaterLasts::UntilMonday, skip_reasons: SkipReasons::from_saved(["Pay", "Culture"]) },
             jobs_view: JobFilters { below_floor: true, too_far: true, language: true, flagged: true, under_score: true, score: 82 },
+            check_updates: AutoCheck::Off,
         }
     }
 
@@ -419,7 +429,7 @@ mod tests {
                 "sign_in": "claude", "key_test": null,
                 "coming_up_days": 14, "later": "tomorrow", "skip_reasons": ["Rate", "Scope", "Domain", "Location"],
                 "hide_below_floor": false, "hide_too_far": false, "hide_language": false, "hide_flagged": false,
-                "hide_under_score": false, "score_floor": 60
+                "hide_under_score": false, "score_floor": 60, "check_updates": true
             })
         );
         file.save(&every_key_set()).unwrap();
@@ -437,7 +447,7 @@ mod tests {
                 "sign_in": "api_key", "key_test": {"passed": true, "at": "2026-03-09T14:03", "cost_usd": 0.04},
                 "coming_up_days": 30, "later": "monday", "skip_reasons": ["Pay", "Culture"],
                 "hide_below_floor": true, "hide_too_far": true, "hide_language": true, "hide_flagged": true,
-                "hide_under_score": true, "score_floor": 82
+                "hide_under_score": true, "score_floor": 82, "check_updates": false
             })
         );
     }
@@ -738,6 +748,19 @@ mod tests {
         assert_eq!(loaded_with(&file, r#""score_floor": 0"#).jobs_view.score, 0);
         assert_eq!(loaded_with(&file, r#""score_floor": 100"#).jobs_view.score, 100);
         assert!(loaded_with(&file, r#""hide_flagged": true"#).jobs_view.flagged);
+    }
+
+    #[test]
+    fn the_update_switch_is_off_only_for_false() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        assert_eq!(loaded_with(&file, r#""check_updates": false"#).check_updates, AutoCheck::Off);
+        assert_eq!(loaded_with(&file, r#""check_updates": true"#).check_updates, AutoCheck::On);
+        assert_eq!(loaded_with(&file, "").check_updates, AutoCheck::On, "a missing key");
+        for field in ["0", "1", "null", r#""false""#, r#""off""#, "[]", "{}", "[false]"] {
+            let loaded = loaded_with(&file, &format!(r#""theme": "dark", "check_updates": {field}"#));
+            assert_eq!((loaded.check_updates, loaded.theme), (AutoCheck::On, ThemeChoice::Dark), "{field}");
+        }
     }
 
     #[test]

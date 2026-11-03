@@ -23,7 +23,7 @@ pub use crate::discovery::application::{CONTRACT_TERM, Commute, CommuteTier, Ter
 pub use crate::profile::application::UNREADABLE as PROFILE_UNREADABLE;
 pub use crate::runs::application::{Period, UsageReport, YearOfDays, heat_step};
 pub use crate::settings::domain::{
-    CapReached, ComingUp, CommandDefault, ConnectionTester, DataSizes, Dollars, Drawn, Group, JobFilters, KeyMask, KeyStore, KeyStoreError, KeyTest,
+    AutoCheck, CapReached, ComingUp, CommandDefault, ConnectionTester, DataSizes, Dollars, Drawn, Group, JobFilters, KeyMask, KeyStore, KeyStoreError, KeyTest,
     LaterLasts, Outcome, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention, RunDefaults, Saved, SkipReasons, SpendCap, StartScreen,
     StartValues, TermsDrawn, TestDone, TestReport, TextSize, ThemeChoice, TodayQueue, drawn_index, index,
 };

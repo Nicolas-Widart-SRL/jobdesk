@@ -3,6 +3,7 @@ use chrono::NaiveDateTime;
 use crate::dossier::application::PdfDocument;
 use crate::profile::domain::{CvFiles, CvTag, FileStamp, Freshness, Shelf, buildable, freshness, label, shelf, tag};
 use crate::settings::application::{age_words, size_short};
+use crate::shared_kernel::visible_text::visible_chars;
 
 /// One stem in `cv/`, with what its files say about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,9 +27,9 @@ impl CvDocument {
         Some(PdfDocument { label: self.label.clone(), path: pdf.path.clone(), modified: pdf.modified })
     }
 
-    /// The file name under the label: the PDF's, or else the `.tex`'s.
+    /// The file name under the label: the PDF's, or else the `.tex`'s, without hidden characters.
     pub fn shown_name(&self) -> String {
-        self.pdf.as_ref().or(self.tex.as_ref()).map(|file| file.name.clone()).unwrap_or_default()
+        self.pdf.as_ref().or(self.tex.as_ref()).map(|file| visible_chars(&file.name).collect()).unwrap_or_default()
     }
 
     /// The later of the two modification times.
@@ -236,6 +237,21 @@ mod tests {
     fn the_shown_name_prefers_the_pdf() {
         assert_eq!(doc("main_a", Some(1), Some(2)).shown_name(), "main_a.pdf");
         assert_eq!(doc("main_a", Some(1), None).shown_name(), "main_a.tex");
+    }
+
+    #[test]
+    fn the_shown_name_drops_hidden_characters() {
+        let mut doc = doc("main_acme", Some(1), Some(2));
+        doc.pdf.as_mut().unwrap().name = "main_acme\u{202E}fdp.pdf".to_owned();
+        assert_eq!(doc.shown_name(), "main_acmefdp.pdf");
+    }
+
+    #[test]
+    fn a_stem_with_a_hidden_character_sorts_by_the_shelf_its_label_reads() {
+        let shelf = cv_shelf(vec![files("main_acme", Some(9), Some(9)), files("main\u{200b}_example_lead", Some(1), Some(1))]);
+        let CvShelf::Read(docs) = shelf else { unreachable!() };
+        assert_eq!((docs[0].shelf, docs[0].label.as_str()), (Shelf::Master, "Master CV, lead"));
+        assert_eq!(docs[1].shelf, Shelf::Application);
     }
 
     #[test]

@@ -91,24 +91,27 @@ pub enum Shelf {
 
 const MASTER: &str = "main_example";
 
+/// The shelf comes from the visible stem, the one `label` reads, so a hidden character cannot split the two.
 pub fn shelf(stem: &str) -> Shelf {
-    if stem.starts_with(MASTER) { Shelf::Master } else { Shelf::Application }
+    if visible_chars(stem).collect::<String>().starts_with(MASTER) { Shelf::Master } else { Shelf::Application }
 }
 
 /// The name a document goes by. The stem comes from a file name, so hidden characters are dropped.
+/// Underscores and tabs read as spaces. A stem with nothing left after that reads "Main" when it had only the `main_` prefix and
+/// "Untitled CV" when it had nothing visible at all.
 pub fn label(stem: &str) -> String {
     let clean: String = visible_chars(stem).collect();
-    let spaced = |text: &str| text.replace('_', " ").trim().to_owned();
+    let spaced = |text: &str| text.replace(['_', '\t'], " ").trim().to_owned();
     if shelf(&clean) == Shelf::Master {
         let rest = spaced(clean[MASTER.len()..].trim_start_matches('_'));
         return if rest.is_empty() { "Master CV".to_owned() } else { format!("Master CV, {rest}") };
     }
-    let rest = clean.strip_prefix("main_").filter(|rest| !rest.is_empty()).unwrap_or(&clean);
-    let words = spaced(rest);
+    let rest = spaced(clean.strip_prefix("main_").unwrap_or(&clean));
+    let words = if rest.is_empty() { spaced(&clean) } else { rest };
     let mut letters = words.chars();
     match letters.next() {
         Some(first) => first.to_uppercase().chain(letters).collect(),
-        None => String::new(),
+        None => "Untitled CV".to_owned(),
     }
 }
 
@@ -192,10 +195,32 @@ mod tests {
     }
 
     #[test]
+    fn a_label_is_never_empty() {
+        assert_eq!(label("main___"), "Main");
+        assert_eq!(label("main_\t"), "Main");
+        assert_eq!(label("_"), "Untitled CV");
+        assert_eq!(label(""), "Untitled CV");
+        assert_eq!(label("\u{200b}\u{202e}"), "Untitled CV");
+    }
+
+    #[test]
+    fn a_tab_reads_as_a_space() {
+        assert_eq!(label("main_acme\tplatform"), "Acme platform");
+        assert_eq!(label("main_example\tlead"), "Master CV, lead");
+    }
+
+    #[test]
+    fn the_shelf_and_the_label_read_the_same_stem() {
+        let hidden = "main\u{200b}_example_lead";
+        assert_eq!(shelf(hidden), Shelf::Master);
+        assert_eq!(label(hidden), "Master CV, lead");
+    }
+
+    #[test]
     fn only_plain_stems_can_be_built() {
         assert!(buildable("main_tessel_platform_lead"));
         assert!(buildable("main-a1"));
-        for stem in ["", "-x", "a b", "a;b", "café", "a\u{202e}"] {
+        for stem in ["", "-x", "--all", "--list", "a b", "a;b", "café", "a\u{202e}"] {
             assert!(!buildable(stem), "{stem:?}");
         }
     }

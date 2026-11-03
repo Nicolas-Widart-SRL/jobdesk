@@ -61,8 +61,6 @@ Settings (Cmd+, , Ctrl+, on Windows, or Settings at the right of the status bar)
 - Data and privacy: where Jobdesk keeps its data, with the size of the run logs and the tray decisions. Keep run logs for 30 days, 90 days or Forever, which is the default. A shorter time deletes older logs when Jobdesk starts, never those of the current month, and Usage statistics then counts only the logs kept. Clear tray decisions asks first and forgets what you decided on Today in this folder, with the reasons given for past skips. Your list of skip reasons stays, and other folders keep theirs.
 - About: the Jobdesk and Claude Code versions with Copy details for a bug report, and links to the auth review and the changelog. The licences are not available there yet.
 
-The other sections show in the rail and open in later versions.
-
 ## Profile
 
 Profile shows what Claude reads about you, one topic at a time, on paper beside a rail of topics. On your CV holds Identity and languages, Experience, Education, Skills, Projects and publications, References and Profile statements. What guides Claude holds How I work, Goals and deal-breakers, Interview stories and Job search. Each topic reads Not started while its sections hold nothing but headings, blank lines and comments, N to fill while it still holds placeholders such as `[FIRST_NAME]`, and Filled when none are left. It reads Hidden when a file that holds it cannot be read, and the alert under the head says which. A fresh checkout reads N to fill for every topic, and the screen opens on the first topic with something left to fill.

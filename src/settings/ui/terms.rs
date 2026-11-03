@@ -20,7 +20,9 @@ const NOTHING_YET: &str = "Your terms show here once you choose your job search 
 const FLOOR_HELP: &str = "A job that states a lower day rate fails this check.";
 const NO_FLOOR: &str = "Your profile does not state one, so every job's day-rate check reads Unclear instead of guessing.";
 const TIERS: &str = "Commute tiers";
-const NO_TIERS: &str = "Your profile does not state them, so every job's commute check reads Unclear instead of guessing.";
+/// Without tiers a fully remote job still passes the commute check, and a place the location check ruled out still fails it.
+const NO_TIERS: &str =
+    "Your profile does not state them, so the commute check reads Unclear for a job that is not fully remote, unless the location check ruled it out.";
 const NOT_STATED: &str = "Not stated";
 const COULD_NOT: &str = "Your terms could not be read.";
 const HIDDEN_TITLE: &str = "Your terms are hidden, not gone";

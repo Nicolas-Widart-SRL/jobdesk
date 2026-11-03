@@ -3,7 +3,7 @@ use chrono::NaiveDate;
 use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
-    CapReached, ComingUp, CommandDefault, Dollars, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention,
+    CapReached, ComingUp, CommandDefault, Dollars, Drawn, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention,
     RunDefaults, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index,
 };
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
@@ -325,15 +325,15 @@ pub struct SearchHits {
 }
 
 /// `None` for a blank query. Case does not matter, and every line the page draws counts once.
-/// `folder_read` says whether the folder is open and read, which decides what Runtime status draws.
-pub fn search(query: &str, folder_read: bool) -> Option<SearchHits> {
+/// `drawn` says what the pages draw as things stand, such as Runtime status before the folder is read.
+pub fn search(query: &str, drawn: Drawn) -> Option<SearchHits> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return None;
     }
     let pages: Vec<(Page, usize)> = Page::ALL
         .iter()
-        .map(|&page| (page, drawn_index(page, folder_read).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
+        .map(|&page| (page, drawn_index(page, drawn).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
         .filter(|&(_, count)| count > 0)
         .collect();
     let total = pages.iter().map(|&(_, count)| count).sum();
@@ -575,10 +575,10 @@ mod tests {
 
     #[test]
     fn a_search_counts_lines_per_page() {
-        let hits = search("FOLDER", true).unwrap();
+        let hits = search("FOLDER", Drawn::folder(true)).unwrap();
         assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Defaults, 1), (Page::Permissions, 2), (Page::Runtime, 1), (Page::Data, 4)]);
         assert_eq!(hits.total, 11);
-        let spend = search("spend", true).unwrap();
+        let spend = search("spend", Drawn::folder(true)).unwrap();
         assert_eq!(spend.pages, vec![(Page::Defaults, 1)]);
     }
 
@@ -609,31 +609,43 @@ mod tests {
 
     #[test]
     fn without_a_folder_runtime_status_matches_only_what_it_draws() {
-        assert_eq!(search("sync", true).unwrap().pages, vec![(Page::Runtime, 1)]);
-        assert!(search("sync", false).unwrap().pages.is_empty());
-        assert_eq!(search("environment", false).unwrap().pages, vec![(Page::Runtime, 1)]);
+        assert_eq!(search("sync", Drawn::folder(true)).unwrap().pages, vec![(Page::Runtime, 1)]);
+        assert!(search("sync", Drawn::folder(false)).unwrap().pages.is_empty());
+        assert_eq!(search("environment", Drawn::folder(false)).unwrap().pages, vec![(Page::Runtime, 1)]);
     }
 
     #[test]
     fn a_search_finds_the_job_search_pages() {
-        assert_eq!(search("skip reasons", true).unwrap().pages, vec![(Page::Queue, 1), (Page::Data, 1)], "Clear tray decisions forgets them too");
-        assert_eq!(search("Hide jobs scored under", true).unwrap().pages, vec![(Page::JobsView, 1)]);
-        assert_eq!(search("commute", true).unwrap().pages, vec![(Page::Terms, 2), (Page::JobsView, 1)]);
-        assert_eq!(search("commute", false).unwrap().pages, vec![(Page::JobsView, 1)], "without a folder, Your terms draws no rows");
+        assert_eq!(
+            search("skip reasons", Drawn::folder(true)).unwrap().pages,
+            vec![(Page::Queue, 1), (Page::Data, 1)],
+            "Clear tray decisions forgets them too"
+        );
+        assert_eq!(search("Hide jobs scored under", Drawn::folder(true)).unwrap().pages, vec![(Page::JobsView, 1)]);
+        assert_eq!(search("commute", Drawn::folder(true)).unwrap().pages, vec![(Page::Terms, 2), (Page::JobsView, 1)]);
+        assert_eq!(search("commute", Drawn::folder(false)).unwrap().pages, vec![(Page::JobsView, 1)], "without a folder, Your terms draws no rows");
+    }
+
+    #[test]
+    fn a_search_skips_the_terms_a_failed_file_hides() {
+        let drawn = |terms| Drawn { folder_read: true, terms };
+        assert!(search("contract", drawn(crate::settings::domain::TermsDrawn::CommuteOnly)).unwrap().pages.is_empty(), "the profile failed");
+        assert_eq!(search("commute", drawn(crate::settings::domain::TermsDrawn::RateOnly)).unwrap().pages, vec![(Page::JobsView, 1)], "the evaluation failed");
+        assert_eq!(search("contract", drawn(crate::settings::domain::TermsDrawn::RateOnly)).unwrap().pages, vec![(Page::Terms, 3)]);
     }
 
     #[test]
     fn a_blank_search_is_none_and_a_miss_has_no_pages() {
-        assert_eq!(search("  ", true), None);
-        assert_eq!(search("", true), None);
-        let miss = search("zzz", true).unwrap();
+        assert_eq!(search("  ", Drawn::folder(true)), None);
+        assert_eq!(search("", Drawn::folder(true)), None);
+        let miss = search("zzz", Drawn::folder(true)).unwrap();
         assert!(miss.pages.is_empty());
         assert_eq!(miss.total, 0);
     }
 
     #[test]
     fn a_search_trims_the_query() {
-        assert_eq!(search("  motion ", true).unwrap().pages, vec![(Page::Appearance, 2)]);
+        assert_eq!(search("  motion ", Drawn::folder(true)).unwrap().pages, vec![(Page::Appearance, 2)]);
     }
 
     fn spec(name: &str) -> &'static CommandSpec {

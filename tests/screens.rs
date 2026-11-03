@@ -15,8 +15,8 @@ use jobdesk::runs::application::{
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
 use jobdesk::settings::application::{
-    ApiKey, ConnectionTester, DataSizes, Dollars, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn, TestDone,
-    TestReport, drawn_index, index,
+    ApiKey, ConnectionTester, DataSizes, Dollars, Drawn, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn,
+    TestDone, TestReport, drawn_index, index,
 };
 use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
@@ -1727,10 +1727,10 @@ fn every_runtime_index_line_is_on_its_page() {
     shell.open_settings(Page::Runtime);
     let mut harness = tray_harness(shell);
     settle(&mut harness);
-    for line in drawn_index(Page::Runtime, true) {
+    for line in drawn_index(Page::Runtime, Drawn::folder(true)) {
         assert!(harness.query_all_by_label(line).next().is_some(), "{line}");
     }
-    assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime), "with the folder read, every line is drawn");
+    assert_eq!(drawn_index(Page::Runtime, Drawn::folder(true)), index(Page::Runtime), "with the folder read, every line is drawn");
 
     // With no folder, the lines a search can match are the ones drawn, and nothing more.
     let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
@@ -1739,7 +1739,7 @@ fn every_runtime_index_line_is_on_its_page() {
     settle(&mut harness);
     for &line in index(Page::Runtime) {
         let drawn = harness.query_all_by_label(line).next().is_some();
-        assert_eq!(drawn, drawn_index(Page::Runtime, false).contains(&line), "{line}");
+        assert_eq!(drawn, drawn_index(Page::Runtime, Drawn::folder(false)).contains(&line), "{line}");
     }
 }
 

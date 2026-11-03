@@ -1,6 +1,6 @@
 use egui::{Align, Key, Label, Layout, Ui, vec2};
 
-use crate::settings::application::{ComingUp, LaterLasts, Page, Settings, SkipReasons, index};
+use crate::settings::application::{ComingUp, LaterLasts, Page, ReasonRefusal, Settings, SkipReasons, index};
 use crate::ui_kit::tokens::SETTING_CONTROL_GAP;
 use crate::ui_kit::{Ink, Type, divider, enabled_when, rich, setting_row, setting_section, small_button, text_field, toggle_group};
 
@@ -8,6 +8,8 @@ use crate::ui_kit::{Ink, Type, divider, enabled_when, rich, setting_row, setting
 const REASON_ROW: f32 = 44.0;
 const ADD_PADDING: f32 = 9.0;
 const ADD: &str = "Add reason";
+/// The room Add reason takes at the right of the field. The field goes in first, for the Tab order, so it cannot measure it.
+const ADD_WIDTH: f32 = 96.0;
 const HINT: &str = "A new reason";
 /// What a screen reader hears for the field, which has no label of its own on screen.
 const FIELD_NAME: &str = "New skip reason";
@@ -70,25 +72,33 @@ fn reason_row(ui: &mut Ui, reason: &str) -> bool {
 }
 
 /// The field for a new reason and Add reason, which waits while the field is empty or the list would refuse what it
-/// holds, and says why. Enter adds it too.
+/// holds, and says why. Enter adds it too. A full list says so under them, and the field waits too.
+/// The field comes first, so Tab goes from it to Add reason.
 fn add_row(ui: &mut Ui, settings: &mut Settings, typed: &mut String) {
-    let refused = settings.preferences().queue.skip_reasons.check(typed).err();
+    let reasons = &settings.preferences().queue.skip_reasons;
+    // A full list refuses any reason, so it says that before it asks for one.
+    let full = reasons.list().len() >= SkipReasons::MOST_REASONS;
+    let refused = if full { Some(ReasonRefusal::Full) } else { reasons.check(typed).err() };
+    let why = refused.map(|refusal| refusal.why()).unwrap_or_default();
     ui.add_space(ADD_PADDING);
     let (added, entered) = ui
-        .allocate_ui_with_layout(vec2(ui.available_width(), 0.0), Layout::right_to_left(Align::Center), |ui| {
-            let why = refused.map(|refusal| refusal.why()).unwrap_or_default();
-            let added = enabled_when(ui, refused.is_none(), why, |ui| small_button(ui, ADD)).clicked();
-            ui.add_space(SETTING_CONTROL_GAP);
-            let field = text_field(ui, typed, ui.available_width(), HINT, SkipReasons::REASON_CHARS);
+        .allocate_ui_with_layout(vec2(ui.available_width(), 0.0), Layout::left_to_right(Align::Center), |ui| {
+            let width = (ui.available_width() - ADD_WIDTH - SETTING_CONTROL_GAP).max(0.0);
+            let field = ui.add_enabled_ui(!full, |ui| text_field(ui, typed, width, HINT, SkipReasons::REASON_CHARS)).inner.on_disabled_hover_text(why);
             ui.ctx().accesskit_node_builder(field.id, |node| node.set_label(FIELD_NAME));
             let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
             if entered {
                 // The field keeps the focus, so the next reason can follow.
                 field.request_focus();
             }
-            (added, entered)
+            let added = ui.with_layout(Layout::right_to_left(Align::Center), |ui| enabled_when(ui, refused.is_none(), why, |ui| small_button(ui, ADD))).inner;
+            (added.clicked(), entered)
         })
         .inner;
+    if full {
+        ui.add_space(ADD_PADDING);
+        ui.label(rich(ui, why, Type::NOTE, Ink::Muted));
+    }
     ui.add_space(ADD_PADDING);
     if (added || entered) && settings.add_skip_reason(typed).is_ok() {
         typed.clear();

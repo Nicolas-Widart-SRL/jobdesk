@@ -14,8 +14,8 @@ use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen, TermsState,
-    TermsWord, TextSize, ThemeChoice, UsageState, WordTone, cap_word, hidden_word, index, rail_word, search, size_short, terms_word,
+    CapCheck, ClaudeVersion, DataSizes, Drawn, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen,
+    TermsState, TermsWord, TextSize, ThemeChoice, UsageState, WordTone, cap_word, hidden_word, index, rail_word, search, size_short, terms_drawn, terms_word,
 };
 use crate::settings::ui::about::AboutView;
 use crate::settings::ui::data::DataView;
@@ -296,7 +296,7 @@ fn rail(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView) {
             ui.label(rich(ui, "Settings", Type::SLIP_TITLE, Ink::Text));
             search_field(ui, &mut screen.query, "Search settings");
         });
-        let hits = search(&screen.query, view.folder_read);
+        let hits = search(&screen.query, Drawn { folder_read: view.folder_read, terms: terms_drawn(view.terms) });
         if let Some(found) = &hits
             && let Some(&(first, _)) = found.pages.first()
             && !found.pages.iter().any(|&(page, _)| page == screen.page)
@@ -950,7 +950,7 @@ mod tests {
         harness.run();
         harness.get_by_label("Your terms could not be read.");
         harness.get_by_label("01-candidate-profile.md: not UTF-8 text");
-        harness.get_by_label("Jobs still lists every job. Its day-rate check reads Unclear until the file is fixed.");
+        harness.get_by_label("Jobs still reads every job you saved. Its day-rate check reads Unclear until the file is fixed.");
         harness.get_by_label("Your terms are hidden, not gone");
         harness.get_by_label("From Namur (by car). This part comes from another file, so it still shows.");
         harness.get_by_label("Namur, Charleroi");
@@ -1044,6 +1044,82 @@ mod tests {
         harness.get_by_label("Remove Scope").click();
         harness.run();
         assert_eq!(reasons(&state), ["Rate", "Domain", "Location", "Culture", "Agency, not the client"]);
+    }
+
+    #[test]
+    fn a_full_list_says_so_and_waits_for_a_removal() {
+        let state = state();
+        for n in 0..4 {
+            state.borrow_mut().settings.add_skip_reason(&format!("Extra {n}")).unwrap();
+        }
+        on(&state, Page::Queue);
+        let mut harness = harness(state.clone());
+        harness.run();
+        let full = "The list holds 8 reasons. Remove one first.";
+        assert!(harness.query_by_label(full).is_some(), "the page says the list is full, with no hover");
+        assert!(reason_field(&harness).accesskit_node().is_disabled(), "the field waits too");
+        assert!(harness.get_by_label("Add reason").accesskit_node().is_disabled());
+        harness.get_by_label("Add reason").hover();
+        harness.run_steps(8);
+        assert_eq!(harness.query_all_by_label(full).count(), 2, "the hover says it too");
+
+        harness.get_by_label("Remove Extra 0").click();
+        harness.run();
+        assert!(harness.query_by_label(full).is_none());
+        assert!(!reason_field(&harness).accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn tab_goes_from_the_reason_field_to_add_reason() {
+        let state = state();
+        on(&state, Page::Queue);
+        let mut harness = harness(state);
+        harness.run();
+        reason_field(&harness).focus();
+        harness.run();
+        reason_field(&harness).type_text("Culture");
+        harness.run();
+        harness.key_press(Key::Tab);
+        harness.run();
+        assert!(harness.get_by_label("Add reason").accesskit_node().is_focused());
+    }
+
+    /// Your terms in each failed state draws every line its search matches, and none it does not.
+    #[test]
+    fn a_search_matches_only_what_a_failed_terms_page_draws() {
+        let failed = |file: &str| crate::shared_kernel::LoadError::new(file, "denied");
+        for (case, floor, commute) in [("profile", true, false), ("evaluation", false, true), ("both", true, true)] {
+            let state = state();
+            if floor {
+                state.borrow_mut().terms.floor = TermPart::Failed(failed("01-candidate-profile.md"));
+            }
+            if commute {
+                state.borrow_mut().terms.commute = TermPart::Failed(failed("04-job-evaluation.md"));
+            }
+            on(&state, Page::Terms);
+            let mut harness = harness(state.clone());
+            harness.run();
+            let drawn = crate::settings::application::drawn_index(
+                Page::Terms,
+                Drawn { folder_read: true, terms: terms_drawn(TermsState::Read(&state.borrow().terms)) },
+            );
+            for &line in index(Page::Terms) {
+                let shown = harness.query_all_by_label(line).next().is_some();
+                assert_eq!(shown, drawn.contains(&line), "{case}: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn commute_tiers_not_stated_say_what_the_check_still_does() {
+        let state = state();
+        state.borrow_mut().terms.commute = TermPart::Read(Commute::default());
+        on(&state, Page::Terms);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label(
+            "Your profile does not state them, so the commute check reads Unclear for a job that is not fully remote, unless the location check ruled it out.",
+        );
     }
 
     #[test]

@@ -315,13 +315,44 @@ pub fn index(page: Page) -> &'static [&'static str] {
 /// How many of Runtime status's lines show before a folder is open and read.
 const RUNTIME_WITHOUT_FOLDER: usize = 7;
 
-/// The lines the page draws as things stand: without `folder_read`, Runtime status leaves out the folder's sections, and
-/// Your terms has nothing to show.
-pub fn drawn_index(page: Page, folder_read: bool) -> &'static [&'static str] {
-    match page {
-        Page::Runtime if !folder_read => &RUNTIME[..RUNTIME_WITHOUT_FOLDER],
-        Page::Terms if !folder_read => &[],
-        page => index(page),
+/// Which parts of Your terms the page draws, as the profile files read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermsDrawn {
+    /// No folder, the folder not read yet, or neither file read.
+    Nothing,
+    /// Both files read: the note, the contract and rate, and the commute.
+    Whole,
+    /// Only the profile read: the contract and rate, faded under the alert.
+    RateOnly,
+    /// Only the evaluation read: the commute, faded under the alert.
+    CommuteOnly,
+}
+
+/// What the pages draw as things stand, which is all a search may match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drawn {
+    /// Whether the folder is open and read.
+    pub folder_read: bool,
+    pub terms: TermsDrawn,
+}
+
+impl Drawn {
+    /// A folder read whole, or none: Your terms draws every part, or nothing.
+    pub fn folder(read: bool) -> Self {
+        Self { folder_read: read, terms: if read { TermsDrawn::Whole } else { TermsDrawn::Nothing } }
+    }
+}
+
+/// The lines the page draws as things stand: without a folder read, Runtime status leaves out the folder's sections, and
+/// Your terms shows only the parts that read.
+pub fn drawn_index(page: Page, drawn: Drawn) -> &'static [&'static str] {
+    match (page, drawn.terms) {
+        (Page::Runtime, _) if !drawn.folder_read => &RUNTIME[..RUNTIME_WITHOUT_FOLDER],
+        (Page::Terms, TermsDrawn::Nothing) => &[],
+        // The note goes with the alert, and the contract shows only beside the floor.
+        (Page::Terms, TermsDrawn::RateOnly) => &TERMS[1..5],
+        (Page::Terms, TermsDrawn::CommuteOnly) => &TERMS[5..],
+        (page, _) => index(page),
     }
 }
 
@@ -338,10 +369,18 @@ mod tests {
 
     #[test]
     fn without_a_folder_your_terms_draws_nothing_to_search() {
-        assert!(drawn_index(Page::Terms, false).is_empty());
-        assert_eq!(drawn_index(Page::Terms, true), index(Page::Terms));
-        assert_eq!(drawn_index(Page::Queue, false), index(Page::Queue), "the queue's settings need no folder");
-        assert_eq!(drawn_index(Page::JobsView, false), index(Page::JobsView));
+        assert!(drawn_index(Page::Terms, Drawn::folder(false)).is_empty());
+        assert_eq!(drawn_index(Page::Terms, Drawn::folder(true)), index(Page::Terms));
+        assert_eq!(drawn_index(Page::Queue, Drawn::folder(false)), index(Page::Queue), "the queue's settings need no folder");
+        assert_eq!(drawn_index(Page::JobsView, Drawn::folder(false)), index(Page::JobsView));
+    }
+
+    #[test]
+    fn a_failed_file_leaves_only_the_part_still_read_to_search() {
+        let terms = |terms| drawn_index(Page::Terms, Drawn { folder_read: true, terms });
+        assert_eq!(terms(TermsDrawn::RateOnly), ["Contract and rate", "Contract", TERMS[3], "Day-rate floor"]);
+        assert_eq!(terms(TermsDrawn::CommuteOnly), ["Commute"]);
+        assert!(terms(TermsDrawn::Nothing).is_empty(), "both failed");
     }
 
     #[test]
@@ -357,13 +396,13 @@ mod tests {
 
     #[test]
     fn without_a_folder_runtime_status_keeps_only_what_it_draws() {
-        let drawn = drawn_index(Page::Runtime, false);
+        let drawn = drawn_index(Page::Runtime, Drawn::folder(false));
         assert!(drawn.contains(&"Environment") && drawn.contains(&"Claude Code"));
         for heading in ["Profile", "Portals", "Templates", "Sync", "Reset"] {
             assert!(!drawn.contains(&heading), "{heading}");
         }
-        assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime));
-        assert_eq!(drawn_index(Page::General, false), index(Page::General));
+        assert_eq!(drawn_index(Page::Runtime, Drawn::folder(true)), index(Page::Runtime));
+        assert_eq!(drawn_index(Page::General, Drawn::folder(false)), index(Page::General));
     }
 
     #[test]

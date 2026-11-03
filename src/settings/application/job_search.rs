@@ -1,5 +1,5 @@
 use crate::discovery::application::{TermPart, YourTerms};
-use crate::settings::domain::JobFilters;
+use crate::settings::domain::{JobFilters, TermsDrawn};
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// The line Update with Claude… opens the launcher on: `/setup`'s goals, which hold the floor and the commute.
@@ -47,6 +47,17 @@ pub fn terms_word(state: TermsState) -> TermsWord {
     }
 }
 
+/// Which parts of Your terms the page draws, so a search matches only those: a part whose file failed is hidden.
+pub fn terms_drawn(state: TermsState) -> TermsDrawn {
+    let TermsState::Read(terms) = state else { return TermsDrawn::Nothing };
+    match (&terms.floor, &terms.commute) {
+        (TermPart::Read(_), TermPart::Read(_)) => TermsDrawn::Whole,
+        (TermPart::Read(_), TermPart::Failed(_)) => TermsDrawn::RateOnly,
+        (TermPart::Failed(_), TermPart::Read(_)) => TermsDrawn::CommuteOnly,
+        (TermPart::Failed(_), TermPart::Failed(_)) => TermsDrawn::Nothing,
+    }
+}
+
 /// Text read from the profile or from an error, as plain text: no control, escape, bidi or zero-width characters.
 pub fn plain(text: &str) -> String {
     visible_chars(text).collect::<String>().trim().to_owned()
@@ -67,16 +78,20 @@ pub fn floor_words(floor: u32) -> String {
     format!("EUR {floor} a day")
 }
 
+/// Which jobs the commute check reads Unclear for without tiers: a fully remote job still passes it, and a place the
+/// location check ruled out still fails it.
+const UNCLEAR_COMMUTE: &str = "for a job that is not fully remote, unless the location check ruled it out.";
+
 /// What the alert says still works while a part of your terms cannot be read, naming the check that reads Unclear.
 pub fn terms_failed_line(terms: &YourTerms) -> String {
     let floor = matches!(terms.floor, TermPart::Failed(_));
     let commute = matches!(terms.commute, TermPart::Failed(_));
     let unclear = match (floor, commute) {
-        (true, true) => "Its day-rate and commute checks read Unclear until the files are fixed.",
-        (false, true) => "Its commute check reads Unclear until the file is fixed.",
-        _ => "Its day-rate check reads Unclear until the file is fixed.",
+        (true, true) => format!("Until the files are fixed, its day-rate check reads Unclear, and so does its commute check {UNCLEAR_COMMUTE}"),
+        (false, true) => format!("Until the file is fixed, its commute check reads Unclear {UNCLEAR_COMMUTE}"),
+        _ => "Its day-rate check reads Unclear until the file is fixed.".to_owned(),
     };
-    format!("Jobs still lists every job. {unclear}")
+    format!("Jobs still reads every job you saved. {unclear}")
 }
 
 /// The day-rate filter's help, from your terms: the floor it holds jobs to, or why no job fails it.
@@ -94,6 +109,7 @@ pub fn floor_filter_help(state: TermsState) -> String {
 pub fn jobs_count_note(filters: &JobFilters, count: Option<(usize, usize)>) -> String {
     match count {
         None => "Jobs counts what these filters hide once your saved jobs are read.".to_owned(),
+        Some((_, 0)) => "No jobs saved yet, so these filters have nothing to hide.".to_owned(),
         Some((_, total)) if !filters.any_on() => match total {
             1 => "No filter is on, so Jobs shows its 1 job.".to_owned(),
             total => format!("No filter is on, so Jobs shows all {total} jobs."),
@@ -156,11 +172,18 @@ mod tests {
     #[test]
     fn the_failed_line_names_the_check_that_reads_unclear() {
         let floor = YourTerms { floor: TermPart::Failed(failed()), commute: TermPart::Read(Commute::default()) };
-        assert_eq!(terms_failed_line(&floor), "Jobs still lists every job. Its day-rate check reads Unclear until the file is fixed.");
+        assert_eq!(terms_failed_line(&floor), "Jobs still reads every job you saved. Its day-rate check reads Unclear until the file is fixed.");
         let commute = YourTerms { floor: TermPart::Read(Some(700)), commute: TermPart::Failed(failed()) };
-        assert_eq!(terms_failed_line(&commute), "Jobs still lists every job. Its commute check reads Unclear until the file is fixed.");
+        assert_eq!(
+            terms_failed_line(&commute),
+            "Jobs still reads every job you saved. Until the file is fixed, its commute check reads Unclear for a job that is not fully remote, unless the location check ruled it out."
+        );
         let both = YourTerms { floor: TermPart::Failed(failed()), commute: TermPart::Failed(failed()) };
-        assert_eq!(terms_failed_line(&both), "Jobs still lists every job. Its day-rate and commute checks read Unclear until the files are fixed.");
+        assert_eq!(
+            terms_failed_line(&both),
+            "Jobs still reads every job you saved. Until the files are fixed, its day-rate check reads Unclear, and so does its commute check for a job that is not fully remote, unless the location check ruled it out."
+        );
+        assert!(!terms_failed_line(&both).contains("lists every job"), "a filter on Jobs view can hide a job from the list");
     }
 
     #[test]
@@ -180,6 +203,9 @@ mod tests {
         );
         assert_eq!(jobs_count_note(&JobFilters::default(), Some((0, 14))), "No filter is on, so Jobs shows all 14 jobs.");
         assert_eq!(jobs_count_note(&on, None), "Jobs counts what these filters hide once your saved jobs are read.");
+        for filters in [on, JobFilters::default()] {
+            assert_eq!(jobs_count_note(&filters, Some((0, 0))), "No jobs saved yet, so these filters have nothing to hide.", "never all 0 jobs");
+        }
         assert_eq!(hidden_word(&on, Some((3, 14))), "3 hidden");
         assert_eq!(hidden_word(&on, None), "");
         assert_eq!(hidden_word(&JobFilters::default(), Some((0, 14))), "", "no filter, no word");

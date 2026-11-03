@@ -1,6 +1,6 @@
 # Settings
 
-This page covers how preferences reach the window and the screens, what is derived from them, the monthly cap, run log retention, and how Jobdesk replaces its own files. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features). The sign-in method and the API key are in [runs](runs.md#sign-in).
+This page covers how preferences reach the window and the screens, what is derived from them, the update switch, the monthly cap, run log retention, and how Jobdesk replaces its own files. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features). The sign-in method and the API key are in [runs](runs.md#sign-in).
 
 ## Preferences
 
@@ -24,6 +24,16 @@ The Today queue rules and the Jobs view filters live in `settings.json` too.
 - A saved list of skip reasons goes through the same rules as a typed one, so a hand-edited file cannot break them.
 
 What the rules do is in [Today queue](today-queue.md) and [discovery](discovery.md#jobs-view-filters).
+
+### The update switch
+
+`check_updates` in `settings.json` holds Check for updates automatically, in Settings › About. It is on by default.
+
+- Only `false` turns it off. A missing key, or a value of another type, reads as on.
+- The shell hands a change to `Updates::set_auto` once, as it does Settings › Permissions. Check now looks whatever the switch says.
+- The switch has one help for on and one for off. Search matches only the help it shows, through `Drawn::auto_check`. Latest version's help says the state of the check, so search does not look through it.
+
+What the check does is in [trust](trust.md#updates).
 
 ## The Setup tab
 

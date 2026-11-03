@@ -46,9 +46,11 @@ The builds are not signed yet, so both systems warn on first open:
 
 On first launch, choose your ai-job-search folder.
 
+From the first release with updates on, Jobdesk tells you in the status bar when a new version is out. Download fetches it and checks its signature, and Restart to update installs it and opens Jobdesk again on the same folder. A copy from before that release does not update itself: install the new version by hand once.
+
 ## Privacy and trust
 
-Slash commands write your checkout, and Jobdesk writes only the profile block you save. By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain.
+Slash commands write your checkout, and Jobdesk writes only the profile block you save. By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain. Jobdesk asks GitHub for its latest release when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About.
 
 ## Authentication
 

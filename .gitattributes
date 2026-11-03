@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.pdf binary
+# Signed update fixtures must stay byte for byte as signed.
+tests/fixtures/updates/** -text

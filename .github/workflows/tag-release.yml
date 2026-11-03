@@ -6,6 +6,8 @@
 # For a code failure, merge the fix into main through a normal PR, then run this workflow by hand with the tag.
 # The run by hand builds the current main commit, then tags and publishes the same way.
 # The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
+# installers.yml gets the update key secrets and signs the update files. Before it tags, publish checks both signatures
+# against assets/update/jobdesk-update.pub and writes latest.json, the feed the app reads, with scripts/update-feed.sh.
 name: Tag release
 
 on:
@@ -94,6 +96,8 @@ jobs:
     with:
       ref: ${{ needs.version.outputs.sha }}
       tag: ${{ needs.version.outputs.tag }}
+    # Only JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD are declared there, so only they reach it.
+    secrets: inherit
 
   publish:
     name: Tag and publish release
@@ -139,6 +143,38 @@ jobs:
           name: setup
           path: dist
 
+      # A build the app cannot check must never be published: the public key must be the real one, and both updates
+      # must pass it, before anything is tagged.
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Check the update signatures and write latest.json
+        run: |
+          key=assets/update/jobdesk-update.pub
+          if grep -q PLACEHOLDER "$key"; then
+            echo "::error::$key still holds the placeholder. Add the public update key, as the Release section of CONTRIBUTING.md says."
+            exit 1
+          fi
+          base64 -d "$key" > "$RUNNER_TEMP/jobdesk-update.pub"
+          for update in "dist/Jobdesk-$TAG-macos-arm64.app.tar.gz" "dist/Jobdesk-$TAG-windows-x64-setup.exe"; do
+            if [ ! -s "$update" ] || [ ! -s "$update.sig" ]; then
+              echo "::error::$update or its .sig is missing."
+              exit 1
+            fi
+            minisig="$RUNNER_TEMP/$(basename "$update").minisig"
+            base64 -d "$update.sig" > "$minisig"
+            if ! minisign -V -q -p "$RUNNER_TEMP/jobdesk-update.pub" -m "$update" -x "$minisig"; then
+              echo "::error::$update does not match $key."
+              exit 1
+            fi
+          done
+          scripts/update-feed.sh "$TAG" "$RUNNER_TEMP/release-notes.md" dist > "$RUNNER_TEMP/latest.json"
+          rm dist/*.sig
+          mv "$RUNNER_TEMP/latest.json" dist/latest.json
+          cat dist/latest.json
+
       # A re-run after a later step failed finds the tag it pushed, and keeps it.
       - name: Tag the commit
         run: |
@@ -155,7 +191,7 @@ jobs:
           git tag -a "$TAG" -m "$TAG" "$SHA"
           git push origin "refs/tags/$TAG"
 
-      # A re-run after this step failed finds the release, and uploads the installers again.
+      # A re-run after this step failed finds the release, and uploads the installers and latest.json again.
       - name: Create the GitHub release
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then

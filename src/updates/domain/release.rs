@@ -123,6 +123,26 @@ pub struct RestartPlan {
     pub signature: String,
 }
 
+/// Why Restart to update did not apply a release. The copy that ran opens again in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyFailure {
+    /// The downloaded file no longer matched the signature of its release, so it was not opened.
+    BadSignature,
+    /// This copy is not where an installer put it, so there is nothing it may replace.
+    NotInstalled,
+    /// The new copy could not be unpacked or put in place. The old one is back where it was.
+    Replace,
+    /// The installer or the new copy did not start.
+    Start,
+}
+
+/// The release a Restart to update did not apply, and why. Read once at the next launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyFailed {
+    pub version: Version,
+    pub failure: ApplyFailure,
+}
+
 /// The number of one download. Each download started gets a new one, and every event of it carries it back,
 /// so what a cancelled download still reports late is never taken for the next one's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

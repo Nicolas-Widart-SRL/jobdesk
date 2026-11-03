@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "pub_date": "2026-10-30T09:00:00Z",
+  "notes": "### Features\n\n- **Profile**: preview each CV before you send it ([#43](https://example.com/pr/43))\n- Read more in the [guide](https://example.com/guide) ![chart](https://example.com/chart.png)\n",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIGNhcmdvLXBhY2thZ2VyIHNlY3JldCBrZXkKUlVRWnRwQ05lNWlndzdyWGs0S2YrdWY0WFRZZGx6QSt0UlpqQ1JZVFRsNFhGemZLRm5WVk5PNFpEZU8rbHQ2OXBlR2dCeU9yWkQ1bko1RHFNbHBQS2txN1RiT2t0WWtrQlFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzM1Njg0CWZpbGU6Sm9iZGVzay12MC4yLjAtbWFjb3MtYXJtNjQuYXBwLnRhci5negpCTmhKZGVrV3RuNGR6b1ltVDUreWxVOW55cFI3SHJLcjB3bTBmajBlNnhuWnFvWE5FNzZQN2R3U0pvTzlZK1hscmV1bWdXUlNMa05ENWFJV0x2ZENCUT09Cg==",
+      "size": 367
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIGNhcmdvLXBhY2thZ2VyIHNlY3JldCBrZXkKUlVRWnRwQ05lNWlndzZIK0o1dHdWZ2w1SDlNR1oxS2hnUzRkcjhaUGFZaGszcTJVYll4Qms3REowZWlKVVVmTG52RWlNdGRBQ0k1T0J4d3dEeDVPMU13c1ZPclhYaUVGVGd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzM1Njg0CWZpbGU6Sm9iZGVzay12MC4yLjAtd2luZG93cy14NjQtc2V0dXAuZXhlCjZxeS85d0pXalVCTGh1em80SXZHL3NTNUxmYnVlQXp2dTRLTXVhK0hVTEZ4T1ZVd3p2Zk9ZVWsxTzlGdVdBdTM5R3lWSkI0ZkM1MGYzbmdpODdEWkRnPT0K",
+      "size": 86
+    }
+  }
+}

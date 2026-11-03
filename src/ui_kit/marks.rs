@@ -470,6 +470,11 @@ pub fn slip_bar(ui: &mut Ui, fraction: f32, ink: impl Into<Ink>) {
     draw_bar(ui, fraction, ink.into(), track);
 }
 
+/// The one line under a figure's bar while the figure is an estimate, such as a live run's Cost.
+pub fn estimate_note(ui: &mut Ui, text: impl Into<String>) -> Response {
+    add_text(ui, text, Type::SMALL, Ink::Muted)
+}
+
 /// A labelled measure: name and value above a bar.
 pub fn measure(ui: &mut Ui, label: &str, value: usize, of: usize, ink: impl Into<Ink>) {
     ui.horizontal(|ui| {

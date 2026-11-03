@@ -29,3 +29,4 @@ None of them sits inside something clickable.
 ## Gallery snapshots
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.
+The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.

@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -30,8 +29,8 @@ pub struct GithubUpdates {
     events: Receiver<ServiceEvent>,
     /// The latest download, running or kept, until a cancel drops it.
     download: Option<Arc<Job>>,
-    /// This process's own folder in `updates/`, claimed at the first download, and the lock that keeps it.
-    own: Option<(PathBuf, File)>,
+    /// This process's own folder in `updates/`, claimed at the first download and locked until the process exits.
+    own: Option<PathBuf>,
 }
 
 impl GithubUpdates {
@@ -62,7 +61,7 @@ impl UpdateService for GithubUpdates {
         if self.own.is_none() {
             self.own = claim(&self.shared.dir).ok();
         }
-        let Some((own, _)) = &self.own else { return fail(Failure::Disk) };
+        let Some(own) = &self.own else { return fail(Failure::Disk) };
         let job = Job::new(id, release.clone(), platform, own.clone());
         self.download = Some(Arc::clone(&job));
         let shared = Arc::clone(&self.shared);

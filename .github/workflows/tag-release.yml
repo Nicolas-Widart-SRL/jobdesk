@@ -176,9 +176,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     # Its actions are pinned to commits, because the job holds a token that can write the repository.
     steps:
+      # Every tag, so the check below finds the key of the release before this one.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.version.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
 
       # Edits made on the release branch count: the notes come from CHANGELOG.md at the built commit.
       - name: Extract release notes from CHANGELOG.md
@@ -209,8 +212,10 @@ jobs:
           name: signatures
           path: dist
 
-      # A build the app cannot check must never be published: the public key must be the real one, and both updates
-      # must pass it under their own names, before anything is tagged.
+      # A build the installed copies cannot check must never be published. They trust the key of the release they run,
+      # so both updates must pass the key of the latest release before this one, under their own names, before anything
+      # is tagged. A release that carries a new key is still signed with the old one. Only when no earlier release
+      # carries a real key, at the first release with updates, is the key of this commit the one to pass.
       - name: Install minisign
         run: |
           sudo apt-get update
@@ -218,12 +223,21 @@ jobs:
 
       - name: Check the update signatures and write latest.json
         run: |
-          key=assets/update/jobdesk-update.pub
-          if grep -q PLACEHOLDER "$key"; then
-            echo "::error::$key still holds the placeholder. Add the public update key, as the Release section of CONTRIBUTING.md says."
+          file=assets/update/jobdesk-update.pub
+          if grep -q PLACEHOLDER "$file"; then
+            echo "::error::$file still holds the placeholder. Add the public update key, as the Release section of CONTRIBUTING.md says."
             exit 1
           fi
-          base64 -d "$key" > "$RUNNER_TEMP/jobdesk-update.pub"
+          previous=$(git tag --merged "$SHA" --list 'v*' --sort=-v:refname | grep -vxF "$TAG" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          key="$file at $SHA"
+          cp "$file" "$RUNNER_TEMP/jobdesk-update.pub.b64"
+          if [ -n "$previous" ] && git show "$previous:$file" > "$RUNNER_TEMP/previous.pub.b64" 2>/dev/null \
+            && ! grep -q PLACEHOLDER "$RUNNER_TEMP/previous.pub.b64"; then
+            key="$file at $previous"
+            cp "$RUNNER_TEMP/previous.pub.b64" "$RUNNER_TEMP/jobdesk-update.pub.b64"
+          fi
+          echo "Checking the signatures against $key."
+          base64 -d "$RUNNER_TEMP/jobdesk-update.pub.b64" > "$RUNNER_TEMP/jobdesk-update.pub"
           for update in "dist/Jobdesk-$TAG-macos-arm64.app.tar.gz" "dist/Jobdesk-$TAG-windows-x64-setup.exe"; do
             if [ ! -s "$update" ] || [ ! -s "$update.sig" ]; then
               echo "::error::$update or its .sig is missing."
@@ -235,8 +249,10 @@ jobs:
               echo "::error::$update does not match $key."
               exit 1
             fi
-            if ! sed -n 's/^trusted comment: //p' "$minisig" | tr '\t' '\n' | grep -qxF "file:$(basename "$update")"; then
-              echo "::error::The signature of $update does not name it."
+            # Exactly one file field, and it names this file, as the app requires.
+            files=$(sed -n 's/^trusted comment: //p' "$minisig" | tr '\t' '\n' | grep '^file:' || true)
+            if [ "$files" != "file:$(basename "$update")" ]; then
+              echo "::error::The signature of $update does not name it, and it alone."
               exit 1
             fi
           done

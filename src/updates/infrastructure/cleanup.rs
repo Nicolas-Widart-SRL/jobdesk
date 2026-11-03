@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::{Mutex, PoisonError};
 
 use crate::updates::domain::{ApplyFailed, ApplyFailure, Version};
 use crate::updates::infrastructure::download::{new_private_file, private_dir};
@@ -11,14 +12,29 @@ pub const APPLY_FAILED: &str = "apply-failed";
 /// The file each running Jobdesk holds locked in its own folder of `updates/`, so another one leaves that folder alone.
 const LOCK: &str = ".lock";
 
-/// This process's own folder in `dir`, `updates/<pid>`, and the lock that keeps it while the returned file stays open.
-/// Each Jobdesk downloads only into its own folder, so a second window's `clear` never deletes the first one's build.
-pub fn claim(dir: &Path) -> io::Result<(PathBuf, File)> {
+/// The folders this process has claimed, each with its open lock. Nothing is ever taken out, so each lock holds until
+/// the process exits, through Restart to update's `finish` after the window has closed.
+static CLAIMED: Mutex<Vec<(PathBuf, File)>> = Mutex::new(Vec::new());
+
+/// This process's own folder in `dir`, `updates/<pid>`, locked until the process exits. Each Jobdesk downloads only
+/// into its own folder, so a second window's `clear` never deletes the first one's build, even while the first one
+/// applies it after its window closed. Claiming the same folder again gives it back as it is.
+pub fn claim(dir: &Path) -> io::Result<PathBuf> {
     let own = dir.join(process::id().to_string());
-    private_dir(&own)?;
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(own.join(LOCK))?;
+    let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
+    if !claimed.iter().any(|(folder, _)| *folder == own) {
+        let lock = lock_folder(&own)?;
+        claimed.push((own.clone(), lock));
+    }
+    Ok(own)
+}
+
+/// Makes `folder` and locks it for as long as the returned file stays open.
+fn lock_folder(folder: &Path) -> io::Result<File> {
+    private_dir(folder)?;
+    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(folder.join(LOCK))?;
     lock.try_lock().map_err(io::Error::from)?;
-    Ok((own, lock))
+    Ok(lock)
 }
 
 /// Whether a Jobdesk that runs now holds `folder`.
@@ -152,18 +168,24 @@ mod tests {
     fn clear_leaves_the_folder_of_a_jobdesk_that_still_runs() {
         let data = tempfile::tempdir().unwrap();
         let dir = data.path().join("updates");
-        let (own, lock) = claim(&dir).unwrap();
+        let own = claim(&dir).unwrap();
         assert_eq!(own, dir.join(process::id().to_string()));
+        assert_eq!(claim(&dir).unwrap(), own, "a second claim finds the folder this process holds");
         fs::write(own.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe"), "ready").unwrap();
         let gone = dir.join("1");
         fs::create_dir_all(&gone).unwrap();
         fs::write(gone.join(LOCK), "").unwrap();
         clear(&dir);
-        assert!(own.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe").exists(), "a running window keeps its download");
+        assert!(own.join("1-Jobdesk-v0.2.0-windows-x64-setup.exe").exists(), "a running Jobdesk keeps its download");
         assert!(!gone.exists(), "a folder no one holds goes");
+
+        let other = dir.join("2");
+        let lock = lock_folder(&other).unwrap();
+        clear(&dir);
+        assert!(other.exists());
         drop(lock);
         clear(&dir);
-        assert!(!own.exists(), "once the window ends, its folder goes at the next launch");
+        assert!(!other.exists(), "once its process ends, a folder goes at the next launch");
     }
 
     #[test]

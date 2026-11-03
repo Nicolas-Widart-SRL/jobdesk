@@ -60,3 +60,4 @@ PR 39 ARCHITECTURE.md: said every `can_use_tool` request shows its input shorten
 PR 39 CONTRIBUTING.md: gave only the branch-run installer names with a commit segment, while a tag release names them after the tag with no commit. Class: incomplete naming.
 PR 39 mockups/Settings.html: canvas row for removed About row not updated with the code change. Class: stale mockup.
 PR 48 src/runs/ui/run_screen.rs: the repaint schedule asked for a frame every second for Elapsed even in a narrow window where Elapsed is not on screen (only drawn in the side column or the open Run details popup). Class: work scheduled for something not shown.
+PR 48 src/runs/ui/run_screen.rs: a fix that stopped the repaint for Elapsed also removed the only timer for the sweep's 30 s and 2 min form changes under Reduce motion in a narrow window while Starting. Class: removing a timer without checking what else relied on it.

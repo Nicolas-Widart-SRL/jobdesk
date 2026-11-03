@@ -67,11 +67,22 @@ impl YourTerms {
     }
 
     /// Where the tiers are measured from, as a sentence: `From Namur (by car).`
+    /// Only when there are tiers, because without them the commute is not stated.
     pub fn origin_line(&self) -> Option<String> {
-        let TermPart::Read(Commute { origin: Some(origin), .. }) = &self.commute else { return None };
-        let mut letters = origin.trim().chars();
-        let first = letters.next()?;
-        let line: String = first.to_uppercase().chain(letters).collect();
+        let TermPart::Read(Commute { origin: Some(origin), tiers }) = &self.commute else { return None };
+        if tiers.is_empty() {
+            return None;
+        }
+        let origin = origin.trim();
+        let mut raised = false;
+        let line: String = origin
+            .chars()
+            .flat_map(|c| {
+                let raise = !raised && c.is_alphabetic();
+                raised |= raise;
+                if raise { c.to_uppercase().collect::<Vec<_>>() } else { vec![c] }
+            })
+            .collect();
         Some(if line.ends_with('.') { line } else { format!("{line}.") })
     }
 }
@@ -109,13 +120,15 @@ mod tests {
 
     #[test]
     fn the_origin_reads_as_a_sentence() {
-        let with = |origin: Option<&str>| YourTerms {
+        let with = |origin: Option<&str>, tiers: Vec<CommuteTier>| YourTerms {
             floor: TermPart::default(),
-            commute: TermPart::Read(Commute { origin: origin.map(str::to_owned), tiers: vec![] }),
+            commute: TermPart::Read(Commute { origin: origin.map(str::to_owned), tiers }),
         };
-        assert_eq!(with(Some("from Namur (by car)")).origin_line().as_deref(), Some("From Namur (by car)."));
-        assert_eq!(with(Some("from Namur.")).origin_line().as_deref(), Some("From Namur."));
-        assert_eq!(with(None).origin_line(), None);
+        assert_eq!(with(Some("from Namur (by car)"), vec![tier()]).origin_line().as_deref(), Some("From Namur (by car)."));
+        assert_eq!(with(Some("from Namur."), vec![tier()]).origin_line().as_deref(), Some("From Namur."));
+        assert_eq!(with(Some("(from Namur)"), vec![tier()]).origin_line().as_deref(), Some("(From Namur)."));
+        assert_eq!(with(None, vec![tier()]).origin_line(), None);
+        assert_eq!(with(Some("from Namur"), vec![]).origin_line(), None);
         let failing = YourTerms { floor: TermPart::default(), commute: TermPart::Failed(failed()) };
         assert_eq!(failing.origin_line(), None);
     }

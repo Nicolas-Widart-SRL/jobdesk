@@ -89,3 +89,17 @@ impl Snapshot {
         Self { archives, workspace, profile, insights, band, board, terms, pipeline, skill_gaps, usage, usage_read, usage_asked, issues, today, read_at }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discovery::application::TermPart;
+
+    #[test]
+    fn load_fills_your_terms_from_the_checkout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace");
+        let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert_eq!(snapshot.terms.floor, TermPart::Read(Some(700)));
+        assert_eq!(snapshot.terms.gates().commute.len(), 4);
+    }
+}

@@ -152,7 +152,7 @@ fn floor_in(profile: &str) -> Option<u32> {
 /// Gives the origin, which is the text between the label and the colon, and the tiers.
 fn commute_tiers_in(evaluation: &str) -> (Option<String>, Vec<CommuteTier>) {
     let Some(line) = evaluation.lines().find(|line| line.trim_start().starts_with(COMMUTE_LINE)) else { return (None, Vec::new()) };
-    let (head, tiers) = line.split_once(':').unwrap_or((line, ""));
+    let Some((head, tiers)) = line.split_once(':') else { return (None, Vec::new()) };
     let origin = shown(head.trim_start().strip_prefix(COMMUTE_LINE).unwrap_or_default());
     ((!origin.is_empty()).then_some(origin), tiers.split(';').filter_map(commute_tier).collect())
 }
@@ -229,6 +229,19 @@ mod tests {
         let (origin, tiers) = commute_tiers_in("Commute tiers from Na\u{202e}mur: **id\u{202e}eal** Na\u{202e}mur (<45\u{202e} min)");
         assert_eq!(origin.as_deref(), Some("from Namur"));
         assert_eq!(tiers, vec![CommuteTier { name: "ideal".into(), places: vec!["Namur".into()], note: "<45 min".into() }]);
+    }
+
+    #[test]
+    fn a_line_without_a_colon_has_no_origin_and_no_tiers() {
+        assert_eq!(commute_tiers_in("Commute tiers not decided yet"), (None, vec![]));
+    }
+
+    #[test]
+    fn a_place_of_hidden_characters_is_dropped() {
+        let (_, tiers) = commute_tiers_in("Commute tiers: **ideal** Namur, \u{200b} , Dinant");
+        assert_eq!(tiers[0].places, vec!["Namur".to_owned(), "Dinant".to_owned()]);
+        let (_, tiers) = commute_tiers_in("Commute tiers: **ideal** , \u{200b} ,");
+        assert!(tiers[0].places.is_empty());
     }
 
     #[test]

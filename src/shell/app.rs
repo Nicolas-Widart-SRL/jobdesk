@@ -59,6 +59,8 @@ const SETTINGS_KEYS: [&str; 2] = command_chord(",");
 /// How long Save waits after a run for the snapshot worker's next load. Past it, Jobdesk reads the profile itself, so a
 /// worker that died cannot hold Save off.
 const RUN_READ_WAIT: Duration = Duration::from_secs(5);
+/// How often Providers looks again while a task's start reads the keychain, perhaps behind its prompt.
+const KEYCHAIN_LOOK_AGAIN: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -1198,7 +1200,8 @@ impl Shell {
             None if checking => ClaudeVersion::Checking,
             None => ClaudeVersion::NotFound,
         };
-        // The mask is read once, on the first frame Providers shows, never at launch. It asks the keychain only when no test or task read it yet.
+        // The mask is read on the first frame Providers shows, never at launch. It asks the keychain only when no test or task asked it yet,
+        // and never waits on a read a task's start has under way. Each later frame only picks up a key read since a failed read.
         if self.settings_screen.page() == Page::Providers {
             self.providers.read_once();
         }
@@ -1263,9 +1266,13 @@ impl Shell {
         }
         let ctx = ui.ctx().clone();
         // Providers picked this frame drew before the read, so it reads now and draws again.
+        // While a task's start reads the keychain, it looks again a little later instead of waiting on that prompt.
         if self.settings_screen.page() == Page::Providers && self.providers.saved() == &Saved::NotRead {
-            self.providers.read_once();
-            ctx.request_repaint();
+            if self.providers.read_once() {
+                ctx.request_repaint_after(KEYCHAIN_LOOK_AGAIN);
+            } else {
+                ctx.request_repaint();
+            }
         }
         match asked {
             Some(SettingsRequest::Back) => {

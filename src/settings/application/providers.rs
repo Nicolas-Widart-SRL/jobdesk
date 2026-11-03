@@ -1,5 +1,5 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use chrono::NaiveDateTime;
 
@@ -16,6 +16,8 @@ const TASK_OPEN: &str = "A task is still open. Reply or end it, then test.";
 pub const TESTING: &str = "Testing…";
 const NOT_A_KEY: &str = "This is not a key. Paste the whole key, with nothing inside it but its own characters.";
 const NO_KEY: &str = "No key is saved.";
+/// Why a test of the key waits: a task's start is reading the keychain, perhaps behind its prompt.
+const KEY_BUSY: &str = "The keychain is being read for a task. Test once it answers.";
 const NO_ANSWER: &str = "The test ended without an answer.";
 /// What Claude Code said is cut to this, so a long error cannot push the page away.
 const SAID_LINES: usize = 8;
@@ -87,59 +89,146 @@ struct Running {
     cancelled: bool,
 }
 
-/// What the keychain answered, held for the rest of the launch so it is asked at most once.
+/// What the keychain answered, held for the rest of the launch so it is not asked again.
 enum Held {
     NotRead,
     Absent,
     Present(ApiKey),
 }
 
-/// The saved key in process memory, shared with each task's start. The first read that succeeds is the only one:
-/// an error is not kept, so a later read asks the keychain again, but only until one succeeds.
-/// Saving a key replaces what is held, and removing it leaves nothing held.
+impl Held {
+    /// A copy of what is held. None while nothing was read.
+    fn answer(&self) -> Option<Option<ApiKey>> {
+        match self {
+            Held::NotRead => None,
+            Held::Absent => Some(None),
+            Held::Present(key) => Some(ApiKey::parse(key.expose())),
+        }
+    }
+}
+
+struct Cell {
+    held: Held,
+    /// Why the last read failed, for the callers that waited on it.
+    failure: Option<String>,
+    /// Counts saves and removes, so a read that started before one never replaces what it wrote.
+    generation: u64,
+}
+
+/// The saved key in process memory, shared with each task's start. The keychain is read once per launch, until a read succeeds:
+/// an error is not held, so a later read asks again. Save key replaces what is held, and a removed key leaves nothing held.
+/// `cell` is never locked across a keychain call. Only a read holds `turn` across it: a task's start waits for that turn,
+/// and the window only tries it, so a prompt on one thread never makes the window wait.
 struct KeyCache {
     keys: Arc<dyn KeyStore>,
-    held: Mutex<Held>,
+    cell: Mutex<Cell>,
+    turn: Mutex<()>,
 }
 
 impl KeyCache {
-    /// The saved key, read from the keychain only when no read has succeeded yet this launch.
-    /// The lock is kept across that read, so two callers at once still read the keychain once.
-    fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
-        let mut held = self.held();
-        if matches!(*held, Held::NotRead) {
-            *held = match self.keys.read()? {
-                Some(key) => Held::Present(key),
-                None => Held::Absent,
-            };
+    fn new(keys: Arc<dyn KeyStore>) -> Self {
+        Self { keys, cell: Mutex::new(Cell { held: Held::NotRead, failure: None, generation: 0 }), turn: Mutex::new(()) }
+    }
+
+    /// The held key, or the keychain's answer when nothing is held. A read under way on another thread is waited for and shared,
+    /// so two callers at once read the keychain once, and its failure is the answer of each. The window must not call this.
+    fn read_waiting(&self) -> Result<Option<ApiKey>, KeyStoreError> {
+        let (turn, waited) = match self.turn.try_lock() {
+            Ok(turn) => (turn, false),
+            Err(TryLockError::Poisoned(poisoned)) => (poisoned.into_inner(), false),
+            Err(TryLockError::WouldBlock) => (self.turn.lock().unwrap_or_else(PoisonError::into_inner), true),
+        };
+        if waited {
+            let cell = self.cell();
+            if let (None, Some(message)) = (cell.held.answer(), &cell.failure) {
+                return Err(KeyStoreError { message: message.clone() });
+            }
         }
-        Ok(match &*held {
-            Held::Present(key) => ApiKey::parse(key.expose()),
-            Held::NotRead | Held::Absent => None,
-        })
+        self.answer_or_read(turn)
+    }
+
+    /// As `read_waiting`, but None at once while another thread reads the keychain, so the window never waits on its prompt.
+    fn read_now(&self) -> Option<Result<Option<ApiKey>, KeyStoreError>> {
+        let turn = match self.turn.try_lock() {
+            Ok(turn) => turn,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        Some(self.answer_or_read(turn))
+    }
+
+    /// What is known without asking the keychain: the held key, or why the last read failed.
+    fn known(&self) -> Option<Result<Option<ApiKey>, KeyStoreError>> {
+        let cell = self.cell();
+        match (cell.held.answer(), &cell.failure) {
+            (Some(answer), _) => Some(Ok(answer)),
+            (None, Some(message)) => Some(Err(KeyStoreError { message: message.clone() })),
+            (None, None) => None,
+        }
+    }
+
+    /// Reads the keychain, with the turn held, only when nothing is held.
+    fn answer_or_read(&self, _turn: MutexGuard<'_, ()>) -> Result<Option<ApiKey>, KeyStoreError> {
+        let generation = {
+            let cell = self.cell();
+            if let Some(answer) = cell.held.answer() {
+                return Ok(answer);
+            }
+            cell.generation
+        };
+        let read = self.keys.read();
+        let mut cell = self.cell();
+        match read {
+            Ok(found) if cell.generation == generation => {
+                cell.held = found.map_or(Held::Absent, Held::Present);
+                cell.failure = None;
+            }
+            Err(error) if cell.generation == generation => {
+                cell.failure = Some(error.message.clone());
+                return Err(error);
+            }
+            // A save or a remove ended while it read, and what it wrote stands.
+            _ => {}
+        }
+        Ok(cell.held.answer().flatten())
     }
 
     fn write(&self, key: &ApiKey) -> Result<(), KeyStoreError> {
-        let mut held = self.held();
         self.keys.write(key)?;
-        *held = ApiKey::parse(key.expose()).map_or(Held::Absent, Held::Present);
+        self.hold(ApiKey::parse(key.expose()).map_or(Held::Absent, Held::Present));
         Ok(())
     }
 
-    /// Nothing stays held even when the keychain item cannot be deleted, so the key leaves memory either way.
+    /// A key the keychain could not delete stays held, so memory, the page and the keychain still agree.
     fn delete(&self) -> Result<(), KeyStoreError> {
-        let mut held = self.held();
-        *held = Held::Absent;
-        self.keys.delete()
+        self.keys.delete()?;
+        self.hold(Held::Absent);
+        Ok(())
     }
 
-    fn held(&self) -> MutexGuard<'_, Held> {
-        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    fn hold(&self, held: Held) {
+        let mut cell = self.cell();
+        cell.held = held;
+        cell.failure = None;
+        cell.generation += 1;
+    }
+
+    fn cell(&self) -> MutexGuard<'_, Cell> {
+        self.cell.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// How tasks sign in, the saved API key and Test connection. The keychain is read at most once per launch, by whichever comes
-/// first of Providers showing, a test and a task's start, and the key is then held in memory for the mask, tests and tasks.
+/// The page's word for a keychain answer.
+fn saved_of(answer: Result<Option<ApiKey>, KeyStoreError>) -> Saved {
+    match answer {
+        Ok(None) => Saved::Absent,
+        Ok(Some(key)) => Saved::Present(KeyMask::of(&key)),
+        Err(error) => Saved::Unreadable(error.message),
+    }
+}
+
+/// How tasks sign in, the saved API key and Test connection. The keychain is read once per launch, until a read succeeds, by whichever
+/// comes first of Providers showing, a test and a task's start, and the key is then held in memory for the mask, tests and tasks.
 pub struct Providers {
     key: Arc<KeyCache>,
     tester: Box<dyn ConnectionTester>,
@@ -151,7 +240,7 @@ pub struct Providers {
 
 impl Providers {
     pub fn new(keys: Arc<dyn KeyStore>, tester: Box<dyn ConnectionTester>) -> Self {
-        let key = Arc::new(KeyCache { keys, held: Mutex::new(Held::NotRead) });
+        let key = Arc::new(KeyCache::new(keys));
         Self { key, tester, saved: Saved::NotRead, running: None, sign_in_check: None, key_failure: None }
     }
 
@@ -159,17 +248,24 @@ impl Providers {
         &self.saved
     }
 
-    /// The mask and the method, from the key held in memory, or from the keychain when nothing read it yet.
-    /// Later calls change nothing.
-    pub fn read_once(&mut self) {
-        if self.saved != Saved::NotRead {
-            return;
+    /// The mask and the method, from what is known in memory, or from the keychain when nothing asked it yet.
+    /// A key a task's start or a test read after a failed read replaces Unreadable. True while a task's start reads the keychain:
+    /// the page then stays NotRead without waiting on that prompt, and should look again soon.
+    pub fn read_once(&mut self) -> bool {
+        if matches!(self.saved, Saved::Absent | Saved::Present(_)) {
+            return false;
         }
-        self.saved = match self.key.read() {
-            Ok(None) => Saved::Absent,
-            Ok(Some(key)) => Saved::Present(KeyMask::of(&key)),
-            Err(error) => Saved::Unreadable(error.message),
-        };
+        if let Some(known) = self.key.known() {
+            self.saved = saved_of(known);
+            return false;
+        }
+        match self.key.read_now() {
+            Some(answer) => {
+                self.saved = saved_of(answer);
+                false
+            }
+            None => true,
+        }
     }
 
     /// How the next task signs in.
@@ -180,7 +276,7 @@ impl Providers {
     /// Gives the saved key when a task's process starts: the one held in memory, or read from the keychain when nothing read it yet.
     pub fn key_reader(&self) -> KeyReader {
         let key = Arc::clone(&self.key);
-        Arc::new(move || key.read().map_err(|error| error.message))
+        Arc::new(move || key.read_waiting().map_err(|error| error.message))
     }
 
     /// The monthly cap is not asked: a test costs at most a cent and is not a task.
@@ -232,7 +328,8 @@ impl Providers {
     /// It serves Test connection, Test again and Use for tasks on the key alike.
     pub fn test_key(&mut self, task_running: bool) -> Result<(), String> {
         self.gate(task_running)?;
-        let key = match self.key.read() {
+        let Some(read) = self.key.read_now() else { return Err(KEY_BUSY.to_owned()) };
+        let key = match read {
             Ok(Some(key)) => key,
             Ok(None) => {
                 self.saved = Saved::Absent;
@@ -261,7 +358,7 @@ impl Providers {
         settings.set_sign_in(SignIn::ClaudeSignIn);
     }
 
-    /// Tasks go back to the Claude sign-in, and the key leaves memory, even when the keychain item cannot be deleted.
+    /// Tasks go back to the Claude sign-in even when the keychain item cannot be deleted. The key leaves memory only once it is deleted.
     pub fn remove_key(&mut self, settings: &mut Settings) -> Result<(), String> {
         self.cancel_key_test();
         settings.set_sign_in(SignIn::ClaudeSignIn);
@@ -411,6 +508,9 @@ pub fn task_wait_reason(working: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use chrono::NaiveDate;
 
@@ -450,17 +550,23 @@ mod tests {
         }
     }
 
-    /// A keychain in memory that counts its reads, and can be told to fail a read or a delete.
+    /// A keychain in memory that counts its reads, and can be told to fail a read or a delete,
+    /// or to hold the next read until the test lets it answer, as a prompt would.
     struct CountingKeychain {
         inner: MemoryKeychain,
         reads: AtomicUsize,
         fail_reads: AtomicBool,
         fail_delete: AtomicBool,
+        prompt: Mutex<Option<mpsc::Receiver<()>>>,
     }
 
     impl KeyStore for CountingKeychain {
         fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
             self.reads.fetch_add(1, Ordering::SeqCst);
+            let prompt = self.prompt.lock().unwrap().take();
+            if let Some(answered) = prompt {
+                answered.recv().unwrap();
+            }
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(KeyStoreError { message: "access denied".to_owned() });
             }
@@ -483,6 +589,22 @@ mod tests {
         fn reads(&self) -> usize {
             self.reads.load(Ordering::SeqCst)
         }
+
+        /// Holds the next read until the sender sends.
+        fn prompt(&self) -> mpsc::Sender<()> {
+            let (answer, answered) = mpsc::channel();
+            *self.prompt.lock().unwrap() = Some(answered);
+            answer
+        }
+
+        /// Waits until `count` reads have started.
+        fn wait_for_reads(&self, count: usize) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.reads() < count {
+                assert!(Instant::now() < deadline, "the read never started");
+                thread::yield_now();
+            }
+        }
     }
 
     struct Fixture {
@@ -498,6 +620,7 @@ mod tests {
             reads: AtomicUsize::new(0),
             fail_reads: AtomicBool::new(false),
             fail_delete: AtomicBool::new(false),
+            prompt: Mutex::new(None),
         });
         let tester = FakeTester::default();
         let providers = Providers::new(Arc::clone(&keys) as Arc<dyn KeyStore>, Box::new(tester.clone()));
@@ -794,13 +917,18 @@ mod tests {
     }
 
     #[test]
-    fn remove_leaves_no_key_held_even_when_the_keychain_keeps_it() {
+    fn remove_drops_the_held_key() {
         let mut f = fixture(Some(FAKE));
         let reader = f.providers.key_reader();
         assert!(reader().unwrap().is_some());
         f.providers.remove_key(&mut f.settings).unwrap();
         assert!(reader().unwrap().is_none());
+        assert_eq!(f.providers.test_key(false), Err(NO_KEY.to_owned()));
+        assert_eq!(f.keys.reads(), 1);
+    }
 
+    #[test]
+    fn a_key_the_keychain_could_not_delete_stays_held_and_testable() {
         let mut f = fixture(Some(FAKE));
         f.providers.read_once();
         f.keys.fail_delete.store(true, Ordering::SeqCst);
@@ -808,7 +936,10 @@ mod tests {
         assert_eq!(f.stored().as_deref(), Some(FAKE), "the keychain still holds it");
         assert!(matches!(f.providers.saved(), Saved::Present(_)), "the page still says what the keychain holds");
         assert_eq!(f.method(), SignIn::ClaudeSignIn);
-        assert!(f.providers.key_reader()().unwrap().is_none(), "but memory does not");
+        assert_eq!(f.providers.key_reader()().unwrap().unwrap().expose(), FAKE, "and so does memory");
+        f.providers.test_key(false).unwrap();
+        assert_eq!(f.tester.last_key().as_deref(), Some(FAKE), "Test connection and Use for tasks still find it");
+        assert!(matches!(f.providers.saved(), Saved::Present(_)));
         assert_eq!(f.keys.reads(), 1);
     }
 
@@ -822,13 +953,81 @@ mod tests {
         assert_eq!(reader().unwrap_err(), "access denied");
         assert_eq!(f.keys.reads(), 2, "an error is not an answer to keep");
 
+        f.providers.read_once();
+        assert_eq!(f.keys.reads(), 2, "the page does not ask again by itself");
+
         f.keys.fail_reads.store(false, Ordering::SeqCst);
         assert_eq!(reader().unwrap().unwrap().expose(), FAKE);
         f.keys.fail_reads.store(true, Ordering::SeqCst);
         assert_eq!(reader().unwrap().unwrap().expose(), FAKE, "once a read succeeds, the keychain is not asked again");
+        f.providers.read_once();
+        assert!(matches!(f.providers.saved(), Saved::Present(_)), "the page picks up the key a task's start read");
         f.providers.test_key(false).unwrap();
-        assert!(matches!(f.providers.saved(), Saved::Present(_)), "the test shows the key held");
         assert_eq!(f.keys.reads(), 3);
+    }
+
+    #[test]
+    fn two_readers_at_once_read_the_keychain_once_and_the_page_never_waits() {
+        let mut f = fixture(Some(FAKE));
+        let answer = f.keys.prompt();
+        let first = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.map(|key| key.expose().to_owned()))
+        });
+        f.keys.wait_for_reads(1);
+        let second = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.map(|key| key.expose().to_owned()))
+        });
+        // The window, meanwhile, never waits on the prompt the task's start opened.
+        assert!(f.providers.read_once(), "the page looks again later");
+        assert_eq!(f.providers.saved(), &Saved::NotRead);
+        assert_eq!(f.providers.test_key(false), Err(KEY_BUSY.to_owned()));
+        answer.send(()).unwrap();
+        assert_eq!(first.join().unwrap().unwrap().as_deref(), Some(FAKE));
+        assert_eq!(second.join().unwrap().unwrap().as_deref(), Some(FAKE));
+        assert!(!f.providers.read_once());
+        assert!(matches!(f.providers.saved(), Saved::Present(_)));
+        assert_eq!(f.keys.reads(), 1);
+    }
+
+    #[test]
+    fn a_denied_prompt_answers_every_reader_that_waited_on_it() {
+        let mut f = fixture(Some(FAKE));
+        f.keys.fail_reads.store(true, Ordering::SeqCst);
+        let answer = f.keys.prompt();
+        let first = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.is_some())
+        });
+        f.keys.wait_for_reads(1);
+        let reader = f.providers.key_reader();
+        let second = thread::spawn(move || reader().map(|key| key.is_some()));
+        answer.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), Err("access denied".to_owned()));
+        let second = second.join().unwrap();
+        // The second reader either waited on the denied read or came after it and asked again itself.
+        assert_eq!(second, Err("access denied".to_owned()));
+        assert!(f.keys.reads() <= 2);
+        f.providers.read_once();
+        assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()), "the page takes the denial without a prompt");
+        assert!(f.keys.reads() <= 2);
+    }
+
+    #[test]
+    fn a_key_saved_while_a_task_reads_the_keychain_wins() {
+        let mut f = fixture(Some(FAKE));
+        let answer = f.keys.prompt();
+        let reading = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.map(|key| key.expose().to_owned()))
+        });
+        f.keys.wait_for_reads(1);
+        f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
+        answer.send(()).unwrap();
+        assert_eq!(reading.join().unwrap().unwrap().as_deref(), Some(OTHER), "the old key it read is not held over the new one");
+        assert_eq!(f.providers.key_reader()().unwrap().unwrap().expose(), OTHER);
+        assert_eq!(f.keys.reads(), 1);
     }
 
     #[test]

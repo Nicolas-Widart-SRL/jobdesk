@@ -57,10 +57,13 @@ Tasks sign in one of two ways, the sign-in method `settings` keeps:
 
 ### How a task gets the method
 
-`Providers` reads the keychain at most once per launch, and never per frame. The first of Providers showing, a key test and a task's start under the key reads it. The key then stays in process memory for the session, and the mask, Test connection and every task use it:
+`Providers` reads the keychain once per launch, until a read succeeds, and never per frame. The first of Providers showing, a key test and a task's start under the key reads it. The key then stays in process memory for the session, and the mask, Test connection and every task use it:
 
-- Save key replaces the key held, and Remove drops it, even when the keychain item cannot be deleted.
-- A read that fails is not held, so the next one asks the keychain again, until one succeeds. No key saved is an answer, and is held.
+- A read that fails, such as a denied prompt, is not held, so the next task's start or test asks the keychain again. Providers showing does not: it shows the failure. No key saved is an answer, and is held.
+- Two reads at once ask the keychain once and share its answer.
+- The lock on the held key is never kept across a keychain call. While a task's start reads, Providers shows nothing yet and looks again a little later, and a test of the key says to wait, so the window never waits on that prompt.
+- Save key replaces the key held, and Remove drops it once the keychain item is deleted. Both write the keychain, so they may prompt too.
+- A read that ends after a save or a remove leaves what they wrote in place.
 
 Under the key method:
 

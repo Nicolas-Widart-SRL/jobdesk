@@ -67,14 +67,15 @@ The checks run once, before the work they guard. So, as for a profile save:
 
 ## The API key
 
-The API key has one path: the system keychain, read at most once per launch, then Jobdesk's process memory for the session, then the environment of that task's `claude` process, as `ANTHROPIC_API_KEY`. When the key is read is in [runs](runs.md#how-a-task-gets-the-method). Test connection passes it the same way, in its own process's environment only.
+The API key has one path: the system keychain, read once per launch until a read succeeds, then Jobdesk's process memory for the session, then the environment of that task's `claude` process, as `ANTHROPIC_API_KEY`. When the key is read is in [runs](runs.md#how-a-task-gets-the-method). Test connection passes it the same way, in its own process's environment only.
 
 - The key never goes on the command line, into a run log's `jobdesk_meta` line, or into `settings.json`.
 - A saved key never goes onto the screen, which shows only `sk-ant-`, dots and, for a key long enough, its last four characters.
 - The one exception is the key being typed in `secret_field`, shown in full only while the user presses Show.
 - `secret_field` never copies its text to the clipboard and keeps no undo history.
 - `ApiKey` in `shared_kernel` has no `Clone` and no `Display`, and its `Debug` prints no text, so a log line or a panic cannot carry it.
-- The key held in memory is an `ApiKey` in `Providers`, never serialized. Remove drops it.
+- The key held in memory is an `ApiKey` in `Providers`, never serialized. Remove drops it once the keychain deleted it.
+- The held key follows no change made to the keychain outside Jobdesk until it quits.
 
 ### Masking
 

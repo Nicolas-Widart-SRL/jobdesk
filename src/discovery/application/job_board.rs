@@ -147,3 +147,47 @@ mod tests {
         assert_eq!(board.total_seen, 3);
     }
 }
+
+/// Jobs and boards for tests, built in memory.
+#[cfg(test)]
+pub mod fixtures {
+    use super::*;
+    use crate::discovery::domain::GateReading;
+
+    /// A scored job that passes every check, keyed and named by `key`.
+    pub fn view(key: &str) -> JobView {
+        let pass = || GateReading { gate: Gate::Pass, value: "x".into() };
+        JobView {
+            key: key.into(),
+            title: format!("Lead {key}"),
+            company: format!("Company {key}"),
+            location: None,
+            url: None,
+            portal: None,
+            found_on: None,
+            deadline: None,
+            days_to_deadline: None,
+            score: Some(80),
+            verdict: Some(Verdict::Good),
+            scraper_fit: None,
+            location_gate: Some(Gate::Pass),
+            language_gate: Some(Gate::Pass),
+            language_note: None,
+            freelance: FreelanceGates { contract: pass(), day_rate: pass(), commute: pass() },
+            guard: Some("clean".into()),
+            strengths: vec![],
+            gaps: vec![],
+            fetch_attempts: None,
+            fetch_error: None,
+            signals: vec![],
+            closing_soon: false,
+            guard_flagged: false,
+        }
+    }
+
+    /// A board with these jobs in these lists and every other list empty.
+    pub fn board(lanes: Vec<(Lane, Vec<JobView>)>) -> JobBoard {
+        let total_seen = lanes.iter().map(|(_, jobs)| jobs.len()).sum();
+        JobBoard { lanes: lanes.into_iter().map(|(lane, jobs)| LaneView { lane, jobs }).collect(), total_seen }
+    }
+}

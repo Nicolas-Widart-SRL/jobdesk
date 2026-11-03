@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::profile::application::{
-    BlockKey, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UpdatedMarks, topic_counts,
+    BlockKey, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UNREADABLE, UpdatedMarks, topic_counts,
 };
 use crate::profile::ui::editor::{Answer, Ask, Edit, Hold, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
 use crate::profile::ui::rail::{UPDATED_HOVER, loading_rail, rail};
@@ -23,8 +23,6 @@ const SUBTITLE: &str = "Claude reads this before it scores a job or writes a CV 
 const CLAUDE: &str = "Update with Claude…";
 /// Why Update with Claude… waits while a run works.
 const BUSY: &str = "Another run is active. One run at a time keeps your files safe.";
-/// Why Update with Claude… waits while a file of the topic cannot be read.
-const UNREADABLE: &str = "Fix the file first, so Claude does not write over it.";
 /// What the paper says of a topic a file hid.
 const HIDDEN: &str = "Jobdesk could not read a file that holds this topic, so it is not shown. Nothing in the file was changed. Jobdesk reads it again as soon as the file changes.";
 /// Why Write it myself waits when the file lacks the topic's section.

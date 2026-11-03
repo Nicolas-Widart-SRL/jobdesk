@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::intray::domain::{Decision, DecisionStore, Outcome, SkipReason};
+use crate::intray::domain::{Decision, DecisionStore, Outcome};
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::dates::parse_iso_date;
 
@@ -16,11 +16,16 @@ struct Record {
     key: String,
     name: String,
     outcome: String,
+    /// As the user picked it. Older files hold the four first reasons in lowercase.
     reason: Option<String>,
     /// Absent in files from before a followed decision named its task, and left out when empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     task: Option<String>,
     on: String,
+    /// The day a card set aside comes back. Absent in files from before Later could last longer than a day,
+    /// and left out on every other decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    until: Option<String>,
 }
 
 /// Decisions per workspace in one file of the app's data folder, readable only by the user.
@@ -82,9 +87,10 @@ fn record_from(decision: &Decision) -> Record {
         key: decision.key.clone(),
         name: decision.name.clone(),
         outcome: outcome.to_owned(),
-        reason: decision.reason.map(|reason| reason.label().to_lowercase()),
+        reason: decision.reason.clone(),
         task: decision.task.clone(),
         on: decision.on.to_string(),
+        until: decision.until.map(|until| until.to_string()),
     }
 }
 
@@ -97,8 +103,11 @@ fn decision_from(record: Record) -> Option<Decision> {
         "kept" => Outcome::Kept,
         _ => return None,
     };
-    let reason = record.reason.and_then(|raw| SkipReason::ALL.into_iter().find(|reason| reason.label().eq_ignore_ascii_case(&raw)));
-    Some(Decision { key: record.key, name: record.name, outcome, reason, task: record.task, on: parse_iso_date(&record.on)? })
+    // A reason reads back as written, so one taken off the list since still names the skip. A blank one names nothing.
+    let reason = record.reason.filter(|reason| !reason.trim().is_empty());
+    // A return day that cannot be read falls back to the day after, as before Later could last longer.
+    let until = record.until.as_deref().and_then(parse_iso_date);
+    Some(Decision { key: record.key, name: record.name, outcome, reason, task: record.task, on: parse_iso_date(&record.on)?, until })
 }
 
 #[cfg(test)]
@@ -107,8 +116,22 @@ mod tests {
 
     use super::*;
 
-    fn decision(key: &str, outcome: Outcome, reason: Option<SkipReason>) -> Decision {
-        Decision { key: key.into(), name: "Acme".into(), outcome, reason, task: None, on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap() }
+    fn decision(key: &str, outcome: Outcome, reason: Option<&str>) -> Decision {
+        Decision {
+            key: key.into(),
+            name: "Acme".into(),
+            outcome,
+            reason: reason.map(str::to_owned),
+            task: None,
+            on: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap(),
+            until: None,
+        }
+    }
+
+    fn written(record: &str) -> Decision {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(FILE), format!(r#"{{"/w": [{record}]}}"#)).unwrap();
+        DecisionFile::new(dir.path().to_owned(), Path::new("/w")).load().unwrap().remove(0)
     }
 
     #[test]
@@ -116,7 +139,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let first = DecisionFile::new(dir.path().join("intray"), Path::new("/one"));
         let second = DecisionFile::new(dir.path().join("intray"), Path::new("/two"));
-        let saved = [decision("triage:a", Outcome::Skipped, Some(SkipReason::Rate)), decision("send:b", Outcome::Later, None)];
+        let saved = [decision("triage:a", Outcome::Skipped, Some("Rate")), decision("send:b", Outcome::Later, None)];
 
         first.save(&saved).unwrap();
         second.save(&saved[1..]).unwrap();
@@ -143,7 +166,7 @@ mod tests {
 
     #[test]
     fn an_unknown_outcome_is_dropped() {
-        let record = Record { key: "k".into(), name: "n".into(), outcome: "maybe".into(), reason: None, task: None, on: "2026-10-31".into() };
+        let record = Record { key: "k".into(), name: "n".into(), outcome: "maybe".into(), reason: None, task: None, on: "2026-10-31".into(), until: None };
         assert_eq!(decision_from(record), None);
     }
 
@@ -171,6 +194,53 @@ mod tests {
         assert_eq!(text, r#"{"key":"k","name":"Acme","outcome":"skipped","reason":null,"on":"2026-10-31"}"#);
     }
 
+    #[test]
+    fn a_later_writes_the_day_it_comes_back() {
+        let until = NaiveDate::from_ymd_opt(2026, 11, 2);
+        let later = Decision { until, ..decision("k", Outcome::Later, None) };
+        let text = serde_json::to_string(&record_from(&later)).unwrap();
+        assert_eq!(text, r#"{"key":"k","name":"Acme","outcome":"later","reason":null,"on":"2026-10-31","until":"2026-11-02"}"#);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = DecisionFile::new(dir.path().to_owned(), Path::new("/w"));
+        file.save(std::slice::from_ref(&later)).unwrap();
+        assert_eq!(file.load().unwrap(), [later]);
+    }
+
+    #[test]
+    fn a_later_with_no_day_comes_back_the_next_day() {
+        let old = written(r#"{"key": "send:a", "name": "Acme", "outcome": "later", "reason": null, "on": "2026-10-31"}"#);
+        assert_eq!(old, decision("send:a", Outcome::Later, None));
+        let on = old.on;
+        assert!(old.sets_aside(on));
+        assert!(!old.sets_aside(on.succ_opt().unwrap()));
+    }
+
+    #[test]
+    fn a_return_day_that_cannot_be_read_counts_as_none() {
+        let bad = written(r#"{"key": "send:a", "name": "Acme", "outcome": "later", "reason": null, "on": "2026-10-31", "until": "Monday"}"#);
+        assert_eq!(bad, decision("send:a", Outcome::Later, None));
+    }
+
+    #[test]
+    fn a_custom_reason_round_trips_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = DecisionFile::new(dir.path().to_owned(), Path::new("/w"));
+        let saved = [decision("triage:a", Outcome::Skipped, Some("Agency, not the client"))];
+        file.save(&saved).unwrap();
+        assert!(fs::read_to_string(dir.path().join(FILE)).unwrap().contains(r#""reason": "Agency, not the client""#));
+        assert_eq!(file.load().unwrap(), saved);
+    }
+
+    #[test]
+    fn an_old_lowercase_reason_still_reads() {
+        let old = written(r#"{"key": "triage:a", "name": "Acme", "outcome": "skipped", "reason": "rate", "on": "2026-10-31"}"#);
+        assert_eq!(old.reason.as_deref(), Some("rate"));
+        assert_eq!(old.label(), "Skipped for rate");
+        let blank = written(r#"{"key": "triage:a", "name": "Acme", "outcome": "skipped", "reason": "  ", "on": "2026-10-31"}"#);
+        assert_eq!(blank.reason, None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_file_is_private() {
@@ -186,7 +256,7 @@ mod tests {
         let first = DecisionFile::new(dir.path().to_owned(), Path::new("/one"));
         let second = DecisionFile::new(dir.path().to_owned(), Path::new("/two"));
         let kept = [decision("send:b", Outcome::Later, None)];
-        first.save(&[decision("triage:a", Outcome::Skipped, Some(SkipReason::Rate))]).unwrap();
+        first.save(&[decision("triage:a", Outcome::Skipped, Some("Rate"))]).unwrap();
         second.save(&kept).unwrap();
 
         first.save(&[]).unwrap();

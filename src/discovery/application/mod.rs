@@ -1,8 +1,16 @@
 mod checks;
+mod filters;
 mod job_board;
+mod terms;
 
 pub use checks::{AD_ALONE, CheckKind, CheckRow, FreelanceGate, JobChecks, failed_gate, fit_band};
+pub use filters::{Shown, hidden_total, hides, shown_in};
 pub use job_board::{JobBoard, JobBoardService, JobView, LaneView};
+pub use terms::{CONTRACT_TERM, Commute, TermPart, YourTerms};
 
 pub use crate::discovery::domain::{CommuteTier, FitLevel, FreelanceGates, FreelanceTerms, Gate, GateReading, Lane, Signal, Verdict};
+pub use crate::settings::application::JobFilters;
 pub use crate::shared_kernel::CheckState;
+
+#[cfg(test)]
+pub use job_board::fixtures;

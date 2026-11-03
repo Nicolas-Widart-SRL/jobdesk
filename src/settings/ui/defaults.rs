@@ -191,7 +191,7 @@ fn model_box(ui: &mut Ui, id: impl Hash + Debug, current: ModelChoice, width: f3
 
 /// Keeps a field's `text` in `edit` while the field has the focus, and lets it go once the focus leaves, so the field
 /// shows what is saved again. Returns the text on a frame it changed.
-fn typed(edit: &mut Option<String>, text: String, field: &Response) -> Option<String> {
+pub fn typed(edit: &mut Option<String>, text: String, field: &Response) -> Option<String> {
     if !field.has_focus() {
         *edit = None;
     } else if field.changed() {

@@ -15,8 +15,8 @@ use jobdesk::runs::application::{
     RunRequest, StartOptions, TaskCost, TaskOutcome, Usage, UsageReport,
 };
 use jobdesk::settings::application::{
-    ApiKey, ConnectionTester, DataSizes, Dollars, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn, TestDone,
-    TestReport, drawn_index, index,
+    ApiKey, ConnectionTester, DataSizes, Dollars, Drawn, KeyStore, KeyStoreError, KeyTest, Outcome, Page, PermissionMode, Providers, Settings, SignIn,
+    TestDone, TestReport, drawn_index, index,
 };
 use jobdesk::settings::{idle_tester, memory_keychain, open_providers};
 use jobdesk::shared_kernel::ModelChoice;
@@ -1502,15 +1502,156 @@ fn change_folder_is_open_with_no_task() {
 }
 
 #[test]
-fn unbuilt_sections_are_disabled() {
-    let mut shell = shell(Screen::InTray, "settings_unbuilt");
+fn every_section_opens() {
+    let mut shell = shell(Screen::InTray, "settings_every_section");
     shell.open_settings(Page::General);
-    let harness = tray_harness(shell);
+    let mut harness = tray_harness(shell);
+    assert_eq!(harness.query_all_by_label("Later").count(), 0, "no page waits");
     for page in Page::ALL {
         let row = harness.query_all_by_label(page.title()).next().unwrap_or_else(|| panic!("{} is listed", page.title()));
-        assert_eq!(row.accesskit_node().is_disabled(), !page.built(), "{}", page.title());
+        assert!(!row.accesskit_node().is_disabled(), "{}", page.title());
+        row.click();
+        harness.run_steps(3);
+        // Runtime status is the workspace's page, which this shell, with no tool check, does not draw.
+        if page != Page::Runtime {
+            assert!(is_shown(&harness, page.lead()), "{} opens", page.title());
+        }
     }
-    assert_eq!(harness.query_all_by_label("Later").count(), 3, "Providers is built, so only the job search pages wait");
+}
+
+/// Your terms read from the sample profile, and the rail says where they come from.
+#[test]
+fn your_terms_show_the_sample_profile() {
+    let mut shell = shell(Screen::InTray, "settings_terms_values");
+    shell.open_settings(Page::Terms);
+    let harness = tray_harness(shell);
+    for value in ["Freelance only", "EUR 700 a day", "From Namur (by car).", "Ideal", "Namur, Charleroi", "Too far", "From profile"] {
+        assert!(is_shown(&harness, value), "{value}");
+    }
+}
+
+/// Edit in Profile leaves Settings for the Profile tab.
+#[test]
+fn edit_in_profile_shows_profile() {
+    let mut shell = shell(Screen::Jobs, "settings_terms_edit");
+    shell.open_settings(Page::Terms);
+    let (mut harness, shell) = shared_harness(shell);
+    harness.get_by_label("Edit in Profile").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, PROFILE_SUBTITLE));
+}
+
+/// Update with Claude… opens the launcher on the goals section, and the user starts the run there. Show the command shows
+/// the line first, and starts nothing.
+#[test]
+fn update_your_terms_with_claude_opens_the_launcher_and_starts_nothing() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::InTray, "settings_terms_claude", &calls);
+    shell.open_settings(Page::Terms);
+    let (mut harness, shell) = shared_harness(shell);
+    assert!(!is_shown(&harness, "/setup --section goals"));
+    harness.get_by_label("Show the command").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "/setup --section goals"), "the line shows");
+    assert!(shell.borrow().settings_open() && !is_shown(&harness, LAUNCHER), "and nothing opens");
+
+    harness.get_by_label("Update with Claude…").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open());
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/setup --section goals").count() > 0, "on the goals section");
+    assert_eq!(calls.lock().unwrap().starts, 0, "no run starts");
+}
+
+/// Picks `choice` on Settings › Today queue, then goes back to Today.
+fn pick_in_queue(harness: &mut Harness, choice: &str) {
+    cmd_comma(harness);
+    harness.get_by_label("Today queue").click();
+    harness.run_steps(3);
+    harness.get_by_label(choice).click();
+    harness.run_steps(3);
+    press(harness, Key::Escape);
+}
+
+/// Coming up's range reaches Today: its panel says the new span.
+#[test]
+fn coming_up_in_settings_reaches_today() {
+    let mut harness = tray_harness(shell(Screen::InTray, "settings_queue_coming_up"));
+    assert!(is_shown(&harness, "2 weeks"));
+    pick_in_queue(&mut harness, "7 days");
+    assert!(is_shown(&harness, "1 week"), "Today's Coming up looks a week ahead");
+    assert!(!is_shown(&harness, "2 weeks"));
+}
+
+/// How long Later lasts reaches Today: on Saturday, Until Monday sets the card aside until Monday.
+#[test]
+fn later_in_settings_reaches_today() {
+    let mut harness = tray_harness(shell(Screen::InTray, "settings_queue_later"));
+    pick_in_queue(&mut harness, "Until Monday");
+    assert!(is_shown(&harness, HARBOR));
+    press(&mut harness, Key::L);
+    assert!(!is_shown(&harness, HARBOR));
+    assert!(is_shown(&harness, "Last decision on Harbor Bank: Set aside until Monday. Press U to undo."));
+}
+
+/// A skip reason added in Settings is offered on Today's next skip.
+#[test]
+fn a_skip_reason_added_in_settings_is_offered_on_today() {
+    let mut harness = tray_harness(shell(Screen::InTray, "settings_queue_reason"));
+    cmd_comma(&mut harness);
+    harness.get_by_label("Today queue").click();
+    harness.run_steps(3);
+    let field = harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("New skip reason"));
+    field.focus();
+    field.type_text("Culture");
+    harness.run_steps(2);
+    harness.get_by_label("Add reason").click();
+    harness.run_steps(3);
+    press(&mut harness, Key::Escape);
+    assert!(is_shown(&harness, HARBOR));
+    // Harbor's card is a send, which has no skip. Meridian's comes after two set aside.
+    press(&mut harness, Key::L);
+    press(&mut harness, Key::L);
+    assert!(is_shown(&harness, MERIDIAN));
+    press(&mut harness, Key::N);
+    harness.get_by_label("Culture").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Skipped for culture"), "the new reason is offered and taken");
+}
+
+/// The Jobs view hides a flagged ad from Jobs, and Today still deals it as Check this ad, so the user decides on it.
+#[test]
+fn a_flagged_ad_hidden_from_jobs_still_deals_on_today() {
+    let mut today = shell(Screen::InTray, "settings_flagged_today");
+    today.settings_mut().set_hide_flagged(true);
+    let mut harness = tray_harness(today);
+    for _ in 0..4 {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, "Check this ad"), "Today deals the flagged ad");
+    assert!(is_shown(&harness, "Harmless, keep posting"));
+
+    let mut jobs = shell(Screen::Jobs, "settings_flagged_jobs");
+    jobs.settings_mut().set_hide_flagged(true);
+    let mut harness = tray_harness(jobs);
+    // Halden's flagged ad is in Low score.
+    harness.get_by_label_contains("Low score").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("1 job hidden by Settings › Jobs view").is_some(), "Jobs hides it and says so");
+}
+
+/// The filters hide rows on Jobs, and Jobs view counts what they hide, in its note and in the rail.
+#[test]
+fn the_jobs_view_counts_what_jobs_hides() {
+    let mut shell = shell(Screen::Jobs, "settings_jobs_count");
+    shell.settings_mut().set_hide_under_score(true);
+    shell.open_settings(Page::JobsView);
+    let harness = tray_harness(shell);
+    let note = harness.get_by_label_contains("Jobs hides ").accesskit_node().value().unwrap_or_default();
+    let hidden: usize = note.trim_start_matches("Jobs hides ").split(' ').next().unwrap().parse().unwrap();
+    assert!(hidden > 0, "{note}");
+    assert!(is_shown(&harness, &format!("{hidden} hidden")), "the rail says the same");
 }
 
 /// With Reduce motion ticked, a decided card is gone on the next frame, with no slide.
@@ -1586,10 +1727,10 @@ fn every_runtime_index_line_is_on_its_page() {
     shell.open_settings(Page::Runtime);
     let mut harness = tray_harness(shell);
     settle(&mut harness);
-    for line in drawn_index(Page::Runtime, true) {
+    for line in drawn_index(Page::Runtime, Drawn::folder(true)) {
         assert!(harness.query_all_by_label(line).next().is_some(), "{line}");
     }
-    assert_eq!(drawn_index(Page::Runtime, true), index(Page::Runtime), "with the folder read, every line is drawn");
+    assert_eq!(drawn_index(Page::Runtime, Drawn::folder(true)), index(Page::Runtime), "with the folder read, every line is drawn");
 
     // With no folder, the lines a search can match are the ones drawn, and nothing more.
     let mut shell = probed(Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()), FixedTools);
@@ -1598,7 +1739,7 @@ fn every_runtime_index_line_is_on_its_page() {
     settle(&mut harness);
     for &line in index(Page::Runtime) {
         let drawn = harness.query_all_by_label(line).next().is_some();
-        assert_eq!(drawn, drawn_index(Page::Runtime, false).contains(&line), "{line}");
+        assert_eq!(drawn, drawn_index(Page::Runtime, Drawn::folder(false)).contains(&line), "{line}");
     }
 }
 
@@ -2927,7 +3068,12 @@ fn labelled(shell: Shell) -> Shell {
 
 /// Settings over Today, on `page`, with bun missing so Runtime status says "1 missing". `query` is typed into the search.
 fn render_settings(page: Page, query: Option<&str>, theme: Theme, name: &str) {
-    let mut shell = labelled(shell(Screen::InTray, name));
+    render_settings_on(shell(Screen::InTray, name), page, query, theme, name);
+}
+
+/// `render_settings` over `shell`, such as one whose settings or folder a test changed.
+fn render_settings_on(shell: Shell, page: Page, query: Option<&str>, theme: Theme, name: &str) {
+    let mut shell = labelled(shell);
     shell.open_settings(page);
     let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
     if let Some(query) = query {
@@ -2966,6 +3112,78 @@ fn settings_runtime_dark() {
 #[test]
 fn settings_search_light() {
     render_settings(Page::General, Some("folder"), Theme::Light, "settings_search_light");
+}
+
+/// The sample folder over Today, with `change` made to it before it is read. A file it breaks is an issue the shell reports.
+fn changed_shell(name: &str, change: impl FnOnce(&Path)) -> Shell {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search");
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    change(&root);
+    let snapshot = Snapshot { usage_read: true, ..Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()) };
+    Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+#[test]
+fn settings_terms_light() {
+    render_settings(Page::Terms, None, Theme::Light, "settings_terms_light");
+}
+
+/// The sample profile with its floor taken out: the floor is not stated.
+#[test]
+fn settings_terms_missing_light() {
+    let name = "settings_terms_missing_light";
+    let shell = changed_shell(name, |root| {
+        let profile = fs::read_to_string(root.join(CANDIDATE)).unwrap();
+        assert!(profile.contains("Freelance only, day-rate floor EUR 700."));
+        fs::write(root.join(CANDIDATE), profile.replace("Freelance only, day-rate floor EUR 700.", "Freelance only.")).unwrap();
+    });
+    render_settings_on(shell, Page::Terms, None, Theme::Light, name);
+}
+
+/// The profile file is not UTF-8: the alert, hidden not gone, the commute faded, and Update with Claude… waiting, with
+/// its reason on hover.
+#[test]
+fn settings_terms_failed_light() {
+    let name = "settings_terms_failed_light";
+    let shell = changed_shell(name, |root| fs::write(root.join(CANDIDATE), b"# Candidate Profile\n\nCaf\xe9\n").unwrap());
+    let mut shell = labelled(shell);
+    shell.open_settings(Page::Terms);
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    harness.get_by_label("Update with Claude…").hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Fix the file first, so Claude does not write over it."));
+    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+}
+
+#[test]
+fn settings_queue_light() {
+    render_settings(Page::Queue, None, Theme::Light, "settings_queue_light");
+}
+
+#[test]
+fn settings_queue_dark() {
+    render_settings(Page::Queue, None, Theme::Dark, "settings_queue_dark");
+}
+
+/// Day rate under your floor and the score filter on, with the count of what they hide.
+#[test]
+fn settings_jobs_view_light() {
+    let name = "settings_jobs_view_light";
+    let mut shell = shell(Screen::InTray, name);
+    shell.settings_mut().set_hide_below_floor(true);
+    shell.settings_mut().set_hide_under_score(true);
+    render_settings_on(shell, Page::JobsView, None, Theme::Light, name);
+}
+
+/// Jobs with the same filters on: the lists leave out what they hide, and say how many.
+#[test]
+fn jobs_filtered_light() {
+    let name = "jobs_filtered_light";
+    let mut shell = shell(Screen::Jobs, name);
+    shell.settings_mut().set_hide_below_floor(true);
+    shell.settings_mut().set_hide_under_score(true);
+    render_with(shell, Theme::Light, name);
 }
 
 /// The tasks each day of October ran, as the canvas draws them.

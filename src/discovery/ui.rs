@@ -2,23 +2,27 @@ use std::collections::HashSet;
 
 use egui::Ui;
 
-use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobView, Lane, Signal, Verdict, fit_band};
+use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobFilters, JobView, Lane, Shown, Signal, Verdict, fit_band, shown_in};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT};
 use crate::ui_kit::{
     CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note,
-    empty_state, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, pick_table, primary_command_action, rich, score, segmented,
-    skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
+    empty_state, link, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, pick_table, primary_command_action, rich, score,
+    segmented, skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
 pub struct JobsScreen {
     lane: Lane,
     selected: Option<String>,
+    /// Settings › Jobs view: which jobs the lists leave out.
+    filters: JobFilters,
+    /// Whether the jobs the filters hide show anyway, after the user pressed Show them.
+    show_hidden: bool,
 }
 
 impl Default for JobsScreen {
     fn default() -> Self {
-        Self { lane: Lane::Shortlist, selected: None }
+        Self { lane: Lane::Shortlist, selected: None, filters: JobFilters::default(), show_hidden: false }
     }
 }
 
@@ -89,6 +93,10 @@ fn day_rate(job: &JobView) -> &str {
     value.split_once(", ").map_or(value, |(rate, _)| rate)
 }
 
+fn jobs_words(n: usize) -> String {
+    if n == 1 { "1 job".to_owned() } else { format!("{n} jobs") }
+}
+
 fn score_jobs_label(new: usize) -> String {
     match new {
         0 => "Score new jobs".to_owned(),
@@ -98,6 +106,17 @@ fn score_jobs_label(new: usize) -> String {
 }
 
 impl JobsScreen {
+    /// Takes the Jobs view filters from Settings. They hide rows only: a job stays in the list `/rank` put it in.
+    pub fn set_filters(&mut self, filters: JobFilters) {
+        self.filters = filters;
+    }
+
+    /// The jobs a list shows, and how many of them the filters hide. While hidden jobs show, the list shows every job.
+    fn shown<'a>(&self, board: &'a JobBoard, lane: Lane, kept: &HashSet<String>) -> Shown<'a> {
+        let shown = shown_in(board, lane, &self.filters, kept);
+        if self.show_hidden && shown.hidden > 0 { Shown { jobs: board.jobs_in(lane).iter().collect(), hidden: shown.hidden } } else { shown }
+    }
+
     /// `waiting` holds the key of every job with a card in Today, and `kept` every job whose flagged ad the user kept there.
     /// While the saved jobs cannot be read, the list and its segments are hidden, never shown as empty.
     /// Until the first read, the table's head and grey rows stand in for the jobs, so no lane reads as empty.
@@ -130,23 +149,32 @@ impl JobsScreen {
         if !lane_shown(self.lane, board) {
             self.lane = Lane::Shortlist;
         }
-        let options: Vec<_> =
-            LANES.into_iter().filter(|lane| lane_shown(*lane, board)).map(|lane| (lane, format!("{}  {}", lane_label(lane), board.count(lane)))).collect();
+        let options: Vec<_> = LANES
+            .into_iter()
+            .filter(|lane| lane_shown(*lane, board))
+            .map(|lane| (lane, format!("{}  {}", lane_label(lane), self.shown(board, lane, kept).jobs.len())))
+            .collect();
         if let Some(lane) = segmented(ui, self.lane, &options) {
             self.lane = lane;
             self.selected = None;
         }
+        let Shown { jobs, hidden } = self.shown(board, self.lane, kept);
+        if hidden > 0 {
+            ui.add_space(ITEM_GAP);
+            self.hidden_line(ui, hidden);
+        }
         ui.add_space(SCREEN_GAP);
 
-        let jobs = board.jobs_in(self.lane);
         if jobs.is_empty() {
-            lane_empty(ui, self.lane, board);
+            if hidden == 0 {
+                lane_empty(ui, self.lane, board);
+            }
             return;
         }
         if !self.selected.as_ref().is_some_and(|key| jobs.iter().any(|job| &job.key == key)) {
             self.selected = jobs.first().map(|job| job.key.clone());
         }
-        let selected = jobs.iter().find(|job| Some(&job.key) == self.selected.as_ref());
+        let selected = jobs.iter().copied().find(|job| Some(&job.key) == self.selected.as_ref());
 
         with_side_column(
             ui,
@@ -154,7 +182,7 @@ impl JobsScreen {
             |ui| {
                 // The fixed columns overflow a narrow window, so the table scrolls sideways there.
                 panel(ui, |ui| {
-                    egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, jobs, waiting));
+                    egui::ScrollArea::horizontal().id_salt("jobs_table_x").auto_shrink([false, true]).show(ui, |ui| self.table(ui, &jobs, waiting));
                 });
                 if jobs.iter().any(|job| waiting.contains(&job.key)) {
                     ui.add_space(ROW_GAP);
@@ -173,14 +201,31 @@ impl JobsScreen {
         );
     }
 
-    fn table(&mut self, ui: &mut Ui, jobs: &[JobView], waiting: &HashSet<String>) {
+    fn table(&mut self, ui: &mut Ui, jobs: &[&JobView], waiting: &HashSet<String>) {
         let shown = shown_columns(ui);
         let heads: Vec<_> = shown.iter().map(|(_, head)| *head).collect();
         let picked = jobs.iter().position(|job| Some(&job.key) == self.selected.as_ref());
         let table = PickTable { id_salt: "jobs_table", columns: &heads, row_height: ROW_HEIGHT, rows: jobs.len(), picked };
-        if let Some(row) = pick_table(ui, &table, |row| spoken(&jobs[row]), |ui, row, column| job_cell(ui, &jobs[row], shown[column].0, waiting)) {
+        if let Some(row) = pick_table(ui, &table, |row| spoken(jobs[row]), |ui, row, column| job_cell(ui, jobs[row], shown[column].0, waiting)) {
             self.selected = Some(jobs[row].key.clone());
         }
+    }
+
+    /// Says how many jobs of the open list the filters hide, with a link that shows them or hides them again.
+    fn hidden_line(&mut self, ui: &mut Ui, hidden: usize) {
+        let jobs = jobs_words(hidden);
+        let (text, action) = if self.show_hidden {
+            (format!("Showing {jobs} your Jobs view hides. "), "Hide them")
+        } else {
+            (format!("{jobs} hidden by Settings › Jobs view. "), "Show them")
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.label(rich(ui, text, Type::NOTE, Ink::Muted));
+            if link(ui, action).clicked() {
+                self.show_hidden = !self.show_hidden;
+            }
+        });
     }
 }
 
@@ -427,5 +472,96 @@ fn bullets(ui: &mut Ui, title: &str, items: &[String]) {
     strong(ui, title);
     for item in items {
         muted(ui, item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+    use crate::discovery::application::fixtures::{board, view};
+
+    const HIDDEN: &str = "1 job hidden by Settings › Jobs view.";
+    const SHOWING: &str = "Showing 1 job your Jobs view hides.";
+
+    fn setup(ctx: &egui::Context) {
+        crate::ui_kit::install_fonts(ctx);
+        crate::ui_kit::install_theme(ctx);
+    }
+
+    fn under_60() -> JobFilters {
+        JobFilters { under_score: true, ..JobFilters::default() }
+    }
+
+    fn screen(board: JobBoard, filters: JobFilters) -> Harness<'static, JobsScreen> {
+        let mut jobs = JobsScreen::default();
+        jobs.set_filters(filters);
+        let (waiting, kept) = (HashSet::new(), HashSet::new());
+        let mut harness = Harness::builder().with_size([1200.0, 800.0]).with_context_setup(setup).build_ui_state(
+            move |ui, jobs: &mut JobsScreen| {
+                let state = ScreenState { load: Load::Ready, unread: &[], alerts: &|_| {} };
+                jobs.show(ui, &state, &board, &waiting, &kept);
+            },
+            jobs,
+        );
+        harness.run();
+        harness
+    }
+
+    fn low_and_top() -> JobBoard {
+        board(vec![(Lane::Shortlist, vec![view("top"), JobView { score: Some(40), ..view("low") }])])
+    }
+
+    #[test]
+    fn no_filter_on_shows_no_line() {
+        let harness = screen(low_and_top(), JobFilters::default());
+        assert!(harness.query_by_label_contains("Jobs view").is_none());
+        harness.get_by_label("Shortlist  2");
+        harness.get_by_label("Lead low, Company low, 40");
+        harness.get_by_label("Score");
+    }
+
+    #[test]
+    fn show_them_and_hide_them_toggle_the_line() {
+        let mut harness = screen(low_and_top(), under_60());
+        harness.get_by_label_contains(HIDDEN);
+        harness.get_by_label("Shortlist  1");
+        assert!(harness.query_by_label("Lead low, Company low, 40").is_none());
+
+        harness.get_by_label("Show them").click();
+        harness.run();
+        harness.get_by_label_contains(SHOWING);
+        assert!(harness.query_by_label_contains(HIDDEN).is_none());
+        harness.get_by_label("Shortlist  2");
+        harness.get_by_label("Lead low, Company low, 40");
+
+        harness.get_by_label("Hide them").click();
+        harness.run();
+        harness.get_by_label_contains(HIDDEN);
+        assert!(harness.query_by_label("Lead low, Company low, 40").is_none());
+    }
+
+    #[test]
+    fn a_list_with_every_job_hidden_shows_only_the_line() {
+        let all_low = board(vec![(Lane::Shortlist, vec![JobView { score: Some(40), ..view("low") }])]);
+        let harness = screen(all_low, under_60());
+        harness.get_by_label_contains(HIDDEN);
+        harness.get_by_label("Shortlist  0");
+        assert!(harness.query_by_label("No jobs wait here.").is_none(), "the list is not empty, only hidden");
+        assert!(harness.query_by_label("Score").is_none(), "no table");
+    }
+
+    #[test]
+    fn a_selection_the_filters_hide_moves_to_the_first_job_shown() {
+        let mut harness = screen(low_and_top(), JobFilters::default());
+        harness.get_by_label("Lead low, Company low, 40").click();
+        harness.run();
+        assert_eq!(harness.state().selected.as_deref(), Some("low"));
+
+        harness.state_mut().set_filters(under_60());
+        harness.run();
+        assert_eq!(harness.state().selected.as_deref(), Some("top"));
     }
 }

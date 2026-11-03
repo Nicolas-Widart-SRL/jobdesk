@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 
 use crate::discovery::application::{AD_ALONE, CheckRow, FreelanceGate, FreelanceGates, JobBoard, JobChecks, JobView, Lane, failed_gate, fit_band};
 use crate::dossier::application::ArchiveContents;
-use crate::intray::domain::{Action, Body, Card, CardKind, Due, Effect, GateRow, SkipReason, Subject};
+use crate::intray::domain::{Action, Body, Card, CardKind, Due, Effect, GateRow, Subject};
 use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point, wants_reply};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
@@ -170,12 +170,12 @@ fn gate_row(row: &CheckRow) -> GateRow {
     GateRow { label: row.kind.label(), value: row.value.clone(), check: row.state }
 }
 
-/// The skip to suggest, from the first freelance gate that fails.
-fn skip_suggestion(gates: &FreelanceGates) -> Option<(SkipReason, &'static str)> {
+/// The skip to suggest, from the first freelance gate that fails. Its reason is recorded even when the user's list lacks it.
+fn skip_suggestion(gates: &FreelanceGates) -> Option<(&'static str, &'static str)> {
     Some(match failed_gate(gates)? {
-        FreelanceGate::Contract => (SkipReason::Scope, "Skip, not freelance"),
-        FreelanceGate::DayRate => (SkipReason::Rate, "Skip, rate too low"),
-        FreelanceGate::Commute => (SkipReason::Location, "Skip, too far"),
+        FreelanceGate::Contract => ("Scope", "Skip, not freelance"),
+        FreelanceGate::DayRate => ("Rate", "Skip, rate too low"),
+        FreelanceGate::Commute => ("Location", "Skip, too far"),
     })
 }
 
@@ -642,8 +642,11 @@ mod tests {
         let rate = JobView { freelance: gates(Gate::Pass, Gate::Fail, Gate::Pass), ..job("Rate") };
         let contract = JobView { freelance: gates(Gate::Fail, Gate::Fail, Gate::Pass), ..job("Contract") };
         let dealt = cards(&shortlist(vec![rate, contract]), vec![], ArchiveContents::default(), &[]);
-        assert_eq!(dealt[0].primary.as_ref().unwrap().effect, Effect::Skip(SkipReason::Rate));
-        assert_eq!(dealt[1].primary.as_ref().unwrap().effect, Effect::Skip(SkipReason::Scope));
+        assert_eq!(dealt[0].primary.as_ref().unwrap().effect, Effect::Skip("Rate"));
+        assert_eq!(dealt[1].primary.as_ref().unwrap().effect, Effect::Skip("Scope"));
+        let far = JobView { freelance: gates(Gate::Pass, Gate::Pass, Gate::Fail), ..job("Far") };
+        let far = &cards(&shortlist(vec![far]), vec![], ArchiveContents::default(), &[])[0];
+        assert_eq!(far.primary.as_ref().unwrap().effect, Effect::Skip("Location"));
         assert_eq!(dealt[0].others[0].label, "Draft anyway…");
     }
 

@@ -14,11 +14,11 @@ use jobdesk::ui_kit::{
     danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state,
     enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane,
     lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
-    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry, score,
-    search_field, secret_field, segmented, select_row, setting_check, setting_check_amount, setting_radio, setting_row, setting_section, settings_page,
-    shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag,
-    stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line, status_waits, step_line, strong, table_head, tag, tally,
-    tally_strip, toggle_group, turn_band, undo_row,
+    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry,
+    ruled_note_with_command, score, search_field, secret_field, segmented, select_row, setting_check, setting_check_amount, setting_check_number,
+    setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button,
+    small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
+    status_waits, step_line, strong, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, undo_row,
 };
 
 /// The width of a side slip in the in-tray's rail.
@@ -923,7 +923,7 @@ fn usage_sheet(theme: Theme, name: &str) {
 }
 
 /// The settings sheet's size: room for every row and the open popover under the last one.
-const SETTINGS_SHEET: [f32; 2] = [1000.0, 1405.0];
+const SETTINGS_SHEET: [f32; 2] = [1000.0, 1730.0];
 const CONFIRM_WIDTH: f32 = 340.0;
 /// An obviously fake key for the secret fields.
 const FAKE_KEY: &str = "sk-ant-fake-gallery-key-0000";
@@ -939,6 +939,8 @@ const CLEAR: Confirm = Confirm {
 /// The Settings controls that pick, hold an amount or ask first, on paper as Settings shows them. `confirm` is the
 /// popover's state: `Some(true)` opens it with Keep them about to take the focus.
 fn settings_widgets(ui: &mut Ui, confirm: &mut Option<bool>) {
+    let note = "Jobs checks postings against these. The floor and the commute tiers come from your profile, and Jobdesk never changes them.";
+    ruled_note_with_command(ui, note, "/setup --section goals", &mut true, "");
     setting_section(ui, "Tool permissions", Some("What happens when Claude wants to read, write or run something during a task."), "");
     let allow = "Tasks never stop for a permission. Each tool Claude used is listed in the task's activity, under its step.";
     setting_radio(ui, true, "Allow and note in the activity", allow, "");
@@ -951,6 +953,14 @@ fn settings_widgets(ui: &mut Ui, confirm: &mut Option<bool>) {
     let cap = "Once this month's tasks cost that much, Run in the launcher is disabled until the 1st and says why. A task that is running finishes.";
     setting_check_amount(ui, &mut true, &mut "60.00".to_owned(), "Stop at", "a month", cap, "");
     setting_check_amount(ui, &mut false, &mut String::new(), "Stop at", "a month", "Off, an empty amount.", "month");
+    setting_check_number(ui, &mut true, &mut "60".to_owned(), "Hide jobs scored under", "", "A whole number, with no unit.", 3, "");
+    setting_section(ui, "Text fields", None, "");
+    setting_row(ui, "Empty", "The hint, and at most 40 characters.", "", |ui| {
+        text_field(ui, &mut String::new(), 280.0, "A new reason", 40);
+    });
+    setting_row(ui, "Filled", "A reason typed in.", "", |ui| {
+        text_field(ui, &mut "Agency, not the client".to_owned(), 280.0, "A new reason", 40);
+    });
     setting_section(ui, "Amount fields", None, "");
     setting_row(ui, "Spend at most, USD", "Empty starts each command at its suggested budget.", "", |ui| {
         amount_field(ui, &mut String::new(), 120.0, "Suggested");
@@ -1079,8 +1089,9 @@ fn every_clickable_widget_shows_the_hand() {
         .with_context_setup(install_look)
         .build_ui(move |ui| settings_page_of(ui, &mut confirm));
     harness.run();
-    // Two radios, two cap checkboxes, three Show toggles, Clear tray decisions, and the popover's Keep them and Clear decisions.
-    assert_eq!(hands(&mut harness), 10, "the settings sheet's clickable widgets");
+    // Hide the command, two radios, two cap checkboxes and the score's, three Show toggles, Clear tray decisions, and the
+    // popover's Keep them and Clear decisions.
+    assert_eq!(hands(&mut harness), 12, "the settings sheet's clickable widgets");
     harness.get_by_label("Ask a second reader").hover();
     harness.step();
     assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default, "a disabled radio keeps the arrow");

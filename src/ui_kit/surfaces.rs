@@ -11,8 +11,8 @@ use crate::shared_kernel::placeholders::Piece;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
-    amount_in, danger_button, dialog_open, enabled_when, interactive, interactive_part, interactive_row, paint_pick_edge, pick_look, plain_shortcut_button,
-    pointer_over, pressed, primary_button, reveal_command,
+    danger_button, dialog_open, enabled_when, field_in, interactive, interactive_part, interactive_row, link, paint_pick_edge, pick_look,
+    plain_shortcut_button, pointer_over, pressed, primary_button, reveal_command,
 };
 use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
@@ -23,14 +23,14 @@ use crate::ui_kit::text::{
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
     CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
-    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_PADDING, FIGURE_BAR_MARGIN, FIGURE_SKELETON,
-    FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING, HEAD_TITLE_MIN,
-    HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, NODE_ARROW, NODE_GAP, NODE_PADDING, NODE_TALLY_HEIGHT,
-    NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL,
-    RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP,
-    SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING,
-    SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH, TABLE_CELL_PADDING,
-    TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
+    EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_INLINE_NUMBER, FIELD_PADDING, FIGURE_BAR_MARGIN,
+    FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING,
+    HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, NODE_ARROW, NODE_GAP, NODE_PADDING,
+    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD,
+    RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
+    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
+    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
+    TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
 fn margin((x, y): (i8, i8)) -> Margin {
@@ -505,51 +505,129 @@ pub fn later_pick_row(ui: &mut Ui, spoken: &str, why: &str, add: impl FnOnce(&mu
 /// The page takes all the height it has. Unlike `page_head`'s, `actions` runs once, so it may change state and give ids.
 pub fn settings_page<A, B>(ui: &mut Ui, title: &str, lead: &str, actions: impl FnOnce(&mut Ui) -> A, body: impl FnOnce(&mut Ui) -> B) -> (A, B) {
     paper(ui, false, |ui| {
-        let (x, top, bottom) = SETTINGS_HEAD_PADDING;
-        let acted = Frame::new()
-            .inner_margin(Margin { left: x, right: x, top, bottom })
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let full = ui.available_width();
-                let p = Palette::of(ui);
-                // The actions go in first, at the right, so the words take the room they leave.
-                // They end on the bottom of the words as measured on the frame before.
-                let kept = KeptHeight::read(ui, ui.scope_id().with("settings_page_head"), BUTTON_HEIGHT);
-                let row = Rect::from_min_size(ui.cursor().min, vec2(full, (kept.height - SETTINGS_ACTIONS_LIFT).max(0.0)));
-                let mut side = ui.new_child(UiBuilder::new().id_salt("settings_page_actions").max_rect(row).layout(Layout::right_to_left(Align::Max)));
-                side.spacing_mut().item_spacing.x = BUTTON_GAP;
-                let acted = actions(&mut side);
-                let used = side.min_rect();
-                let room = if used.width() > 0.0 { full - used.width() - HEAD_GAP.0 } else { full };
-                let title_line = line(ui, title, Type::H1, p.text, room);
-                let lead_lines = wrapped(ui, lead, Type::TAKE, p.muted, room.min(DOC_MEASURE));
-                let words = ui
-                    .vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
-                        let shown = add_galley(ui, title_line.clone());
-                        cut_hover(shown, &title_line, title);
-                        add_galley(ui, lead_lines);
-                    })
-                    .response
-                    .rect;
-                kept.keep(ui, words.height().max(used.height() + SETTINGS_ACTIONS_LIFT), "a settings head changed height");
-                ui.expand_to_include_rect(used);
-                acted
-            })
-            .inner;
+        let acted = settings_head(ui, title, lead, actions);
         divider(ui);
-        let (x, top, bottom) = SETTINGS_BODY_PADDING;
-        let shown = egui::ScrollArea::vertical().id_salt("settings_page_body").auto_shrink([false, false]).show(ui, |ui| {
-            Frame::new()
-                .inner_margin(Margin { left: x, right: x, top, bottom })
-                .show(ui, |ui| {
+        let shown = egui::ScrollArea::vertical().id_salt("settings_page_body").auto_shrink([false, false]).show(ui, |ui| settings_body(ui, body));
+        (acted, shown.inner)
+    })
+}
+
+/// A `settings_page` whose values come from the job search folder: under its body, a one-line strip pinned at the bottom
+/// under a hairline names the files, as Profile's foot does. `foot` lays out left to right with no gap of its own, so
+/// its words carry their own spaces.
+pub fn settings_page_with_foot<A, B>(
+    ui: &mut Ui,
+    title: &str,
+    lead: &str,
+    actions: impl FnOnce(&mut Ui) -> A,
+    body: impl FnOnce(&mut Ui) -> B,
+    foot: impl FnOnce(&mut Ui),
+) -> (A, B) {
+    paper(ui, false, |ui| {
+        let acted = settings_head(ui, title, lead, actions);
+        divider(ui);
+        let shown = footed(
+            ui,
+            true,
+            false,
+            |ui| settings_body(ui, body),
+            |ui| {
+                divider(ui);
+                Frame::new().inner_margin(margin(DEAL_FOOT_PADDING)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    body(ui)
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        foot(ui);
+                    });
+                });
+            },
+        );
+        (acted, shown)
+    })
+}
+
+/// A settings page's head: the title over the lead, and the actions at the right.
+fn settings_head<A>(ui: &mut Ui, title: &str, lead: &str, actions: impl FnOnce(&mut Ui) -> A) -> A {
+    let (x, top, bottom) = SETTINGS_HEAD_PADDING;
+    Frame::new()
+        .inner_margin(Margin { left: x, right: x, top, bottom })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let full = ui.available_width();
+            let p = Palette::of(ui);
+            // The actions go in first, at the right, so the words take the room they leave.
+            // They end on the bottom of the words as measured on the frame before.
+            let kept = KeptHeight::read(ui, ui.scope_id().with("settings_page_head"), BUTTON_HEIGHT);
+            let row = Rect::from_min_size(ui.cursor().min, vec2(full, (kept.height - SETTINGS_ACTIONS_LIFT).max(0.0)));
+            let mut side = ui.new_child(UiBuilder::new().id_salt("settings_page_actions").max_rect(row).layout(Layout::right_to_left(Align::Max)));
+            side.spacing_mut().item_spacing.x = BUTTON_GAP;
+            let acted = actions(&mut side);
+            let used = side.min_rect();
+            let room = if used.width() > 0.0 { full - used.width() - HEAD_GAP.0 } else { full };
+            let title_line = line(ui, title, Type::H1, p.text, room);
+            let lead_lines = wrapped(ui, lead, Type::TAKE, p.muted, room.min(DOC_MEASURE));
+            let words = ui
+                .vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = ITEM_GAP - 2.0;
+                    let shown = add_galley(ui, title_line.clone());
+                    cut_hover(shown, &title_line, title);
+                    add_galley(ui, lead_lines);
+                })
+                .response
+                .rect;
+            kept.keep(ui, words.height().max(used.height() + SETTINGS_ACTIONS_LIFT), "a settings head changed height");
+            ui.expand_to_include_rect(used);
+            acted
+        })
+        .inner
+}
+
+/// A settings page's body, padded, inside its scroll area.
+fn settings_body<B>(ui: &mut Ui, body: impl FnOnce(&mut Ui) -> B) -> B {
+    let (x, top, bottom) = SETTINGS_BODY_PADDING;
+    Frame::new()
+        .inner_margin(Margin { left: x, right: x, top, bottom })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            body(ui)
+        })
+        .inner
+}
+
+/// A note at the top of a Settings page, in a `ruled_panel`: `text`, with "Show the command" at its right, which opens
+/// `line` under the words in a code box, as `reveal_command` does. Hits of the search `query` are highlighted. The caller
+/// holds `open`. Returns the link's response.
+pub fn ruled_note_with_command(ui: &mut Ui, text: &str, line: &str, open: &mut bool, query: &str) -> Response {
+    let (x, y) = NOTE_PADDING;
+    ruled_panel(ui, (x, y, y), |ui| {
+        ui.spacing_mut().item_spacing.y = ITEM_GAP;
+        let shown = ui
+            .horizontal(|ui| {
+                // The link goes in first, at the right, so the words wrap in the room it leaves.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let label = if *open { "Hide the command" } else { "Show the command" };
+                    let shown = link(ui, label);
+                    ui.add_space(ROW_ITEM_GAP);
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.set_max_width(ui.available_width().min(DOC_MEASURE));
+                        let galley = wrapped(ui, text, Type::BODY, Palette::of(ui).text, ui.available_width());
+                        add_marked(ui, galley, text, query);
+                    });
+                    shown
                 })
                 .inner
-        });
-        (acted, shown.inner)
+            })
+            .inner;
+        if shown.clicked() {
+            *open = !*open;
+        }
+        if *open {
+            code_box(ui, |ui| {
+                add_text(ui, line, Type::MONO, Ink::Text);
+            });
+        }
+        shown
     })
 }
 
@@ -761,6 +839,43 @@ pub fn setting_radio(ui: &mut Ui, on: bool, label: &str, help: &str, query: &str
 /// sentence, and the field named by `before`. A hairline sits above. Hits of the search `query` are highlighted.
 /// Returns the checkbox's response, then the field's.
 pub fn setting_check_amount(ui: &mut Ui, on: &mut bool, text: &mut String, before: &str, after: &str, help: &str, query: &str) -> (Response, Response) {
+    let field = InlineField { unit: Some("$"), size: FIELD_INLINE, limit: None };
+    setting_check_field(ui, on, text, [before, after, help], field, query)
+}
+
+/// `setting_check_amount` with a whole number in place of an amount, such as "Hide jobs scored under [60]": no unit
+/// before it, a narrower field, and at most `digits` characters. A screen reader hears the checkbox named by the whole
+/// sentence, the number included, and the field named by `before`. A blank `after` leaves the field last on the line.
+#[allow(clippy::too_many_arguments)]
+pub fn setting_check_number(
+    ui: &mut Ui,
+    on: &mut bool,
+    text: &mut String,
+    before: &str,
+    after: &str,
+    help: &str,
+    digits: usize,
+    query: &str,
+) -> (Response, Response) {
+    let field = InlineField { unit: None, size: FIELD_INLINE_NUMBER, limit: Some(digits) };
+    setting_check_field(ui, on, text, [before, after, help], field, query)
+}
+
+/// The field set in a checkbox's sentence: the unit before what it holds, its size, and how many characters it takes.
+struct InlineField<'a> {
+    unit: Option<&'a str>,
+    size: (f32, f32),
+    limit: Option<usize>,
+}
+
+fn setting_check_field(
+    ui: &mut Ui,
+    on: &mut bool,
+    text: &mut String,
+    [before, after, help]: [&str; 3],
+    inline: InlineField,
+    query: &str,
+) -> (Response, Response) {
     let enabled = ui.is_enabled();
     let (ink, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
     let id = ui.next_auto_id();
@@ -772,7 +887,7 @@ pub fn setting_check_amount(ui: &mut Ui, on: &mut bool, text: &mut String, befor
         let top = origin.y + SETTING_ROW_PADDING;
         let lead = CHECK_BOX + SETTING_CHECK_GAP;
         let room = (full - lead).clamp(0.0, DOC_MEASURE);
-        let (field_width, field_height) = FIELD_INLINE;
+        let (field_width, field_height) = inline.size;
         let before_line = line(ui, before, Type::STRONG, ink, room);
         let after_line = line(ui, after, Type::STRONG, ink, room);
         let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
@@ -800,7 +915,8 @@ pub fn setting_check_amount(ui: &mut Ui, on: &mut bool, text: &mut String, befor
         }
         let checked = *on;
         let amount = text.trim();
-        let spoken = if amount.is_empty() { format!("{before} {after}") } else { format!("{before} ${amount} {after}") };
+        let amount = if amount.is_empty() { String::new() } else { format!("{}{amount}", inline.unit.unwrap_or_default()) };
+        let spoken = [before, amount.as_str(), after].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ");
         // Told to the named part alone, so a screen reader's bounds stay off the field.
         named.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, checked, &spoken));
         if !help.is_empty() {
@@ -816,7 +932,7 @@ pub fn setting_check_amount(ui: &mut Ui, on: &mut bool, text: &mut String, befor
         if let Some(help_lines) = help_lines {
             paint_marked(ui, pos2(left, top + first_line + SETTING_HELP_GAP), help_lines, help, query);
         }
-        let field = amount_in(ui, id.with("setting_amount"), field, text, "");
+        let field = field_in(ui, id.with("setting_amount"), field, text, "", inline.unit, inline.limit);
         ui.ctx().accesskit_node_builder(field.id, |node| node.set_label(before));
         let height = words.max(CHECK_BOX).max(SETTING_ROW_MIN - SETTING_ROW_PADDING * 2.0);
         ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover());

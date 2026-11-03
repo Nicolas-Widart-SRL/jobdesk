@@ -3,8 +3,8 @@ use chrono::NaiveDate;
 use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
-    CapReached, CommandDefault, Dollars, KeyTest, Page, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen,
-    StartValues, TextSize, ThemeChoice, drawn_index,
+    CapReached, ComingUp, CommandDefault, Dollars, Drawn, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal, Retention,
+    RunDefaults, SpendCap, StartScreen, StartValues, TextSize, ThemeChoice, drawn_index,
 };
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
@@ -128,6 +128,52 @@ impl Settings {
 
     pub fn set_key_test(&mut self, key_test: Option<KeyTest>) {
         self.change(|preferences| &mut preferences.key_test, key_test);
+    }
+
+    pub fn set_coming_up(&mut self, coming_up: ComingUp) {
+        self.change(|preferences| &mut preferences.queue.coming_up, coming_up);
+    }
+
+    pub fn set_later(&mut self, later: LaterLasts) {
+        self.change(|preferences| &mut preferences.queue.later, later);
+    }
+
+    /// Adds a reason at the end of the list. A refused reason changes and saves nothing.
+    pub fn add_skip_reason(&mut self, text: &str) -> Result<(), ReasonRefusal> {
+        self.preferences.queue.skip_reasons.add(text)?;
+        self.save();
+        Ok(())
+    }
+
+    pub fn remove_skip_reason(&mut self, text: &str) {
+        if self.preferences.queue.skip_reasons.remove(text) {
+            self.save();
+        }
+    }
+
+    pub fn set_hide_below_floor(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.below_floor, hide);
+    }
+
+    pub fn set_hide_too_far(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.too_far, hide);
+    }
+
+    pub fn set_hide_language(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.language, hide);
+    }
+
+    pub fn set_hide_flagged(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.flagged, hide);
+    }
+
+    pub fn set_hide_under_score(&mut self, hide: bool) {
+        self.change(|preferences| &mut preferences.jobs_view.under_score, hide);
+    }
+
+    /// The score the "under" filter hides jobs below, kept between 0 and 100.
+    pub fn set_score_floor(&mut self, score: u8) {
+        self.change(|preferences| &mut preferences.jobs_view.score, score.min(100));
     }
 
     /// Saves only a changed value. The new value stays in use when the save fails.
@@ -279,15 +325,15 @@ pub struct SearchHits {
 }
 
 /// `None` for a blank query. Case does not matter, and every line the page draws counts once.
-/// `folder_read` says whether the folder is open and read, which decides what Runtime status draws.
-pub fn search(query: &str, folder_read: bool) -> Option<SearchHits> {
+/// `drawn` says what the pages draw as things stand, such as Runtime status before the folder is read.
+pub fn search(query: &str, drawn: Drawn) -> Option<SearchHits> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
         return None;
     }
     let pages: Vec<(Page, usize)> = Page::ALL
         .iter()
-        .map(|&page| (page, drawn_index(page, folder_read).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
+        .map(|&page| (page, drawn_index(page, drawn).iter().filter(|line| line.to_lowercase().contains(&needle)).count()))
         .filter(|&(_, count)| count > 0)
         .collect();
     let total = pages.iter().map(|&(_, count)| count).sum();
@@ -308,6 +354,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::settings::domain::{PartDrawn, TermsDrawn};
 
     #[derive(Default)]
     struct Shared {
@@ -407,6 +454,80 @@ mod tests {
     }
 
     #[test]
+    fn the_queue_and_jobs_view_setters_save_once_and_only_on_a_change() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        settings.set_coming_up(ComingUp::TwoWeeks);
+        settings.set_later(LaterLasts::Tomorrow);
+        settings.set_hide_below_floor(false);
+        settings.set_hide_too_far(false);
+        settings.set_hide_language(false);
+        settings.set_hide_flagged(false);
+        settings.set_hide_under_score(false);
+        settings.set_score_floor(60);
+        assert!(shared.saved.borrow().is_empty(), "the defaults again change nothing");
+
+        settings.set_coming_up(ComingUp::Month);
+        settings.set_coming_up(ComingUp::Month);
+        settings.set_later(LaterLasts::UntilMonday);
+        settings.set_later(LaterLasts::UntilMonday);
+        settings.set_hide_below_floor(true);
+        settings.set_hide_below_floor(true);
+        settings.set_hide_too_far(true);
+        settings.set_hide_too_far(true);
+        settings.set_hide_language(true);
+        settings.set_hide_language(true);
+        settings.set_hide_flagged(true);
+        settings.set_hide_flagged(true);
+        settings.set_hide_under_score(true);
+        settings.set_hide_under_score(true);
+        settings.set_score_floor(75);
+        settings.set_score_floor(75);
+        assert_eq!(shared.saved.borrow().len(), 8);
+        let saved = shared.saved.borrow();
+        let last = saved.last().unwrap();
+        assert_eq!((last.queue.coming_up, last.queue.later), (ComingUp::Month, LaterLasts::UntilMonday));
+        let view = last.jobs_view;
+        assert_eq!((view.below_floor, view.too_far, view.language, view.flagged, view.under_score, view.score), (true, true, true, true, true, 75));
+    }
+
+    #[test]
+    fn the_score_floor_stays_between_0_and_100() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        settings.set_score_floor(250);
+        assert_eq!(settings.preferences().jobs_view.score, 100);
+        settings.set_score_floor(100);
+        settings.set_score_floor(0);
+        assert_eq!(settings.preferences().jobs_view.score, 0);
+        assert_eq!(shared.saved.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_skip_reason_saves_once_and_a_refused_one_saves_nothing() {
+        let shared = Rc::new(Shared::default());
+        let mut settings = settings(&shared);
+        assert_eq!(settings.add_skip_reason("  Culture "), Ok(()));
+        assert_eq!(shared.saved.borrow().len(), 1);
+        assert_eq!(settings.add_skip_reason("culture"), Err(ReasonRefusal::Taken));
+        assert_eq!(settings.add_skip_reason("   "), Err(ReasonRefusal::Empty));
+        assert_eq!(settings.add_skip_reason(&"x".repeat(41)), Err(ReasonRefusal::TooLong));
+        assert_eq!(shared.saved.borrow().len(), 1);
+        settings.remove_skip_reason("Nothing like it");
+        assert_eq!(shared.saved.borrow().len(), 1);
+        settings.remove_skip_reason("rate");
+        assert_eq!(shared.saved.borrow().len(), 2);
+        assert_eq!(settings.preferences().queue.skip_reasons.list(), ["Scope", "Domain", "Location", "Culture"]);
+        assert_eq!(shared.saved.borrow()[1].queue.skip_reasons.list(), settings.preferences().queue.skip_reasons.list());
+        for n in 0..4 {
+            settings.add_skip_reason(&format!("Extra {n}")).unwrap();
+        }
+        let saves = shared.saved.borrow().len();
+        assert_eq!(settings.add_skip_reason("One more"), Err(ReasonRefusal::Full));
+        assert_eq!(shared.saved.borrow().len(), saves);
+    }
+
+    #[test]
     fn every_setter_saves_its_value() {
         let shared = Rc::new(Shared::default());
         let mut settings = settings(&shared);
@@ -455,10 +576,10 @@ mod tests {
 
     #[test]
     fn a_search_counts_lines_per_page() {
-        let hits = search("FOLDER", true).unwrap();
+        let hits = search("FOLDER", Drawn::folder(true)).unwrap();
         assert_eq!(hits.pages, vec![(Page::General, 3), (Page::Defaults, 1), (Page::Permissions, 2), (Page::Runtime, 1), (Page::Data, 4)]);
         assert_eq!(hits.total, 11);
-        let spend = search("spend", true).unwrap();
+        let spend = search("spend", Drawn::folder(true)).unwrap();
         assert_eq!(spend.pages, vec![(Page::Defaults, 1)]);
     }
 
@@ -489,23 +610,55 @@ mod tests {
 
     #[test]
     fn without_a_folder_runtime_status_matches_only_what_it_draws() {
-        assert_eq!(search("sync", true).unwrap().pages, vec![(Page::Runtime, 1)]);
-        assert!(search("sync", false).unwrap().pages.is_empty());
-        assert_eq!(search("environment", false).unwrap().pages, vec![(Page::Runtime, 1)]);
+        assert_eq!(search("sync", Drawn::folder(true)).unwrap().pages, vec![(Page::Runtime, 1)]);
+        assert!(search("sync", Drawn::folder(false)).unwrap().pages.is_empty());
+        assert_eq!(search("environment", Drawn::folder(false)).unwrap().pages, vec![(Page::Runtime, 1)]);
+    }
+
+    #[test]
+    fn a_search_finds_the_job_search_pages() {
+        assert_eq!(search("skip reasons", Drawn::folder(true)).unwrap().pages, vec![(Page::Queue, 1)], "Clear tray decisions leaves the list of reasons alone");
+        assert_eq!(search("past skips", Drawn::folder(true)).unwrap().pages, vec![(Page::Queue, 1), (Page::Data, 1)]);
+        assert_eq!(search("Hide jobs scored under", Drawn::folder(true)).unwrap().pages, vec![(Page::JobsView, 1)]);
+        assert_eq!(search("commute", Drawn::folder(true)).unwrap().pages, vec![(Page::Terms, 2), (Page::JobsView, 1)]);
+        assert_eq!(search("commute", Drawn::folder(false)).unwrap().pages, vec![(Page::JobsView, 1)], "without a folder, Your terms draws no rows");
+    }
+
+    fn terms_drawn(rate: PartDrawn, commute: PartDrawn) -> Drawn {
+        Drawn { folder_read: true, terms: TermsDrawn { rate, commute } }
+    }
+
+    #[test]
+    fn a_search_skips_the_terms_a_failed_file_hides() {
+        assert!(search("contract", terms_drawn(PartDrawn::Hidden, PartDrawn::Stated)).unwrap().pages.is_empty(), "the profile failed");
+        assert_eq!(search("commute", terms_drawn(PartDrawn::Stated, PartDrawn::Hidden)).unwrap().pages, vec![(Page::JobsView, 1)], "the evaluation failed");
+        assert_eq!(search("contract", terms_drawn(PartDrawn::Stated, PartDrawn::Hidden)).unwrap().pages, vec![(Page::Terms, 3)]);
+    }
+
+    #[test]
+    fn a_search_finds_the_fixed_terms_lines_only_where_the_page_draws_them() {
+        let pages = |query, drawn| search(query, drawn).unwrap().pages;
+        assert_eq!(pages("lower day rate", Drawn::folder(true)), vec![(Page::Terms, 1)]);
+        assert!(pages("lower day rate", terms_drawn(PartDrawn::NotStated, PartDrawn::Stated)).is_empty(), "no floor, so its help is not drawn");
+        assert!(pages("reads Unclear", Drawn::folder(true)).is_empty());
+        assert_eq!(pages("reads Unclear", terms_drawn(PartDrawn::NotStated, PartDrawn::Stated)), vec![(Page::Terms, 1)]);
+        assert_eq!(pages("reads Unclear", terms_drawn(PartDrawn::NotStated, PartDrawn::NotStated)), vec![(Page::Terms, 2)]);
+        assert_eq!(pages("commute tiers", terms_drawn(PartDrawn::Stated, PartDrawn::NotStated)), vec![(Page::Terms, 2)], "the note and the row");
+        assert_eq!(pages("commute tiers", Drawn::folder(true)), vec![(Page::Terms, 1)], "the note alone");
     }
 
     #[test]
     fn a_blank_search_is_none_and_a_miss_has_no_pages() {
-        assert_eq!(search("  ", true), None);
-        assert_eq!(search("", true), None);
-        let miss = search("zzz", true).unwrap();
+        assert_eq!(search("  ", Drawn::folder(true)), None);
+        assert_eq!(search("", Drawn::folder(true)), None);
+        let miss = search("zzz", Drawn::folder(true)).unwrap();
         assert!(miss.pages.is_empty());
         assert_eq!(miss.total, 0);
     }
 
     #[test]
     fn a_search_trims_the_query() {
-        assert_eq!(search("  motion ", true).unwrap().pages, vec![(Page::Appearance, 2)]);
+        assert_eq!(search("  motion ", Drawn::folder(true)).unwrap().pages, vec![(Page::Appearance, 2)]);
     }
 
     fn spec(name: &str) -> &'static CommandSpec {

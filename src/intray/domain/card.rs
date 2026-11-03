@@ -1,19 +1,7 @@
 use chrono::NaiveDate;
 
-use crate::intray::domain::SkipReason;
 use crate::shared_kernel::dates::days_from;
 use crate::shared_kernel::{CheckState, WebUrl};
-
-/// How far ahead a date counts as a deadline, the span of Coming up.
-pub const HORIZON_DAYS: i64 = 14;
-
-/// The horizon as a heading, "2 weeks", and in a sentence, "two weeks".
-/// Another span will not compile until it has words here.
-pub const HORIZON_WORDS: (&str, &str) = match HORIZON_DAYS {
-    14 => ("2 weeks", "two weeks"),
-    7 => ("1 week", "one week"),
-    _ => panic!("name HORIZON_DAYS in words"),
-};
 
 /// Declared in the order cards of one tier and date are dealt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,7 +63,8 @@ pub enum Effect {
     Run(String),
     Posting(WebUrl),
     Copy(String),
-    Skip(SkipReason),
+    /// Skips with this reason, spelled as the default reasons list spells it.
+    Skip(&'static str),
     Keep,
 }
 
@@ -148,18 +137,19 @@ impl Card {
         self.due.as_ref().map(|due| days_from(today, due.on))
     }
 
-    fn tier(&self, today: NaiveDate) -> Tier {
+    /// `horizon` is how many days ahead a date counts as a deadline, the span of Coming up.
+    fn tier(&self, today: NaiveDate, horizon: i64) -> Tier {
         if self.kind.pauses_a_run() {
             Tier::PausedRun
-        } else if self.days_left(today).is_some_and(|days| days < HORIZON_DAYS) {
+        } else if self.days_left(today).is_some_and(|days| days < horizon) {
             Tier::Deadline
         } else {
             Tier::Rest
         }
     }
 
-    pub fn is_on_horizon(&self, today: NaiveDate) -> bool {
-        self.days_left(today).is_some_and(|days| (0..HORIZON_DAYS).contains(&days))
+    pub fn is_on_horizon(&self, today: NaiveDate, horizon: i64) -> bool {
+        self.days_left(today).is_some_and(|days| (0..horizon).contains(&days))
     }
 
     pub fn pauses_a_run(&self) -> bool {
@@ -168,9 +158,10 @@ impl Card {
 }
 
 /// Paused runs, then deadlines by date, then the rest. A passed deadline sorts first of all dates.
-pub fn rank(cards: &mut [Card], today: NaiveDate) {
+/// A date counts as a deadline when it falls within `horizon` days.
+pub fn rank(cards: &mut [Card], today: NaiveDate, horizon: i64) {
     cards.sort_by_key(|card| {
-        let tier = card.tier(today);
+        let tier = card.tier(today, horizon);
         let date = card.due.as_ref().filter(|_| tier == Tier::Deadline).map(|due| due.on);
         (tier, date, card.kind, card.weight)
     });
@@ -218,7 +209,7 @@ mod tests {
             card("permission", CardKind::Permission, None),
         ];
 
-        rank(&mut cards, today());
+        rank(&mut cards, today(), 14);
 
         let keys: Vec<_> = cards.iter().map(|card| card.key.as_str()).collect();
         assert_eq!(keys, ["permission", "question", "send sooner", "triage soon", "follow up", "triage far", "close"]);
@@ -227,27 +218,25 @@ mod tests {
     #[test]
     fn weight_orders_one_kind() {
         let mut cards = vec![Card { weight: -70, ..card("second", CardKind::Triage, None) }, Card { weight: -80, ..card("first", CardKind::Triage, None) }];
-        rank(&mut cards, today());
+        rank(&mut cards, today(), 14);
         assert_eq!(cards[0].key, "first");
     }
 
     #[test]
-    fn the_horizon_covers_fourteen_days_from_today() {
-        assert!(card("a", CardKind::Send, Some(0)).is_on_horizon(today()));
-        assert!(card("a", CardKind::Send, Some(13)).is_on_horizon(today()));
-        assert!(!card("a", CardKind::Send, Some(14)).is_on_horizon(today()));
-    }
-
-    #[test]
-    fn the_horizon_reads_in_weeks() {
-        assert_eq!(HORIZON_WORDS, ("2 weeks", "two weeks"));
+    fn the_horizon_covers_its_days_from_today() {
+        assert!(card("a", CardKind::Send, Some(0)).is_on_horizon(today(), 14));
+        assert!(card("a", CardKind::Send, Some(13)).is_on_horizon(today(), 14));
+        assert!(!card("a", CardKind::Send, Some(14)).is_on_horizon(today(), 14));
+        assert!(card("a", CardKind::Send, Some(6)).is_on_horizon(today(), 7));
+        assert!(!card("a", CardKind::Send, Some(7)).is_on_horizon(today(), 7));
+        assert!(card("a", CardKind::Send, Some(29)).is_on_horizon(today(), 30));
     }
 
     #[test]
     fn a_deadline_ranks_first_only_inside_the_horizon() {
         let mut cards =
             vec![card("fourteen", CardKind::Send, Some(14)), card("follow up", CardKind::FollowUp, None), card("thirteen", CardKind::Triage, Some(13))];
-        rank(&mut cards, today());
+        rank(&mut cards, today(), 14);
         let keys: Vec<_> = cards.iter().map(|card| card.key.as_str()).collect();
         assert_eq!(keys, ["thirteen", "fourteen", "follow up"], "a date 14 days out ranks with the rest, by kind");
     }

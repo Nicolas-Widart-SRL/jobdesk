@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value, json};
 
 use crate::settings::domain::{
-    CommandDefault, Dollars, KeyTest, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SpendCap, StartScreen, TextSize, ThemeChoice,
+    ComingUp, CommandDefault, Dollars, JobFilters, KeyTest, LaterLasts, PermissionMode, Preferences, PreferencesStore, Retention, RunDefaults, SkipReasons,
+    SpendCap, StartScreen, TextSize, ThemeChoice, TodayQueue,
 };
 use crate::shared_kernel::{LoadError, ModelChoice, SignIn};
 
@@ -16,7 +17,7 @@ const FILE: &str = "settings.json";
 const TEST_TIME: &str = "%Y-%m-%dT%H:%M";
 
 /// Every field may be missing, and an unknown field is ignored, so an older or newer file still loads.
-/// The run defaults, cap, permissions, retention, sign-in and key test arrive as raw JSON and are read leniently below:
+/// The run defaults, cap, permissions, retention, sign-in, key test, queue and Jobs view arrive as raw JSON and are read leniently below:
 /// a field of the wrong shape falls back to its default and never fails the rest of the file.
 #[derive(Serialize, Deserialize)]
 struct Record {
@@ -46,6 +47,24 @@ struct Record {
     sign_in: Value,
     #[serde(default)]
     key_test: Value,
+    #[serde(default)]
+    coming_up_days: Value,
+    #[serde(default)]
+    later: Value,
+    #[serde(default)]
+    skip_reasons: Value,
+    #[serde(default)]
+    hide_below_floor: Value,
+    #[serde(default)]
+    hide_too_far: Value,
+    #[serde(default)]
+    hide_language: Value,
+    #[serde(default)]
+    hide_flagged: Value,
+    #[serde(default)]
+    hide_under_score: Value,
+    #[serde(default)]
+    score_floor: Value,
 }
 
 fn default_text_size() -> i64 {
@@ -131,7 +150,50 @@ fn preferences_from(record: Record) -> Preferences {
         retention: retention_from(&record.keep_run_logs),
         sign_in: sign_in_from(&record.sign_in),
         key_test: key_test_from(&record.key_test),
+        queue: TodayQueue {
+            coming_up: coming_up_from(&record.coming_up_days),
+            later: later_from(&record.later),
+            skip_reasons: skip_reasons_from(&record.skip_reasons),
+        },
+        jobs_view: JobFilters {
+            below_floor: flag_from(&record.hide_below_floor),
+            too_far: flag_from(&record.hide_too_far),
+            language: flag_from(&record.hide_language),
+            flagged: flag_from(&record.hide_flagged),
+            under_score: flag_from(&record.hide_under_score),
+            score: score_from(&record.score_floor),
+        },
     }
+}
+
+/// Only a span the app offers counts, so any other value keeps the two weeks.
+fn coming_up_from(value: &Value) -> ComingUp {
+    value.as_i64().and_then(|days| ComingUp::ALL.into_iter().find(|span| span.days() == days)).unwrap_or_default()
+}
+
+fn later_from(value: &Value) -> LaterLasts {
+    match value.as_str() {
+        Some("3_days") => LaterLasts::ThreeDays,
+        Some("monday") => LaterLasts::UntilMonday,
+        _ => LaterLasts::Tomorrow,
+    }
+}
+
+/// A list goes through the rules of typing. An empty list stays empty, because the user may have taken every reason out.
+/// Anything that is not a list gives the defaults.
+fn skip_reasons_from(value: &Value) -> SkipReasons {
+    match value.as_array() {
+        Some(items) => SkipReasons::from_saved(items.iter().filter_map(Value::as_str)),
+        None => SkipReasons::default(),
+    }
+}
+
+fn flag_from(value: &Value) -> bool {
+    value.as_bool().unwrap_or(false)
+}
+
+fn score_from(value: &Value) -> u8 {
+    value.as_i64().and_then(|score| u8::try_from(score).ok()).filter(|score| *score <= 100).unwrap_or(JobFilters::DEFAULT_SCORE)
 }
 
 fn model_from(value: &Value) -> ModelChoice {
@@ -222,6 +284,19 @@ fn record_from(preferences: &Preferences) -> Record {
             SignIn::ApiKey => "api_key",
         }),
         key_test: preferences.key_test.as_ref().map_or(Value::Null, key_test_value),
+        coming_up_days: Value::from(preferences.queue.coming_up.days()),
+        later: Value::from(match preferences.queue.later {
+            LaterLasts::Tomorrow => "tomorrow",
+            LaterLasts::ThreeDays => "3_days",
+            LaterLasts::UntilMonday => "monday",
+        }),
+        skip_reasons: Value::from(preferences.queue.skip_reasons.list().to_vec()),
+        hide_below_floor: Value::Bool(preferences.jobs_view.below_floor),
+        hide_too_far: Value::Bool(preferences.jobs_view.too_far),
+        hide_language: Value::Bool(preferences.jobs_view.language),
+        hide_flagged: Value::Bool(preferences.jobs_view.flagged),
+        hide_under_score: Value::Bool(preferences.jobs_view.under_score),
+        score_floor: Value::from(preferences.jobs_view.score),
     }
 }
 
@@ -290,6 +365,8 @@ mod tests {
             retention: Retention::Days90,
             sign_in: SignIn::ApiKey,
             key_test: Some(key_test(true, 3, 0.04)),
+            queue: TodayQueue { coming_up: ComingUp::Month, later: LaterLasts::UntilMonday, skip_reasons: SkipReasons::from_saved(["Pay", "Culture"]) },
+            jobs_view: JobFilters { below_floor: true, too_far: true, language: true, flagged: true, under_score: true, score: 82 },
         }
     }
 
@@ -329,7 +406,10 @@ mod tests {
                 "theme": "system", "text_size": 100, "reduce_motion": false, "open_on": "today",
                 "model": "default", "budget_usd": null, "commands": [],
                 "cap_on": false, "cap_usd": null, "permissions": "allow", "keep_run_logs": "forever",
-                "sign_in": "claude", "key_test": null
+                "sign_in": "claude", "key_test": null,
+                "coming_up_days": 14, "later": "tomorrow", "skip_reasons": ["Rate", "Scope", "Domain", "Location"],
+                "hide_below_floor": false, "hide_too_far": false, "hide_language": false, "hide_flagged": false,
+                "hide_under_score": false, "score_floor": 60
             })
         );
         file.save(&every_key_set()).unwrap();
@@ -344,7 +424,10 @@ mod tests {
                     {"command": "/rank", "model": "default", "budget_usd": 3.25},
                 ],
                 "cap_on": true, "cap_usd": 60.0, "permissions": "ask", "keep_run_logs": "90_days",
-                "sign_in": "api_key", "key_test": {"passed": true, "at": "2026-03-09T14:03", "cost_usd": 0.04}
+                "sign_in": "api_key", "key_test": {"passed": true, "at": "2026-03-09T14:03", "cost_usd": 0.04},
+                "coming_up_days": 30, "later": "monday", "skip_reasons": ["Pay", "Culture"],
+                "hide_below_floor": true, "hide_too_far": true, "hide_language": true, "hide_flagged": true,
+                "hide_under_score": true, "score_floor": 82
             })
         );
     }
@@ -556,6 +639,124 @@ mod tests {
         let text = fs::read_to_string(&file.path).unwrap();
         assert!(!text.contains(key.expose()) && !text.contains("sk-ant") && !text.contains("R2kd"), "{text}");
         assert!(text.contains("api_key"));
+    }
+
+    /// A settings file from before the queue and Jobs view keys.
+    const PART_FOUR: &str = r#"{"theme": "dark", "text_size": 110, "reduce_motion": false, "open_on": "jobs",
+        "model": "opus", "budget_usd": 4.5, "commands": [], "cap_on": false, "cap_usd": null,
+        "permissions": "allow", "keep_run_logs": "forever", "sign_in": "claude", "key_test": null}"#;
+
+    #[test]
+    fn a_file_without_the_new_keys_loads_the_defaults() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        write(&file, PART_FOUR);
+        let loaded = file.load().unwrap().unwrap();
+        assert_eq!((loaded.theme, loaded.open_on), (ThemeChoice::Dark, StartScreen::Jobs));
+        assert_eq!(loaded.queue, TodayQueue::default());
+        assert_eq!(loaded.jobs_view, JobFilters::default());
+        assert_eq!(loaded.queue.coming_up, ComingUp::TwoWeeks);
+        assert_eq!(loaded.queue.later, LaterLasts::Tomorrow);
+        assert_eq!(loaded.queue.skip_reasons.list(), ["Rate", "Scope", "Domain", "Location"]);
+        assert_eq!(loaded.jobs_view.score, 60);
+    }
+
+    fn loaded_with(file: &PreferencesFile, fields: &str) -> Preferences {
+        write(file, &format!("{{{fields}}}"));
+        file.load().unwrap().unwrap()
+    }
+
+    #[test]
+    fn the_queue_and_jobs_view_round_trip() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for coming_up in ComingUp::ALL {
+            for later in LaterLasts::ALL {
+                let preferences = Preferences { queue: TodayQueue { coming_up, later, ..TodayQueue::default() }, ..Preferences::default() };
+                file.save(&preferences).unwrap();
+                assert_eq!(file.load().unwrap(), Some(preferences));
+            }
+        }
+        for flags in 0..32u8 {
+            let on = |bit: u8| flags & (1 << bit) != 0;
+            let jobs_view = JobFilters { below_floor: on(0), too_far: on(1), language: on(2), flagged: on(3), under_score: on(4), score: flags * 3 };
+            let preferences = Preferences { jobs_view, ..Preferences::default() };
+            file.save(&preferences).unwrap();
+            assert_eq!(file.load().unwrap(), Some(preferences));
+        }
+        for score in [0, 100] {
+            let preferences = Preferences { jobs_view: JobFilters { score, ..JobFilters::default() }, ..Preferences::default() };
+            file.save(&preferences).unwrap();
+            assert_eq!(file.load().unwrap(), Some(preferences));
+        }
+        let empty = Preferences { queue: TodayQueue { skip_reasons: SkipReasons::from_saved([]), ..TodayQueue::default() }, ..Preferences::default() };
+        file.save(&empty).unwrap();
+        assert_eq!(file.load().unwrap(), Some(empty), "a list the user emptied stays empty");
+    }
+
+    #[test]
+    fn an_unknown_span_or_word_loads_the_defaults() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for coming_up in ["0", "8", "-7", "365", "7.5", r#""14""#, r#""week""#, "null", "true", "[]", "{}"] {
+            let loaded = loaded_with(&file, &format!(r#""coming_up_days": {coming_up}"#));
+            assert_eq!(loaded.queue.coming_up, ComingUp::TwoWeeks, "{coming_up}");
+        }
+        for later in [r#""Tomorrow""#, r#""monday ""#, r#""friday""#, r#""""#, "1", "3", "null", "false", "[]", "{}"] {
+            let loaded = loaded_with(&file, &format!(r#""later": {later}"#));
+            assert_eq!(loaded.queue.later, LaterLasts::Tomorrow, "{later}");
+        }
+        assert_eq!(loaded_with(&file, r#""coming_up_days": 7"#).queue.coming_up, ComingUp::Week);
+        assert_eq!(loaded_with(&file, r#""later": "3_days""#).queue.later, LaterLasts::ThreeDays);
+    }
+
+    #[test]
+    fn wrong_types_for_the_flags_and_the_score_load_the_defaults() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        for flag in [r#""true""#, "1", "0", "null", "[]", "{}", r#""yes""#] {
+            let loaded = loaded_with(
+                &file,
+                &format!(r#""hide_below_floor": {flag}, "hide_too_far": {flag}, "hide_language": {flag}, "hide_flagged": {flag}, "hide_under_score": {flag}"#),
+            );
+            assert_eq!(loaded.jobs_view, JobFilters::default(), "{flag}");
+        }
+        for score in ["-1", "101", "256", "1000", "60.5", r#""80""#, "null", "true", "[]", "{}"] {
+            let loaded = loaded_with(&file, &format!(r#""score_floor": {score}"#));
+            assert_eq!(loaded.jobs_view.score, 60, "{score}");
+        }
+        assert_eq!(loaded_with(&file, r#""score_floor": 0"#).jobs_view.score, 0);
+        assert_eq!(loaded_with(&file, r#""score_floor": 100"#).jobs_view.score, 100);
+        assert!(loaded_with(&file, r#""hide_flagged": true"#).jobs_view.flagged);
+    }
+
+    #[test]
+    fn the_skip_reasons_read_through_the_rules_of_typing() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        let defaults = ["Rate", "Scope", "Domain", "Location"];
+        for field in ["null", r#""Rate""#, "7", "true", "{}", r#"{"0": "Rate"}"#] {
+            let loaded = loaded_with(&file, &format!(r#""skip_reasons": {field}"#));
+            assert_eq!(loaded.queue.skip_reasons.list(), defaults, "{field}");
+        }
+        assert_eq!(loaded_with(&file, "").queue.skip_reasons.list(), defaults, "a missing key");
+        assert!(loaded_with(&file, r#""skip_reasons": []"#).queue.skip_reasons.list().is_empty(), "an empty list stays empty");
+        let loaded = loaded_with(&file, r#""skip_reasons": ["  Pay  low ", "pay low", "", 5, null, "Fit", "FIT", "Gap"]"#);
+        assert_eq!(loaded.queue.skip_reasons.list(), ["Pay low", "Fit", "Gap"]);
+        let long = "z".repeat(41);
+        let loaded = loaded_with(&file, &format!(r#""skip_reasons": ["1","2","3","4","5","6","7","8","9","{long}"]"#));
+        assert_eq!(loaded.queue.skip_reasons.list(), ["1", "2", "3", "4", "5", "6", "7", "8"]);
+    }
+
+    #[test]
+    fn a_bad_queue_key_keeps_the_rest() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = file_in(&folder);
+        write(&file, r#"{"theme": "dark", "coming_up_days": "soon", "later": 3, "skip_reasons": 1, "hide_flagged": true, "score_floor": "high"}"#);
+        assert_eq!(
+            file.load().unwrap(),
+            Some(Preferences { theme: ThemeChoice::Dark, jobs_view: JobFilters { flagged: true, ..JobFilters::default() }, ..Preferences::default() })
+        );
     }
 
     #[test]

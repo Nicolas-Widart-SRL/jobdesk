@@ -10,9 +10,9 @@ use egui::{
 use egui_commonmark::CommonMarkCache;
 
 use crate::runs::application::{
-    Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, Prompt, PromptKind, Question, QuickReply, Run, RunDesk, RunStatus, StepLine,
-    StepState, Sweep, ToolState, action_noun, band, closing_question, cost_note, cost_text, elapsed_text, first_line, notice_text, short_path, step_lines,
-    stop_point, wants_reply,
+    Activity, ActivityKind, Band, BandText, BandTone, ClosingQuestion, Decision, LONG_QUIET_AFTER, Prompt, PromptKind, QUIET_AFTER, Question, QuickReply, Run,
+    RunDesk, RunStatus, StepLine, StepState, Sweep, ToolState, action_noun, band, closing_question, cost_note, cost_text, elapsed_text, first_line,
+    notice_text, short_path, step_lines, stop_point, wants_reply,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
@@ -290,12 +290,20 @@ fn sweep_form(sweep: Sweep) -> SweepForm {
 }
 
 /// When the screen next needs a frame: soon while the sweep moves, else when the first of `ticking`, figures shown
-/// in whole seconds, turns over. None when nothing on screen changes by itself.
-fn next_frame(moving: bool, ticking: &[Duration]) -> Option<Duration> {
+/// in whole seconds, turns over, or at `quiet_turn`. None when nothing on screen changes by itself.
+fn next_frame(moving: bool, ticking: &[Duration], quiet_turn: Option<Duration>) -> Option<Duration> {
     if moving {
         return Some(SWEEP_FRAME);
     }
-    ticking.iter().map(|shown| Duration::from_secs(1) - Duration::from_nanos(u64::from(shown.subsec_nanos()))).min()
+    ticking.iter().map(|shown| Duration::from_secs(1) - Duration::from_nanos(u64::from(shown.subsec_nanos()))).chain(quiet_turn).min()
+}
+
+/// How long until the sweep changes form by itself: at the next quiet step after the last update, 30 then 120 seconds.
+/// None once long quiet, or when the band shows no sweep that follows the quiet. It holds whether or not any figure ticks.
+fn quiet_turn(run: &Run, view: &View) -> Option<Duration> {
+    let follows = matches!(view.band.sweep, Some(Sweep::Working | Sweep::Quiet));
+    let since = view.now.saturating_duration_since(run.last_heard.filter(|_| follows)?);
+    [QUIET_AFTER, LONG_QUIET_AFTER].into_iter().find(|step| since < *step).map(|step| step - since)
 }
 
 /// The figures on screen that count the seconds: Elapsed while the clock runs and Elapsed is on screen, and the time
@@ -370,7 +378,7 @@ impl RunScreen {
         let moving = view.band.sweep.is_some_and(|sweep| sweep_moves(ui.ctx(), sweep_form(sweep)));
         // Narrow, Elapsed shows only in the open popup, which this frame's toggle and click-outside have settled.
         let elapsed_shown = !narrow || self.details;
-        if let Some(after) = next_frame(moving, &ticking(&run, &view, elapsed_shown)) {
+        if let Some(after) = next_frame(moving, &ticking(&run, &view, elapsed_shown), quiet_turn(&run, &view)) {
             ui.ctx().request_repaint_after(after);
         }
         None
@@ -1124,21 +1132,24 @@ mod tests {
 
     #[test]
     fn the_sweep_asks_for_about_thirty_frames_a_second() {
-        assert_eq!(next_frame(true, &[Duration::from_millis(4_250)]), Some(Duration::from_millis(33)));
-        assert_eq!(next_frame(true, &[]), Some(Duration::from_millis(33)));
+        assert_eq!(next_frame(true, &[Duration::from_millis(4_250)], None), Some(Duration::from_millis(33)));
+        assert_eq!(next_frame(true, &[], None), Some(Duration::from_millis(33)));
     }
 
     #[test]
     fn ticking_figures_ask_for_a_frame_on_the_next_whole_second() {
-        assert_eq!(next_frame(false, &[Duration::from_millis(4_250)]), Some(Duration::from_millis(750)));
-        assert_eq!(next_frame(false, &[Duration::from_secs(4)]), Some(Duration::from_secs(1)));
-        assert_eq!(next_frame(false, &[Duration::from_millis(4_250), Duration::from_millis(9_900)]), Some(Duration::from_millis(100)), "the first to turn");
+        assert_eq!(next_frame(false, &[Duration::from_millis(4_250)], None), Some(Duration::from_millis(750)));
+        assert_eq!(next_frame(false, &[Duration::from_secs(4)], None), Some(Duration::from_secs(1)));
+        assert_eq!(
+            next_frame(false, &[Duration::from_millis(4_250), Duration::from_millis(9_900)], None),
+            Some(Duration::from_millis(100)),
+            "the first to turn"
+        );
     }
 
-    #[test]
-    fn elapsed_ticks_only_where_it_is_on_screen() {
+    fn starting_run() -> Run {
         use crate::runs::domain::RunRequest;
-        let mut run = Run::new(&RunRequest {
+        Run::new(&RunRequest {
             run_id: "1".into(),
             line: "/rank".into(),
             model: None,
@@ -1146,7 +1157,12 @@ mod tests {
             started_at: String::new(),
             resume_session: None,
             sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
-        });
+        })
+    }
+
+    #[test]
+    fn elapsed_ticks_only_where_it_is_on_screen() {
+        let mut run = starting_run();
         let start = Instant::now();
         run.elapsed.start(start);
         let view = View::of(&run, start + Duration::from_millis(4_250));
@@ -1159,6 +1175,34 @@ mod tests {
 
     #[test]
     fn nothing_that_moves_asks_for_no_frame() {
-        assert_eq!(next_frame(false, &[]), None);
+        assert_eq!(next_frame(false, &[], None), None);
+    }
+
+    #[test]
+    fn a_still_sweep_asks_for_a_frame_at_each_quiet_step() {
+        let mut run = starting_run();
+        let heard = Instant::now();
+        run.elapsed.start(heard);
+        run.heard(heard);
+        // Narrow with the popup closed and motion reduced: no figure ticks and the sweep stands still.
+        let frame = |after: u64| {
+            let view = View::of(&run, heard + Duration::from_secs(after));
+            assert!(view.band.who_spoken.is_none(), "starting, the band counts no seconds");
+            next_frame(false, &ticking(&run, &view, false), quiet_turn(&run, &view))
+        };
+        assert_eq!(frame(29), Some(Duration::from_secs(1)), "turns quiet at 30s");
+        assert_eq!(frame(31), Some(Duration::from_secs(89)), "turns long quiet at 120s");
+        assert_eq!(frame(121), None, "long quiet is the last step");
+    }
+
+    #[test]
+    fn a_band_without_a_sweep_asks_for_no_quiet_step() {
+        let mut run = starting_run();
+        let heard = Instant::now();
+        run.heard(heard);
+        run.status = RunStatus::Stopped;
+        let view = View::of(&run, heard + Duration::from_secs(29));
+        assert!(view.band.sweep.is_none());
+        assert_eq!(quiet_turn(&run, &view), None);
     }
 }

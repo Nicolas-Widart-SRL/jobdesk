@@ -172,4 +172,4 @@ The Tasks screen shows three figures that change while a run works: the time sin
 
 ### Frames
 
-The figures repaint only while the run screen shows. The screen asks for a frame about 30 times a second if the sweep moves, and otherwise when the first whole second shown turns over. When nothing on screen counts the seconds, it asks for none.
+The figures repaint only while the run screen shows. The screen asks for a frame about 30 times a second if the sweep moves, and otherwise when the first whole second shown turns over. A sweep that stands still, under reduced motion, still changes form 30 and 120 seconds after the last update, so the screen also asks for a frame at the next of those, whatever else shows. When nothing on screen counts the seconds and no quiet step is ahead, it asks for none.

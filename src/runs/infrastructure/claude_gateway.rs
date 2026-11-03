@@ -10,7 +10,7 @@ use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, Even
 use crate::runs::infrastructure::run_logs::RunLog;
 use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
-use crate::shared_kernel::process_tree::{kill_tree, own_group};
+use crate::shared_kernel::process_tree::{kill_tree, no_window, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, SignIn, inherited_env, key_route_refusal, redacted};
 
 const STDERR_LINES_KEPT: usize = 12;
@@ -146,8 +146,7 @@ fn command_for(claude: &Path, workspace: &Path, path: &str, request: &RunRequest
     if let Some(session) = &request.resume_session {
         command.args(["--resume", session]);
     }
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+    no_window(&mut command);
     command
 }
 

@@ -10,6 +10,14 @@ pub fn own_group(command: &mut Command) {
     let _ = command;
 }
 
+/// Starts a console program on Windows without the console window it would otherwise open.
+pub fn no_window(command: &mut Command) {
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(command, 0x0800_0000); // CREATE_NO_WINDOW
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 /// Kills a process started with `own_group` and every process it started.
 #[cfg(unix)]
 pub fn kill_tree(pid: u32) {
@@ -23,9 +31,10 @@ pub fn kill_tree(pid: u32) {
 /// Kills a process and every process it started.
 #[cfg(windows)]
 pub fn kill_tree(pid: u32) {
-    let mut command = Command::new("taskkill");
+    let taskkill = crate::shared_kernel::host_path::system_program(std::env::var_os("SystemRoot").as_deref(), &["System32", "taskkill.exe"]);
+    let mut command = Command::new(taskkill);
     command.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
-    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+    no_window(&mut command);
     let _ = command.status();
 }
 
@@ -63,5 +72,47 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(!alive(grandchild));
+    }
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod windows_tests {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::shared_kernel::host_path::system_program;
+
+    /// A tool Claude started, here a `ping` that would run for a minute, dies with Claude. It shares the stdout pipe,
+    /// so the pipe closes only once the `ping` is gone too.
+    #[test]
+    fn killing_the_tree_reaches_grandchildren() {
+        let cmd = system_program(std::env::var_os("SystemRoot").as_deref(), &["System32", "cmd.exe"]);
+        let mut command = Command::new(cmd);
+        command.args(["/c", "ping", "-n", "60", "127.0.0.1"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        own_group(&mut command);
+        no_window(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        // `ping` names its target once it runs, so the grandchild exists before the kill.
+        let mut line = Vec::new();
+        while !line.windows(9).any(|part| part == b"127.0.0.1") {
+            line.clear();
+            assert_ne!(stdout.read_until(b'\n', &mut line).unwrap(), 0, "ping ended before it started");
+        }
+
+        kill_tree(child.id());
+        child.wait().unwrap();
+
+        let (sent, closed) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = stdout.read_to_end(&mut Vec::new());
+            let _ = sent.send(());
+        });
+        assert!(closed.recv_timeout(Duration::from_secs(10)).is_ok(), "the ping still holds the pipe, so it still runs");
     }
 }

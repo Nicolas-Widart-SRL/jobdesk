@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::settings::domain::{ConnectionTester, Outcome, TestDone, TestReport};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
-use crate::shared_kernel::process_tree::{kill_tree, own_group};
+use crate::shared_kernel::process_tree::{kill_tree, no_window, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, inherited_env, key_route_refusal, redacted};
 
 const PROMPT: &str = "Reply with the single word: ready";
@@ -168,8 +168,7 @@ fn command_for(claude: &Path, folder: &Path, path: &str, key: Option<&ApiKey>) -
             command.env_remove(name);
         }
     }
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+    no_window(&mut command);
     command
 }
 
@@ -475,6 +474,28 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "echo out; echo err >&2; exit 3"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         assert_eq!(run(command, TIMEOUT), (lines(&["out"]), lines(&["err"]), Ending::Exited("code 3".to_owned())));
+    }
+
+    /// npm installs `claude.cmd`, which `cmd.exe` reads. The empty `--tools` value and the prompt with its spaces must
+    /// still arrive as one argument each.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_stub_gets_each_argument_whole() {
+        let bin = tempfile::tempdir().unwrap();
+        let path = bin.path().to_str().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let sent = args(&command_for(Path::new("claude.cmd"), folder.path(), path, None)).into_iter().map(str::to_owned).collect::<Vec<_>>();
+        // Prints each argument in brackets, one more than it is sent, so a split or a merged argument shifts the lines.
+        let stub = format!("@echo off\r\n{}exit /b 0\r\n", "echo [%~1]\r\nshift\r\n".repeat(sent.len() + 1));
+        std::fs::write(bin.path().join("claude.cmd"), stub).unwrap();
+        let claude = find_executable(path, "claude").unwrap();
+        assert_eq!(claude, bin.path().join("claude.cmd"));
+
+        let (out, _, ending) = run(command_for(&claude, folder.path(), path, None), TIMEOUT);
+        let expected: Vec<String> = sent.iter().map(|arg| format!("[{arg}]")).chain(["[]".to_owned()]).collect();
+        assert!(sent.iter().any(|arg| arg.is_empty()) && sent.contains(&PROMPT.to_owned()));
+        assert_eq!(out, expected);
+        assert_eq!(ending, Ending::Exited("code 0".to_owned()));
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
+use crate::shared_kernel::process_tree::no_window;
 use crate::workspace::domain::{ToolProber, ToolSpec};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -20,8 +21,7 @@ impl ToolProber for ProcessProber {
         thread::spawn(move || {
             let mut command = Command::new(program);
             command.args(args).env("PATH", path).stdin(Stdio::null());
-            #[cfg(windows)]
-            std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
+            no_window(&mut command);
             let _ = sent.send(command.output());
         });
         let output = received.recv_timeout(TIMEOUT).ok()?.ok()?;

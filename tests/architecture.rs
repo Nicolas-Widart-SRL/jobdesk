@@ -210,6 +210,22 @@ fn the_system_keychain_is_reached_from_one_place() {
     assert!(occurrences(&read_all("tests"), &keychain_call()).is_empty(), "tests must never touch the real keychain");
 }
 
+/// On Windows a console program opens a console window unless `no_window` starts it. Explorer is a window program,
+/// and the login-shell call runs on Unix only.
+#[test]
+fn every_process_starts_without_a_console_window() {
+    let exempt = [Path::new("src/settings/infrastructure/folder_reveal.rs"), Path::new("src/shared_kernel/host_path.rs")];
+    let violations: Vec<String> = read_all("src")
+        .into_iter()
+        .filter(|(file, text)| {
+            let code = production_source(text);
+            code.contains("Command::new(") && !code.contains("no_window(") && !exempt.contains(&file.as_path())
+        })
+        .map(|(file, _)| format!("{}: starts a process without no_window", file.display()))
+        .collect();
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
 fn source(path: &str, text: &str) -> (PathBuf, String) {
     (PathBuf::from(path), text.to_owned())
 }

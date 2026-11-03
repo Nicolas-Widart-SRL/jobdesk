@@ -23,7 +23,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **Tasks**: the head, the turn band, the question bar, the run's story and the side column → see [handoff/tasks.md](handoff/tasks.md). Open it when you change the Tasks screen or how a run asks for the user.
 - **UI pass**: the rules for hover, selected, pressed, disabled, links, copyable text, and loading, failed and empty states → see [handoff/ui-pass.md](handoff/ui-pass.md). Open it before adding or changing a clickable widget or an empty, loading or failed state.
 - **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel and the `profile` feature → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen or how Jobdesk writes profile files.
-- **Settings**: the full-screen Settings, its rail and pages, the API key in the keychain and Test connection, usage statistics, when the Setup tab shows, new widgets and doc changes → see [handoff/settings.md](handoff/settings.md). Open it when you change Settings, how tasks sign in, or a preference it holds.
+- **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
 
 A new round writes or updates one handoff file per screen or topic it changes, its canvas's row in the Canvases table, and its line under Handoff files (`.claude/agents/designer.md` step 6).

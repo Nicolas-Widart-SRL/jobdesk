@@ -298,10 +298,10 @@ fn next_frame(moving: bool, ticking: &[Duration]) -> Option<Duration> {
     ticking.iter().map(|shown| Duration::from_secs(1) - Duration::from_nanos(u64::from(shown.subsec_nanos()))).min()
 }
 
-/// The figures on screen that count the seconds: Elapsed while the clock runs, and the time since the last update
-/// while the band says it.
-fn ticking(run: &Run, view: &View) -> Vec<Duration> {
-    let elapsed = run.elapsed.is_running().then(|| run.elapsed.total(view.now));
+/// The figures on screen that count the seconds: Elapsed while the clock runs and Elapsed is on screen, and the time
+/// since the last update while the band says it.
+fn ticking(run: &Run, view: &View, elapsed_shown: bool) -> Vec<Duration> {
+    let elapsed = (elapsed_shown && run.elapsed.is_running()).then(|| run.elapsed.total(view.now));
     let quiet = view.band.who_spoken.as_ref().and(run.last_heard).map(|heard| view.now.saturating_duration_since(heard));
     elapsed.into_iter().chain(quiet).collect()
 }
@@ -368,7 +368,9 @@ impl RunScreen {
         let view = View::of(&run, now);
         page_body(ui, |ui| self.body(ui, desk, &run, &view, root, narrow));
         let moving = view.band.sweep.is_some_and(|sweep| sweep_moves(ui.ctx(), sweep_form(sweep)));
-        if let Some(after) = next_frame(moving, &ticking(&run, &view)) {
+        // Narrow, Elapsed shows only in the open popup, which this frame's toggle and click-outside have settled.
+        let elapsed_shown = !narrow || self.details;
+        if let Some(after) = next_frame(moving, &ticking(&run, &view, elapsed_shown)) {
             ui.ctx().request_repaint_after(after);
         }
         None
@@ -1131,6 +1133,28 @@ mod tests {
         assert_eq!(next_frame(false, &[Duration::from_millis(4_250)]), Some(Duration::from_millis(750)));
         assert_eq!(next_frame(false, &[Duration::from_secs(4)]), Some(Duration::from_secs(1)));
         assert_eq!(next_frame(false, &[Duration::from_millis(4_250), Duration::from_millis(9_900)]), Some(Duration::from_millis(100)), "the first to turn");
+    }
+
+    #[test]
+    fn elapsed_ticks_only_where_it_is_on_screen() {
+        use crate::runs::domain::RunRequest;
+        let mut run = Run::new(&RunRequest {
+            run_id: "1".into(),
+            line: "/rank".into(),
+            model: None,
+            budget_usd: 1.0,
+            started_at: String::new(),
+            resume_session: None,
+            sign_in: crate::shared_kernel::SignIn::ClaudeSignIn,
+        });
+        let start = Instant::now();
+        run.elapsed.start(start);
+        let view = View::of(&run, start + Duration::from_millis(4_250));
+        assert!(view.band.who_spoken.is_none(), "no update figure here, so Elapsed is the only one");
+        assert_eq!(ticking(&run, &view, true), vec![Duration::from_millis(4_250)], "wide, or the popup open");
+        assert!(ticking(&run, &view, false).is_empty(), "narrow with the popup closed");
+        run.elapsed.hold(start + Duration::from_secs(5));
+        assert!(ticking(&run, &view, true).is_empty(), "a stopped clock does not tick");
     }
 
     #[test]

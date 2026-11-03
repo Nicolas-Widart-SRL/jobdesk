@@ -13,7 +13,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `Grid.html` | `?screen=today\|jobs\|tracker\|turn\|firstrun&theme=light\|dark` | 6 `Grid-*.png` | [look](handoff/look.md), [today](handoff/today.md), [tasks](handoff/tasks.md) |
 | `UiPass.html` | `?scene=states\|jobs\|failed\|loading\|empty&theme=light\|dark` | 6 `UiPass-*.png` | [ui-pass](handoff/ui-pass.md) |
 | `Profile.html` | `?state=view\|edit\|busy\|conflict\|empty\|loading\|failed\|updated\|setup&theme=light\|dark` | 10 `Profile-*.png` | [profile](handoff/profile.md) |
-| `ProfileCv.html` | `?option=a\|b&state=full\|source\|profile\|missing\|failed\|loading\|empty\|unread&theme=light\|dark` | 16 `ProfileCv-*.png`: `-a-*` and `-b-*` per option, `-empty` and `-unread` shared | [profile](handoff/profile.md) |
+| `ProfileCv.html` | `?state=full\|source\|busy\|missing\|notex\|failed\|loading\|empty\|unread&theme=light\|dark` | 10 `ProfileCv-*.png` | [profile](handoff/profile.md) |
 | `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|search\|nav&theme=light\|dark` | 24 `Settings-*.png` | [settings](handoff/settings.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
 
@@ -23,7 +23,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **Today**: the head and day stamp, the deal card, Done today and Coming up, the other states, motion and accessibility → see [handoff/today.md](handoff/today.md). Open it when you change the Today screen.
 - **Tasks**: the head, the turn band, the question bar, the run's story and the side column → see [handoff/tasks.md](handoff/tasks.md). Open it when you change the Tasks screen or how a run asks for the user.
 - **UI pass**: the rules for hover, selected, pressed, disabled, links, copyable text, and loading, failed and empty states → see [handoff/ui-pass.md](handoff/ui-pass.md). Open it before adding or changing a clickable widget or an empty, loading or failed state.
-- **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature, and CV documents (the CV PDF preview, round 1 with options A and B open) → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen, how Jobdesk writes profile files, or how it shows CV PDFs.
+- **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature, and CV documents (the CV PDF preview: a list column beside the pages, its four tags and the `/build-cv <name>` launcher action) → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen, how Jobdesk writes profile files, or how it shows CV PDFs.
 - **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
 

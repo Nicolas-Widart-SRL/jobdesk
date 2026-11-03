@@ -7,10 +7,9 @@
 <link rel="stylesheet" href="app.css">
 <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
 <style>
-/* Profile: CV documents. A rail entry at the foot of the topic rail opens the compiled CV PDFs in the cv folder, read only.
-   Choose with ?option=a|b, ?state=full|source|profile|missing|failed|loading|empty|unread and ?theme=light|dark.
-   Option A picks a document with the dossier's segmented strip above the pages. Option B picks it from a list column beside them.
-   empty and unread show no picker, so they draw the same in both options.
+/* Profile: CV documents. A rail entry at the foot of the topic rail opens the CV PDFs in the cv folder, read only.
+   A list column inside the paper picks a document, and its pages show beside it.
+   Choose with ?state=full|source|busy|missing|notex|failed|loading|empty|unread and ?theme=light|dark.
    Profile.html's scoped shell, copied under .pc, so app.css and the other canvases are unchanged. Fictional data only. */
 body { margin: 0; }
 .pc {
@@ -48,6 +47,10 @@ body { margin: 0; }
 .pc .b.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
 .pc .path { font: 400 13px/1.3 var(--type); }
 .pc .tag { height: 22px; padding: 0 7px; font-size: 12.5px; }
+/* Hover: the tooltip and the pointer, as Profile.html draws them. */
+.pc .tip { position: absolute; z-index: 5; padding: 6px 9px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); color: var(--text); font-size: 13px; line-height: 1.4; white-space: normal; }
+.pc .tip .path { font-size: 12.5px; }
+.pc .ptr { position: absolute; z-index: 6; width: 18px; height: 22px; pointer-events: none; }
 
 /* Page head on the grid. */
 .pc .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
@@ -77,7 +80,7 @@ body { margin: 0; }
 .pc .rail .rows { flex: 0 1 auto; min-height: 0; overflow: hidden; position: relative; }
 .pc .rail .rows .bar-y { position: absolute; top: 6px; right: 3px; width: 6px; height: 70%; border-radius: 3px; background: var(--line); }
 
-/* The documents on paper. */
+/* The documents on paper: the list column, then the picked document's head and pages. */
 .pc .sheetp { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
 .pc .cvsplit { flex: 1 1 auto; min-height: 0; display: flex; }
 .pc .view { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
@@ -92,22 +95,15 @@ body { margin: 0; }
 .pc .dh .why { display: flex; align-items: center; gap: 8px; margin-top: 9px; font-size: 13.5px; color: var(--muted); }
 .pc .dh .why .w { line-height: 1.4; }
 .pc .dh .why .path { color: var(--text); font-size: 13px; }
-.pc .dh .why .b { margin-left: auto; }
+.pc .dh .why .hov { position: relative; flex: none; margin-left: auto; }
 .pc .dscroll { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; padding: 0 22px; }
 .pc .dfoot { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px 9px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); }
 .pc .dfoot .path { font-size: 12.5px; }
 .pc .dfoot .r { margin-left: auto; color: var(--muted); }
 
-/* Option A: the dossier's segmented strip, with a status square in each tab that is not current. */
-.pc .strip { flex: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; margin: 12px 22px 0; border-bottom: 1px solid var(--text); }
-.pc .strip span { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 4px 4px 0 0; color: var(--muted); font-weight: 500; white-space: nowrap; }
-.pc .strip span.on { background: var(--text); color: var(--sheet); font-weight: 600; }
-.pc .strip .gap { width: 14px; padding: 0; }
-
-/* Option B: a list column inside the paper, on the paper with a hairline at its right. */
+/* The list column: inside the paper, with a hairline at its right. It scrolls on its own. */
 .pc .dlist { flex: 0 0 280px; min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 4px 0 8px; border-right: 1px solid var(--line); }
 .pc .dlist .gt { padding: 10px 14px 3px; }
-.pc .dlist .tr { gap: 8px; }
 .pc .dlist .tr .tag { height: 20px; padding: 0 6px; font-size: 12px; }
 
 /* Pages: each page of the PDF, sized to the room's height, side by side on the paper. */
@@ -153,10 +149,10 @@ body { margin: 0; }
 <div id="root"></div>
 <script>
 const P = new URLSearchParams(location.search);
-const OPTION = (P.get('option') || 'a').toLowerCase();
 const STATE = (P.get('state') || 'full').toLowerCase();
 const THEME = (P.get('theme') || 'light').toLowerCase();
 const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
 const B = (t, cls = '') => `<span class="b ${cls}">${t}</span>`;
 const FINDER = 'Show in Finder';
 
@@ -173,31 +169,33 @@ function shell(inner, o = {}) {
 const head = (sub) => `<header class="phead"><div><h1>Profile</h1><div class="sub">${sub}</div></div></header>`;
 const SUB = 'Sample Candidate. Claude reads this before it scores a job or writes a CV or a letter.';
 
-// The documents in cv/: masters first, then each application's CV, newest first.
-// st: current | source | profile | none (a .tex with no PDF) | failed. Profile changed marks masters only.
+// The documents in cv/: masters first, then each application's CV, newest first by the later of the .tex and PDF times.
+// An application's label is its stem without main_, with spaces for underscores and a capital first letter.
+// st: current | source (the .tex is newer than the PDF) | none (a .tex with no PDF) | notex (a PDF with no .tex) | failed.
 const DOCS = [
   { id: 'master', label: 'Master CV', file: 'main_example', master: true, st: 'current', pages: 2, size: '84 KB', built: '3 days ago', art: 'modern' },
-  { id: 'eng', label: 'Master CV, engineer', file: 'main_example_engineer', master: true, st: 'profile', pages: 2, size: '97 KB', built: '12 days ago', art: 'eng' },
-  { id: 'halyard', label: 'Halyard Labs tech lead', file: 'main_halyard_labs_tech_lead', st: 'none', written: 'today' },
+  { id: 'eng', label: 'Master CV, engineer', file: 'main_example_engineer', master: true, st: 'current', pages: 2, size: '97 KB', built: '12 days ago', art: 'eng' },
+  { id: 'halyard', label: 'Halyard labs tech lead', file: 'main_halyard_labs_tech_lead', st: 'none', written: 'today' },
   { id: 'tessel', label: 'Tessel platform lead', file: 'main_tessel_platform_lead', st: 'source', pages: 2, size: '91 KB', built: '2 days ago', art: 'modern' },
   { id: 'brightwell', label: 'Brightwell eng manager', file: 'main_brightwell_eng_manager', st: 'failed', size: '88 KB', built: 'yesterday' },
   { id: 'ardent', label: 'Ardent backend engineer', file: 'main_ardent_backend_engineer', st: 'current', pages: 2, size: '86 KB', built: '4 days ago', art: 'modern' },
-  { id: 'granite', label: 'Granite Cloud staff engineer', file: 'main_granite_cloud_staff_engineer', st: 'current', pages: 3, size: '102 KB', built: '9 days ago', art: 'modern' },
-  { id: 'orchard', label: 'Orchard Systems architect', file: 'main_orchard_systems_architect', st: 'current', pages: 2, size: '83 KB', built: '2 weeks ago', art: 'eng' },
+  { id: 'granite', label: 'Granite cloud staff engineer', file: 'main_granite_cloud_staff_engineer', st: 'current', pages: 3, size: '102 KB', built: '9 days ago', art: 'modern' },
+  { id: 'orchard', label: 'Orchard systems architect', file: 'main_orchard_systems_architect', st: 'current', pages: 2, size: '83 KB', built: '2 weeks ago', art: 'eng' },
+  { id: 'linden', label: 'Linden analytics data lead', file: 'main_linden_analytics_data_lead', st: 'notex', pages: 2, size: '79 KB', built: '5 weeks ago', art: 'modern' },
 ];
-const STALE = DOCS.filter((d) => ['source', 'profile', 'none'].includes(d.st)).length;
-// The tag each state takes, and its ink.
+// The rail's state word counts Source newer and Not built yet.
+const STALE = DOCS.filter((d) => ['source', 'none'].includes(d.st)).length;
+// The tag each state takes, and its ink. A PDF with no .tex reads Current, because nothing exists to build it from.
 const TAG = {
   current: ['Current', 'plain'],
+  notex: ['Current', 'plain'],
   source: ['Source newer', 'interview'],
-  profile: ['Profile changed', 'interview'],
   none: ['Not built yet', 'interview'],
   failed: ['Render failed', 'closed'],
 };
-const SQ = { source: 'interview', profile: 'interview', none: 'interview', failed: 'closed' };
 const tag = (st) => `<span class="tag c-${TAG[st][1]}">${TAG[st][0]}</span>`;
 
-const PICK = { full: 'master', source: 'tessel', profile: 'eng', missing: 'halyard', failed: 'brightwell', loading: 'granite' }[STATE] || 'master';
+const PICK = { full: 'master', source: 'tessel', busy: 'tessel', missing: 'halyard', notex: 'linden', failed: 'brightwell', loading: 'granite' }[STATE] || 'master';
 
 // The rail: the eleven topics as Profile.html draws them, then the CV documents group at the foot.
 function rail(o = {}) {
@@ -246,15 +244,22 @@ function pages(d, o = {}) {
   return `<div class="pages" data-fit="${Math.min(d.pages, 3)}">${Array.from({ length: d.pages }, (_, i) => `<div class="pw"><div class="pg">${art(d.art, i + 1)}</div><span class="cap num">Page ${i + 1} of ${d.pages}</span></div>`).join('')}</div>`;
 }
 
+// The build action opens the launcher with /build-cv <stem> filled in. It never starts a run, and is disabled while one works.
+// source draws its hover, busy draws it disabled with its reason.
+function action(d, label) {
+  if (STATE === 'busy') return `<span class="hov">${B(label, 'sm dis')}<div class="tip" style="right: 0; top: 38px; width: 270px">Another run is active. One run at a time keeps your files safe.</div>${ARROW(70, 12)}</span>`;
+  if (STATE === 'source') return `<span class="hov">${B(label, 'sm')}<div class="tip" style="right: 0; top: 38px; width: 300px">Opens the launcher with <span class="path">/build-cv ${d.file}</span>. Nothing runs until you start it there.</div>${ARROW(70, 12)}</span>`;
+  return `<span class="hov">${B(label, 'sm')}</span>`;
+}
+
 // What the state means and what to do about it, under the meta line.
 function why(d) {
   const tex = '<span class="path">.tex</span>';
-  const act = (l) => B(l, 'sm');
   switch (d.st) {
-    case 'current': return `<div class="why">${tag('current')}<span class="w">Built after its ${tex} and your profile last changed.</span></div>`;
-    case 'source': return `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. Run /build-cv in the launcher to build it again.</span>${act('Rebuild the PDF…')}</div>`;
-    case 'profile': return `<div class="why">${tag('profile')}<span class="w">Your profile changed 5 days ago, after this PDF was built. /build-cv builds it again from its ${tex} as it is, so check that it holds your change.</span>${act('Rebuild the PDF…')}</div>`;
-    case 'none': return `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. Run /build-cv in the launcher to build one.</span>${act('Build the PDF…')}</div>`;
+    case 'current': return `<div class="why">${tag('current')}<span class="w">Built after its ${tex} last changed.</span></div>`;
+    case 'notex': return `<div class="why">${tag('notex')}<span class="w">No ${tex} sits beside this PDF, so there is nothing to build it from again.</span></div>`;
+    case 'source': return `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. Run /build-cv in the launcher to build it again.</span>${action(d, 'Rebuild the PDF…')}</div>`;
+    case 'none': return `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. Run /build-cv in the launcher to build one.</span>${action(d, 'Build the PDF…')}</div>`;
     case 'failed': return `<div class="why">${tag('failed')}<span class="w">The file is there, but Jobdesk could not draw its pages.</span></div>`;
   }
   return '';
@@ -268,15 +273,11 @@ function docHead(d, o = {}) {
   return `<header class="dh"><div class="top"><div class="hd"><h2>${d.label}</h2><div class="meta">${meta}</div></div><div class="acts">${acts}</div></div>${why(d)}</header>`;
 }
 
-const foot = (d) => `<footer class="dfoot"><span>Kept in <span class="path">cv/</span>, beside the <span class="path">.tex</span> each PDF is built from</span><span class="r">Jobdesk shows these PDFs. /build-cv builds them.</span></footer>`;
+const foot = () => `<footer class="dfoot"><span>Kept in <span class="path">cv/</span>, beside the <span class="path">.tex</span> each PDF is built from</span><span class="r">Jobdesk shows these PDFs. /build-cv builds them.</span></footer>`;
 
-function stripA() {
-  const tab = (d) => `<span class="${d.id === PICK ? 'on' : ''}">${SQ[d.st] ? `<i class="sq" style="background: var(--${SQ[d.st]})"></i>` : ''}${d.label}</span>`;
-  return `<nav class="strip" aria-label="CV documents">${DOCS.filter((d) => d.master).map(tab).join('')}<span class="gap" aria-hidden="true"></span>${DOCS.filter((d) => !d.master).map(tab).join('')}</nav>`;
-}
-
-function listB() {
-  const row = (d) => `<div class="tr${d.id === PICK ? ' on' : ''}"><span class="t">${d.label}</span>${d.st === 'current' ? '' : tag(d.st)}</div>`;
+// The list column: Masters, then For applications. A row carries a tag only when the document is not current.
+function list() {
+  const row = (d) => `<div class="tr${d.id === PICK ? ' on' : ''}" title="${d.label}"><span class="t">${d.label}</span>${TAG[d.st][0] === 'Current' ? '' : tag(d.st)}</div>`;
   return `<nav class="dlist" aria-label="CV documents"><div class="gt">Masters</div>${DOCS.filter((d) => d.master).map(row).join('')}
     <div class="gt">For applications</div>${DOCS.filter((d) => !d.master).map(row).join('')}</nav>`;
 }
@@ -285,15 +286,13 @@ function screen() {
   const d = DOCS.find((x) => x.id === PICK);
   const loading = STATE === 'loading';
   const body = `${docHead(d, { loading })}<div class="dscroll">${pages(d, { loading })}</div>`;
-  const paper = OPTION === 'b'
-    ? `<section class="sheetp" aria-label="CV documents"><div class="cvsplit">${listB()}<div class="view">${body}</div></div>${foot(d)}</section>`
-    : `<section class="sheetp" aria-label="CV documents">${stripA()}<div class="view">${body}</div>${foot(d)}</section>`;
+  const paper = `<section class="sheetp" aria-label="CV documents"><div class="cvsplit">${list()}<div class="view">${body}</div></div>${foot()}</section>`;
   return shell(`${head(SUB)}<div class="bbody">${rail()}${paper}</div>`);
 }
 
 function emptyScreen() {
   const body = `<div class="empty"><h3>No CV documents in your folder yet</h3>
-    <p>This page shows each PDF in <span class="path">cv/</span> that has a <span class="path">.tex</span> beside it, and each <span class="path">.tex</span> not built yet. /apply writes one for every application, and /build-cv builds its PDF.</p></div>`;
+    <p>This page shows each PDF in <span class="path">cv/</span>, and each <span class="path">.tex</span> there not built yet. /apply writes one for every application, and /build-cv builds its PDF.</p></div>`;
   return shell(`${head(SUB)}<div class="bbody">${rail({ word: ['None yet', ''] })}
     <section class="sheetp" aria-label="CV documents"><header class="dh"><div class="hd"><h2>CV documents</h2><div class="meta">The PDFs built from your profile, as they last built.</div></div></header>
     <div class="dscroll">${body}</div>${foot()}</section></div>`);
@@ -314,12 +313,16 @@ function unreadScreen() {
 const pick = { empty: emptyScreen, unread: unreadScreen }[STATE] || screen;
 document.getElementById('root').innerHTML = pick();
 
-// Fit each page to the room's height, as the builder would from the scroll area's height.
+// Fit each page to the room's height, as the builder would from the scroll area's height,
+// and narrower when needed so two pages sit side by side. A third page wraps under them.
 // Pages never draw smaller than the dossier's PAGE_SIZE. Headless Chrome lays out once before its final window size, so fit again.
 function fit() {
   document.querySelectorAll('.pages[data-fit]').forEach((row) => {
-    const h = Math.max(252, Math.floor(row.parentElement.clientHeight - 32 - 22));
-    const w = Math.round(h * 210 / 297);
+    const room = row.clientWidth;
+    const byHeight = Math.round(Math.floor(row.parentElement.clientHeight - 32 - 22) * 210 / 297);
+    const byWidth = Math.floor((room - 12) / 2) - 2;
+    const w = Math.max(Math.round(252 * 210 / 297), Math.min(byHeight, byWidth));
+    const h = Math.round(w * 297 / 210);
     row.querySelectorAll('.pg').forEach((pg) => {
       pg.style.height = h + 'px'; pg.style.width = w + 'px';
       const a = pg.querySelector('.art'); if (a) a.style.transform = `scale(${w / 420})`;

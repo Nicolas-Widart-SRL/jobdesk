@@ -336,9 +336,9 @@ impl Run {
         self.background_agents = 0;
         self.streaming_text.clear();
         self.close_open_tools();
-        // A run that already failed keeps its first reason, said once.
+        // A run that was stopped, closed or already failed keeps its status; a failure says its first reason once.
         match failure {
-            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped | RunStatus::Failed(_)) => {
+            Some(reason) if !matches!(self.status, RunStatus::Stopping | RunStatus::Stopped | RunStatus::Closed | RunStatus::Failed(_)) => {
                 self.notice(&reason);
                 self.status = RunStatus::Failed(reason);
                 self.failed_on_stderr = true;
@@ -454,6 +454,17 @@ mod tests {
         run.note_stop_requested();
         run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
         assert_eq!(run.status, RunStatus::Stopped);
+    }
+
+    #[test]
+    fn a_failed_exit_after_closing_leaves_the_run_closed() {
+        let mut run = run("/rank");
+        run.apply(turn(0.5));
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        assert_eq!(run.status, RunStatus::Closed);
+        run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
+        assert_eq!(run.status, RunStatus::Closed);
+        assert!(!run.activity.iter().any(|activity| matches!(activity.kind, ActivityKind::Notice(_))));
     }
 
     #[test]

@@ -18,6 +18,9 @@ out-dir = "target/packages"
 before-packaging-command = "cargo build --release --locked"
 binaries = [{ path = "jobdesk", main = true }]
 
+[package.metadata.packager.macos]
+signing-identity = "-"
+
 [lib]
 path = "src/lib.rs"
 

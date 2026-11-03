@@ -234,7 +234,7 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
         Pressed::Undo => tray.undo(today),
         Pressed::Reason(reason) => tray.give_reason(&reason, today),
         Pressed::Bring(key) => tray.pull_forward(&key, today),
-        Pressed::BringAll => tray.bring_back_all(today),
+        Pressed::BringAll => tray.bring_back_all(queue),
         Pressed::Later => tray.later(top?, today),
         Pressed::Skip => tray.skip(top?, today),
         Pressed::Act(action) => return tray.follow(top?, &action, today),

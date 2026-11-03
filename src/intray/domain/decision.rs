@@ -53,12 +53,14 @@ impl Decision {
 
     /// The day a card set aside comes back, given the card's date as it stands now. A date after the day it was set aside
     /// brings it back on that date when that comes first, so a deadline added or moved while the card is away never
-    /// passes. A date on or before that day changes nothing, because Later then holds the card only until the next day.
+    /// passes. A date on or before that day brings it back the next day at the latest, as Later does for a card due or
+    /// late when it is pressed.
     pub fn returns_by(&self, due: Option<NaiveDate>) -> NaiveDate {
         let until = self.returns_on();
         match due {
             Some(due) if due > self.on => until.min(due),
-            _ => until,
+            Some(_) => until.min(self.on.succ_opt().unwrap_or(until)),
+            None => until,
         }
     }
 
@@ -162,8 +164,17 @@ mod tests {
         assert!(later.keeps_aside(day(10, 31), Some(day(11, 1))));
         assert!(!later.keeps_aside(day(11, 1), Some(day(11, 1))));
         assert_eq!(later.returns_by(Some(day(11, 5))), day(11, 2), "a later date leaves the stay alone");
-        assert_eq!(later.returns_by(Some(day(10, 31))), day(11, 2), "a date due the day it was set aside changes nothing");
         assert_eq!(later.returns_by(None), day(11, 2));
+    }
+
+    #[test]
+    fn a_date_on_or_before_the_day_it_was_set_aside_brings_it_back_the_next_day() {
+        let later = Decision { until: Some(day(11, 2)), ..decided(Outcome::Later) };
+        assert_eq!(later.returns_by(Some(day(10, 31))), day(11, 1), "due the day it was set aside");
+        assert_eq!(later.returns_by(Some(day(10, 29))), day(11, 1), "already late");
+        let due_when_pressed = Decision { until: Some(day(11, 1)), ..decided(Outcome::Later) };
+        assert_eq!(due_when_pressed.returns_by(Some(day(10, 31))), day(11, 1), "a card due when L was pressed still goes away for the day");
+        assert!(due_when_pressed.keeps_aside(day(10, 31), Some(day(10, 31))));
     }
 
     #[test]

@@ -93,6 +93,7 @@ impl Returning {
 /// A card set aside with Later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetAside {
+    pub key: String,
     pub name: String,
     /// The day it comes back.
     pub until: NaiveDate,
@@ -450,7 +451,8 @@ impl InTray {
         let due = |card: &Card| card.due.as_ref().map(|due| due.on);
         let (aside, mut cards): (Vec<Card>, Vec<Card>) =
             derived.into_iter().filter(|card| !self.is_cleared(&card.key, today)).partition(|card| self.is_set_aside(&card.key, due(card), today));
-        let set_aside = aside.into_iter().map(|card| SetAside { until: self.returns_on(&card.key, due(&card), today), name: card.name }).collect();
+        let set_aside =
+            aside.into_iter().map(|card| SetAside { until: self.returns_on(&card.key, due(&card), today), key: card.key, name: card.name }).collect();
         rank(&mut cards, today, horizon.days());
         let returned = self.returned(today);
         cards.sort_by_key(|card| {
@@ -521,16 +523,19 @@ impl InTray {
         self.read(key);
     }
 
-    /// Returns every card set aside today ahead of the rest, the card being read included.
-    pub fn bring_back_all(&mut self, today: NaiveDate) {
+    /// Returns every card `queue` shows set aside ahead of the rest, the card being read included. A card its date
+    /// already brought back is not away, so it keeps its place.
+    pub fn bring_back_all(&mut self, queue: &Queue) {
+        let today = queue.today;
         self.forget_returns_before(today);
         self.returned_on = Some(today);
-        for decision in self.decisions.iter().filter(|decision| decision.sets_aside(today)) {
-            if !self.returned.contains(&decision.key) {
-                self.returned.push(decision.key.clone());
+        let away: Vec<&str> = queue.set_aside.iter().map(|card| card.key.as_str()).collect();
+        for key in &away {
+            if !self.returned.iter().any(|returned| returned == key) {
+                self.returned.push((*key).to_owned());
             }
         }
-        self.take_back(|decision| decision.sets_aside(today));
+        self.take_back(|decision| away.contains(&decision.key.as_str()) && decision.sets_aside(today));
         self.reading = None;
     }
 
@@ -831,7 +836,7 @@ mod tests {
         tray.skip(&top(&tray, &jobs), today());
         tray.later(&top(&tray, &jobs), today());
         assert_eq!(tray.decision_count(), 2);
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
         assert_eq!(tray.returned.len(), 1);
 
         tray.clear_decisions();
@@ -956,7 +961,7 @@ mod tests {
         tray.later(&top(&tray, &jobs), today());
         assert_eq!(queue(&tray, &jobs, today()).today_headline(&[]), "All done for today");
 
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Beta"]);
         assert!(queue(&tray, &jobs, today()).set_aside.is_empty());
@@ -975,7 +980,7 @@ mod tests {
         later_on(&mut tray, &jobs, "triage:acme");
         tray.read("triage:top");
 
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
 
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Beta", "Top"]);
     }
@@ -986,7 +991,7 @@ mod tests {
         let jobs = board(vec![job("Top", 95), job("Acme", 80), job("Beta", 70)]);
         later_on(&mut tray, &jobs, "triage:acme");
         later_on(&mut tray, &jobs, "triage:beta");
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
 
         tray.skip(&top(&tray, &jobs), today());
 
@@ -1003,7 +1008,7 @@ mod tests {
         tray.later(&top(&tray, &jobs), today());
         assert!(dealt(&tray, &jobs).is_empty());
 
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
 
         let grown = board(vec![job("Urgent", 99), job("Acme", 80), job("Beta", 70)]);
         assert_eq!(dealt(&tray, &grown), ["Acme", "Beta", "Urgent"]);
@@ -1022,7 +1027,7 @@ mod tests {
             tray.later(&card, today());
         }
 
-        tray.bring_back_all(today());
+        tray.bring_back_all(&tray.queue(&sources));
 
         let kinds: Vec<(CardKind, String)> = tray.queue(&sources).cards.into_iter().map(|card| (card.kind, card.name)).collect();
         assert_eq!(kinds[0].0, CardKind::Question);
@@ -1043,7 +1048,7 @@ mod tests {
 
         let question = tray.queue(&sources).cards.into_iter().find(|card| card.kind == CardKind::Question).unwrap();
         tray.later(&question, today());
-        tray.bring_back_all(today());
+        tray.bring_back_all(&tray.queue(&sources));
 
         assert_eq!(kinds(&tray), [CardKind::Permission, CardKind::Question, CardKind::Triage]);
     }
@@ -1087,7 +1092,7 @@ mod tests {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Top", 95), job("Acme", 80)]);
         later_on(&mut tray, &jobs, "triage:acme");
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
         tray.skip(&top(&tray, &jobs), today());
         assert_eq!(dealt(&tray, &jobs), ["Top"]);
 
@@ -1102,7 +1107,7 @@ mod tests {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Top", 95), job("Acme", 80), job("Beta", 70)]);
         later_on(&mut tray, &jobs, "triage:beta");
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
         let plain = queue(&tray, &jobs, today()).cards.into_iter().find(|card| card.key == "triage:top").unwrap();
         tray.skip(&plain, today());
 
@@ -1117,7 +1122,7 @@ mod tests {
         let mut tray = InTray::unsaved();
         let jobs = board(vec![job("Top", 95), job("Acme", 80)]);
         later_on(&mut tray, &jobs, "triage:acme");
-        tray.bring_back_all(today());
+        tray.bring_back_all(&queue(&tray, &jobs, today()));
         assert_eq!(dealt(&tray, &jobs), ["Acme", "Top"]);
 
         let tomorrow = today().succ_opt().unwrap();
@@ -1581,7 +1586,7 @@ mod tests {
     }
 
     fn asides(names: &[&str]) -> Vec<SetAside> {
-        names.iter().map(|name| SetAside { name: (*name).to_owned(), until: day(1) }).collect()
+        names.iter().map(|name| SetAside { key: String::new(), name: (*name).to_owned(), until: day(1) }).collect()
     }
 
     #[test]
@@ -1595,7 +1600,7 @@ mod tests {
     #[test]
     fn the_return_row_counts_only_the_cards_back_on_its_day() {
         let returning = |untils: &[i64]| {
-            let set_aside = untils.iter().map(|offset| SetAside { name: "Acme".into(), until: day(*offset) }).collect();
+            let set_aside = untils.iter().map(|offset| SetAside { key: "triage:acme".into(), name: "Acme".into(), until: day(*offset) }).collect();
             Queue { set_aside, ..today_queue(vec![]) }.returning().unwrap()
         };
         assert_eq!(returning(&[1]).on_the_day(), "1 comes back");
@@ -1607,7 +1612,7 @@ mod tests {
     #[test]
     fn the_return_row_says_when_the_cards_come_back() {
         let back = |untils: &[i64]| {
-            let set_aside = untils.iter().map(|offset| SetAside { name: "Acme".into(), until: day(*offset) }).collect();
+            let set_aside = untils.iter().map(|offset| SetAside { key: "triage:acme".into(), name: "Acme".into(), until: day(*offset) }).collect();
             let returning = Queue { set_aside, ..today_queue(vec![]) }.returning().unwrap();
             (returning.on, returning.back)
         };
@@ -1711,7 +1716,7 @@ mod tests {
         tray.later(&top(&tray, &jobs), today());
         let sunday = on(11, 1);
 
-        tray.bring_back_all(sunday);
+        tray.bring_back_all(&queue(&tray, &jobs, sunday));
 
         assert_eq!(queue(&tray, &jobs, sunday).cards.len(), 1);
     }
@@ -1944,6 +1949,54 @@ mod tests {
         assert_eq!(sunday.cards.len(), 1, "back the next day, not on Monday");
         assert_eq!(sunday.overdue(), 1);
         assert_eq!(sunday.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::LateNow(3)]);
+    }
+
+    /// The tray dealt from one offer with this reply date, on `today`.
+    fn offer_dealt(tray: &InTray, deadline: Option<NaiveDate>, today: NaiveDate) -> Queue {
+        let offer = ApplicationCard { deadline, ..offer_card("Juniper") };
+        let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
+        tray.queue(&Sources { board: &JobBoard::default(), pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today })
+    }
+
+    #[test]
+    fn a_date_on_or_before_the_day_of_later_brings_the_card_back_the_next_day() {
+        let friday = on(10, 30);
+        let saturday = today();
+        // A scrape after L gives the undated offer a reply date of that Friday, or one already past.
+        for due in [friday, on(10, 29)] {
+            let mut tray = InTray::unsaved();
+            tray.set_rules(&later_lasting(LaterLasts::UntilMonday));
+            tray.later(&offer_dealt(&tray, None, friday).cards[0], friday);
+            assert_eq!(tray.decisions[0].until, Some(on(11, 2)));
+
+            let same_day = offer_dealt(&tray, Some(due), friday);
+            assert!(same_day.cards.is_empty(), "L still holds for the day it was pressed, due {due}");
+            assert_eq!(same_day.returning().unwrap().back, "tomorrow");
+            assert_eq!(offer_dealt(&tray, Some(due), saturday).cards.len(), 1, "back on Saturday, not Monday, due {due}");
+        }
+    }
+
+    #[test]
+    fn bring_them_back_returns_only_the_cards_still_away() {
+        let friday = on(10, 30);
+        let sunday = on(11, 1);
+        let undated = board(vec![job("Top", 95), job("Acme", 80), job("Beta", 70)]);
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(LaterLasts::UntilMonday));
+        for key in ["triage:acme", "triage:beta"] {
+            let card = queue(&tray, &undated, friday).cards.into_iter().find(|card| card.key == key).unwrap();
+            tray.later(&card, friday);
+        }
+        // Beta gets a deadline of Sunday, which brings it back that day. Acme stays away until Monday.
+        let jobs = board(vec![job("Top", 95), job("Acme", 80), JobView { deadline: Some(sunday), days_to_deadline: Some(0), ..job("Beta", 70) }]);
+        let before = queue(&tray, &jobs, sunday);
+        assert_eq!(before.set_aside_distinct(), ["Acme"]);
+
+        tray.bring_back_all(&before);
+
+        assert_eq!(tray.returned, ["triage:acme"]);
+        let names = queue(&tray, &jobs, sunday).cards.into_iter().map(|card| card.name).collect::<Vec<_>>();
+        assert_eq!(names, ["Acme", "Beta", "Top"], "Beta keeps its place by its date");
     }
 
     #[test]

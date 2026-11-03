@@ -6,7 +6,6 @@ use std::time::{Duration, SystemTime};
 
 use crate::profile::domain::{ProfileFile, ProfileStore};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::replace_file::rename_over;
 
 /// Added to a file's name, before the process id and a number, for the copy a save writes before it replaces the file.
 const SAVE_SUFFIX: &str = ".jobdesk-save";
@@ -88,9 +87,10 @@ const CANNOT_WRITE: &str = "cannot be written, or is open in another program, so
 
 /// Whether the file at `target` cannot be written in place, which the rename would not notice, because it needs only the
 /// folder. The mode bits or an access list can deny a write that the read-only flag does not show, so the file is opened
-/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way.
+/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file that is
+/// gone by now is not a refusal: the save creates it.
 fn cannot_write(target: &Path, metadata: &fs::Metadata) -> bool {
-    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err()
+    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err_and(|error| error.kind() != ErrorKind::NotFound)
 }
 
 /// The folder of `file` from the root, as the user would look for it.
@@ -105,7 +105,9 @@ fn replace(target: &Path, text: &str) -> io::Result<()> {
     let folder = target.parent().ok_or(ErrorKind::InvalidInput)?;
     remove_stale_copies(target, SystemTime::now());
     let copy = write_copy(target, next_copy, |file| file.write_all(text.as_bytes()))?;
-    if let Err(error) = rename_over(&copy, target) {
+    // A plain rename, never a retry: the save compared the file once, and a program that writes it during a wait would be
+    // overwritten unseen. A file held open fails at once, and the user sees it.
+    if let Err(error) = fs::rename(&copy, target) {
         let _ = fs::remove_file(&copy);
         return Err(error);
     }
@@ -484,6 +486,42 @@ mod tests {
         assert!(!fs::metadata(&path).unwrap().permissions().readonly());
         assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, "cannot be written by your user, so it was not saved");
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    /// Another program holds the file with no sharing, as a sync client or an editor can, so the save is refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_another_program_holds_open_is_not_saved() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, files) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let held = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, CANNOT_WRITE);
+        drop(held);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_file_cannot_be_written() {
+        let (dir, _) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        assert!(cannot_write(&path, &fs::metadata(&path).unwrap()));
+    }
+
+    #[test]
+    fn a_file_that_is_gone_is_not_a_refusal_to_write() {
+        let (dir, _) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(!cannot_write(&path, &metadata));
     }
 
     #[cfg(unix)]

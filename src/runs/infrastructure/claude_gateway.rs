@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest};
 use crate::runs::infrastructure::run_logs::RunLog;
-use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
+use crate::runs::infrastructure::stream_json::{StreamReader, decision_response, interrupt_request, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, no_window, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, SignIn, inherited_env, key_route_refusal, redacted};
@@ -289,6 +289,7 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
         let mut last_emit: Option<Instant> = None;
+        let mut reader = StreamReader::default();
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let line = masker.mask(&line);
             if let Some(log) = &log
@@ -296,7 +297,7 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
             {
                 log.append(&line);
             }
-            events_to_emit(parse_line(&line), Instant::now(), &mut last_emit).into_iter().for_each(&emit);
+            events_to_emit(reader.read(&line), Instant::now(), &mut last_emit).into_iter().for_each(&emit);
         }
         let _ = done.send(Outgoing::StreamEnded);
     });
@@ -352,6 +353,7 @@ mod heard_tests {
 #[cfg(test)]
 mod key_tests {
     use super::*;
+    use crate::runs::infrastructure::stream_json::parse_line;
     use crate::shared_kernel::KeyMask;
     use crate::shared_kernel::api_key::{PLAIN_HTTP_REFUSED, PROXY_REFUSED};
 

@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::runs::domain::{AgentEvent, ModelCost, Run, RunHistory, RunRequest, RunStatus, TaskCost, TaskOutcome, UsageLogs};
-use crate::runs::infrastructure::stream_json::{ProcessTotals, parse_line, process_totals};
+use crate::runs::infrastructure::stream_json::{ProcessTotals, StreamReader, process_totals};
 use crate::shared_kernel::SignIn;
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -114,6 +114,7 @@ impl RunLogs {
         });
         // The log keeps no sign-in, so the run does not claim the one above.
         run.forget_sign_in();
+        let mut reader = StreamReader::default();
         for line in lines {
             if line == STOP_LINE {
                 run.note_stop_requested();
@@ -122,11 +123,13 @@ impl RunLogs {
             // Each process reports its own running total, so the cost of the ones before it is kept apart.
             if line == RESUME_LINE {
                 run.note_new_process();
+                // The new process names its messages afresh.
+                reader = StreamReader::default();
                 continue;
             }
             match serde_json::from_str::<UserLine>(&line) {
                 Ok(user) if user.r#type == USER => run.note_reply(&user.text),
-                _ => parse_line(&line).into_iter().for_each(|event| run.apply(event)),
+                _ => reader.read(&line).into_iter().for_each(|event| run.apply(event)),
             }
         }
         // The process ended while it was stopping, so the stop went through.
@@ -309,7 +312,10 @@ impl UsageLogs for RunLogUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::CostFigure;
+    use crate::runs::domain::{CostFigure, Tokens, estimate_usd};
+    use crate::runs::infrastructure::stream_json::captured;
+
+    const TEXT: &str = r#"{"type":"text","text":"ok"}"#;
 
     fn request(id: &str, line: &str) -> RunRequest {
         RunRequest {
@@ -433,11 +439,9 @@ mod tests {
         assert_eq!(tasks(dir.path())[0].cost_usd, 1.0);
     }
 
-    /// An assistant line as the CLI writes it, with fictional figures: 1M output tokens at Opus list price is $25.
-    fn assistant(id: &str, output: u64) -> String {
-        format!(
-            r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-4-5","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":0,"output_tokens":{output}}}}}}}"#
-        )
+    /// What the captured-shape message below costs at list price once its output count is final: 48 tokens, the start said 2.
+    fn final_estimate() -> f64 {
+        estimate_usd(&Tokens { input: 6, output: 48, cache_write: 1500, cache_read: 20000 }, "claude-haiku-4-5")
     }
 
     fn replayed(dir: &Path) -> Run {
@@ -447,7 +451,7 @@ mod tests {
     #[test]
     fn a_replayed_run_with_a_result_shows_the_exact_cost() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "/w", "a", &[&[&assistant("m1", 1_000_000), &result(0.5)]]);
+        write(dir.path(), "/w", "a", &[&[&captured::assistant("m1", "null", TEXT, 2), &result(0.5)]]);
 
         assert_eq!(replayed(dir.path()).shown_cost(), CostFigure { usd: 0.5, estimated: false });
     }
@@ -455,9 +459,33 @@ mod tests {
     #[test]
     fn a_replayed_run_with_no_result_shows_an_estimate() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "/w", "a", &[&[&assistant("m1", 1_000_000)]]);
+        write(dir.path(), "/w", "a", &[&[&captured::assistant("m1", "null", TEXT, 2)]]);
 
-        assert_eq!(replayed(dir.path()).shown_cost(), CostFigure { usd: 25.0, estimated: true });
+        let shown = replayed(dir.path()).shown_cost();
+
+        assert!(shown.estimated);
+        assert_eq!(shown.usd, estimate_usd(&Tokens { input: 6, output: 2, cache_write: 1500, cache_read: 20000 }, "claude-haiku-4-5"));
+    }
+
+    /// The message's final output count comes in its last line, so the estimate reads the final figure once, not the start's and the end's added.
+    #[test]
+    fn a_replayed_message_is_estimated_from_its_final_figures_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = [
+            captured::message_start("m1", "null", 2),
+            captured::assistant("m1", "null", TEXT, 2),
+            captured::message_start("m2", r#""toolu_p1""#, 2),
+            captured::message_delta("m1", "null", 48),
+            captured::message_delta("m2", r#""toolu_p1""#, 48),
+        ];
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        write(dir.path(), "/w", "a", &[&lines]);
+
+        let shown = replayed(dir.path()).shown_cost();
+
+        assert!(shown.estimated);
+        assert!((shown.usd - 2.0 * final_estimate()).abs() < 1e-12, "two messages, each priced once: {}", shown.usd);
+        assert!(final_estimate() > estimate_usd(&Tokens { input: 6, output: 2, cache_write: 1500, cache_read: 20000 }, "claude-haiku-4-5"));
     }
 
     #[test]

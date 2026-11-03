@@ -104,14 +104,6 @@ impl Page {
             Page::About => "A desk for your ai-job-search folder.",
         }
     }
-
-    /// Whether the page has its content yet. The others show a placeholder until their step lands.
-    pub fn built(self) -> bool {
-        matches!(
-            self,
-            Page::General | Page::Appearance | Page::Usage | Page::Providers | Page::Defaults | Page::Permissions | Page::Runtime | Page::Data | Page::About
-        )
-    }
 }
 
 const GENERAL: [&str; 6] = [
@@ -147,6 +139,44 @@ const APPEARANCE_WINDOWS: [&str; 8] = [
 
 /// The figures' labels, then the sections under them.
 const USAGE: [&str; 8] = ["Spent", "Tokens", "Cache hits", "Tasks", "Per application sent", "Every day", "By command", "By model"];
+
+/// The note on where the terms come from, then the fixed rows' words. The floor's help and the tiers come from the
+/// profile, so a search cannot look through them.
+const TERMS: [&str; 6] = [
+    "Jobs checks postings against these. The floor and the commute tiers come from your profile, and Jobdesk never changes them. To change one, edit your profile or ask Claude to.",
+    "Contract and rate",
+    "Contract",
+    "Fixed in Jobdesk: jobs that offer only a permanent contract fail this check.",
+    "Day-rate floor",
+    "Commute",
+];
+
+/// How Today deals, then the skip reasons. The reasons themselves are the user's, so a search cannot look through them.
+const QUEUE: [&str; 7] = [
+    "Dealing",
+    "Coming up shows",
+    "How far ahead Coming up lists dated cards. Cards dated inside it also deal before the rest.",
+    "Later sets a card aside",
+    "How long L keeps a card out of the queue. Coming up can bring it back sooner.",
+    "Skip reasons",
+    "Offered when you skip a card with N. A reason is optional, and past skips keep theirs.",
+];
+
+/// The checks a job can fail, then the score and the safety check. The floor's help comes from your terms, and the count
+/// from the jobs, so a search cannot look through them.
+const JOBS_VIEW: [&str; 11] = [
+    "Hide jobs that fail a check",
+    "Day rate under your floor",
+    "Too far to commute",
+    "In your Too far tier and not fully remote, or a place the location check ruled out.",
+    "Language does not match",
+    "The posting asks for a language your profile does not list.",
+    "Score and safety",
+    "Hide jobs scored under",
+    "Applies to every list on Jobs.",
+    "Hide jobs the safety check flagged",
+    "Flagged ads still wait in Today as Check this ad, so you decide on each one.",
+];
 
 /// What Test connection costs and leaves out, on the Claude sign-in's detail.
 const TEST_HELP: &str =
@@ -262,14 +292,16 @@ const RUNTIME: [&str; 12] = [
     "Reset",
 ];
 
-/// The labels and help lines the page shows, which is what a search looks through.
-/// A page not built yet has none.
+/// The fixed labels and help lines the page shows, which is what a search looks through.
 pub fn index(page: Page) -> &'static [&'static str] {
     match page {
         Page::General => &GENERAL,
         Page::Appearance if cfg!(target_os = "macos") => &APPEARANCE_MAC,
         Page::Appearance => &APPEARANCE_WINDOWS,
         Page::Usage => &USAGE,
+        Page::Terms => &TERMS,
+        Page::Queue => &QUEUE,
+        Page::JobsView => &JOBS_VIEW,
         Page::Providers if cfg!(windows) => &PROVIDERS_WINDOWS,
         Page::Providers => &PROVIDERS_MAC,
         Page::Defaults => &DEFAULTS,
@@ -277,17 +309,18 @@ pub fn index(page: Page) -> &'static [&'static str] {
         Page::Runtime => &RUNTIME,
         Page::Data => &DATA,
         Page::About => &ABOUT,
-        _ => &[],
     }
 }
 
 /// How many of Runtime status's lines show before a folder is open and read.
 const RUNTIME_WITHOUT_FOLDER: usize = 7;
 
-/// The lines the page draws as things stand: without `folder_read`, Runtime status leaves out the folder's sections.
+/// The lines the page draws as things stand: without `folder_read`, Runtime status leaves out the folder's sections, and
+/// Your terms has nothing to show.
 pub fn drawn_index(page: Page, folder_read: bool) -> &'static [&'static str] {
     match page {
         Page::Runtime if !folder_read => &RUNTIME[..RUNTIME_WITHOUT_FOLDER],
+        Page::Terms if !folder_read => &[],
         page => index(page),
     }
 }
@@ -297,10 +330,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_page_is_built_when_it_has_an_index() {
+    fn every_page_has_an_index() {
         for page in Page::ALL {
-            assert_eq!(page.built(), !index(page).is_empty(), "{}", page.title());
+            assert!(!index(page).is_empty(), "{}", page.title());
         }
+    }
+
+    #[test]
+    fn without_a_folder_your_terms_draws_nothing_to_search() {
+        assert!(drawn_index(Page::Terms, false).is_empty());
+        assert_eq!(drawn_index(Page::Terms, true), index(Page::Terms));
+        assert_eq!(drawn_index(Page::Queue, false), index(Page::Queue), "the queue's settings need no folder");
+        assert_eq!(drawn_index(Page::JobsView, false), index(Page::JobsView));
     }
 
     #[test]

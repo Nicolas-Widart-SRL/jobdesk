@@ -244,6 +244,8 @@ pub const FIELD_TINY_WIDTH: f32 = 92.0;
 /// An amount field set in a line of words, such as the monthly cap's: its width and height, and the room either side.
 pub const FIELD_INLINE: (f32, f32) = (96.0, 28.0);
 pub const FIELD_INLINE_MARGIN: f32 = 4.0;
+/// A whole number set in a line of words, such as the score the Jobs view hides jobs under: its width and height.
+pub const FIELD_INLINE_NUMBER: (f32, f32) = (64.0, 28.0);
 /// A settings page's head padding (inline, top, bottom), its body padding (inline, top, bottom),
 /// and how far its actions sit above the lead's bottom edge.
 pub const SETTINGS_HEAD_PADDING: (i8, i8, i8) = (22, 18, 14);

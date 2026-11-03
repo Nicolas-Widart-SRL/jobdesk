@@ -1,7 +1,11 @@
+mod job_search;
 mod providers;
 mod settings;
 mod usage;
 
+pub use job_search::{
+    TERMS_LINE, TermsState, TermsWord, floor_filter_help, floor_words, hidden_word, jobs_count_note, plain, terms_failed_line, terms_word, tier_title,
+};
 pub use providers::{
     KeyFailure, Providers, SignInCheck, TESTING, TestGate, TestTarget, WordTone, age_words, is_claude_sign_in, sign_in_words, task_wait_reason,
 };
@@ -14,6 +18,8 @@ pub use usage::{
     tasks_note, tokens, usage_page,
 };
 
+pub use crate::discovery::application::{CONTRACT_TERM, Commute, CommuteTier, TermPart, YourTerms};
+pub use crate::profile::application::UNREADABLE as PROFILE_UNREADABLE;
 pub use crate::runs::application::{Period, UsageReport, YearOfDays, heat_step};
 pub use crate::settings::domain::{
     CapReached, ComingUp, CommandDefault, ConnectionTester, DataSizes, Dollars, Group, JobFilters, KeyMask, KeyStore, KeyStoreError, KeyTest, LaterLasts,

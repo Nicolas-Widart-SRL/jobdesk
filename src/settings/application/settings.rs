@@ -615,6 +615,14 @@ mod tests {
     }
 
     #[test]
+    fn a_search_finds_the_job_search_pages() {
+        assert_eq!(search("skip reasons", true).unwrap().pages, vec![(Page::Queue, 1), (Page::Data, 1)], "Clear tray decisions forgets them too");
+        assert_eq!(search("Hide jobs scored under", true).unwrap().pages, vec![(Page::JobsView, 1)]);
+        assert_eq!(search("commute", true).unwrap().pages, vec![(Page::Terms, 2), (Page::JobsView, 1)]);
+        assert_eq!(search("commute", false).unwrap().pages, vec![(Page::JobsView, 1)], "without a folder, Your terms draws no rows");
+    }
+
+    #[test]
     fn a_blank_search_is_none_and_a_miss_has_no_pages() {
         assert_eq!(search("  ", true), None);
         assert_eq!(search("", true), None);

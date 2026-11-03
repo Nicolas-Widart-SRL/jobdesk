@@ -803,16 +803,32 @@ pub fn amount_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str) -> R
 
 /// An amount field painted at `rect`, which the caller has made room for, such as a place in a line of words.
 pub(in crate::ui_kit) fn amount_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: &mut String, hint: &str) -> Response {
+    field_in(ui, id, rect, text, hint, Some("$"), None)
+}
+
+/// A field for one short line of text, `width` wide: the `hint` in `faint` while it is empty, and at most `limit`
+/// characters. The response is the text edit's. The text shows as typed, plain, never as Markdown.
+pub fn text_field(ui: &mut Ui, text: &mut String, width: f32, hint: &str, limit: usize) -> Response {
+    // The field's id is its place in `ui`, taken before anything is added, as `search_field` takes its own.
+    let id = ui.next_auto_id().with("text_field");
+    let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_HEIGHT), Sense::hover());
+    field_in(ui, id, rect, text, hint, None, Some(limit))
+}
+
+/// A field painted at `rect`, with a `muted` `unit` before what it holds, if any, and at most `limit` characters.
+pub(in crate::ui_kit) fn field_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: &mut String, hint: &str, unit: Option<&str>, limit: Option<usize>) -> Response {
     let p = Palette::of(ui);
     let enabled = ui.is_enabled();
     // The field's box is painted last, when its focus is known, under what it holds.
     let under = ui.painter().add(egui::Shape::Noop);
     let unit_ink = if enabled { p.muted } else { dimmed(p.muted) };
-    let unit = line(ui, "$", Type::BODY, unit_ink, f32::INFINITY);
     let inner = rect.shrink2(vec2(FIELD_PADDING, 0.0));
-    let unit_at = egui::pos2(inner.left(), rect.center().y - unit.size().y / 2.0);
-    let room =
-        Rect::from_min_max(egui::pos2((unit_at.x + unit.size().x + FIELD_PADDING).min(inner.right()), rect.top()), egui::pos2(inner.right(), rect.bottom()));
+    let unit = unit.map(|unit| {
+        let galley = line(ui, unit, Type::BODY, unit_ink, f32::INFINITY);
+        (egui::pos2(inner.left(), rect.center().y - galley.size().y / 2.0), galley)
+    });
+    let left = unit.as_ref().map_or(inner.left(), |(at, galley)| (at.x + galley.size().x + FIELD_PADDING).min(inner.right()));
+    let room = Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(inner.right(), rect.bottom()));
     let ink = if enabled { p.text } else { dimmed(p.text) };
     let edit = egui::TextEdit::singleline(text)
         .id(id)
@@ -823,6 +839,10 @@ pub(in crate::ui_kit) fn amount_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: 
         .hint_text(egui::RichText::new(hint).font(Type::BODY.font()).color(if enabled { p.faint } else { dimmed(p.faint) }))
         .desired_width(room.width())
         .align(egui::Align2::LEFT_CENTER);
+    let edit = match limit {
+        Some(limit) => edit.char_limit(limit),
+        None => edit,
+    };
     let mut field = ui.new_child(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
     let response = field.add(edit);
     let border = match (enabled, response.has_focus()) {
@@ -831,7 +851,9 @@ pub(in crate::ui_kit) fn amount_in(ui: &mut Ui, id: egui::Id, rect: Rect, text: 
         (true, false) => p.line,
     };
     ui.painter().set(under, egui::Shape::rect_filled(rect, RADIUS_BUTTON, p.field));
-    paint_text(ui, unit_at, unit, unit_ink, p.field);
+    if let Some((at, galley)) = unit {
+        paint_text(ui, at, galley, unit_ink, p.field);
+    }
     ui.painter().rect_stroke(rect, RADIUS_BUTTON, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
     response
 }

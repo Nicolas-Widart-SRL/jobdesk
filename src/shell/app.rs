@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
 
+use crate::discovery::application::hidden_total;
 use crate::discovery::ui::JobsScreen;
 use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
@@ -23,8 +24,8 @@ use crate::runs::application::RunDesk;
 use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
 use crate::settings::application::{
-    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Providers, Retention, RuntimeWord, Saved, Settings, SignIn, StartScreen, TestGate, UsageState,
-    cap_check,
+    CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Providers, Retention, RuntimeWord, Saved, Settings, SignIn, StartScreen, TermsState, TestGate,
+    UsageState, cap_check,
 };
 use crate::settings::ui::{LastTask, SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
@@ -673,6 +674,8 @@ impl Shell {
         if self.screen != Screen::InTray {
             tray.stop_reading();
         }
+        // Coming up, Later and the skip reasons are the user's, so the tray takes them before it deals.
+        tray.set_rules(&self.settings.preferences().queue);
         let snapshot = &self.snapshot;
         let runs = self.desk.as_ref().map_or(&[][..], RunDesk::runs);
         tray.queue(&Sources { board: &snapshot.board, pipeline: &snapshot.pipeline, archives: &snapshot.archives, runs, today: snapshot.today })
@@ -966,6 +969,8 @@ impl Shell {
             }
             Screen::Jobs => {
                 let kept = self.tray.as_ref().map(InTray::kept_jobs).unwrap_or_default();
+                // The filters hide rows only: each job stays in the list `/rank` put it in.
+                self.jobs.set_filters(self.settings.preferences().jobs_view);
                 self.jobs.show(ui, &state(load(Source::Jobs)), &snapshot.board, &queue.waiting().jobs, &kept);
             }
             Screen::Tracker => {
@@ -1170,6 +1175,16 @@ impl Shell {
         let task_running = self.desk.as_ref().is_some_and(RunDesk::has_live_process);
         let task_working = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         let now = self.now();
+        let terms = match (folder_open, self.loaded) {
+            (false, _) => TermsState::NoFolder,
+            (true, false) => TermsState::Reading,
+            (true, true) => TermsState::Read(&snapshot.terms),
+        };
+        // What the Jobs view hides, counted as Jobs hides it, once the saved jobs are read.
+        let jobs = (folder_open && self.loaded && !unread.contains(&Source::Jobs)).then(|| {
+            let kept = self.tray.as_ref().map(InTray::kept_jobs).unwrap_or_default();
+            hidden_total(&snapshot.board, &self.settings.preferences().jobs_view, &kept)
+        });
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1196,6 +1211,8 @@ impl Shell {
                     task_running,
                     task_working,
                     now,
+                    terms,
+                    jobs,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
@@ -1243,6 +1260,12 @@ impl Shell {
                 ctx.request_repaint();
             }
             Some(SettingsRequest::NewTask) => self.open_launcher(),
+            // Edit in Profile leaves Settings for the Profile tab, as Back to app would leave it for the screen underneath.
+            Some(SettingsRequest::OpenProfile) => {
+                self.settings_open = false;
+                self.screen = Screen::Profile;
+                ctx.request_repaint();
+            }
             // Only Jobdesk's own data folder, never the checkout.
             Some(SettingsRequest::ShowDataFolder) => {
                 if let Some(data) = &self.data {
@@ -1564,6 +1587,28 @@ mod tests {
         let ctx = egui::Context::default();
         let shell = launch(&ctx, Some(checkout(&folder)), data.path());
         assert_eq!(shell.screen, Screen::Jobs);
+    }
+
+    /// The Today queue and Jobs view settings saved in one session are in force at the next launch, and the tray deals by them.
+    #[test]
+    fn the_queue_and_jobs_view_come_back_at_launch() {
+        use crate::settings::application::{ComingUp, LaterLasts};
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let mut saved = settings::open_settings(data.path(), Preferences::default());
+        saved.set_coming_up(ComingUp::Week);
+        saved.set_later(LaterLasts::ThreeDays);
+        saved.add_skip_reason("Culture").unwrap();
+        saved.set_hide_under_score(true);
+        saved.set_score_floor(75);
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let preferences = shell.settings.preferences();
+        assert_eq!((preferences.queue.coming_up, preferences.queue.later), (ComingUp::Week, LaterLasts::ThreeDays));
+        assert_eq!(preferences.queue.skip_reasons.list().last().map(String::as_str), Some("Culture"));
+        assert!(preferences.jobs_view.under_score);
+        assert_eq!(preferences.jobs_view.score, 75);
+        assert_eq!(shell.queue().horizon, ComingUp::Week, "the tray deals by the saved range");
     }
 
     /// Without a folder only Today answers, so the welcome shows there whatever Open on says.

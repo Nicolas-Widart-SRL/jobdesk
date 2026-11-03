@@ -1,8 +1,11 @@
 mod about;
 mod data;
 mod defaults;
+mod jobs_view;
 mod permissions;
 mod providers;
+mod queue;
+mod terms;
 mod usage;
 
 use std::cell::Cell;
@@ -11,8 +14,8 @@ use chrono::{NaiveDate, NaiveDateTime};
 use egui::{Align, ComboBox, Frame, Key, Label, Layout, Margin, Modifiers, Popup, Rect, ScrollArea, ThemePreference, Ui, UiBuilder, pos2, vec2};
 
 use crate::settings::application::{
-    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen, TextSize,
-    ThemeChoice, UsageState, WordTone, cap_word, index, rail_word, search, size_short,
+    CapCheck, ClaudeVersion, DataSizes, Group, IssueKind, Page, Period, Preferences, Providers, RuntimeWord, SearchHits, Settings, StartScreen, TermsState,
+    TermsWord, TextSize, ThemeChoice, UsageState, WordTone, cap_word, hidden_word, index, rail_word, search, size_short, terms_word,
 };
 use crate::settings::ui::about::AboutView;
 use crate::settings::ui::data::DataView;
@@ -23,7 +26,7 @@ use crate::ui_kit::tokens::{
 };
 use crate::ui_kit::{
     Ink, Tone, Type, back_pressed, copyable, divider, enabled_when, hand, hit_mark, pick_row, rail_title, rich, search_field, set_reduced_motion,
-    setting_check, setting_row, setting_section, settings_page, shortcut_button, slip, small_button, toggle_group,
+    setting_check, setting_row, setting_section, settings_page, settings_page_with_foot, shortcut_button, slip, small_button, toggle_group,
 };
 
 /// How wide Open on's combo box is.
@@ -32,7 +35,8 @@ const OPEN_ON_WIDTH: f32 = 180.0;
 const SHOW_FOLDER: &str = if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" };
 
 /// What stays between frames: the page open, the search, the period Usage statistics counts, Run defaults' amounts
-/// as typed, whether Clear tray decisions is asking, and Providers' way picked and key as typed.
+/// as typed, whether Clear tray decisions is asking, Providers' way picked and key as typed, whether Your terms shows
+/// its command, the skip reason and the score as typed.
 #[derive(Default)]
 pub struct SettingsScreen {
     page: Page,
@@ -42,14 +46,14 @@ pub struct SettingsScreen {
     /// Clear tray decisions' popover: open, and whether Keep them still takes the focus.
     clearing: Option<bool>,
     providers: ProvidersScreen,
+    terms_command: bool,
+    reason: String,
+    score: Option<String>,
 }
 
 impl SettingsScreen {
-    /// A page not built yet cannot open, so General stays.
     pub fn open_on(&mut self, page: Page) {
-        if page.built() {
-            self.page = page;
-        }
+        self.page = page;
     }
 
     /// The page open, which Settings reopens on.
@@ -62,6 +66,7 @@ impl SettingsScreen {
     pub fn closed(&mut self) {
         self.clearing = None;
         self.providers.reset();
+        self.terms_command = false;
     }
 }
 
@@ -98,6 +103,10 @@ pub struct SettingsView<'a> {
     pub task_working: bool,
     /// The app's clock, for the ages Providers shows.
     pub now: NaiveDateTime,
+    /// Your terms as the open folder gives them.
+    pub terms: TermsState<'a>,
+    /// How many jobs the Jobs view hides, and how many there are in all. None until the saved jobs are read.
+    pub jobs: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +124,8 @@ pub enum SettingsRequest {
     NewTask,
     /// Close Settings and show the newest task that said how it signed in.
     OpenLastTask,
+    /// Close Settings and show Profile, where the profile your terms come from is edited.
+    OpenProfile,
 }
 
 /// The Settings screen: Back to app and the rail at the left, the open page on paper beside them.
@@ -197,11 +208,36 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             let about = AboutView { version: view.version, claude: view.claude };
             settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &query));
         }
-        _ => other_page(&mut page_ui, page, &query),
+        Page::Terms => {
+            let lead = if matches!(view.terms, TermsState::Reading) { terms::READING } else { page.lead() };
+            let show_command = &mut screen.terms_command;
+            let (asked, _) = settings_page_with_foot(
+                &mut page_ui,
+                page.heading(),
+                lead,
+                |ui| terms::actions(ui, view.terms),
+                |ui| terms::body(ui, view.terms, show_command, &query),
+                terms::foot,
+            );
+            request = asked.or(request);
+        }
+        Page::Queue => {
+            let reason = &mut screen.reason;
+            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| queue::body(ui, view.settings, reason, &query));
+        }
+        Page::JobsView => {
+            let score = &mut screen.score;
+            settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| jobs_view::body(ui, view.settings, view.terms, view.jobs, score, &query));
+        }
+        Page::Runtime => other_page(&mut page_ui, page, &query),
     }
     // The popover asks about the page it sits on, so another page or leaving Settings closes it.
     if screen.page != Page::Data || request == Some(SettingsRequest::Back) {
         screen.clearing = None;
+    }
+    // Another page or leaving Settings closes the command Your terms shows.
+    if screen.page != Page::Terms || request == Some(SettingsRequest::Back) {
+        screen.terms_command = false;
     }
     // Leaving Providers forgets a key typed and not saved, and picks the way in use when it opens again.
     if opened_on == Page::Providers && (screen.page != Page::Providers || request == Some(SettingsRequest::Back)) {
@@ -307,9 +343,7 @@ fn rail_rows(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView, hits
                     None => state_word(page, view),
                 };
                 let on = page == screen.page;
-                let row = |ui: &mut Ui| pick_row(ui, on, |ui| rail_row(ui, page.title(), &word, ink));
-                let picked = if page.built() { row(ui) } else { enabled_when(ui, false, "Not available yet.", row) };
-                if picked.clicked() && page.built() {
+                if pick_row(ui, on, |ui| rail_row(ui, page.title(), &word, ink)).clicked() {
                     screen.page = page;
                 }
             }
@@ -320,7 +354,6 @@ fn rail_rows(ui: &mut Ui, screen: &mut SettingsScreen, view: &SettingsView, hits
 /// The one word at a row's right, saying the page's state.
 fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
     match page {
-        _ if !page.built() => ("Later".to_owned(), Ink::Muted),
         Page::Appearance => (view.settings.preferences().theme.label().to_owned(), Ink::Muted),
         Page::Usage => match view.usage {
             UsageState::Read { report, today, .. } => (rail_word(report, today), Ink::Muted),
@@ -343,7 +376,13 @@ fn state_word(page: Page, view: &SettingsView) -> (String, Ink) {
         Page::Permissions => (view.settings.preferences().permissions.label().to_owned(), Ink::Muted),
         Page::Data => (view.sizes.map(|sizes| size_short(sizes.total())).unwrap_or_default(), Ink::Muted),
         Page::About => (view.version.to_owned(), Ink::Muted),
-        _ => (String::new(), Ink::Muted),
+        Page::Terms => match terms_word(view.terms) {
+            word @ TermsWord::NotStated(_) => (word.text(), Tone::Interview.into()),
+            word @ TermsWord::Hidden => (word.text(), Tone::Closed.into()),
+            word => (word.text(), Ink::Muted),
+        },
+        Page::JobsView => (hidden_word(&view.settings.preferences().jobs_view, view.jobs), Ink::Muted),
+        Page::General | Page::Queue => (String::new(), Ink::Muted),
     }
 }
 
@@ -486,7 +525,7 @@ mod tests {
 
     use super::*;
     use crate::runs::application::{ModelCost, TaskCost, TaskOutcome};
-    use crate::settings::application::{Pipeline, UsageReport, sent_on};
+    use crate::settings::application::{Commute, CommuteTier, Pipeline, TermPart, UsageReport, YourTerms, sent_on};
 
     struct State {
         screen: SettingsScreen,
@@ -501,6 +540,8 @@ mod tests {
         providers: Providers,
         last_task: Option<LastTask>,
         task_running: bool,
+        terms: YourTerms,
+        jobs: Option<(usize, usize)>,
     }
 
     /// A key kept in memory, and a Test connection that never answers.
@@ -569,6 +610,8 @@ mod tests {
                 task_running: state.task_running,
                 task_working: state.task_running,
                 now: now(),
+                terms: if state.no_folder { TermsState::NoFolder } else { TermsState::Read(&state.terms) },
+                jobs: state.jobs,
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -577,6 +620,17 @@ mod tests {
                 state.asked = asked;
             }
         })
+    }
+
+    /// Fictional terms: the floor given, and two commute tiers from Namur.
+    fn terms(floor: Option<u32>) -> YourTerms {
+        let tier = |name: &str, places: &[&str], note: &str| CommuteTier {
+            name: name.to_owned(),
+            places: places.iter().map(|place| place.to_string()).collect(),
+            note: note.to_owned(),
+        };
+        let tiers = vec![tier("ideal", &["Namur", "Charleroi"], "Under 45 minutes."), tier("too far", &["Over 2 hours"], "")];
+        YourTerms { floor: TermPart::Read(floor), commute: TermPart::Read(Commute { origin: Some("from Namur (by car)".to_owned()), tiers }) }
     }
 
     fn state() -> Rc<RefCell<State>> {
@@ -613,6 +667,8 @@ mod tests {
             providers: memory_providers(None),
             last_task: None,
             task_running: false,
+            terms: terms(Some(700)),
+            jobs: Some((0, 14)),
         }))
     }
 
@@ -662,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rail_lists_every_page_in_its_group_and_fades_the_later_ones() {
+    fn the_rail_lists_every_page_in_its_group_and_every_one_opens() {
         let mut harness = harness(state());
         harness.run();
         // Appearance's word is the theme, System by default, which is also a group's title.
@@ -673,9 +729,9 @@ mod tests {
         for page in Page::ALL {
             let rows: Vec<_> = harness.query_all_by_label(page.title()).collect();
             assert!(!rows.is_empty(), "{}", page.title());
-            assert_eq!(rows[0].accesskit_node().is_disabled(), !page.built(), "{}", page.title());
+            assert!(!rows[0].accesskit_node().is_disabled(), "{}", page.title());
         }
-        assert_eq!(harness.query_all_by_label("Later").count(), 3, "the three job search pages wait");
+        assert_eq!(harness.query_all_by_label("Later").count(), 0, "every page is built");
         harness.get_by_label("1 missing");
     }
 
@@ -787,6 +843,8 @@ mod tests {
                 task_running: false,
                 task_working: false,
                 now: now(),
+                terms: TermsState::NoFolder,
+                jobs: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -798,7 +856,19 @@ mod tests {
 
     #[test]
     fn every_indexed_line_shows_on_its_page() {
-        for page in [Page::General, Page::Appearance, Page::Usage, Page::Providers, Page::Defaults, Page::Permissions, Page::Data, Page::About] {
+        for page in [
+            Page::General,
+            Page::Appearance,
+            Page::Usage,
+            Page::Terms,
+            Page::Queue,
+            Page::JobsView,
+            Page::Providers,
+            Page::Defaults,
+            Page::Permissions,
+            Page::Data,
+            Page::About,
+        ] {
             let state = state();
             state.borrow_mut().screen.open_on(page);
             let mut harness = harness(state);
@@ -819,12 +889,245 @@ mod tests {
         state.borrow_mut().screen.open_on(page);
     }
 
+    fn disabled_because(harness: &mut Harness<'static>, label: &str, why: &str) {
+        assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+        harness.get_by_label(label).hover();
+        harness.run_steps(8);
+        assert!(harness.query_by_label(why).is_some(), "{label}: {why}");
+    }
+
+    #[test]
+    fn your_terms_show_the_profile_values_read_only() {
+        let state = state();
+        on(&state, Page::Terms);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Freelance only");
+        harness.get_by_label("EUR 700 a day");
+        harness.get_by_label("From Namur (by car).");
+        harness.get_by_label("Ideal");
+        harness.get_by_label("Namur, Charleroi");
+        harness.get_by_label("Under 45 minutes.");
+        harness.get_by_label("Too far");
+        harness.get_by_label("Over 2 hours");
+        harness.get_by_label("From profile");
+        assert!(harness.query_by_role(egui::accesskit::Role::TextInput).is_some(), "only the search is a field");
+        assert_eq!(harness.query_all_by_role(egui::accesskit::Role::TextInput).count(), 1);
+
+        assert!(harness.query_by_label("/setup --section goals").is_none());
+        harness.get_by_label("Show the command").click();
+        harness.run();
+        harness.get_by_label("/setup --section goals");
+        harness.get_by_label("Hide the command").click();
+        harness.run();
+        assert!(harness.query_by_label("/setup --section goals").is_none());
+
+        harness.get_by_label("Edit in Profile").click();
+        harness.run();
+        assert_eq!(state.borrow().asked, Some(SettingsRequest::OpenProfile));
+    }
+
+    #[test]
+    fn a_floor_not_stated_says_what_the_check_does_instead() {
+        let state = state();
+        state.borrow_mut().terms = terms(None);
+        on(&state, Page::Terms);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label("Not stated");
+        harness.get_by_label("Your profile does not state one, so every job's day-rate check reads Unclear instead of guessing.");
+        harness.get_by_label("1 not stated");
+        assert!(harness.query_by_label("EUR 700 a day").is_none());
+    }
+
+    #[test]
+    fn a_profile_that_cannot_be_read_hides_your_terms_and_waits_to_update() {
+        let state = state();
+        let failed = crate::shared_kernel::LoadError { source: "01-candidate-profile.md".to_owned(), reason: "not UTF-8\u{202e} text".to_owned() };
+        state.borrow_mut().terms.floor = TermPart::Failed(failed);
+        on(&state, Page::Terms);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label("Your terms could not be read.");
+        harness.get_by_label("01-candidate-profile.md: not UTF-8 text");
+        harness.get_by_label("Jobs still lists every job. Its day-rate check reads Unclear until the file is fixed.");
+        harness.get_by_label("Your terms are hidden, not gone");
+        harness.get_by_label("From Namur (by car). This part comes from another file, so it still shows.");
+        harness.get_by_label("Namur, Charleroi");
+        assert!(harness.query_by_label("Freelance only").is_none(), "the rate's part is hidden");
+        harness.get_by_label("Hidden");
+        assert!(!harness.get_by_label("Edit in Profile").accesskit_node().is_disabled());
+        disabled_because(&mut harness, "Update with Claude…", crate::settings::application::PROFILE_UNREADABLE);
+    }
+
+    #[test]
+    fn profile_text_shows_as_plain_text() {
+        let state = state();
+        let tier =
+            CommuteTier { name: "**ideal**".to_owned(), places: vec!["Na\u{200b}mur".to_owned(), "[x](https://x.example)".to_owned()], note: String::new() };
+        state.borrow_mut().terms.commute = TermPart::Read(Commute { origin: Some("from Na\u{202e}mur".to_owned()), tiers: vec![tier] });
+        on(&state, Page::Terms);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label("**ideal**");
+        harness.get_by_label("Namur, [x](https://x.example)");
+        harness.get_by_label("From Namur.");
+        assert_eq!(harness.query_all_by_role(egui::accesskit::Role::Link).count(), 1, "nothing from the profile is a link");
+        harness.get_by_role_and_label(egui::accesskit::Role::Link, "Show the command");
+    }
+
+    #[test]
+    fn with_no_folder_your_terms_wait_for_one() {
+        let state = state();
+        state.borrow_mut().no_folder = true;
+        on(&state, Page::Terms);
+        let mut harness = harness(state);
+        harness.run();
+        harness.get_by_label("Your terms show here once you choose your job search folder.");
+        disabled_because(&mut harness, "Edit in Profile", "Choose a folder first.");
+        disabled_because(&mut harness, "Update with Claude…", "Choose a folder first.");
+    }
+
+    #[test]
+    fn the_queue_settings_save() {
+        let state = state();
+        on(&state, Page::Queue);
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert_eq!(harness.get_by_label("14 days").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        harness.get_by_label("30 days").click();
+        harness.run();
+        harness.get_by_label("Until Monday").click();
+        harness.run();
+        let queue = state.borrow().settings.preferences().queue.clone();
+        assert_eq!((queue.coming_up, queue.later), (crate::settings::application::ComingUp::Month, crate::settings::application::LaterLasts::UntilMonday));
+    }
+
+    fn reasons(state: &Rc<RefCell<State>>) -> Vec<String> {
+        state.borrow().settings.preferences().queue.skip_reasons.list().to_vec()
+    }
+
+    fn reason_field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+        harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("New skip reason"))
+    }
+
+    #[test]
+    fn a_skip_reason_is_added_by_button_or_enter_and_removed() {
+        let state = state();
+        on(&state, Page::Queue);
+        let mut harness = harness(state.clone());
+        harness.run();
+        disabled_because(&mut harness, "Add reason", "Type a reason first.");
+
+        reason_field(&harness).focus();
+        harness.run();
+        reason_field(&harness).type_text("rate");
+        harness.run();
+        disabled_because(&mut harness, "Add reason", "That reason is already in the list.");
+
+        reason_field(&harness).focus();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        reason_field(&harness).type_text("Culture");
+        harness.run();
+        harness.get_by_label("Add reason").click();
+        harness.run();
+        assert_eq!(reasons(&state), ["Rate", "Scope", "Domain", "Location", "Culture"]);
+        assert_eq!(reason_field(&harness).value().as_deref(), Some(""), "the field empties");
+
+        reason_field(&harness).focus();
+        harness.run();
+        reason_field(&harness).type_text("Agency, not the client");
+        harness.key_press(Key::Enter);
+        harness.run();
+        assert_eq!(reasons(&state).last().map(String::as_str), Some("Agency, not the client"));
+
+        harness.get_by_label("Remove Scope").click();
+        harness.run();
+        assert_eq!(reasons(&state), ["Rate", "Domain", "Location", "Culture", "Agency, not the client"]);
+    }
+
+    #[test]
+    fn a_reason_field_takes_forty_characters() {
+        let state = state();
+        on(&state, Page::Queue);
+        let mut harness = harness(state);
+        harness.run();
+        reason_field(&harness).focus();
+        harness.run();
+        reason_field(&harness).type_text(&"x".repeat(45));
+        harness.run();
+        assert_eq!(reason_field(&harness).value().map(|text| text.chars().count()), Some(40));
+    }
+
+    #[test]
+    fn the_jobs_view_filters_save_and_the_count_follows() {
+        let state = state();
+        on(&state, Page::JobsView);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("No filter is on, so Jobs shows all 14 jobs.");
+        let floor = harness.get_by_label("Day rate under your floor");
+        assert_eq!(floor.accesskit_node().description().as_deref(), Some("EUR 700 a day, from Your terms."));
+        floor.click();
+        harness.run();
+        harness.get_by_label("Too far to commute").click();
+        harness.run();
+        harness.get_by_label("Language does not match").click();
+        harness.run();
+        harness.get_by_label("Hide jobs the safety check flagged").click();
+        harness.run();
+        harness.get_by_label("Hide jobs scored under 60").click();
+        harness.run();
+        let view = state.borrow().settings.preferences().jobs_view;
+        assert!(view.below_floor && view.too_far && view.language && view.flagged && view.under_score);
+
+        state.borrow_mut().jobs = Some((3, 14));
+        harness.run();
+        harness.get_by_label("Jobs hides 3 of 14 jobs with these filters. Hidden jobs stay in your folder, and Jobs shows how many it hides.");
+        harness.get_by_label("3 hidden");
+    }
+
+    #[test]
+    fn a_typed_score_saves_once_it_reads_from_0_to_100() {
+        let state = state();
+        on(&state, Page::JobsView);
+        let mut harness = harness(state.clone());
+        harness.run();
+        fn field<'a>(harness: &'a Harness<'static>) -> egui_kittest::Node<'a> {
+            harness.get_by(|node| node.role() == egui::accesskit::Role::TextInput && node.label().as_deref() == Some("Hide jobs scored under"))
+        }
+        field(&harness).focus();
+        harness.run();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("75");
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().jobs_view.score, 75);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        field(&harness).type_text("150");
+        harness.run();
+        assert_eq!(state.borrow().settings.preferences().jobs_view.score, 75, "past 100 saves nothing");
+        assert_eq!(field(&harness).value().as_deref(), Some("150"), "and stays as typed while the field has the focus");
+    }
+
+    #[test]
+    fn a_search_finds_the_queue_and_jobs_view() {
+        let state = state();
+        state.borrow_mut().screen.query = "Skip reasons".to_owned();
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::Queue);
+        state.borrow_mut().screen.query = "hide jobs scored under".to_owned();
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::JobsView);
+    }
+
     #[test]
     fn the_new_pages_say_their_state_in_the_rail() {
         let state = state();
         let mut harness = harness(state.clone());
         harness.run();
-        assert!(harness.query_all_by_label("Later").next().is_some(), "the job search pages wait");
+        harness.get_by_label("From profile");
+        assert!(harness.query_by_label_contains(" hidden").is_none(), "no filter, no word");
         harness.get_by_label("Claude sign-in");
         harness.get_by_label("Allow and note");
         harness.get_by_label("212 MB");
@@ -982,6 +1285,8 @@ mod tests {
                 task_running: false,
                 task_working: false,
                 now: now(),
+                terms: TermsState::NoFolder,
+                jobs: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1201,6 +1506,8 @@ mod tests {
                 task_running: false,
                 task_working: false,
                 now: now(),
+                terms: TermsState::NoFolder,
+                jobs: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

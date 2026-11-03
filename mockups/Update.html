@@ -281,7 +281,7 @@ function notes(o = {}) {
   const body = `<div class="nb" aria-label="What changed in 0.2.0">${NOTES}<span class="bar-y"></span></div>
     <p class="ntrust">From the GitHub release. Its links and images do not open here.</p>`;
   const foot = o.ready
-    ? `<div class="nready">Jobdesk closes, installs 0.2.0 and opens again on this screen, with the same folder and settings. Restart waits while a task runs.</div>
+    ? `<div class="nready">Jobdesk closes, installs 0.2.0 and opens again with the same folder and settings. Restart waits while a task is open.</div>
        <div class="nf"><span class="b pri foc">Restart to update</span><span class="lk">Open the release page</span><span class="esc r">Esc closes</span></div>`
     : `<div class="nf"><span class="b pri foc">Download 0.2.0</span><span class="muted" style="font-size: 13px">14.2 MB</span><span class="lk r">Open the release page</span></div>
        <div class="esc" style="padding: 0 18px 12px; margin-top: -6px; font-size: 12.5px; color: var(--faint)">Nothing installs until you choose Restart to update. Esc closes.</div>`;

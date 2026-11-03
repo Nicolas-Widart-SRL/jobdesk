@@ -654,7 +654,7 @@ mod tests {
         let pages = |query, drawn| search(query, drawn).unwrap().pages;
         assert_eq!(pages("6 hours", Drawn::folder(true)), vec![(Page::About, 1)]);
         assert!(pages("6 hours", off).is_empty(), "off, the help says nothing of it");
-        assert!(pages("GitHub", off).is_empty());
+        assert_eq!(pages("GitHub", off), vec![(Page::Data, 1)], "off, only Data and privacy's line names GitHub");
         assert_eq!(pages("only when you choose", off), vec![(Page::About, 1)]);
         assert!(pages("only when you choose", Drawn::folder(true)).is_empty());
         assert_eq!(pages("updates", off), vec![(Page::About, 2)], "the section and the switch, either way");

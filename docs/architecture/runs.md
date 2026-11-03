@@ -19,7 +19,7 @@ Each run owns one `claude -p` child process, with the stream-json protocol over 
 3. in `.claude/local` of the user's profile folder;
 4. on Windows, in npm's `%APPDATA%\npm`.
 
-On Windows the profile folder is `USERPROFILE`, with `HOME` only when it is unset. Each folder is tried for `claude.exe`, `claude.cmd` and `claude.bat`, in that order.
+On Windows the profile folder is `USERPROFILE`, with `HOME` only when it is unset, and each folder is tried for `claude.exe`, `claude.cmd` and `claude.bat`, in that order.
 
 ## Stopping a run and Windows system programs
 

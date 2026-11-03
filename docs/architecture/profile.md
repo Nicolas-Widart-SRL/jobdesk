@@ -47,7 +47,7 @@ Save goes through `ProfileEditor`:
 
 `ProfileFiles` writes a copy beside the file with the file's permission bits, syncs it and renames it over the file. So a crash leaves the old text or the new, never half.
 
-That is one plain rename, never retried. A program that writes the file during a wait would be overwritten unseen, so a file held open is a failure the user sees. Jobdesk's own files use a retried rename instead: see [settings](settings.md#how-settingsjson-and-decisionsjson-are-replaced).
+That is one plain rename, never retried. A program that writes the file during a wait would be overwritten unseen, so a file held open is a failure the user sees. `settings.json` and `decisions.json` go through `rename_over` instead, which tries a held file again only on Windows: see [settings](settings.md#how-settingsjson-and-decisionsjson-are-replaced).
 
 ### Save copies
 

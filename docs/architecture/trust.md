@@ -14,7 +14,7 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | Claude's closing question, pinned above the reply box and shown on the Today card | Plain text, with Markdown markup and hidden characters removed |
 | A failed tool's reason, and a load error's reason | Plain text, with hidden characters removed |
 | A run's notices | Plain text, with hidden characters removed: see [Notices](#notices) |
-| Test connection's error | Plain text, with hidden characters removed and the key masked: see [Masking](#masking) |
+| Test connection's error | Plain text: see [Masking](#masking) |
 
 A link opens only on click, and only for `http` or `https`.
 
@@ -68,12 +68,13 @@ The API key has one path: the system keychain, then the environment of that task
 1. The key sits in `claude`'s own environment, so any process of the same user can read it: with `ps -Eww` on macOS, or from the process's environment block on Windows. Any tool the agent runs as the same user can equally read the Claude sign-in's credentials. Jobdesk sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, so Claude Code strips the key from the environment of the tools, hooks and MCP servers it starts.
 2. An older Claude Code that ignores that variable hands the key to its tools. Jobdesk checks no version.
 3. The scrub has side effects, under the API key only: Claude Code forces its permission mode to default, and tools lose variables such as `SSH_AUTH_SOCK`, `GH_TOKEN` and `GITHUB_TOKEN`, `XDG_*`, `CARGO_HOME`, `NPM_CONFIG_*` and any that look like secrets.
-4. An inherited `ANTHROPIC_BASE_URL` is kept on purpose, for a proxy the user trusts, so the key goes to the host it names. The rules:
+4. An inherited `ANTHROPIC_BASE_URL` is kept on purpose, for a proxy the user trusts, so the key goes to the host it names. A base URL set in the `env` of the workspace's project settings is not checked, because the CLI reads it itself. So a task that rewrites those settings could route the key of a later run to a host it picks.
+
+   `key_route_refusal` in `shared_kernel` checks the inherited URL with these rules:
    - A task under the key and a key's Test connection start no process when that URL is set and not blank and is neither `https` nor `http` to `localhost`, `127.0.0.0/8` or `::1`. They say why without naming any value. Text that is no URL is refused too.
    - An `http` URL on this machine is refused as well when `HTTP_PROXY`, `http_proxy`, `ALL_PROXY` or `all_proxy` is set and not empty, whatever `NO_PROXY` says.
-   - `key_route_refusal` in `shared_kernel` checks both.
-   - A base URL set in the `env` of the workspace's project settings is not checked, because the CLI reads it itself. So a task that rewrites those settings could route the key of a later run to a host it picks.
-   - The provider switches and `ANTHROPIC_AUTH_TOKEN`, which would outrank the key, are removed from the environment when a key is passed. `ENV_THAT_OUTRANKS_THE_KEY` in `shared_kernel` lists them.
+
+   When a key is passed, the provider switches and `ANTHROPIC_AUTH_TOKEN`, which would outrank the key, are also removed from the environment. `ENV_THAT_OUTRANKS_THE_KEY` in `shared_kernel` lists them.
 
 ## Tool permissions
 

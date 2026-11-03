@@ -110,19 +110,26 @@ pub enum InstallBlock {
     NoKey,
 }
 
-/// What Restart to update applies: the checked file of this version.
+/// What Restart to update applies: the file of this version, and the signature of this release.
+/// The signature is carried so the apply step can check the file once more against the release it was downloaded for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestartPlan {
     pub version: Version,
     pub file: PathBuf,
+    pub signature: String,
 }
+
+/// The number of one download. Each download started gets a new one, and every event of it carries it back,
+/// so what a cancelled download still reports late is never taken for the next one's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DownloadId(pub u64);
 
 /// What the service reports back, in the order it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceEvent {
     Checked(Result<Release, Failure>),
-    Progress { done: u64, total: u64 },
-    Ended(DownloadEnd),
+    Progress { id: DownloadId, done: u64, total: u64 },
+    Ended { id: DownloadId, end: DownloadEnd },
 }
 
 /// The network and the disk side of an update. Each call returns at once, and the answers come through `poll`.
@@ -130,8 +137,10 @@ pub trait UpdateService: Send {
     /// Reads the feed.
     fn check(&mut self);
     /// Downloads the build of `release` from the address built from its version, and checks its signature.
-    fn download(&mut self, release: &Release);
-    /// Stops the download and deletes what it wrote.
+    /// `id` is the number of this download: every `Progress` and `Ended` it reports must carry it back unchanged.
+    /// Events of an older download, which a cancel left running, carry the older number and are ignored.
+    fn download(&mut self, release: &Release, id: DownloadId);
+    /// Stops the download and deletes what it wrote, a finished file too.
     fn cancel(&mut self);
     /// The next thing that happened, if anything did.
     fn poll(&mut self) -> Option<ServiceEvent>;

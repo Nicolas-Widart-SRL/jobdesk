@@ -145,7 +145,8 @@ pub struct UpdateView {
 pub struct Updates {
     service: Box<dyn UpdateService>,
     state: UpdateState,
-    platform: Platform,
+    /// `None` on a computer Jobdesk publishes no build for.
+    platform: Option<Platform>,
     auto: bool,
     last_attempt: Option<NaiveDateTime>,
     /// The time of the last `poll` or `check_now`, which the words say a check relative to.
@@ -154,24 +155,22 @@ pub struct Updates {
 
 impl Updates {
     /// `current` is the version this copy runs, as `CARGO_PKG_VERSION` gives it. `block` is why it cannot replace itself.
-    /// Automatic checks start on, as the setting does.
-    pub fn new(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>) -> Self {
-        let current = Version::parse(current).unwrap_or_default();
-        Self {
-            service,
-            state: UpdateState::new(current, block),
-            platform: Platform::current().unwrap_or(Platform::MacArm),
-            auto: true,
-            last_attempt: None,
-            now: None,
-        }
+    /// `auto` is the setting as it is saved, so no check starts against the user's choice before the first `set_auto`.
+    /// A copy whose version cannot be read, or that runs on a computer with no published build, is blocked as well.
+    pub fn new(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool) -> Self {
+        Self::with_platform(service, current, block, auto, Platform::current())
     }
 
-    /// Follows the setting. Only a change counts, so this may run every frame.
+    fn with_platform(service: Box<dyn UpdateService>, current: &str, block: Option<InstallBlock>, auto: bool, platform: Option<Platform>) -> Self {
+        let version = Version::parse(current);
+        // Without a version to compare, every release would read as newer, even an older one.
+        let block = block.or_else(|| (version.is_none() || platform.is_none()).then_some(InstallBlock::NotInstalled));
+        Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None }
+    }
+
+    /// Follows the setting. It is cheap, so it may run every frame.
     pub fn set_auto(&mut self, auto: bool) {
-        if self.auto != auto {
-            self.auto = auto;
-        }
+        self.auto = auto;
     }
 
     /// Takes what the service reported, then starts an automatic check when one is due. Call it every frame.
@@ -179,9 +178,14 @@ impl Updates {
         self.now = Some(now);
         while let Some(event) = self.service.poll() {
             match event {
-                ServiceEvent::Checked(result) => self.state.checked(result, now),
-                ServiceEvent::Progress { done, total } => self.state.progress(done, total),
-                ServiceEvent::Ended(end) => self.state.ended(end),
+                ServiceEvent::Checked(result) => {
+                    // A release that is gone takes its download with it, and the service deletes the file.
+                    if self.state.checked(result, now) {
+                        self.service.cancel();
+                    }
+                }
+                ServiceEvent::Progress { id, done, total } => self.state.progress(id, done, total),
+                ServiceEvent::Ended { id, end } => self.state.ended(id, end),
             }
         }
         if due(self.last_attempt, now, self.auto) {
@@ -204,8 +208,8 @@ impl Updates {
 
     /// Starts the download of the release found, when it may start: Download and Retry.
     pub fn download(&mut self) {
-        if let Some(release) = self.state.start_download() {
-            self.service.download(&release);
+        if let Some((release, id)) = self.state.start_download() {
+            self.service.download(&release, id);
         }
     }
 
@@ -266,7 +270,7 @@ impl Updates {
         let (action, problem, slip) = match &self.state.download {
             Download::Idle => (self.state.block.is_none().then(|| step(BarAction::Download, words::notes_download(version))).flatten(), None, None),
             Download::Running { .. } => (step(BarAction::Cancel, BarAction::Cancel.label().to_owned()), None, None),
-            Download::Ready { .. } => (step(BarAction::Restart, RESTART.to_owned()), None, Some(words::ready_slip(self.platform, version))),
+            Download::Ready { .. } => (step(BarAction::Restart, RESTART.to_owned()), None, self.platform.map(|platform| words::ready_slip(platform, version))),
             Download::Failed { percent, failure } => {
                 (step(BarAction::Retry, BarAction::Retry.label().to_owned()), Some(words::bar_failed(version, *percent, *failure)), None)
             }
@@ -394,13 +398,14 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
-    use crate::updates::domain::{DownloadEnd, Failure};
+    use crate::updates::domain::{DownloadEnd, DownloadId, Failure};
 
     #[derive(Default)]
     struct Log {
         calls: Vec<&'static str>,
         events: VecDeque<ServiceEvent>,
         downloaded: Vec<Version>,
+        ids: Vec<DownloadId>,
     }
 
     struct Recording(Arc<Mutex<Log>>);
@@ -409,10 +414,11 @@ mod tests {
         fn check(&mut self) {
             self.0.lock().unwrap().calls.push("check");
         }
-        fn download(&mut self, release: &Release) {
+        fn download(&mut self, release: &Release, id: DownloadId) {
             let mut log = self.0.lock().unwrap();
             log.calls.push("download");
             log.downloaded.push(release.version);
+            log.ids.push(id);
         }
         fn cancel(&mut self) {
             self.0.lock().unwrap().calls.push("cancel");
@@ -437,12 +443,31 @@ mod tests {
     }
 
     fn desk(block: Option<InstallBlock>) -> (Updates, Arc<Mutex<Log>>) {
+        desk_of("0.1.0", block, Some(Platform::MacArm))
+    }
+
+    fn desk_of(current: &str, block: Option<InstallBlock>, platform: Option<Platform>) -> (Updates, Arc<Mutex<Log>>) {
         let log = Arc::new(Mutex::new(Log::default()));
-        (Updates::new(Box::new(Recording(log.clone())), "0.1.0", block), log)
+        (Updates::with_platform(Box::new(Recording(log.clone())), current, block, true, platform), log)
     }
 
     fn answer(log: &Arc<Mutex<Log>>, event: ServiceEvent) {
         log.lock().unwrap().events.push_back(event);
+    }
+
+    /// The number of the download the service was asked for last.
+    fn last_id(log: &Arc<Mutex<Log>>) -> DownloadId {
+        *log.lock().unwrap().ids.last().expect("a download was started")
+    }
+
+    fn finish(log: &Arc<Mutex<Log>>, end: DownloadEnd) {
+        let id = last_id(log);
+        answer(log, ServiceEvent::Ended { id, end });
+    }
+
+    fn advance(log: &Arc<Mutex<Log>>, done: u64, total: u64) {
+        let id = last_id(log);
+        answer(log, ServiceEvent::Progress { id, done, total });
     }
 
     fn calls(log: &Arc<Mutex<Log>>) -> Vec<&'static str> {
@@ -461,7 +486,7 @@ mod tests {
     fn ready() -> (Updates, Arc<Mutex<Log>>) {
         let (mut updates, log) = found();
         updates.download();
-        answer(&log, ServiceEvent::Ended(DownloadEnd::Done(PathBuf::from("/data/updates/Jobdesk"))));
+        finish(&log, DownloadEnd::Done(PathBuf::from("/data/updates/Jobdesk")));
         updates.poll(at(9, 5));
         (updates, log)
     }
@@ -587,7 +612,7 @@ mod tests {
         updates.download();
         assert_eq!(calls(&log), ["check", "download"]);
         assert_eq!(log.lock().unwrap().downloaded, [Version { major: 0, minor: 2, patch: 0 }]);
-        answer(&log, ServiceEvent::Progress { done: 5_400_000, total: 14_200_000 });
+        advance(&log, 5_400_000, 14_200_000);
         updates.poll(at(9, 1));
         let view = updates.view();
         let bar = view.bar.unwrap();
@@ -658,7 +683,7 @@ mod tests {
     fn a_failed_download_says_why_and_offers_retry() {
         let (mut updates, log) = found();
         updates.download();
-        answer(&log, ServiceEvent::Ended(DownloadEnd::Failed { percent: 41, failure: Failure::Interrupted }));
+        finish(&log, DownloadEnd::Failed { percent: 41, failure: Failure::Interrupted });
         updates.poll(at(9, 3));
         let view = updates.view();
         let bar = view.bar.unwrap();
@@ -676,7 +701,7 @@ mod tests {
     fn a_bad_signature_is_said_plainly_and_may_be_retried() {
         let (mut updates, log) = found();
         updates.download();
-        answer(&log, ServiceEvent::Ended(DownloadEnd::BadSignature));
+        finish(&log, DownloadEnd::BadSignature);
         updates.poll(at(9, 3));
         let bar = updates.view().bar.unwrap();
         assert_eq!(bar.words, "0.2.0 failed its signature check. It was deleted, not installed.");
@@ -730,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_is_followed_only_when_it_changes() {
+    fn the_switch_is_followed() {
         let (mut updates, _log) = desk(None);
         assert!(updates.view().about.auto);
         updates.set_auto(false);
@@ -738,5 +763,106 @@ mod tests {
         assert!(!updates.view().about.auto);
         updates.set_auto(true);
         assert!(updates.view().about.auto);
+    }
+
+    #[test]
+    fn a_switch_that_starts_off_never_checks_before_it_is_asked() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let mut updates = Updates::with_platform(Box::new(Recording(log.clone())), "0.1.0", None, false, Some(Platform::MacArm));
+        updates.poll(at(9, 0));
+        assert!(calls(&log).is_empty());
+        assert_eq!(updates.next_due(at(9, 0)), None);
+        assert!(!updates.view().about.auto);
+    }
+
+    #[test]
+    fn a_version_that_cannot_be_read_never_offers_a_download() {
+        for current in ["0.3.0-rc.1", "", "v1", "banana"] {
+            let (mut updates, log) = desk_of(current, None, Some(Platform::MacArm));
+            updates.poll(at(9, 0));
+            answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() })));
+            updates.poll(at(9, 0));
+            assert_eq!(updates.view().bar.map(|bar| bar.action), Some(None), "{current:?}: an older release is not offered either");
+            updates.download();
+            assert_eq!(calls(&log), ["check"], "{current:?}");
+            let notes = updates.view().notes.unwrap();
+            assert_eq!((notes.action, notes.blocked.is_some()), (None, true), "{current:?}");
+        }
+    }
+
+    #[test]
+    fn a_computer_with_no_published_build_never_offers_a_download() {
+        let (mut updates, log) = desk_of("0.1.0", None, None);
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(release())));
+        updates.poll(at(9, 0));
+        updates.download();
+        assert_eq!(calls(&log), ["check"]);
+        let view = updates.view();
+        assert_eq!(view.bar.unwrap().action, None);
+        assert!(view.notes.unwrap().blocked.is_some());
+    }
+
+    #[test]
+    fn a_block_the_caller_gave_is_kept() {
+        let (mut updates, log) = desk_of("banana", Some(InstallBlock::ReadOnly), None);
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(release())));
+        updates.poll(at(9, 0));
+        let blocked = updates.view().notes.unwrap().blocked.unwrap();
+        assert!(blocked.starts_with("Jobdesk cannot replace itself where it is installed."), "{blocked}");
+    }
+
+    #[test]
+    fn a_late_event_of_a_cancelled_download_changes_nothing_in_the_next() {
+        let (mut updates, log) = found();
+        updates.download();
+        let old = last_id(&log);
+        updates.cancel();
+        updates.download();
+        let new = last_id(&log);
+        assert_ne!(old, new);
+        answer(&log, ServiceEvent::Ended { id: old, end: DownloadEnd::Done(PathBuf::from("/data/updates/Jobdesk")) });
+        answer(&log, ServiceEvent::Progress { id: old, done: 900, total: 1000 });
+        answer(&log, ServiceEvent::Ended { id: old, end: DownloadEnd::Cancelled });
+        updates.poll(at(9, 5));
+        assert_eq!(updates.restart_plan(), None);
+        assert_eq!(updates.view().bar.unwrap().words, "Downloading 0.2.0");
+        advance(&log, 5_400_000, 14_200_000);
+        updates.poll(at(9, 6));
+        assert_eq!(updates.view().bar.unwrap().progress.unwrap().share, "38%");
+    }
+
+    #[test]
+    fn the_restart_plan_carries_the_signature_of_the_release() {
+        let (updates, _log) = ready();
+        assert_eq!(updates.restart_plan().unwrap().signature, "sig");
+    }
+
+    #[test]
+    fn a_release_that_is_withdrawn_takes_its_ready_download_with_it() {
+        let (mut updates, log) = ready();
+        updates.check_now(at(15, 0));
+        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() })));
+        updates.poll(at(15, 0));
+        assert_eq!(calls(&log).last(), Some(&"cancel"), "the service is asked to delete the file");
+        assert_eq!(updates.restart_plan(), None);
+        let view = updates.view();
+        assert_eq!((view.bar, view.notes), (None, None));
+        assert_eq!(view.about.tag, Some(("Up to date", Mark::Good)));
+    }
+
+    #[test]
+    fn a_release_that_is_withdrawn_stops_its_running_download() {
+        let (mut updates, log) = found();
+        updates.download();
+        updates.check_now(at(9, 30));
+        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release() })));
+        updates.poll(at(9, 30));
+        assert_eq!(calls(&log), ["check", "download", "check", "cancel"]);
+        assert_eq!(updates.view().bar, None);
+        finish(&log, DownloadEnd::Done(PathBuf::from("/late")));
+        updates.poll(at(9, 31));
+        assert_eq!(updates.restart_plan(), None);
     }
 }

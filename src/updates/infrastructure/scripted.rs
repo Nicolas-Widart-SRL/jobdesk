@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::updates::domain::{Release, ServiceEvent, UpdateService};
+use crate::updates::domain::{DownloadId, Release, ServiceEvent, UpdateService};
 
 /// A service that never answers: a check or a download started with it stays running. For previews and snapshots.
 #[derive(Default)]
@@ -9,7 +9,7 @@ pub struct IdleUpdates;
 impl UpdateService for IdleUpdates {
     fn check(&mut self) {}
 
-    fn download(&mut self, _release: &Release) {}
+    fn download(&mut self, _release: &Release, _id: DownloadId) {}
 
     fn cancel(&mut self) {}
 
@@ -19,7 +19,8 @@ impl UpdateService for IdleUpdates {
 }
 
 /// A service that answers from a queue at once: a check gets the next `Checked`, and a download gets the progress and
-/// the end that follow. For tests and snapshots, so no network or disk is touched.
+/// the end that follow, stamped with the number of that download whatever number the script gave them.
+/// For tests and snapshots, so no network or disk is touched.
 pub struct ScriptedUpdates {
     script: VecDeque<ServiceEvent>,
     sent: VecDeque<ServiceEvent>,
@@ -38,10 +39,15 @@ impl UpdateService for ScriptedUpdates {
         }
     }
 
-    fn download(&mut self, _release: &Release) {
-        while let Some(event @ (ServiceEvent::Progress { .. } | ServiceEvent::Ended(_))) = self.script.front().cloned() {
+    fn download(&mut self, _release: &Release, id: DownloadId) {
+        loop {
+            let event = match self.script.front() {
+                Some(ServiceEvent::Progress { done, total, .. }) => ServiceEvent::Progress { id, done: *done, total: *total },
+                Some(ServiceEvent::Ended { end, .. }) => ServiceEvent::Ended { id, end: end.clone() },
+                _ => break,
+            };
             self.script.pop_front();
-            let ends = matches!(event, ServiceEvent::Ended(_));
+            let ends = matches!(event, ServiceEvent::Ended { .. });
             self.sent.push_back(event);
             if ends {
                 break;
@@ -49,8 +55,9 @@ impl UpdateService for ScriptedUpdates {
         }
     }
 
+    /// Drops the download's events that were not read yet, and no answer to a check.
     fn cancel(&mut self) {
-        self.sent.clear();
+        self.sent.retain(|event| matches!(event, ServiceEvent::Checked(_)));
     }
 
     fn poll(&mut self) -> Option<ServiceEvent> {
@@ -73,11 +80,19 @@ mod tests {
         std::iter::from_fn(|| service.poll()).collect()
     }
 
+    fn progress(id: u64, done: u64) -> ServiceEvent {
+        ServiceEvent::Progress { id: DownloadId(id), done, total: 10 }
+    }
+
+    fn ended(id: u64, end: DownloadEnd) -> ServiceEvent {
+        ServiceEvent::Ended { id: DownloadId(id), end }
+    }
+
     #[test]
     fn the_idle_service_never_answers() {
         let mut idle = IdleUpdates;
         idle.check();
-        idle.download(&release());
+        idle.download(&release(), DownloadId(1));
         idle.cancel();
         assert_eq!(idle.poll(), None);
     }
@@ -95,20 +110,25 @@ mod tests {
     }
 
     #[test]
-    fn a_download_gets_its_progress_and_its_end() {
-        let end = ServiceEvent::Ended(DownloadEnd::Done(PathBuf::from("/updates/Jobdesk")));
-        let mut service = ScriptedUpdates::new([
-            ServiceEvent::Checked(Ok(release())),
-            ServiceEvent::Progress { done: 5, total: 10 },
-            end.clone(),
-            ServiceEvent::Ended(DownloadEnd::BadSignature),
-        ]);
-        service.download(&release());
+    fn a_download_gets_its_progress_and_its_end_with_its_own_number() {
+        let done = DownloadEnd::Done(PathBuf::from("/updates/Jobdesk"));
+        let mut service =
+            ScriptedUpdates::new([ServiceEvent::Checked(Ok(release())), progress(0, 5), ended(0, done.clone()), ended(0, DownloadEnd::BadSignature)]);
+        service.download(&release(), DownloadId(1));
         assert_eq!(service.poll(), None, "a check comes first");
         service.check();
-        service.download(&release());
-        assert_eq!(drain(&mut service), [ServiceEvent::Checked(Ok(release())), ServiceEvent::Progress { done: 5, total: 10 }, end]);
-        service.download(&release());
-        assert_eq!(drain(&mut service), [ServiceEvent::Ended(DownloadEnd::BadSignature)]);
+        service.download(&release(), DownloadId(1));
+        assert_eq!(drain(&mut service), [ServiceEvent::Checked(Ok(release())), progress(1, 5), ended(1, done)]);
+        service.download(&release(), DownloadId(2));
+        assert_eq!(drain(&mut service), [ended(2, DownloadEnd::BadSignature)]);
+    }
+
+    #[test]
+    fn cancel_drops_only_the_events_of_the_download() {
+        let mut service = ScriptedUpdates::new([ServiceEvent::Checked(Ok(release())), progress(0, 5), ended(0, DownloadEnd::BadSignature)]);
+        service.check();
+        service.download(&release(), DownloadId(1));
+        service.cancel();
+        assert_eq!(drain(&mut service), [ServiceEvent::Checked(Ok(release()))], "an unread answer to a check stays");
     }
 }

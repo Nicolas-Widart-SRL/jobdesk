@@ -5,6 +5,6 @@ pub use updates::{AboutAction, AboutButton, AboutUpdate, BarAction, BarGroup, Ba
 pub use words::{CHECK_NOW, CHECKING_WORD, SessionState, restart_wait};
 
 pub use crate::updates::domain::{
-    DownloadEnd, FEED_URL, Failure, InstallBlock, Platform, REPOSITORY, Release, RestartPlan, ServiceEvent, UpdateService, Version, asset_url, relaunch_args,
-    release_page,
+    DownloadEnd, DownloadId, FEED_URL, Failure, InstallBlock, Platform, REPOSITORY, Release, RestartPlan, ServiceEvent, UpdateService, Version, asset_url,
+    relaunch_args, release_page,
 };

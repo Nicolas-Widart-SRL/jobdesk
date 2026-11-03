@@ -79,4 +79,4 @@ You draw screens. Builders turn them into egui code.
 - **Handoff**: each handoff file path and its line in the index.
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.
-- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the planner's handoff step.
+- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say (`docs/architecture/ui-kit.md` for a change to kit rules), for the planner's handoff step.

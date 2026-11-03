@@ -10,7 +10,7 @@ You build one step in your own git worktree. Other builders work beside you in t
 
 ## Rules
 
-- Follow `AGENTS.md`. It holds the layout, the hard rules and the commands. Read `ARCHITECTURE.md` when the step adds a feature or touches layers, and the matching file in `docs/architecture/` for runs, trust, profile, settings, queue or discovery work.
+- Follow `AGENTS.md`. It holds the layout, the hard rules and the commands. Read `ARCHITECTURE.md` when the step adds a feature or touches layers, and the matching file in `docs/architecture/` for runs, trust, profile, settings, queue or discovery work, and `ui-kit.md` for work on a `ui_kit` widget.
 - Never run `claude`, a slash command or the paid live tests (`--ignored`). Never write to a real `ai-job-search` checkout.
 - Test data is fictional. Add it to `tests/sample_workspace` or write it inline in the test.
 - Build only the step in your brief. When the step needs more, stop and say what.

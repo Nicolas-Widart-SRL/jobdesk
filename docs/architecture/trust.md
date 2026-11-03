@@ -97,7 +97,7 @@ The API key has one path: the system keychain, read once per launch until a read
 
    When a key is passed, the provider switches and `ANTHROPIC_AUTH_TOKEN`, which would outrank the key, are also removed from the environment. `ENV_THAT_OUTRANKS_THE_KEY` in `shared_kernel` lists them.
 5. After the first read, the key stays in Jobdesk's memory until Remove or quit, so a process of the same user that can read Jobdesk's memory can read it. That spares a keychain prompt at each task.
-6. On macOS the keychain may still ask once per launch, until the user chooses Always Allow. Jobdesk is ad-hoc signed, so Always Allow may not survive an update. The legacy keychain prompt offers no Touch ID.
+6. On macOS the keychain may still ask at the first read of each launch, until the user chooses Always Allow. A denied prompt is not held, so the next task's start or key test asks again, and Save key and Remove may prompt too. Jobdesk is ad-hoc signed, so Always Allow may not survive an update. The legacy keychain prompt offers no Touch ID.
 
 ## Tool permissions
 

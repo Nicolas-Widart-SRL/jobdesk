@@ -157,12 +157,30 @@ impl KeyCache {
 
     /// As `read_waiting`, but None at once while another thread reads the keychain, so the window never waits on its prompt.
     fn read_now(&self) -> Option<Result<Option<ApiKey>, KeyStoreError>> {
-        let turn = match self.turn.try_lock() {
-            Ok(turn) => turn,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return None,
-        };
+        let turn = self.try_turn()?;
         Some(self.answer_or_read(turn))
+    }
+
+    /// What the page shows: the held key, or else why the last read failed, or else the keychain's answer.
+    /// None at once while another thread reads the keychain, because its answer may replace that failure.
+    fn look(&self) -> Option<Result<Option<ApiKey>, KeyStoreError>> {
+        if let Some(Ok(held)) = self.known() {
+            return Some(Ok(held));
+        }
+        let turn = self.try_turn()?;
+        match self.known() {
+            Some(known) => Some(known),
+            None => Some(self.answer_or_read(turn)),
+        }
+    }
+
+    /// The read turn, or None while another thread holds it.
+    fn try_turn(&self) -> Option<MutexGuard<'_, ()>> {
+        match self.turn.try_lock() {
+            Ok(turn) => Some(turn),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
     }
 
     /// What is known without asking the keychain: the held key, or why the last read failed.
@@ -241,6 +259,8 @@ pub struct Providers {
     key: Arc<KeyCache>,
     tester: Box<dyn ConnectionTester>,
     saved: Saved,
+    /// What the last `read_once` found: a task's start reading the keychain.
+    keychain_busy: bool,
     running: Option<Running>,
     sign_in_check: Option<SignInCheck>,
     key_failure: Option<KeyFailure>,
@@ -249,7 +269,7 @@ pub struct Providers {
 impl Providers {
     pub fn new(keys: Arc<dyn KeyStore>, tester: Box<dyn ConnectionTester>) -> Self {
         let key = Arc::new(KeyCache::new(keys));
-        Self { key, tester, saved: Saved::NotRead, running: None, sign_in_check: None, key_failure: None }
+        Self { key, tester, saved: Saved::NotRead, keychain_busy: false, running: None, sign_in_check: None, key_failure: None }
     }
 
     pub fn saved(&self) -> &Saved {
@@ -258,22 +278,23 @@ impl Providers {
 
     /// The mask and the method, from what is known in memory, or from the keychain when nothing asked it yet.
     /// A key a task's start or a test read after a failed read replaces Unreadable. True while a task's start reads the keychain:
-    /// the page then stays NotRead without waiting on that prompt, and should look again soon.
+    /// the page then keeps NotRead or the old failure without waiting on that prompt, offers no key action, and should look again soon.
     pub fn read_once(&mut self) -> bool {
+        self.keychain_busy = false;
         if matches!(self.saved, Saved::Absent | Saved::Present(_)) {
             return false;
         }
-        if let Some(known) = self.key.known() {
-            self.saved = saved_of(known);
-            return false;
+        match self.key.look() {
+            Some(answer) => self.saved = saved_of(answer),
+            None => self.keychain_busy = true,
         }
-        match self.key.read_now() {
-            Some(answer) => {
-                self.saved = saved_of(answer);
-                false
-            }
-            None => true,
-        }
+        self.keychain_busy
+    }
+
+    /// True when the last `read_once` found a task's start reading the keychain, perhaps behind its prompt.
+    /// Until it answers, the page cannot tell what is saved, and a save or a remove would write the keychain under that prompt.
+    pub fn keychain_busy(&self) -> bool {
+        self.keychain_busy
     }
 
     /// How the next task signs in.
@@ -1033,6 +1054,30 @@ mod tests {
         f.providers.read_once();
         assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()), "the page takes the denial without a prompt");
         assert_eq!(f.keys.reads(), 1);
+    }
+
+    #[test]
+    fn a_task_reading_again_after_a_denial_makes_the_page_wait_too() {
+        let mut f = fixture(Some(FAKE));
+        f.keys.fail_reads.store(true, Ordering::SeqCst);
+        assert!(!f.providers.read_once());
+        assert_eq!(f.providers.saved(), &Saved::Unreadable("access denied".to_owned()));
+        f.keys.fail_reads.store(false, Ordering::SeqCst);
+        let answer = f.keys.prompt();
+        let reading = thread::spawn({
+            let reader = f.providers.key_reader();
+            move || reader().map(|key| key.is_some())
+        });
+        f.keys.wait_for_reads(2);
+        assert!(f.providers.read_once(), "the old failure may not be the answer, so the page waits");
+        assert!(f.providers.keychain_busy());
+        assert_eq!(f.keys.reads(), 2, "without a read of its own");
+        answer.send(()).unwrap();
+        assert_eq!(reading.join().unwrap(), Ok(true));
+        assert!(!f.providers.read_once());
+        assert!(!f.providers.keychain_busy());
+        assert!(matches!(f.providers.saved(), Saved::Present(_)));
+        assert_eq!(f.keys.reads(), 2);
     }
 
     #[test]

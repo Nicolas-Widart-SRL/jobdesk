@@ -138,7 +138,7 @@ pub struct Shell {
     settings: Settings,
     /// The Permissions setting the desk last took. A change reaches the desk once, on the frame after it is made.
     permissions: PermissionMode,
-    /// How tasks sign in, the saved key and Test connection. The keychain is read at most once per launch, and the key then held in memory.
+    /// How tasks sign in, the saved key and Test connection. The keychain is read once per launch, until a read succeeds, and the key then held in memory.
     providers: Providers,
     /// The sign-in the desk last took. A change reaches the desk once, as Permissions does.
     sign_in: SignIn,
@@ -1201,7 +1201,7 @@ impl Shell {
             None => ClaudeVersion::NotFound,
         };
         // The mask is read on the first frame Providers shows, never at launch. It asks the keychain only when no test or task asked it yet,
-        // and never waits on a read a task's start has under way. Each later frame only picks up a key read since a failed read.
+        // and never waits on a read a task's start has under way. Each later frame only picks up a key read since a failed read, or one under way.
         if self.settings_screen.page() == Page::Providers {
             self.providers.read_once();
         }
@@ -1267,7 +1267,7 @@ impl Shell {
         let ctx = ui.ctx().clone();
         // Providers picked this frame drew before the read, so it reads now and draws again.
         // While a task's start reads the keychain, it looks again a little later instead of waiting on that prompt.
-        if self.settings_screen.page() == Page::Providers && self.providers.saved() == &Saved::NotRead {
+        if self.settings_screen.page() == Page::Providers && (self.providers.saved() == &Saved::NotRead || self.providers.keychain_busy()) {
             if self.providers.read_once() {
                 ctx.request_repaint_after(KEYCHAIN_LOOK_AGAIN);
             } else {

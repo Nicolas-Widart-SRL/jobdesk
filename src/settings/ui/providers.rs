@@ -530,19 +530,23 @@ fn key_detail(
     detail_head(ui, title, tag);
     let in_use = in_use == SignIn::ApiKey;
     match providers.saved().clone() {
+        // No action until the keychain answers, so a key saved there is never replaced unseen, and nothing writes the keychain
+        // while a task's read waits on its prompt. A failure from before that read may no longer be the answer.
+        Saved::NotRead => keychain_wait(ui),
+        Saved::Unreadable(_) if providers.keychain_busy() => keychain_wait(ui),
         Saved::Present(mask) if !screen.replacing => match providers.key_failure().cloned() {
             // A test of the key that runs again shows as running, not as the failure before it.
             Some(failure) if providers.testing() != Some(TestTarget::Key) => failed_key(ui, screen, settings, providers, view, &mask, &failure),
             _ => saved_key(ui, screen, settings, providers, view, Ok(&mask), in_use),
         },
         Saved::Unreadable(why) if !screen.replacing => saved_key(ui, screen, settings, providers, view, Err(&why), in_use),
-        // No action until the keychain answers, so a key saved there is never replaced unseen.
-        Saved::NotRead => {
-            ui.add(Label::new(rich(ui, KEYCHAIN_WAIT, Type::BODY, Ink::Muted)).wrap());
-        }
         _ => key_entry(ui, screen, settings, providers, view),
     }
     problem_line(ui, screen);
+}
+
+fn keychain_wait(ui: &mut Ui) {
+    ui.add(Label::new(rich(ui, KEYCHAIN_WAIT, Type::BODY, Ink::Muted)).wrap());
 }
 
 /// The field to paste a key, Save key, Cancel and the way to the Console. Save key writes the key to the keychain and

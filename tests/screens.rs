@@ -6168,13 +6168,18 @@ fn a_refused_keychain_write_still_empties_the_field() {
 }
 
 /// A keychain whose first read says it started, then waits for the test's answer, as behind its prompt.
+/// With `denied` set, the read before it is denied at once instead, as a prompt the user turned down.
 struct PromptKeychain {
+    denied: std::sync::atomic::AtomicBool,
     asked: Mutex<std::sync::mpsc::Sender<()>>,
     answered: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 impl KeyStore for PromptKeychain {
     fn read(&self) -> Result<Option<ApiKey>, KeyStoreError> {
+        if self.denied.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(KeyStoreError { message: "access denied".to_owned() });
+        }
         let _ = self.asked.lock().unwrap().send(());
         let answered = self.answered.lock().unwrap().take();
         if let Some(answered) = answered {
@@ -6197,7 +6202,7 @@ impl KeyStore for PromptKeychain {
 fn providers_waits_for_a_keychain_read_a_task_started() {
     let (asked, started) = std::sync::mpsc::channel();
     let (answer, answered) = std::sync::mpsc::channel();
-    let keys = PromptKeychain { asked: Mutex::new(asked), answered: Mutex::new(Some(answered)) };
+    let keys = PromptKeychain { denied: false.into(), asked: Mutex::new(asked), answered: Mutex::new(Some(answered)) };
     let providers = open_providers(Arc::new(keys), idle_tester());
     let reader = providers.key_reader();
     let task = std::thread::spawn(move || reader().map(|key| key.is_some()));
@@ -6205,16 +6210,46 @@ fn providers_waits_for_a_keychain_read_a_task_started() {
     let mut harness = tray_harness(providers_shell("providers_keychain_waits", providers, ("none", SignIn::ClaudeSignIn), at(9, 30)));
     harness.get_by_label(KEY_LINE).click();
     harness.run_steps(3);
-    assert!(is_shown(&harness, "Waiting for the keychain…"));
-    for action in ["Save key", "Replace", "Remove", "Test connection", "Use for tasks"] {
-        assert!(!is_shown(&harness, action), "{action}");
-    }
-    assert!(harness.query_by_role(egui::accesskit::Role::PasswordInput).is_none(), "no field to paste a key over the saved one");
+    assert_waits_for_the_keychain(&harness);
     answer.send(()).unwrap();
     assert_eq!(task.join().unwrap(), Ok(true));
     harness.run_steps(3);
     assert!(!is_shown(&harness, "Waiting for the keychain…"));
     assert!(is_shown(&harness, "Remove") && !is_shown(&harness, "Save key"), "the saved key shows once the keychain answers");
+}
+
+/// A first read denied shows its reason, with Replace and Remove. A task's start that reads again behind a new prompt
+/// may change that answer, and Replace or Remove would write the keychain under the prompt, so the page waits for it too.
+#[test]
+fn providers_waits_for_a_task_that_reads_again_after_a_denied_read() {
+    let (asked, started) = std::sync::mpsc::channel();
+    let (answer, answered) = std::sync::mpsc::channel();
+    let keys = PromptKeychain { denied: true.into(), asked: Mutex::new(asked), answered: Mutex::new(Some(answered)) };
+    let providers = open_providers(Arc::new(keys), idle_tester());
+    let reader = providers.key_reader();
+    let mut harness = tray_harness(providers_shell("providers_keychain_waits_again", providers, ("none", SignIn::ClaudeSignIn), at(9, 30)));
+    harness.get_by_label(KEY_LINE).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "access denied") && is_shown(&harness, "Remove"), "the denial shows first");
+    let task = std::thread::spawn(move || reader().map(|key| key.is_some()));
+    started.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    harness.run_steps(3);
+    assert_waits_for_the_keychain(&harness);
+    assert!(!is_shown(&harness, "access denied"), "the old denial may not be the answer");
+    answer.send(()).unwrap();
+    assert_eq!(task.join().unwrap(), Ok(true));
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Waiting for the keychain…"));
+    assert!(is_shown(&harness, "Remove") && !is_shown(&harness, "access denied"), "the key the task read shows once the keychain answers");
+}
+
+/// Nothing on the API key's side acts while it waits: no field, and no button that writes or tests the key.
+fn assert_waits_for_the_keychain(harness: &Harness) {
+    assert!(is_shown(harness, "Waiting for the keychain…"));
+    for action in ["Save key", "Replace", "Remove", "Test connection", "Use for tasks"] {
+        assert!(!is_shown(harness, action), "{action}");
+    }
+    assert!(harness.query_by_role(egui::accesskit::Role::PasswordInput).is_none(), "no field to paste a key over the saved one");
 }
 
 /// A task whose turn ended keeps its process up while it waits for a reply, and Test connection waits for it too. Its

@@ -59,3 +59,4 @@ PR 39 docs/guide.md: the Today section said the range is 7 or 30 days while the 
 PR 39 ARCHITECTURE.md: said every `can_use_tool` request shows its input shortened past 20 KB, while `AskUserQuestion` becomes a question prompt and only a permission prompt's displayed detail is cut at 20,000 bytes, the answer keeping the full input. Class: overclaim.
 PR 39 CONTRIBUTING.md: gave only the branch-run installer names with a commit segment, while a tag release names them after the tag with no commit. Class: incomplete naming.
 PR 39 mockups/Settings.html: canvas row for removed About row not updated with the code change. Class: stale mockup.
+PR 48 src/runs/ui/run_screen.rs: the repaint schedule asked for a frame every second for Elapsed even in a narrow window where Elapsed is not on screen (only drawn in the side column or the open Run details popup). Class: work scheduled for something not shown.

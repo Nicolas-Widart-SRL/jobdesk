@@ -537,10 +537,15 @@ impl InTray {
     }
 
     /// The day a card set aside today comes back: the Later setting's day, or the card's own date when that comes first,
-    /// so a deadline never passes while its card is away. A date already here or passed leaves the setting's day.
+    /// so a deadline never passes while its card is away. A card due today or already late comes back tomorrow whatever
+    /// the setting, because a passed date shows only while its card is pending.
     fn back_on(&self, card: &Card, today: NaiveDate) -> NaiveDate {
         let until = self.rules.later.until(today);
-        card.due.as_ref().map(|due| due.on).filter(|on| *on > today).map_or(until, |due| until.min(due))
+        match card.due.as_ref().map(|due| due.on) {
+            Some(due) if due <= today => today.succ_opt().unwrap_or(until),
+            Some(due) => until.min(due),
+            None => until,
+        }
     }
 
     pub fn skip(&mut self, card: &Card, today: NaiveDate) {
@@ -1844,17 +1849,80 @@ mod tests {
         let monday = on(11, 2);
         assert_eq!(set_aside_until_monday(monday, on(11, 9)), on(11, 9), "due the day it would come back");
         assert_eq!(set_aside_until_monday(monday, on(11, 12)), on(11, 9));
-        assert_eq!(set_aside_until_monday(monday, monday), on(11, 9), "a card due today keeps the setting's day");
     }
 
     #[test]
-    fn a_passed_deadline_leaves_the_setting_alone() {
-        let jobs = board(vec![job("Acme", 90)]);
+    fn a_card_due_today_comes_back_tomorrow_whatever_the_setting() {
+        let monday = on(11, 2);
+        assert_eq!(set_aside_until_monday(monday, monday), on(11, 3));
+
+        let jobs = board(vec![JobView { deadline: Some(monday), days_to_deadline: Some(0), ..job("Acme", 90) }]);
         let mut tray = InTray::unsaved();
         tray.set_rules(&later_lasting(LaterLasts::ThreeDays));
-        let card = Card { due: Some(Due { on: day(-2), label: "Acme reply".into() }), ..top(&tray, &jobs) };
-        tray.later(&card, today());
+        tray.later(&queue(&tray, &jobs, monday).cards[0], monday);
         assert_eq!(tray.decisions[0].until, Some(on(11, 3)));
+        assert_eq!(tray.undo_offer(monday).unwrap().note, "Set aside until tomorrow");
+    }
+
+    #[test]
+    fn a_late_card_comes_back_tomorrow_and_shows_as_late() {
+        for later in [LaterLasts::UntilMonday, LaterLasts::ThreeDays] {
+            let jobs = board(vec![job("Acme", 90)]);
+            let mut tray = InTray::unsaved();
+            tray.set_rules(&later_lasting(later));
+            let card = Card { due: Some(Due { on: day(-2), label: "Acme reply".into() }), ..top(&tray, &jobs) };
+            tray.later(&card, today());
+            assert_eq!(tray.decisions[0].until, Some(on(11, 1)), "{later:?}");
+        }
+    }
+
+    fn offer_card(company: &str) -> ApplicationCard {
+        ApplicationCard {
+            company: company.into(),
+            role: "Lead".into(),
+            sector: String::new(),
+            channel: String::new(),
+            status_label: String::new(),
+            bucket: StatusBucket::Offer,
+            applied_on: String::new(),
+            sent_on: None,
+            deadline: None,
+            deadline_state: None,
+            contact_person: String::new(),
+            fit_rating: None,
+            notes: String::new(),
+            source: None,
+            days_quiet: None,
+            days_sent: None,
+            days_followed_up: None,
+            follow_ups_sent: 0,
+            follow_up_due: false,
+            stale: false,
+            reached: ReachedStage::Applied,
+            is_rejection: false,
+            is_final: false,
+            cv_file: String::new(),
+            cover_letter_file: String::new(),
+            archive_folder: None,
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn an_overdue_offer_set_aside_until_monday_is_late_again_the_next_day() {
+        let offer = ApplicationCard { deadline: Some(day(-2)), ..offer_card("Juniper") };
+        let pipeline = Pipeline { lanes: vec![PipelineLane { bucket: StatusBucket::Offer, cards: vec![offer] }] };
+        let dealt =
+            |tray: &InTray, today| tray.queue(&Sources { board: &JobBoard::default(), pipeline: &pipeline, archives: &HashMap::new(), runs: &[], today });
+        let mut tray = InTray::unsaved();
+        tray.set_rules(&later_lasting(LaterLasts::UntilMonday));
+
+        tray.later(&dealt(&tray, today()).cards[0], today());
+
+        let sunday = dealt(&tray, on(11, 1));
+        assert_eq!(sunday.cards.len(), 1, "back the next day, not on Monday");
+        assert_eq!(sunday.overdue(), 1);
+        assert_eq!(sunday.agenda().rows.iter().map(|row| row.state).collect::<Vec<_>>(), [RowState::LateNow(3)]);
     }
 
     #[test]

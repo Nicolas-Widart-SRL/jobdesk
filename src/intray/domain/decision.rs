@@ -79,12 +79,15 @@ impl Decision {
     }
 }
 
-/// A reason inside a sentence: "Domain" reads "domain", but "IR35" or "Not on LinkedIn" stay as written.
+/// A reason inside a sentence: its first letter is lowered unless its first word is an acronym. "Domain" reads "domain",
+/// "Not on LinkedIn" reads "not on LinkedIn", and "IR35" stays as written.
 fn in_sentence(reason: &str) -> String {
     let mut chars = reason.chars();
     let Some(first) = chars.next() else { return String::new() };
     let rest = chars.as_str();
-    if rest.chars().any(char::is_uppercase) { reason.to_owned() } else { first.to_lowercase().chain(rest.chars()).collect() }
+    // The rest of the first word: empty when the reason is a one-letter word followed by others.
+    let first_word = rest.split(char::is_whitespace).next().unwrap_or_default();
+    if first_word.chars().any(char::is_uppercase) { reason.to_owned() } else { first.to_lowercase().chain(rest.chars()).collect() }
 }
 
 /// When a card comes back, said from `on`: "tomorrow", "Monday", "next Monday", or a date further out.
@@ -171,7 +174,9 @@ mod tests {
     fn a_reason_keeps_the_capitals_it_needs() {
         let label = |reason: &str| Decision { reason: Some(reason.into()), ..decided(Outcome::Skipped) }.label();
         assert_eq!(label("IR35"), "Skipped for IR35");
-        assert_eq!(label("Not on LinkedIn"), "Skipped for Not on LinkedIn");
+        assert_eq!(label("Not on LinkedIn"), "Skipped for not on LinkedIn");
+        assert_eq!(label("B2B only"), "Skipped for B2B only");
+        assert_eq!(label("A Big agency"), "Skipped for a Big agency");
         assert_eq!(label("Domain"), "Skipped for domain");
         assert_eq!(label("Écart de salaire"), "Skipped for écart de salaire");
     }

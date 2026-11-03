@@ -12,7 +12,7 @@ Y opens the suggested task, L sets the card aside (Coming up shows how many, and
 
 The card's actions stay pinned under it, and Show the command reveals the command line a task would run. Y opens the slash command in the launcher, and nothing runs until you start it. Permission, question, guard and Your turn cards have no Y action. Skip reasons stay in the app's data folder, and a past skip keeps its reason after you take that reason off the list.
 
-When nothing is left to decide, Today offers Find new jobs…, and Score N new jobs… while new jobs wait to be scored. Both only open the launcher. It shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Profile, which shows each topic, what is filled in and what is missing.
+When nothing is left to decide, Today offers Find new jobs…, and Score 1 new job… or Score N new jobs… while new jobs wait to be scored. Both only open the launcher. Today shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Profile, which shows each topic, what is filled in and what is missing.
 
 ## Jobs, Applications and Insights
 

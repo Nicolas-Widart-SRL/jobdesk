@@ -9,6 +9,7 @@ argument-hint: "<what to fix>"
 The main session is the lead, defined in `.claude/agents/lead.md`.
 It writes no code or docs itself: one builder writes the fix, or `docs-writer` writes a docs-only fix.
 The user's words in the task win over this workflow, for example "do it yourself" or "use ship".
+A docs-only fix goes to `docs-writer`: where this skill says the builder, read the docs-writer for that fix.
 
 Task: $ARGUMENTS
 
@@ -53,7 +54,7 @@ A docs line elsewhere, copy, a constant, a typo, or one bug with its test needs 
    Never check out, reset or pull in the main checkout.
    Never check out the branch in any worktree, because `merge-step.sh` moves it with `update-ref`.
 2. **Brief one builder.** Run no planner and no plan waves. Write the one step yourself: its files, the edit and its check.
-   Use `docs-writer` when the fix changes only `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or files in `docs/`.
+   Use `docs-writer` when the fix changes only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`.
    Otherwise use `builder-sonnet` when you name the files, the edit and the test, and `builder` when you do not.
    Brief it as the Briefs section of the `ship` skill says.
    Once it reports, check the step as step 6 says, before any review.

@@ -1,6 +1,6 @@
 ---
 name: docs-writer
-description: Writes and edits the project's technical docs (README, docs/, ARCHITECTURE, CONTRIBUTING, AGENTS) in its own git worktree and commits them. Use for a docs-only step or a docs rewrite that needs clear, concise writing.
+description: "Writes and edits the project's technical docs (`README.md`, `docs/`, `ARCHITECTURE.md`, `CONTRIBUTING.md` and `AGENTS.md`) in its own git worktree and commits them. Use for a docs-only step: Markdown in those files and in `docs/`, never `CHANGELOG.md`, `.claude/`, `mockups/` or `tests/`."
 tools: Bash, Read, Edit, Write, Glob, Grep
 model: opus
 effort: high

@@ -46,11 +46,11 @@ Never write a value from a real job search in it.
    the files, the types, the signatures and the test cases are all in the step.
    The lead sends written-down steps to `builder-sonnet` and the rest to `builder`.
    A step that needs UI layout or visual judgment is never written down: it goes to `builder`.
-   Mark each step **docs** when it changes only `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or files in `docs/`.
+   Mark each step **docs** when it changes only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`.
    The lead sends a docs step to `docs-writer`, whether it is written down or not.
    A code step keeps the doc updates it needs (`build-step` step 5), for its builder.
    A step that also touches `CHANGELOG.md`, `.claude/`, `mockups/` or `tests/` is not a docs step.
-   One example is the step that applies a handoff's Doc changes and deletes them.
+   That is the handoff step: it applies a design handoff's Doc changes and deletes them, and it goes to a builder.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.

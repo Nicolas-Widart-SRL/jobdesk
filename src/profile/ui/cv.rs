@@ -1,10 +1,9 @@
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
 use egui::{Align, ColorImage, Frame, Label, Layout, Margin, Response, ScrollArea, TextWrapMode, TextureFilter, TextureHandle, TextureOptions, Ui, vec2};
 
-use crate::profile::application::{CvDocument, CvShelf, CvTag, PageImage, PageState, PageStore, Shelf, meta_words, state_line};
+use crate::profile::application::{CvDocument, CvShelf, CvTag, PageCount, PageImage, PageState, PageStore, Shelf, meta_words, state_line};
 use crate::profile::ui::rail::{CV_DOCUMENTS, row_words, rows};
 use crate::profile::ui::screen::{BUSY, ProfileRequest};
 use crate::shared_kernel::visible_text::visible_chars;
@@ -36,14 +35,12 @@ const LOADING_PAGES: usize = 2;
 /// A rendered PDF: its path and modification time, so a PDF that `/build-cv` rewrites renders again.
 type Key = (PathBuf, u64);
 
-/// What stays between frames: the document picked by its stem, the picked document's pages as textures, and the PDFs
-/// whose render failed, so their rows keep saying so once the user moves on.
+/// What stays between frames: the document picked by its stem, and the picked document's pages as textures.
 #[derive(Default)]
 pub(super) struct CvScreen {
     picked: Option<String>,
     /// Only the pages on show: another document's are released when it is picked.
     textures: Option<(Key, Vec<TextureHandle>)>,
-    failed: HashSet<Key>,
 }
 
 /// What the picked document's pages area shows.
@@ -51,7 +48,8 @@ enum Shown {
     /// A `.tex` with no PDF.
     Blank,
     Loading,
-    Ready,
+    /// How many pages the PDF holds, which can be more than rendered.
+    Ready(usize),
     /// The renderer's reason, as plain text.
     Failed(String),
 }
@@ -89,29 +87,29 @@ fn textures_for(ui: &Ui, images: &[PageImage]) -> Vec<TextureHandle> {
 
 impl CvScreen {
     /// Asks `pages` for the document's pages, which starts their render the first time, and gives what the pages area
-    /// shows with how many pages rendered. Rendered pages become textures, and a refused render is remembered by its file.
+    /// shows with how many pages rendered out of how many the PDF holds. Rendered pages become textures.
     /// Without a store nothing renders, so the pages stay loading.
-    fn pages(&mut self, ui: &Ui, doc: &CvDocument, pages: Option<&mut PageStore>) -> (Shown, Option<usize>) {
+    fn pages(&mut self, ui: &Ui, doc: &CvDocument, pages: Option<&mut PageStore>) -> (Shown, Option<PageCount>) {
         let (Some(pdf), Some(key)) = (doc.pdf_document(), key(doc)) else { return (Shown::Blank, None) };
         let Some(store) = pages else { return (Shown::Loading, None) };
         match store.pages(&pdf) {
             PageState::Loading => (Shown::Loading, None),
-            PageState::Ready(images) => {
+            PageState::Ready(rendered) => {
                 if self.textures.as_ref().is_none_or(|(shown, _)| *shown != key) {
-                    self.textures = Some((key, textures_for(ui, &images)));
+                    self.textures = Some((key, textures_for(ui, &rendered.pages)));
                 }
-                (Shown::Ready, Some(images.len()))
+                let count = PageCount { shown: rendered.pages.len(), total: rendered.total.max(rendered.pages.len()) };
+                (Shown::Ready(count.total), Some(count))
             }
-            PageState::Failed(reason) => {
-                self.failed.insert(key);
-                (Shown::Failed(visible_chars(&reason).collect()), None)
-            }
+            PageState::Failed(reason) => (Shown::Failed(visible_chars(&reason).collect()), None),
         }
     }
+}
 
-    fn render_failed(&self, doc: &CvDocument) -> bool {
-        key(doc).is_some_and(|key| self.failed.contains(&key))
-    }
+/// Whether the store already found it could not render the document's PDF. Only a PDF opened before can say so: the
+/// list never starts a render.
+fn render_failed(pages: Option<&PageStore>, doc: &CvDocument) -> bool {
+    doc.pdf_document().zip(pages).is_some_and(|(pdf, store)| matches!(store.known(&pdf), Some(PageState::Failed(_))))
 }
 
 /// The CV documents on paper: the list at the left, and the picked one beside it, which falls back to the first when
@@ -122,7 +120,7 @@ pub(super) fn cv_paper(
     ui: &mut Ui,
     shelf: &CvShelf,
     screen: &mut CvScreen,
-    pages: Option<&mut PageStore>,
+    mut pages: Option<&mut PageStore>,
     busy: bool,
     now: NaiveDateTime,
 ) -> Option<ProfileRequest> {
@@ -132,17 +130,17 @@ pub(super) fn cv_paper(
     };
     let Some(first) = documents.first() else { return lone(ui, EMPTY_TITLE, EMPTY) };
     let shown = screen.picked.as_deref().and_then(|stem| documents.iter().find(|doc| doc.stem == stem)).unwrap_or(first);
-    let (pages_shown, count) = screen.pages(ui, shown, pages);
-    if !matches!(pages_shown, Shown::Ready) {
+    let (pages_shown, count) = screen.pages(ui, shown, pages.as_deref_mut());
+    if !matches!(pages_shown, Shown::Ready(_)) {
         screen.textures = None;
     }
     let meta = Meta { pages: count, rendering: matches!(pages_shown, Shown::Loading), failed: matches!(pages_shown, Shown::Failed(_)) };
     let (mut chosen, mut request) = (None, None);
-    let kept = &*screen;
+    let (kept, store) = (&*screen, pages.as_deref());
     split_paper(
         ui,
         RUN_SIDE,
-        |ui| chosen = list(ui, documents, kept, &shown.stem, now),
+        |ui| chosen = list(ui, documents, store, &shown.stem, now),
         |ui| {
             request = head(ui, shown, meta, busy, now);
             let textures = kept.textures.as_ref().map_or(&[][..], |(_, textures)| textures.as_slice());
@@ -157,7 +155,7 @@ pub(super) fn cv_paper(
 }
 
 /// Masters, then each application's CV, as pickable rows. Returns the stem picked this frame.
-fn list(ui: &mut Ui, documents: &[CvDocument], screen: &CvScreen, shown: &str, now: NaiveDateTime) -> Option<String> {
+fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown: &str, now: NaiveDateTime) -> Option<String> {
     let mut chosen = None;
     ui.spacing_mut().item_spacing.y = 0.0;
     for (shelf, title) in [(Shelf::Master, "Masters"), (Shelf::Application, "For applications")] {
@@ -168,7 +166,7 @@ fn list(ui: &mut Ui, documents: &[CvDocument], screen: &CvScreen, shown: &str, n
         rail_title(ui, title);
         rows(ui, |ui| {
             for doc in group {
-                if doc_row(ui, doc, screen.render_failed(doc), doc.stem == shown, now).clicked() {
+                if doc_row(ui, doc, render_failed(pages, doc), doc.stem == shown, now).clicked() {
                     chosen = Some(doc.stem.clone());
                 }
             }
@@ -177,8 +175,8 @@ fn list(ui: &mut Ui, documents: &[CvDocument], screen: &CvScreen, shown: &str, n
     chosen
 }
 
-/// One document: its label, cut to the row with the whole on hover, and its tag when it is not Current. A PDF whose
-/// render failed this session says so.
+/// One document: its label, cut to the row with the whole on hover, and its tag when it is not Current. A PDF the store
+/// could not render says so.
 fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDateTime) -> Response {
     let mark = Some(state_line(doc, failed, now).tag).filter(|&tag| tag != CvTag::Current);
     let spoken = match mark {
@@ -202,7 +200,7 @@ fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDate
 /// refused the PDF.
 #[derive(Clone, Copy)]
 struct Meta {
-    pages: Option<usize>,
+    pages: Option<PageCount>,
     rendering: bool,
     failed: bool,
 }
@@ -275,7 +273,7 @@ fn body(ui: &mut Ui, shown: &Shown, textures: &[TextureHandle], label: &str) {
             ui.allocate_ui_with_layout(room, Layout::top_down(Align::Min), |ui| match shown {
                 Shown::Blank => blank_page(ui, NO_PDF),
                 Shown::Loading => fitted_pages(ui, PageSet::Loading(LOADING_PAGES)),
-                Shown::Ready => fitted_pages(ui, PageSet::Ready { pages: textures, alt: label }),
+                Shown::Ready(total) => fitted_pages(ui, PageSet::Ready { pages: textures, of: *total, alt: label }),
                 Shown::Failed(reason) => refused(ui, reason),
             });
         });
@@ -339,7 +337,7 @@ mod tests {
 
     use super::*;
     use crate::dossier::application::PageRasterizer;
-    use crate::profile::application::{CvFiles, FileStamp, cv_shelf};
+    use crate::profile::application::{CvFiles, FileStamp, RenderedPages, cv_shelf};
 
     fn setup(ctx: &egui::Context) {
         crate::ui_kit::install_fonts(ctx);
@@ -419,7 +417,7 @@ mod tests {
     struct Refusing;
 
     impl PageRasterizer for Refusing {
-        fn render(&self, _: &Path) -> Result<Vec<PageImage>, String> {
+        fn render(&self, _: &Path) -> Result<RenderedPages, String> {
             Err("Bad\u{202e}font\u{1b}[31m program\u{200b} in page 1".into())
         }
     }

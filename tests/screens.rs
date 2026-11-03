@@ -4903,9 +4903,9 @@ fn profile_cv_failed_light() {
 struct Stuck;
 
 impl jobdesk::dossier::application::PageRasterizer for Stuck {
-    fn render(&self, path: &Path) -> Result<Vec<jobdesk::profile::application::PageImage>, String> {
+    fn render(&self, path: &Path) -> Result<jobdesk::profile::application::RenderedPages, String> {
         if path.to_string_lossy().contains("brightwell") {
-            return Err("This PDF could not be read.".into());
+            return Err("The file is not a PDF the renderer can read.".into());
         }
         loop {
             std::thread::park();
@@ -4961,6 +4961,78 @@ fn a_rebuilt_cv_pdf_renders_again() {
     rendered(&mut harness);
     assert!(is_shown(&harness, "3 pages, 84 KB, built 1 hour ago"), "the new build rendered");
     assert!(is_shown(&harness, "Page 3 of 3"));
+}
+
+/// Master CV, its PDF replaced by `bytes`, opened on a shell that renders it. The feed hands the shell new snapshots.
+fn master_cv_as(name: &str, bytes: &[u8]) -> (Harness<'static>, std::path::PathBuf, std::sync::mpsc::Sender<Snapshot>) {
+    let (shell, root) = cv_shell(name);
+    write_aged(&root.join("cv/main_example.pdf"), bytes, 3 * 24);
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    (harness, root, feed)
+}
+
+/// A PDF longer than the render shows its first pages, and never passes them off as the whole.
+#[test]
+fn a_long_cv_says_only_its_first_pages_show() {
+    let (harness, _root, _feed) = master_cv_as("profile_cv_long", &cv_pdf(8, 84_000));
+    assert!(is_shown(&harness, "8 pages, the first 6 shown, 84 KB, built 3 days ago"));
+    assert!(is_shown(&harness, "Page 6 of 8"));
+    assert!(!is_shown(&harness, "Page 6 of 6") && !is_shown(&harness, "Page 7 of 8"));
+}
+
+/// A PDF with no page is no CV to show: the render failed, with the reason.
+#[test]
+fn a_cv_with_no_pages_failed_to_render() {
+    let (harness, _root, _feed) = master_cv_as("profile_cv_no_pages", &cv_pdf_padded(0, 0));
+    assert!(is_shown(&harness, NOT_RENDERED));
+    assert!(is_shown(&harness, "This PDF has no pages."));
+    assert!(is_shown(&harness, "Master CV, Render failed"));
+    assert!(harness.query_by_label_contains("0 pages").is_none());
+}
+
+/// A PDF read while `/build-cv` was still writing it renders once the folder is read again, even when the finished file
+/// keeps the same modification time to the second.
+#[test]
+fn a_cv_read_half_written_renders_once_whole() {
+    let whole = cv_pdf(2, 84_000);
+    let (shell, root) = cv_shell("profile_cv_half_written");
+    let path = root.join("cv/main_example.pdf");
+    // Written just now, and read before the task finished writing it.
+    fs::write(&path, &whole[..whole.len() / 3]).unwrap();
+    let written = fs::metadata(&path).unwrap().modified().unwrap();
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, NOT_RENDERED), "the half-written file failed");
+
+    // The task finishes within the same second, so the file keeps the time the failed read saw.
+    fs::write(&path, &whole).unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(written).unwrap();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    rendered(&mut harness);
+    assert!(!is_shown(&harness, NOT_RENDERED), "the failure did not stick");
+    assert!(is_shown(&harness, "Page 2 of 2"));
+}
+
+/// A PDF that failed and has not changed for a while stays failed when the folder is read again, so it does not render
+/// over and over.
+#[test]
+fn an_old_cv_that_failed_stays_failed() {
+    let (mut harness, root, feed) = master_cv_as("profile_cv_old_failure", b"%PDF-1.4\nnot a PDF after all\n");
+    assert!(is_shown(&harness, NOT_RENDERED));
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, RENDERING), "no new render started");
+    assert!(is_shown(&harness, NOT_RENDERED));
 }
 
 /// The last line of the sample's first role, and the same with its blank filled in.

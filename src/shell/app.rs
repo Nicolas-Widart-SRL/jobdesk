@@ -629,6 +629,11 @@ impl Shell {
         if let Some(open) = &mut self.open_dossier {
             open.view = None;
         }
+        // A PDF read while a task was still writing it failed to render, and may be whole now with the same modification time.
+        if let Some(pages) = &mut self.pages {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            pages.retry_failures(now);
+        }
     }
 
     /// Whether Save waits for the first load after a run ended, so a Save is never marked as the run's.

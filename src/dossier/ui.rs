@@ -209,7 +209,7 @@ fn page_count_note(documents: &[(&PdfDocument, PageState)]) -> Option<String> {
     let counts: Vec<String> = documents
         .iter()
         .filter_map(|(document, state)| match state {
-            PageState::Ready(images) => Some(format!("{} {} {}", document.label, images.len(), if images.len() == 1 { "page" } else { "pages" })),
+            PageState::Ready(images) => Some(format!("{} {} {}", document.label, images.pages.len(), if images.pages.len() == 1 { "page" } else { "pages" })),
             _ => None,
         })
         .collect();
@@ -234,7 +234,7 @@ fn compiled_pages(ui: &mut Ui, textures: &mut HashMap<(PathBuf, u64), Vec<Textur
                 }
                 PageState::Ready(images) => {
                     let key = (document.path.clone(), document.modified);
-                    let pages = textures.entry(key).or_insert_with(|| textures_for(ui, images));
+                    let pages = textures.entry(key).or_insert_with(|| textures_for(ui, &images.pages));
                     for (index, texture) in pages.iter().enumerate() {
                         let size = texture.size_vec2();
                         let scale = (PAGE_SIZE.0 / size.x).min(PAGE_SIZE.1 / size.y);

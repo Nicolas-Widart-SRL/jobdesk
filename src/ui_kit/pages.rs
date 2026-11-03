@@ -17,10 +17,11 @@ pub fn page_fit(room: Vec2, aspect: f32, caption: f32) -> Vec2 {
 }
 
 /// What a document's pages show: grey blocks for as many pages while they render, or the rendered pages, read as `alt`.
+/// `of` is how many pages the document holds, which is more than `pages` when the render stopped short.
 #[derive(Clone, Copy)]
 pub enum PageSet<'a> {
     Loading(usize),
-    Ready { pages: &'a [TextureHandle], alt: &'a str },
+    Ready { pages: &'a [TextureHandle], of: usize, alt: &'a str },
 }
 
 /// A page's width for each unit of its height, when nothing rendered says otherwise.
@@ -39,11 +40,11 @@ fn fitter(ui: &Ui) -> impl Fn(f32) -> Vec2 + use<> {
 /// render, each is a grey block over a short one where its caption goes.
 pub fn fitted_pages(ui: &mut Ui, set: PageSet) {
     let fit = fitter(ui);
-    let count = match set {
-        PageSet::Loading(count) => count,
-        PageSet::Ready { pages, .. } => pages.len(),
+    let (count, of) = match set {
+        PageSet::Loading(count) => (count, count),
+        PageSet::Ready { pages, of, .. } => (pages.len(), of.max(pages.len())),
     };
-    let caption = |index: usize| format!("Page {} of {count}", index + 1);
+    let caption = |index: usize| format!("Page {} of {of}", index + 1);
     ui.spacing_mut().item_spacing = vec2(PAGE_GAP, PAGE_GAP);
     ui.horizontal_wrapped(|ui| {
         for index in 0..count {
@@ -60,7 +61,7 @@ pub fn fitted_pages(ui: &mut Ui, set: PageSet) {
                         let width = ui.fonts_mut(|fonts| fonts.layout_no_wrap(caption(index), Type::NOTE.font(), Color32::PLACEHOLDER).size().x);
                         card_skeleton(ui, width, Type::NOTE.size);
                     }
-                    PageSet::Ready { pages, alt } => {
+                    PageSet::Ready { pages, alt, .. } => {
                         let texture = &pages[index];
                         let rendered = texture.size_vec2();
                         let aspect = if rendered.x > 0.0 && rendered.y > 0.0 { rendered.x / rendered.y } else { PAGE_ASPECT };

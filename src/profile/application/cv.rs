@@ -99,15 +99,24 @@ pub fn rail_word(shelf: &CvShelf) -> RailWord {
     }
 }
 
-/// "2 pages, 84 KB, built 3 days ago". A `.tex` with no PDF reads "written 3 days ago".
-pub fn meta_words(doc: &CvDocument, pages: Option<usize>, now: NaiveDateTime) -> String {
+/// How many pages rendered, and how many the PDF holds: a render stops after its first few.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageCount {
+    pub shown: usize,
+    pub total: usize,
+}
+
+/// "2 pages, 84 KB, built 3 days ago", or "8 pages, the first 6 shown, …" when the render stopped short. A `.tex` with
+/// no PDF reads "written 3 days ago".
+pub fn meta_words(doc: &CvDocument, pages: Option<PageCount>, now: NaiveDateTime) -> String {
     let Some(pdf) = &doc.pdf else {
         return doc.tex.as_ref().map(|tex| format!("written {}", age_words(tex.at, now))).unwrap_or_default();
     };
     let built = format!("{}, built {}", size_short(pdf.bytes), age_words(pdf.at, now));
     match pages {
-        Some(1) => format!("1 page, {built}"),
-        Some(count) => format!("{count} pages, {built}"),
+        Some(PageCount { shown, total }) if shown < total => format!("{total} pages, the first {shown} shown, {built}"),
+        Some(PageCount { total: 1, .. }) => format!("1 page, {built}"),
+        Some(PageCount { total, .. }) => format!("{total} pages, {built}"),
         None => built,
     }
 }
@@ -258,10 +267,19 @@ mod tests {
     fn meta_words_read_in_three_shapes() {
         let now = at(14);
         let built = doc("main_a", Some(9), Some(11));
-        assert_eq!(meta_words(&built, Some(2), now), "2 pages, 84 KB, built 3 days ago");
-        assert_eq!(meta_words(&built, Some(1), now), "1 page, 84 KB, built 3 days ago");
+        let all = |count| Some(PageCount { shown: count, total: count });
+        assert_eq!(meta_words(&built, all(2), now), "2 pages, 84 KB, built 3 days ago");
+        assert_eq!(meta_words(&built, all(1), now), "1 page, 84 KB, built 3 days ago");
         assert_eq!(meta_words(&built, None, now), "84 KB, built 3 days ago");
-        assert_eq!(meta_words(&doc("main_a", Some(11), None), Some(2), now), "written 3 days ago");
+        assert_eq!(meta_words(&doc("main_a", Some(11), None), all(2), now), "written 3 days ago");
+    }
+
+    /// A render that stopped short never passes for the whole PDF.
+    #[test]
+    fn meta_words_say_when_only_the_first_pages_show() {
+        let built = doc("main_a", Some(9), Some(11));
+        let cut = Some(PageCount { shown: 6, total: 8 });
+        assert_eq!(meta_words(&built, cut, at(14)), "8 pages, the first 6 shown, 84 KB, built 3 days ago");
     }
 
     fn line(stem: &str, tex: Option<u32>, pdf: Option<u32>, failed: bool) -> StateLine {

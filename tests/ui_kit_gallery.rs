@@ -895,7 +895,7 @@ fn cv_documents(ui: &mut Ui) {
                 divider(ui);
                 ScrollArea::vertical().id_salt("cv_pages").auto_shrink([false, false]).show(ui, |ui| {
                     egui::Frame::new().inner_margin(egui::Margin::symmetric(22, 16)).show(ui, |ui| {
-                        fitted_pages(ui, PageSet::Ready { pages: &pages[..2], alt: "Master CV" });
+                        fitted_pages(ui, PageSet::Ready { pages: &pages[..2], of: 2, alt: "Master CV" });
                     });
                 });
             },
@@ -911,7 +911,7 @@ fn cv_documents(ui: &mut Ui) {
         egui::Frame::new().inner_margin(16).show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(24.0, 24.0);
-                ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| fitted_pages(ui, PageSet::Ready { pages: &pages, alt: "Master CV" }));
+                ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| fitted_pages(ui, PageSet::Ready { pages: &pages, of: pages.len(), alt: "Master CV" }));
                 ui.vertical(|ui| {
                     ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| fitted_pages(ui, PageSet::Loading(2)));
                     ui.allocate_ui(egui::Vec2::from(CV_ROOM), |ui| blank_page(ui, "No PDF yet. It shows here once /build-cv has built it."));

@@ -13,7 +13,7 @@
                 "--watch", "Cargo.toml",
                 "--watch", "Cargo.lock",
                 "--",
-                "cargo", "run", "--", "--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"
+                "cargo", "run", "--", "--workspace", "${workspaceFolder}/../ai-job-search"
             ],
             "isBackground": true,
             "problemMatcher": ["$rustc-watch"],
@@ -23,7 +23,7 @@
             "label": "jobdesk: run",
             "type": "shell",
             "command": "cargo",
-            "args": ["run", "--", "--workspace", "/Users/nicolaswidart/Sites/projects/ai-job-search"],
+            "args": ["run", "--", "--workspace", "${workspaceFolder}/../ai-job-search"],
             "problemMatcher": ["$rustc"],
             "presentation": { "panel": "dedicated" }
         }

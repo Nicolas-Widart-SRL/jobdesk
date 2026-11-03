@@ -124,9 +124,9 @@ pub(super) fn cv_paper(
     busy: bool,
     now: NaiveDateTime,
 ) -> Option<ProfileRequest> {
-    let documents = match shelf {
+    let (documents, build_cv) = match shelf {
         CvShelf::Unread => return lone(ui, HIDDEN_TITLE, HIDDEN),
-        CvShelf::Read(documents) => documents,
+        CvShelf::Read { documents, build_cv } => (documents, *build_cv),
     };
     let Some(first) = documents.first() else { return lone(ui, EMPTY_TITLE, EMPTY) };
     let shown = screen.picked.as_deref().and_then(|stem| documents.iter().find(|doc| doc.stem == stem)).unwrap_or(first);
@@ -134,13 +134,13 @@ pub(super) fn cv_paper(
     if !matches!(pages_shown, Shown::Ready(_)) {
         screen.textures = None;
     }
-    let meta = Meta { pages: count, rendering: matches!(pages_shown, Shown::Loading), failed: matches!(pages_shown, Shown::Failed(_)) };
+    let meta = Meta { pages: count, rendering: matches!(pages_shown, Shown::Loading), failed: matches!(pages_shown, Shown::Failed(_)), build_cv };
     let (mut chosen, mut request) = (None, None);
     let (kept, store) = (&*screen, pages.as_deref());
     split_paper(
         ui,
         RUN_SIDE,
-        |ui| chosen = list(ui, documents, store, &shown.stem, now),
+        |ui| chosen = list(ui, documents, store, &shown.stem, build_cv, now),
         |ui| {
             request = head(ui, shown, meta, busy, now);
             let textures = kept.textures.as_ref().map_or(&[][..], |(_, textures)| textures.as_slice());
@@ -155,7 +155,7 @@ pub(super) fn cv_paper(
 }
 
 /// Masters, then each application's CV, as pickable rows. Returns the stem picked this frame.
-fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown: &str, now: NaiveDateTime) -> Option<String> {
+fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown: &str, build_cv: bool, now: NaiveDateTime) -> Option<String> {
     let mut chosen = None;
     ui.spacing_mut().item_spacing.y = 0.0;
     for (shelf, title) in [(Shelf::Master, "Masters"), (Shelf::Application, "For applications")] {
@@ -166,7 +166,7 @@ fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown:
         rail_title(ui, title);
         rows(ui, |ui| {
             for doc in group {
-                if doc_row(ui, doc, render_failed(pages, doc), doc.stem == shown, now).clicked() {
+                if doc_row(ui, doc, render_failed(pages, doc), doc.stem == shown, build_cv, now).clicked() {
                     chosen = Some(doc.stem.clone());
                 }
             }
@@ -177,8 +177,8 @@ fn list(ui: &mut Ui, documents: &[CvDocument], pages: Option<&PageStore>, shown:
 
 /// One document: its label, cut to the row with the whole on hover and on focus, and its tag when it is not Current.
 /// A PDF the store could not render says so.
-fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDateTime) -> Response {
-    let mark = Some(state_line(doc, failed, now).tag).filter(|&tag| tag != CvTag::Current);
+fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, build_cv: bool, now: NaiveDateTime) -> Response {
+    let mark = Some(state_line(doc, failed, build_cv, now).tag).filter(|&tag| tag != CvTag::Current);
     let spoken = match mark {
         Some(tag) => format!("{}, {}", doc.label, tag.word()),
         None => doc.label.clone(),
@@ -198,12 +198,13 @@ fn doc_row(ui: &mut Ui, doc: &CvDocument, failed: bool, on: bool, now: NaiveDate
 }
 
 /// What the head knows of the render: how many pages it gave, whether it is still going, and whether the renderer
-/// refused the PDF.
+/// refused the PDF. Also whether the folder has `/build-cv` to offer a build with.
 #[derive(Clone, Copy)]
 struct Meta {
     pages: Option<PageCount>,
     rendering: bool,
     failed: bool,
+    build_cv: bool,
 }
 
 /// The picked document's head: its label, its file name and what it weighs, with Open PDF and Show in Finder at the
@@ -240,15 +241,16 @@ fn head(ui: &mut Ui, doc: &CvDocument, meta: Meta, busy: bool, now: NaiveDateTim
             }
         });
         ui.add_space(ITEM_GAP);
-        state(ui, doc, meta.failed, busy, now);
+        state(ui, doc, meta, busy, now);
     });
     divider(ui);
     request
 }
 
-/// The tag, what it means, and at the right the build that would help, which opens the launcher and waits while a run works.
-fn state(ui: &mut Ui, doc: &CvDocument, failed: bool, busy: bool, now: NaiveDateTime) {
-    let line = state_line(doc, failed, now);
+/// The tag, what it means, and at the right the build that would help, which opens the launcher and waits while a run
+/// works. A folder with no `/build-cv` shows no build at all.
+fn state(ui: &mut Ui, doc: &CvDocument, meta: Meta, busy: bool, now: NaiveDateTime) {
+    let line = state_line(doc, meta.failed, meta.build_cv, now);
     let height = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(vec2(ui.available_width(), height), Layout::right_to_left(Align::Center), |ui| {
         if let Some((label, command)) = &line.action {
@@ -354,19 +356,26 @@ mod tests {
         FileStamp { name: name.to_owned(), path: Path::new("/fictional/cv").join(name), modified: at.and_utc().timestamp().unsigned_abs(), at, bytes: 84_000 }
     }
 
-    /// Master CV with its `.tex` and PDF, and an application's CV with only its `.tex`.
-    fn shelf() -> CvShelf {
-        cv_shelf(vec![
-            CvFiles { stem: "main_example".into(), tex: Some(stamp("main_example.tex", 72)), pdf: Some(stamp("main_example.pdf", 48)) },
-            CvFiles { stem: "main_halyard_labs_tech_lead".into(), tex: Some(stamp("main_halyard_labs_tech_lead.tex", 1)), pdf: None },
-        ])
+    /// Master CV with its `.tex` and PDF, and an application's CV with only its `.tex`, in a folder that has
+    /// `/build-cv` or not.
+    fn shelf(build_cv: bool) -> CvShelf {
+        cv_shelf(
+            vec![
+                CvFiles { stem: "main_example".into(), tex: Some(stamp("main_example.tex", 72)), pdf: Some(stamp("main_example.pdf", 48)) },
+                CvFiles { stem: "main_halyard_labs_tech_lead".into(), tex: Some(stamp("main_halyard_labs_tech_lead.tex", 1)), pdf: None },
+            ],
+            build_cv,
+        )
     }
 
     /// What the paper asked last, kept beside the screen it asked from.
     type State = (CvScreen, Option<ProfileRequest>, Option<PageStore>);
 
     fn paper(pages: Option<PageStore>) -> Harness<'static, State> {
-        let shelf = shelf();
+        paper_on(shelf(true), pages)
+    }
+
+    fn paper_on(shelf: CvShelf, pages: Option<PageStore>) -> Harness<'static, State> {
         let mut harness = Harness::builder().with_size([1100.0, 760.0]).with_context_setup(setup).build_ui_state(
             move |ui, (screen, asked, pages): &mut State| {
                 if let Some(pages) = pages.as_mut() {
@@ -406,6 +415,25 @@ mod tests {
         assert!(harness.query_by_label("Open PDF").is_none());
         assert!(harness.query_by_label(NO_PDF).is_some(), "an empty page says why");
         assert_eq!(press(&mut harness, SHOW_FILE), Some(ProfileRequest::Reveal("main_halyard_labs_tech_lead.tex".into())));
+    }
+
+    /// A folder with no `/build-cv` keeps the tag and says why no build shows.
+    #[test]
+    fn a_folder_with_no_build_cv_offers_no_build() {
+        let pick = |build_cv| {
+            let mut harness = paper_on(shelf(build_cv), None);
+            harness.get_by_label("Halyard labs tech lead, Not built yet").click();
+            harness.run_steps(3);
+            harness
+        };
+        let harness = pick(true);
+        assert!(harness.query_by_label("Build the PDF…").is_some());
+        let harness = pick(false);
+        assert!(harness.query_by_label("Build the PDF…").is_none(), "no build, not even a disabled one");
+        let sentence =
+            "Its .tex has no PDF beside it yet. This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it.";
+        assert!(harness.query_by_label(sentence).is_some());
+        assert!(harness.query_by_label(SHOW_FILE).is_some());
     }
 
     /// Without a store the pages never render, so they say they are rendering.

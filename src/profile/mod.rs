@@ -17,9 +17,11 @@ pub fn load(root: &Path) -> (ProfileView, Vec<LoadError>) {
     profile_view(&|file| files.read(file))
 }
 
-/// The CV documents of `cv/`. A folder that cannot be read is an error, and a missing one is an empty shelf.
+/// The CV documents of `cv/`, with whether the checkout has `/build-cv` to build them. A folder that cannot be read is
+/// an error, and a missing one is an empty shelf.
 pub fn load_cv(root: &Path) -> Result<CvShelf, LoadError> {
-    CvFolder::in_workspace(root).list().map(cv_shelf)
+    let folder = CvFolder::in_workspace(root);
+    folder.list().map(|files| cv_shelf(files, folder.has_build_cv()))
 }
 
 /// Opens one PDF of `cv/` in the system's viewer, when the name still passes the check.
@@ -280,7 +282,7 @@ mod tests {
     /// The page key Profile and the dossier give one application's CV PDF, through the tracker's `.tex` path and
     /// through the conventional name.
     fn page_keys(root: &Path) -> Vec<(PathBuf, u64)> {
-        let CvShelf::Read(documents) = load_cv(root).unwrap() else { panic!("read") };
+        let CvShelf::Read { documents, .. } = load_cv(root).unwrap() else { panic!("read") };
         let profile = documents.iter().find(|doc| doc.stem == "main_acme_lead").and_then(|doc| doc.pdf_document()).unwrap();
         let mut keys = vec![(profile.path, profile.modified)];
         for cv_file in ["cv/main_acme_lead.tex", ""] {

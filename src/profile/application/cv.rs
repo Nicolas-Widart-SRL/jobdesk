@@ -17,9 +17,10 @@ pub struct CvDocument {
 }
 
 impl CvDocument {
-    /// The line the launcher opens with, only when a build would help and the stem is safe to type.
-    pub fn build_line(&self) -> Option<String> {
-        (self.freshness.out_of_date() && buildable(&self.stem)).then(|| format!("/build-cv {}", self.stem))
+    /// The line the launcher opens with, only when a build would help, the folder has `/build-cv` and the stem is safe
+    /// to type.
+    pub fn build_line(&self, build_cv: bool) -> Option<String> {
+        (build_cv && self.freshness.out_of_date() && buildable(&self.stem)).then(|| format!("/build-cv {}", self.stem))
     }
 
     pub fn pdf_document(&self) -> Option<PdfDocument> {
@@ -41,18 +42,23 @@ impl CvDocument {
 /// The list of CV documents, or that `cv/` could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CvShelf {
-    Read(Vec<CvDocument>),
+    Read {
+        documents: Vec<CvDocument>,
+        /// Whether the folder holds `.claude/commands/build-cv.md`, as `/build-cv` exists only in checkouts that have it.
+        /// One fact for the whole folder.
+        build_cv: bool,
+    },
     Unread,
 }
 
 impl Default for CvShelf {
     fn default() -> Self {
-        CvShelf::Read(Vec::new())
+        CvShelf::Read { documents: Vec::new(), build_cv: false }
     }
 }
 
 /// Masters first, by stem. Applications follow, newest first, ties by stem. A stem with neither file is dropped.
-pub fn cv_shelf(files: Vec<CvFiles>) -> CvShelf {
+pub fn cv_shelf(files: Vec<CvFiles>, build_cv: bool) -> CvShelf {
     let mut documents: Vec<CvDocument> = files
         .into_iter()
         .filter_map(|files| {
@@ -64,7 +70,7 @@ pub fn cv_shelf(files: Vec<CvFiles>) -> CvShelf {
         Shelf::Master => a.shelf.cmp(&b.shelf).then_with(|| a.stem.cmp(&b.stem)),
         Shelf::Application => a.shelf.cmp(&b.shelf).then_with(|| b.newest().cmp(&a.newest())).then_with(|| a.stem.cmp(&b.stem)),
     });
-    CvShelf::Read(documents)
+    CvShelf::Read { documents, build_cv }
 }
 
 /// The state word on the rail row.
@@ -91,8 +97,8 @@ impl RailWord {
 pub fn rail_word(shelf: &CvShelf) -> RailWord {
     match shelf {
         CvShelf::Unread => RailWord::Hidden,
-        CvShelf::Read(documents) if documents.is_empty() => RailWord::NoneYet,
-        CvShelf::Read(documents) => match documents.iter().filter(|doc| doc.freshness.out_of_date()).count() {
+        CvShelf::Read { documents, .. } if documents.is_empty() => RailWord::NoneYet,
+        CvShelf::Read { documents, .. } => match documents.iter().filter(|doc| doc.freshness.out_of_date()).count() {
             0 => RailWord::Documents(documents.len()),
             stale => RailWord::OutOfDate(stale),
         },
@@ -129,19 +135,28 @@ pub struct StateLine {
     pub action: Option<(&'static str, String)>,
 }
 
-pub fn state_line(doc: &CvDocument, render_failed: bool, now: NaiveDateTime) -> StateLine {
+/// What an out-of-date line says in place of the build when the folder has no `/build-cv`.
+const NO_COMMAND: &str = "This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it.";
+
+/// `build_cv` says whether the folder has `/build-cv`. Without it, an out-of-date document keeps its tag, says the
+/// command is missing, and offers no build.
+pub fn state_line(doc: &CvDocument, render_failed: bool, build_cv: bool, now: NaiveDateTime) -> StateLine {
     let tag = tag(doc.freshness, render_failed);
     let (sentence, label) = match (tag, doc.freshness) {
         (CvTag::RenderFailed, _) => ("The file is there, but Jobdesk could not draw its pages.".to_owned(), None),
         (_, Freshness::NoSource) => ("No .tex sits beside this PDF, so there is nothing to build it from again.".to_owned(), None),
         (_, Freshness::SourceNewer) => {
             let when = doc.tex.as_ref().map(|tex| age_words(tex.at, now)).unwrap_or_default();
-            (format!("Its .tex changed {when}, after this PDF was built. Run /build-cv in the launcher to build it again."), Some("Rebuild the PDF…"))
+            let next = if build_cv { "Run /build-cv in the launcher to build it again." } else { NO_COMMAND };
+            (format!("Its .tex changed {when}, after this PDF was built. {next}"), Some("Rebuild the PDF…"))
         }
-        (_, Freshness::NotBuilt) => ("Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one.".to_owned(), Some("Build the PDF…")),
-        (_, Freshness::Current) => ("Built after its .tex last changed.".to_owned(), None),
+        (_, Freshness::NotBuilt) => {
+            let next = if build_cv { "Run /build-cv in the launcher to build one." } else { NO_COMMAND };
+            (format!("Its .tex has no PDF beside it yet. {next}"), Some("Build the PDF…"))
+        }
+        (_, Freshness::Current) => ("Its .tex has not changed since this PDF was built.".to_owned(), None),
     };
-    let action = label.and_then(|label| doc.build_line().map(|line| (label, line)));
+    let action = label.and_then(|label| doc.build_line(build_cv).map(|line| (label, line)));
     StateLine { tag, sentence, action }
 }
 
@@ -170,35 +185,38 @@ mod tests {
     }
 
     fn doc(stem: &str, tex: Option<u32>, pdf: Option<u32>) -> CvDocument {
-        match cv_shelf(vec![files(stem, tex, pdf)]) {
-            CvShelf::Read(mut docs) => docs.remove(0),
+        match cv_shelf(vec![files(stem, tex, pdf)], true) {
+            CvShelf::Read { mut documents, .. } => documents.remove(0),
             CvShelf::Unread => unreachable!(),
         }
     }
 
     fn stems(shelf: CvShelf) -> Vec<String> {
         match shelf {
-            CvShelf::Read(docs) => docs.into_iter().map(|doc| doc.stem).collect(),
+            CvShelf::Read { documents, .. } => documents.into_iter().map(|doc| doc.stem).collect(),
             CvShelf::Unread => Vec::new(),
         }
     }
 
     #[test]
     fn masters_come_first_then_applications_newest_first() {
-        let shelf = cv_shelf(vec![
-            files("main_acme_dev", Some(3), Some(4)),
-            files("main_example_b", Some(1), Some(1)),
-            files("main_tessel_lead", Some(9), Some(2)),
-            files("main_example", Some(1), Some(1)),
-            files("main_birch_ops", Some(4), None),
-            files("empty", None, None),
-        ]);
+        let shelf = cv_shelf(
+            vec![
+                files("main_acme_dev", Some(3), Some(4)),
+                files("main_example_b", Some(1), Some(1)),
+                files("main_tessel_lead", Some(9), Some(2)),
+                files("main_example", Some(1), Some(1)),
+                files("main_birch_ops", Some(4), None),
+                files("empty", None, None),
+            ],
+            true,
+        );
         assert_eq!(stems(shelf), ["main_example", "main_example_b", "main_tessel_lead", "main_acme_dev", "main_birch_ops"]);
     }
 
     #[test]
     fn equal_times_break_by_stem() {
-        let shelf = cv_shelf(vec![files("main_b", Some(5), Some(5)), files("main_a", Some(5), Some(5))]);
+        let shelf = cv_shelf(vec![files("main_b", Some(5), Some(5)), files("main_a", Some(5), Some(5))], true);
         assert_eq!(stems(shelf), ["main_a", "main_b"]);
     }
 
@@ -210,7 +228,7 @@ mod tests {
 
     #[test]
     fn the_rail_word_counts_what_is_out_of_date_first() {
-        let read = |docs: Vec<CvFiles>| rail_word(&cv_shelf(docs));
+        let read = |docs: Vec<CvFiles>| rail_word(&cv_shelf(docs, true));
         let stale = vec![files("main_a", Some(5), Some(2)), files("main_b", Some(1), None), files("main_c", Some(1), Some(2))];
         assert_eq!(read(stale), RailWord::OutOfDate(2));
         assert_eq!(RailWord::OutOfDate(2).words(), "2 out of date");
@@ -223,15 +241,28 @@ mod tests {
         assert_eq!(RailWord::NoneYet.words(), "None yet");
         assert_eq!(rail_word(&CvShelf::Unread), RailWord::Hidden);
         assert_eq!(RailWord::Hidden.words(), "Hidden");
-        assert_eq!(CvShelf::default(), CvShelf::Read(Vec::new()));
+        assert_eq!(CvShelf::default(), CvShelf::Read { documents: Vec::new(), build_cv: false });
+    }
+
+    /// The rail word counts what a build would help, whether or not the folder has `/build-cv`.
+    #[test]
+    fn the_rail_word_is_the_same_without_build_cv() {
+        let stale = vec![files("main_a", Some(5), Some(2)), files("main_b", Some(1), None), files("main_c", Some(1), Some(2))];
+        assert_eq!(rail_word(&cv_shelf(stale, false)), RailWord::OutOfDate(2));
     }
 
     #[test]
     fn a_build_line_needs_an_out_of_date_document_and_a_plain_stem() {
-        assert_eq!(doc("main_tessel_lead", Some(5), Some(2)).build_line().as_deref(), Some("/build-cv main_tessel_lead"));
-        assert_eq!(doc("main_tessel_lead", Some(5), None).build_line().as_deref(), Some("/build-cv main_tessel_lead"));
-        assert_eq!(doc("main_tessel_lead", Some(1), Some(2)).build_line(), None);
-        assert_eq!(doc("a b", Some(5), Some(2)).build_line(), None);
+        assert_eq!(doc("main_tessel_lead", Some(5), Some(2)).build_line(true).as_deref(), Some("/build-cv main_tessel_lead"));
+        assert_eq!(doc("main_tessel_lead", Some(5), None).build_line(true).as_deref(), Some("/build-cv main_tessel_lead"));
+        assert_eq!(doc("main_tessel_lead", Some(1), Some(2)).build_line(true), None);
+        assert_eq!(doc("a b", Some(5), Some(2)).build_line(true), None);
+    }
+
+    #[test]
+    fn a_build_line_needs_the_build_cv_command() {
+        assert_eq!(doc("main_tessel_lead", Some(5), Some(2)).build_line(false), None);
+        assert_eq!(doc("main_tessel_lead", Some(5), None).build_line(false), None);
     }
 
     #[test]
@@ -257,8 +288,8 @@ mod tests {
 
     #[test]
     fn a_stem_with_a_hidden_character_sorts_by_the_shelf_its_label_reads() {
-        let shelf = cv_shelf(vec![files("main_acme", Some(9), Some(9)), files("main\u{200b}_example_lead", Some(1), Some(1))]);
-        let CvShelf::Read(docs) = shelf else { unreachable!() };
+        let shelf = cv_shelf(vec![files("main_acme", Some(9), Some(9)), files("main\u{200b}_example_lead", Some(1), Some(1))], true);
+        let CvShelf::Read { documents: docs, .. } = shelf else { unreachable!() };
         assert_eq!((docs[0].shelf, docs[0].label.as_str()), (Shelf::Master, "Master CV, lead"));
         assert_eq!(docs[1].shelf, Shelf::Application);
     }
@@ -283,15 +314,54 @@ mod tests {
     }
 
     fn line(stem: &str, tex: Option<u32>, pdf: Option<u32>, failed: bool) -> StateLine {
-        state_line(&doc(stem, tex, pdf), failed, at(14))
+        state_line(&doc(stem, tex, pdf), failed, true, at(14))
+    }
+
+    /// The same in a folder with no `/build-cv`.
+    fn line_without_command(stem: &str, tex: Option<u32>, pdf: Option<u32>, failed: bool) -> StateLine {
+        state_line(&doc(stem, tex, pdf), failed, false, at(14))
+    }
+
+    /// It holds for a PDF built in the same second as its `.tex` too.
+    #[test]
+    fn current_says_its_tex_has_not_changed_since_the_build() {
+        for pdf in [2, 1] {
+            let line = line("main_a", Some(1), Some(pdf), false);
+            assert_eq!(line.tag, CvTag::Current);
+            assert_eq!(line.sentence, "Its .tex has not changed since this PDF was built.", "the PDF built on day {pdf}");
+            assert_eq!(line.action, None);
+        }
     }
 
     #[test]
-    fn current_says_it_was_built_after_the_tex() {
-        let line = line("main_a", Some(1), Some(2), false);
-        assert_eq!(line.tag, CvTag::Current);
-        assert_eq!(line.sentence, "Built after its .tex last changed.");
+    fn a_newer_tex_without_build_cv_says_the_command_is_missing() {
+        let line = line_without_command("main_a", Some(11), Some(2), false);
+        assert_eq!(line.tag, CvTag::SourceNewer);
+        assert_eq!(
+            line.sentence,
+            "Its .tex changed 3 days ago, after this PDF was built. This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it."
+        );
         assert_eq!(line.action, None);
+        assert_eq!(line_without_command("main_a", Some(11), Some(2), true).action, None, "a refused render changes nothing");
+    }
+
+    #[test]
+    fn a_tex_with_no_pdf_without_build_cv_says_the_command_is_missing() {
+        let line = line_without_command("main_a", Some(11), None, false);
+        assert_eq!(line.tag, CvTag::NotBuilt);
+        assert_eq!(
+            line.sentence,
+            "Its .tex has no PDF beside it yet. This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it."
+        );
+        assert_eq!(line.action, None);
+    }
+
+    /// The command matters only to an out-of-date document.
+    #[test]
+    fn the_other_lines_are_the_same_without_build_cv() {
+        for (tex, pdf, failed) in [(Some(1), Some(2), false), (None, Some(2), false), (Some(1), Some(2), true), (None, Some(2), true)] {
+            assert_eq!(line_without_command("main_a", tex, pdf, failed), line("main_a", tex, pdf, failed));
+        }
     }
 
     #[test]

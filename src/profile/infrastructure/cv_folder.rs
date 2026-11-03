@@ -16,6 +16,8 @@ use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::workspace_path::within_workspace;
 
 const FOLDER: &str = "cv";
+/// The command file `/build-cv` comes from, in checkouts that have it.
+const BUILD_CV: &str = ".claude/commands/build-cv.md";
 
 /// The `cv/` folder of one checkout. Its files come from an untrusted checkout, so a name is checked again, with every link
 /// resolved, before anything touches the file.
@@ -64,6 +66,15 @@ impl CvFolder {
             }
         }
         Ok(groups.into_values().collect())
+    }
+
+    /// Whether the checkout has `/build-cv`: its `.claude/commands/build-cv.md` is a regular file, every link resolved,
+    /// inside the resolved checkout. Only that it exists is read, never what it holds. Anything that cannot be checked
+    /// counts as missing.
+    pub fn has_build_cv(&self) -> bool {
+        let Some(path) = within_workspace(&self.root, BUILD_CV) else { return false };
+        let (Ok(root), Ok(resolved)) = (fs::canonicalize(&self.root), fs::canonicalize(path)) else { return false };
+        resolved.starts_with(&root) && fs::metadata(&resolved).is_ok_and(|metadata| metadata.is_file())
     }
 
     /// The file's stamp. Its path is the one under the checkout's root, links unresolved, as the dossier names the same
@@ -310,7 +321,7 @@ mod tests {
         put(dir.path(), "main_a.pdf");
         at(dir.path(), "main_a.pdf", 1_000);
         at(dir.path(), "main_a.tex", 2_000);
-        let CvShelf::Read(documents) = cv_shelf(cv.list().unwrap()) else { panic!("read") };
+        let CvShelf::Read { documents, .. } = cv_shelf(cv.list().unwrap(), true) else { panic!("read") };
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].freshness, Freshness::SourceNewer);
         assert_eq!((documents[0].pdf.as_ref().unwrap().modified, documents[0].tex.as_ref().unwrap().modified), (1_000, 2_000));
@@ -418,6 +429,60 @@ mod tests {
         assert!(cv.checked("x.pdf").is_some());
         assert_eq!(cv.pdf_to_open("x.pdf"), None);
         assert!(cv.file_to_reveal("x.pdf").is_some());
+    }
+
+    fn put_command(dir: &Path) {
+        fs::create_dir_all(dir.join(".claude/commands")).unwrap();
+        fs::write(dir.join(BUILD_CV), b"Build a CV.\n").unwrap();
+    }
+
+    #[test]
+    fn build_cv_is_there_only_with_its_command_file() {
+        let (dir, cv) = folder();
+        assert!(!cv.has_build_cv(), "no .claude/ at all");
+        fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        fs::write(dir.path().join(".claude/commands/apply.md"), b"x").unwrap();
+        assert!(!cv.has_build_cv(), "another command only");
+        put_command(dir.path());
+        assert!(cv.has_build_cv());
+    }
+
+    #[test]
+    fn a_folder_named_build_cv_md_is_no_command() {
+        let (dir, cv) = folder();
+        fs::create_dir_all(dir.path().join(BUILD_CV)).unwrap();
+        assert!(!cv.has_build_cv());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_linked_outside_the_checkout_is_missing() {
+        use std::os::unix::fs::symlink;
+        let (dir, cv) = folder();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("build-cv.md"), b"x").unwrap();
+        fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        symlink(outside.path().join("build-cv.md"), dir.path().join(BUILD_CV)).unwrap();
+        assert!(!cv.has_build_cv());
+        fs::remove_file(dir.path().join(BUILD_CV)).unwrap();
+        symlink(dir.path().join(".claude/commands/missing.md"), dir.path().join(BUILD_CV)).unwrap();
+        assert!(!cv.has_build_cv(), "a dangling link");
+        fs::remove_file(dir.path().join(BUILD_CV)).unwrap();
+        fs::write(dir.path().join("kept.md"), b"x").unwrap();
+        symlink(dir.path().join("kept.md"), dir.path().join(BUILD_CV)).unwrap();
+        assert!(cv.has_build_cv(), "a link that stays inside the checkout");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_commands_folder_linked_outside_the_checkout_is_missing() {
+        use std::os::unix::fs::symlink;
+        let (dir, cv) = folder();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("build-cv.md"), b"x").unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        symlink(outside.path(), dir.path().join(".claude/commands")).unwrap();
+        assert!(!cv.has_build_cv());
     }
 
     #[test]

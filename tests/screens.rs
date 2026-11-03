@@ -4635,8 +4635,18 @@ fn empty_cv(root: &Path) {
     }
 }
 
-/// Puts the canvas's nine documents in place of the sample's `cv/`. Each PDF is the fictional CV, at its size.
+/// The command file that gives the folder `/build-cv`, which the sample does not hold.
+const BUILD_CV: &str = ".claude/commands/build-cv.md";
+
+/// Gives the folder `/build-cv`, so an out-of-date document offers its build.
+fn add_build_cv(root: &Path) {
+    fs::write(root.join(BUILD_CV), "Builds a CV PDF from its .tex.\n").unwrap();
+}
+
+/// Puts the canvas's nine documents in place of the sample's `cv/`, in a folder that has `/build-cv`. Each PDF is the
+/// fictional CV, at its size.
 fn fill_cv(root: &Path) {
+    add_build_cv(root);
     empty_cv(root);
     for (stem, tex, built, size, pages) in CV_FILES {
         if let Some(hours) = tex {
@@ -4652,6 +4662,19 @@ fn fill_cv(root: &Path) {
 fn cv_shell(name: &str) -> (Shell, std::path::PathBuf) {
     let root = sample_root(name);
     fill_cv(&root);
+    cv_shell_on(root)
+}
+
+/// The same in a folder with no `/build-cv`.
+fn cv_shell_without_build_cv(name: &str) -> (Shell, std::path::PathBuf) {
+    let root = sample_root(name);
+    fill_cv(&root);
+    fs::remove_file(root.join(BUILD_CV)).unwrap();
+    cv_shell_on(root)
+}
+
+/// The shell on a folder whose `cv/` a test has filled.
+fn cv_shell_on(root: std::path::PathBuf) -> (Shell, std::path::PathBuf) {
     let snapshot = Snapshot::load(&root, day());
     assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
     (Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), snapshot).with_now(cv_now()), root)
@@ -4692,7 +4715,7 @@ fn cv_documents_list_masters_then_applications() {
     assert!(tops.is_sorted(), "{tops:?}");
     assert!(is_shown(&harness, "main_example.pdf"), "the first document opens");
     assert!(is_shown(&harness, "84 KB, built 3 days ago"));
-    assert!(is_shown(&harness, "Built after its .tex last changed."));
+    assert!(is_shown(&harness, "Its .tex has not changed since this PDF was built."));
     assert!(is_shown(&harness, CV_SHOWS));
 }
 
@@ -4753,6 +4776,7 @@ fn rebuild_waits_while_a_run_works() {
 #[test]
 fn a_stem_that_cannot_be_typed_gets_no_build() {
     let root = sample_root("profile_cv_bad_stem");
+    add_build_cv(&root);
     empty_cv(&root);
     write_aged(&root.join("cv/main_bad name.tex"), b"\\documentclass{article}\n", 1);
     let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day())).with_now(cv_now());
@@ -4761,6 +4785,61 @@ fn a_stem_that_cannot_be_typed_gets_no_build() {
     assert!(is_shown(&harness, "Bad name, Not built yet"), "the document is listed");
     assert!(is_shown(&harness, "Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one."));
     assert!(harness.query_by_label("Build the PDF…").is_none(), "no build for a stem with a space");
+}
+
+/// What an out-of-date document says in a folder with no `/build-cv`.
+const NO_BUILD_CV: &str = "This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it.";
+
+/// A folder with no `/build-cv` keeps each tag and the rail word, says why, and offers no build, disabled or not.
+#[test]
+fn a_folder_with_no_build_cv_offers_no_build() {
+    let mut harness = tray_harness(cv_shell_without_build_cv("profile_cv_no_command").0);
+    assert!(is_shown(&harness, "CV documents, 2 out of date"), "the rail word is unchanged");
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Its .tex has not changed since this PDF was built."), "a Current line is unchanged");
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none(), "no build without the command");
+    assert!(is_shown(&harness, "Open PDF"));
+    harness.get_by_label("Halyard labs tech lead, Not built yet").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex has no PDF beside it yet. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label("Build the PDF…").is_none());
+    assert!(is_shown(&harness, if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" }));
+}
+
+/// While a run works, the no-command line stays as it is: there is no build to disable.
+#[test]
+fn a_folder_with_no_build_cv_says_the_same_while_a_run_works() {
+    let root = sample_root("profile_cv_no_command_busy");
+    fill_cv(&root);
+    fs::remove_file(root.join(BUILD_CV)).unwrap();
+    let (shell, _root, _sink, _feed) = profile_with_run_on(root);
+    let mut harness = tray_harness(shell.with_now(cv_now()));
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none());
+}
+
+/// A checkout update that adds `/build-cv` brings the build back on the next snapshot.
+#[test]
+fn adding_build_cv_brings_the_build_back() {
+    let (mut shell, root) = cv_shell_without_build_cv("profile_cv_command_added");
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label(REBUILD).is_none());
+
+    add_build_cv(&root);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Its .tex changed 3 hours ago, after this PDF was built. Run /build-cv in the launcher to build it again."));
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Button, REBUILD).is_some(), "the build is back");
 }
 
 /// A draft with unsaved changes asks before CV documents open in its place.
@@ -4910,6 +4989,17 @@ fn profile_cv_failed_light() {
     assert!(is_shown(&harness, "The file is there, but Jobdesk could not draw its pages."));
     assert!(is_shown(&harness, "88 KB, built yesterday"), "no page count for pages that never rendered");
     assert!(is_shown(&harness, "Open PDF"), "the system's viewer may still open it");
+}
+
+/// The folder has no `/build-cv`: the application CV keeps Source newer, says the command is missing, and offers no build.
+#[test]
+fn profile_cv_nocommand_light() {
+    let shell = cv_shell_without_build_cv("profile_cv_nocommand_light").0.with_page_store(page_store());
+    let mut harness = cv_scene(shell, Theme::Light, "Tessel platform lead, Source newer");
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none());
+    assert!(is_shown(&harness, "Halyard labs tech lead, Not built yet"), "the list still tags it");
+    compare(&mut harness, "profile_cv_nocommand_light");
 }
 
 /// Refuses Brightwell's PDF at once, and renders no other.

@@ -132,13 +132,30 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace");
         let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
         assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
-        let CvShelf::Read(documents) = &snapshot.cv_documents else { panic!("cv/ reads") };
+        let CvShelf::Read { documents, build_cv } = &snapshot.cv_documents else { panic!("cv/ reads") };
         let mut stems: Vec<&str> = documents.iter().map(|doc| doc.stem.as_str()).collect();
         stems.sort();
         assert_eq!(stems, ["main_harbor", "main_tessel_group_solution_architect"]);
         // With no `.tex` beside it, a PDF has no source to be older than, so its tag reads Current.
         assert!(documents.iter().all(|doc| doc.tex.is_none() && doc.freshness == Freshness::NoSource), "the sample holds no .tex");
-        assert!(documents.iter().all(|doc| state_line(doc, false, snapshot.today.and_hms_opt(9, 0, 0).unwrap()).tag == CvTag::Current));
+        let now = snapshot.today.and_hms_opt(9, 0, 0).unwrap();
+        assert!(documents.iter().all(|doc| state_line(doc, false, *build_cv, now).tag == CvTag::Current));
+        assert!(!build_cv, "the sample holds no /build-cv");
+    }
+
+    /// Whether the folder has `/build-cv` comes with the CV documents, read again on each load.
+    #[test]
+    fn load_says_whether_the_folder_has_build_cv() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let build_cv = |root: &Path| match Snapshot::load(root, today).cv_documents {
+            CvShelf::Read { build_cv, .. } => build_cv,
+            CvShelf::Unread => panic!("cv/ reads"),
+        };
+        assert!(!build_cv(dir.path()));
+        std::fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        std::fs::write(dir.path().join(".claude/commands/build-cv.md"), "Build a CV.\n").unwrap();
+        assert!(build_cv(dir.path()));
     }
 
     #[test]

@@ -137,6 +137,7 @@ Brief: a rail entry on Profile that previews the CV PDFs in the job search folde
 | [ProfileCv-loading.png](../ProfileCv-loading.png) | The list and head come from the snapshot. The pages are skeletons while they render. |
 | [ProfileCv-empty.png](../ProfileCv-empty.png) | No `.tex` or PDF in `cv/`: no list, an empty note, and the rail row None yet. |
 | [ProfileCv-unread.png](../ProfileCv-unread.png) | `cv/` cannot be read: the alert, the rail row Hidden, the tab's failed square. Also shows the topics scrolling above the pinned group when the rail is short. |
+| [ProfileCv-nocommand.png](../ProfileCv-nocommand.png) | The folder has no `.claude/commands/build-cv.md`: the application CV tagged Source newer says the folder has no `/build-cv` command, with no build action. The list still tags the Not built yet row. |
 
 `Profile.html`'s canvases show the same pinned group at the rail's foot, not picked, with its state word ("2 out of date", or a skeleton while loading).
 
@@ -159,20 +160,23 @@ Brief: a rail entry on Profile that previews the CV PDFs in the job search folde
 **Head** (`headed_paper`'s head)
 - The label in `Type::DEAL`. Under it, the file name in mono, then "N pages, size, built <relative time>" in `muted`. A `.tex` with no PDF reads "written <relative time>".
 - At the right: `small_button` Open PDF, which opens the file in the system's PDF viewer, and `small_button` Show in Finder (Show in Explorer on Windows, the wording Settings › General already uses). A `.tex` with no PDF shows only Show in Finder, which selects the `.tex`.
-- Under the meta line, the state line: a `tag`, one sentence in `muted`, and, at the right, a `small_command_action` when a build would help.
+- Under the meta line, the state line: a `tag`, one sentence in `muted`, and, at the right, a `small_command_action` when a build would help and the folder has `/build-cv`.
 
 | Tag | Tone | When | Sentence | Action |
 | --- | --- | --- | --- | --- |
-| Current | `Plain` | the PDF is newer than its `.tex` | Built after its .tex last changed. | none |
+| Current | `Plain` | the PDF is as new as its `.tex` or newer, equal to the second included | Its .tex has not changed since this PDF was built. | none |
 | Current | `Plain` | a PDF with no `.tex` | No .tex sits beside this PDF, so there is nothing to build it from again. | none |
 | Source newer | `Interview` | the `.tex` is newer than the PDF | Its .tex changed <when>, after this PDF was built. Run /build-cv in the launcher to build it again. | Rebuild the PDF… |
+| Source newer | `Interview` | the same, in a folder with no `/build-cv` | Its .tex changed <when>, after this PDF was built. This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it. | none |
 | Not built yet | `Interview` | a `.tex` with no PDF | Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one. | Build the PDF… |
+| Not built yet | `Interview` | the same, in a folder with no `/build-cv` | Its .tex has no PDF beside it yet. This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it. | none |
 | Render failed | `Closed` | the renderer refused a PDF that is otherwise Current | The file is there, but Jobdesk could not draw its pages. | none |
 
 - The only staleness inputs are the `.tex` and PDF modification times. Jobdesk never reads a profile file, `CLAUDE.md` or a `.tex`'s contents for it, because `/build-cv` makes no content edits: a build only turns the `.tex` as it is into a PDF.
 - One tag at a time. A PDF that is both Source newer and refused by the renderer keeps Source newer and its action, because a build may fix both, and its pages area shows the failure box.
 - A PDF with no `.tex` is listed and reads Current, with no action, because nothing exists to build it from. Open PDF and Show in Finder work as for any PDF.
 - The action opens the launcher with `/build-cv <stem>` filled in, where the stem is the document's file name without its extension, such as `/build-cv main_example`. Its hover says "Opens the launcher with /build-cv <stem>. Nothing runs until you start it there." Nothing runs until the user starts it in the launcher, as AGENTS.md says, so its label ends in "…". It is disabled while a run works ("Another run is active. One run at a time keeps your files safe."). There is no button that builds. `/build-cv` also takes `--all` and `--list`, and the screen offers neither: the user can type them in the launcher.
+- **Missing command**: the action is offered only when the folder holds `.claude/commands/build-cv.md`, because `/build-cv` exists only in checkouts that have it, and opening the launcher on an unknown command would start a paid run for nothing. Jobdesk reads whether that file exists with the folder snapshot, like the other profile files, and never reads its contents. A file that cannot be checked counts as missing. It is one fact for the whole folder and does not depend on the stem. Without it, an out-of-date document keeps its tag, its second sentence becomes the no-command one in the table, and no action shows, disabled or not. The busy rule applies only when the action shows: while a run works, the no-command line stays as it is. When an update adds the file, the action returns on the next snapshot. The rail word, the list tags and their label hovers, Open PDF, Show in Finder, the blank page and the footnote stay as they are.
 
 **Pages**
 - Each page sits in `page_frame` on the paper, side by side with `PAGE_GAP` between. A page takes the scroll area's height less its caption, and less when needed so two pages fit side by side, never less than `PAGE_SIZE`. A third page wraps under them, and the area scrolls. Its width follows the rendered page, A4 portrait in practice. Under it, "Page N of M" in `Type::NOTE`, `faint`.
@@ -199,11 +203,12 @@ No new token. The list column reuses `RUN_SIDE`.
 
 ### Doc changes
 
-For the planner's docs step:
-- `docs/guide.md` › Profile: a paragraph on CV documents: the Built from your profile row pinned under the topics, and its state words (N out of date, N documents, None yet, Hidden). The list: masters first, then applications, newest first. The four tags and what each means. Jobdesk never builds a PDF: Rebuild the PDF… and Build the PDF… only open `/build-cv <name>` in the launcher, and are disabled while a task runs. Open PDF and Show in Finder. A PDF with no `.tex` is listed as Current, with nothing to build it from.
-- `ARCHITECTURE.md` › Features: the `profile` row adds "CV document, staleness" to its language and "the `.tex` and PDF files in `cv/` and their modification times" to what it reads. The compare of the two times stays in `profile`'s domain.
-- `ARCHITECTURE.md` › Runtime: the PDF page line says pages also render for Profile's CV documents, at the size the screen asks for.
-- `ARCHITECTURE.md` › Trust: CV PDFs render as page images only, and their paths pass `within_workspace`.
+For the planner's docs step. None of these is in the docs yet:
+- `docs/guide.md` › Profile: a paragraph on CV documents: the Built from your profile row pinned under the topics, and its state words (N out of date, N documents, None yet, Hidden). The list: masters first, then applications, newest first. The four tags and what each means, Current including a PDF saved in the same second as its `.tex`. Jobdesk never builds a PDF: Rebuild the PDF… and Build the PDF… only open `/build-cv <name>` in the launcher, and are disabled while a task runs. They show only when the folder has the `/build-cv` command. Without it, the line says so and suggests updating the ai-job-search checkout. Open PDF and Show in Finder. A PDF with no `.tex` is listed as Current, with nothing to build it from.
+- `ARCHITECTURE.md` › Features: the `profile` row adds "CV document, staleness" to its language, and to what it reads "the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists". The compare of the two times stays in `profile`'s domain.
+- `docs/architecture/profile.md`: one line on how CV documents reach the `Snapshot`: the `cv/` stems with their file stamps, and whether `.claude/commands/build-cv.md` exists, read with the profile files, an unreadable check counting as missing. The build action needs both an out-of-date document and the command.
+- `ARCHITECTURE.md` › PDF pages: pages also render for Profile's CV documents, at the size the screen asks for.
+- `docs/architecture/trust.md`: CV PDFs render as page images only, and their paths pass `within_workspace`. Jobdesk only checks that `build-cv.md` exists and never reads it.
 
 ## Later ideas
 

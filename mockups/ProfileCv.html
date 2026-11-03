@@ -9,7 +9,8 @@
 <style>
 /* Profile: CV documents. A rail entry at the foot of the topic rail opens the CV PDFs in the cv folder, read only.
    A list column inside the paper picks a document, and its pages show beside it.
-   Choose with ?state=full|source|busy|missing|notex|failed|loading|empty|unread and ?theme=light|dark.
+   Choose with ?state=full|source|busy|missing|notex|failed|loading|empty|unread|nocommand and ?theme=light|dark.
+   nocommand: the folder has no .claude/commands/build-cv.md, so an out-of-date document offers no build action.
    Profile.html's scoped shell, copied under .pc, so app.css and the other canvases are unchanged. Fictional data only. */
 body { margin: 0; }
 .pc {
@@ -195,7 +196,10 @@ const TAG = {
 };
 const tag = (st) => `<span class="tag c-${TAG[st][1]}">${TAG[st][0]}</span>`;
 
-const PICK = { full: 'master', source: 'tessel', busy: 'tessel', missing: 'halyard', notex: 'linden', failed: 'brightwell', loading: 'granite' }[STATE] || 'master';
+const PICK = { full: 'master', source: 'tessel', busy: 'tessel', missing: 'halyard', notex: 'linden', failed: 'brightwell', loading: 'granite', nocommand: 'tessel' }[STATE] || 'master';
+// Whether the folder holds .claude/commands/build-cv.md, read with the folder snapshot. Without it, no build action shows.
+const HAS_BUILD_CV = STATE !== 'nocommand';
+const NO_COMMAND = 'This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it.';
 
 // The rail: the eleven topics as Profile.html draws them, then the CV documents group at the foot.
 function rail(o = {}) {
@@ -256,10 +260,14 @@ function action(d, label) {
 function why(d) {
   const tex = '<span class="path">.tex</span>';
   switch (d.st) {
-    case 'current': return `<div class="why">${tag('current')}<span class="w">Built after its ${tex} last changed.</span></div>`;
+    case 'current': return `<div class="why">${tag('current')}<span class="w">Its ${tex} has not changed since this PDF was built.</span></div>`;
     case 'notex': return `<div class="why">${tag('notex')}<span class="w">No ${tex} sits beside this PDF, so there is nothing to build it from again.</span></div>`;
-    case 'source': return `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. Run /build-cv in the launcher to build it again.</span>${action(d, 'Rebuild the PDF…')}</div>`;
-    case 'none': return `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. Run /build-cv in the launcher to build one.</span>${action(d, 'Build the PDF…')}</div>`;
+    case 'source': return HAS_BUILD_CV
+      ? `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. Run /build-cv in the launcher to build it again.</span>${action(d, 'Rebuild the PDF…')}</div>`
+      : `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. ${NO_COMMAND}</span></div>`;
+    case 'none': return HAS_BUILD_CV
+      ? `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. Run /build-cv in the launcher to build one.</span>${action(d, 'Build the PDF…')}</div>`
+      : `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. ${NO_COMMAND}</span></div>`;
     case 'failed': return `<div class="why">${tag('failed')}<span class="w">The file is there, but Jobdesk could not draw its pages.</span></div>`;
   }
   return '';

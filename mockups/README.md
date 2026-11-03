@@ -4,13 +4,14 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 ## Building a canvas
 
-`Grid.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html` and `Settings.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.up`, `.pf`, `.pc`, `.st`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
+`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html` and `Settings.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
 
 ## Canvases
 
 | Canvas | Query string | PNGs | Handoff file |
 | --- | --- | --- | --- |
 | `Grid.html` | `?screen=today\|jobs\|tracker\|turn\|firstrun&theme=light\|dark` | 6 `Grid-*.png` | [look](handoff/look.md), [today](handoff/today.md), [tasks](handoff/tasks.md) |
+| `RunLive.html` | `?option=a\|b&state=working\|quiet\|sheet&theme=light\|dark`, `&motion=on` to animate | 10 `RunLive-*.png` | [tasks](handoff/tasks.md) |
 | `UiPass.html` | `?scene=states\|jobs\|failed\|loading\|empty&theme=light\|dark` | 6 `UiPass-*.png` | [ui-pass](handoff/ui-pass.md) |
 | `Profile.html` | `?state=view\|edit\|busy\|conflict\|empty\|loading\|failed\|updated\|setup&theme=light\|dark` | 10 `Profile-*.png` | [profile](handoff/profile.md) |
 | `ProfileCv.html` | `?state=full\|source\|busy\|missing\|notex\|failed\|loading\|empty\|unread\|nocommand&theme=light\|dark` | 11 `ProfileCv-*.png` | [profile](handoff/profile.md) |
@@ -21,7 +22,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 - **The look**: the desk and the paper, the menu, the highlighter, stamp ink, type and words every screen shares → see [handoff/look.md](handoff/look.md). Open it before drawing any screen.
 - **Today**: the head and day stamp, the deal card, Done today and Coming up, the other states, motion and accessibility → see [handoff/today.md](handoff/today.md). Open it when you change the Today screen.
-- **Tasks**: the head, the turn band, the question bar, the run's story and the side column → see [handoff/tasks.md](handoff/tasks.md). Open it when you change the Tasks screen or how a run asks for the user.
+- **Tasks**: the head, the turn band, the question bar, the run's story, the side column, and how a working run shows it is alive (live Elapsed and Cost, the quiet state, options A and B, still open) → see [handoff/tasks.md](handoff/tasks.md). Open it when you change the Tasks screen, how a run asks for the user, or what moves while Claude works.
 - **UI pass**: the rules for hover, selected, pressed, disabled, links, copyable text, and loading, failed and empty states → see [handoff/ui-pass.md](handoff/ui-pass.md). Open it before adding or changing a clickable widget or an empty, loading or failed state.
 - **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature, and CV documents (the CV PDF preview: a list column beside the pages, its four tags, the `/build-cv <name>` launcher action, and the line that replaces it when the folder has no `/build-cv` command) → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen, how Jobdesk writes profile files, or how it shows CV PDFs.
 - **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.

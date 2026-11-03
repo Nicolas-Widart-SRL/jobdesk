@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Profile: CV documents</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* Profile: CV documents. A rail entry at the foot of the topic rail opens the compiled CV PDFs in the cv folder, read only.
+   Choose with ?option=a|b, ?state=full|source|profile|missing|failed|loading|empty|unread and ?theme=light|dark.
+   Option A picks a document with the dossier's segmented strip above the pages. Option B picks it from a list column beside them.
+   empty and unread show no picker, so they draw the same in both options.
+   Profile.html's scoped shell, copied under .pc, so app.css and the other canvases are unchanged. Fictional data only. */
+body { margin: 0; }
+.pc {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.pc[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.pc .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; position: relative; }
+.pc .num { font-variant-numeric: tabular-nums; }
+
+/* Shell, as Grid.html draws it. */
+.pc .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.pc .menu .brand { margin-right: 0; }
+.pc .menu .brand svg path:last-child { stroke: var(--sheet); }
+.pc .tabs { display: flex; gap: 6px; }
+.pc .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.pc .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.pc .tabs a.on { color: var(--text); font-weight: 600; }
+.pc .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.pc .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.pc .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.pc .newtask .keys { color: var(--muted); }
+.pc .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.pc .statusbar .seg { margin-left: auto; border: 0; }
+.pc .statusbar .seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 12.5px; }
+.pc .statusbar .seg button.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.pc .sq { display: inline-block; flex: none; width: 8px; height: 8px; }
+
+/* Controls, as UiPass.html draws them. */
+.pc .b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; white-space: nowrap; position: relative; }
+.pc .b.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.pc .b.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
+.pc .path { font: 400 13px/1.3 var(--type); }
+.pc .tag { height: 22px; padding: 0 7px; font-size: 12.5px; }
+
+/* Page head on the grid. */
+.pc .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
+.pc .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.pc .phead .sub { margin-top: 2px; color: var(--muted); }
+.pc .bbody { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 0 32px 14px; }
+
+/* The topic rail, as Profile.html draws it, with one more group at its foot. */
+.pc .rail { flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0; border-radius: 4px; background: var(--panel); }
+.pc .rail .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 4px; font: 600 17px/1.3 var(--slab); }
+.pc .rail .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.pc .rail .tl { display: flex; gap: 3px; padding: 4px 14px 10px; border-bottom: 1px solid var(--line); }
+.pc .rail .tl i { display: block; width: 6px; height: 18px; background: var(--text); }
+.pc .rail .tl i.f { background: var(--interview); }
+.pc .rail .tl i.o { background: var(--off); }
+.pc .gt { padding: 10px 14px 3px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.pc .tr { flex: none; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 6px; padding: 0 8px; border-radius: 3px; }
+.pc .tr .t { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc .tr .s { flex: none; font-size: 13px; color: var(--muted); }
+.pc .tr .s.f { color: var(--interview); font-weight: 600; }
+.pc .tr .s.x { color: var(--closed); font-weight: 600; }
+.pc .tr.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); font-weight: 600; }
+.pc .tr.on .s { font-weight: 600; }
+/* The new group sits at the rail's foot, under a hairline, apart from the eleven topics it is built from. */
+.pc .rail .built { flex: none; margin-top: auto; padding-bottom: 6px; border-top: 1px solid var(--line); }
+/* The topics scroll above it when the window is short, so the group stays in view. */
+.pc .rail .rows { flex: 0 1 auto; min-height: 0; overflow: hidden; position: relative; }
+.pc .rail .rows .bar-y { position: absolute; top: 6px; right: 3px; width: 6px; height: 70%; border-radius: 3px; background: var(--line); }
+
+/* The documents on paper. */
+.pc .sheetp { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.pc .cvsplit { flex: 1 1 auto; min-height: 0; display: flex; }
+.pc .view { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.pc .dh { flex: none; display: flex; flex-direction: column; padding: 16px 22px 12px; border-bottom: 1px solid var(--line); }
+.pc .dh .top { display: flex; align-items: flex-start; gap: 16px; }
+.pc .dh .hd { min-width: 0; }
+.pc .dh h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.pc .dh .meta { display: flex; align-items: baseline; gap: 10px; margin-top: 4px; color: var(--muted); white-space: nowrap; }
+.pc .dh .meta .path { color: var(--text); }
+.pc .dh .acts { margin-left: auto; flex: none; display: flex; gap: 6px; padding-top: 4px; }
+/* The state line: a tag, what it means, and what to do about it. */
+.pc .dh .why { display: flex; align-items: center; gap: 8px; margin-top: 9px; font-size: 13.5px; color: var(--muted); }
+.pc .dh .why .w { line-height: 1.4; }
+.pc .dh .why .path { color: var(--text); font-size: 13px; }
+.pc .dh .why .b { margin-left: auto; }
+.pc .dscroll { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; padding: 0 22px; }
+.pc .dfoot { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px 9px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); }
+.pc .dfoot .path { font-size: 12.5px; }
+.pc .dfoot .r { margin-left: auto; color: var(--muted); }
+
+/* Option A: the dossier's segmented strip, with a status square in each tab that is not current. */
+.pc .strip { flex: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; margin: 12px 22px 0; border-bottom: 1px solid var(--text); }
+.pc .strip span { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 4px 4px 0 0; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.pc .strip span.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+.pc .strip .gap { width: 14px; padding: 0; }
+
+/* Option B: a list column inside the paper, on the paper with a hairline at its right. */
+.pc .dlist { flex: 0 0 280px; min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 4px 0 8px; border-right: 1px solid var(--line); }
+.pc .dlist .gt { padding: 10px 14px 3px; }
+.pc .dlist .tr { gap: 8px; }
+.pc .dlist .tr .tag { height: 20px; padding: 0 6px; font-size: 12px; }
+
+/* Pages: each page of the PDF, sized to the room's height, side by side on the paper. */
+.pc .pages { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 12px; padding: 16px 0; }
+.pc .pw { display: flex; flex-direction: column; gap: 5px; }
+.pc .pw .cap { font-size: 12.5px; color: var(--faint); }
+.pc .pg { position: relative; overflow: hidden; background: var(--page); border: 1px solid var(--line); border-radius: 1px; }
+.pc .art { position: absolute; left: 0; top: 0; width: 420px; height: 594px; transform-origin: 0 0; padding: 36px 38px; box-sizing: border-box; color: var(--page-head); font-family: "Schibsted Grotesk", system-ui, sans-serif; }
+.pc .art .nm { font: 600 34px/1.05 var(--slab); }
+.pc .art .ro { margin-top: 4px; font-size: 14px; }
+.pc .art .sec { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px; font: 600 16px/1 var(--slab); }
+.pc .art .sec::before { content: ""; width: 52px; height: 4px; background: var(--page-head); }
+.pc .art .en { display: grid; grid-template-columns: 52px 1fr; column-gap: 10px; margin-bottom: 10px; }
+.pc .art .en b { display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+.pc .art i { display: block; height: 4px; margin: 0 0 5px; background: var(--page-line); }
+.pc .art i.d { width: 44px; }
+.pc .art .two { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+/* The engineer template: a band across the top, a side column of skills. */
+.pc .art.eng { padding: 0; }
+.pc .art.eng .band { padding: 30px 38px 20px; background: var(--page-head); color: var(--page); }
+.pc .art.eng .band i { background: var(--page-line); opacity: .6; }
+.pc .art.eng .cols { display: grid; grid-template-columns: 120px 1fr; column-gap: 22px; padding: 20px 38px; }
+.pc .art.eng .sec { margin-top: 14px; }
+.pc .art.eng .sec::before { width: 14px; }
+/* A .tex with no PDF: an empty page in the hairline frame, saying so. */
+.pc .pg.none { display: flex; align-items: center; justify-content: center; text-align: center; background: var(--card); color: var(--muted); font-size: 13.5px; padding: 0 22px; }
+
+/* Empty, failed and loading, as the kit draws them. */
+.pc .empty { display: flex; flex-direction: column; gap: 12px; max-width: 560px; padding: 24px 0 18px; }
+.pc .empty h3 { margin: 0; font: 600 19px/1.25 var(--slab); }
+.pc .empty p { color: var(--muted); line-height: 1.45; font-size: 15px; }
+.pc .pbox { display: flex; flex-direction: column; gap: 8px; max-width: 560px; margin: 18px 5px 0 0; padding: 14px 16px; border: 1px solid var(--closed); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--closed); }
+.pc .pbox .at { color: var(--closed); font-weight: 600; }
+.pc .code { padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13px/1.35 var(--type); white-space: pre-wrap; }
+.pc .sk { display: block; height: 12px; border-radius: 2px; background: var(--raised); }
+.pc .pg.skel { background: var(--raised); border-color: var(--raised); }
+.pc .alert { flex: none; display: flex; align-items: flex-start; gap: 16px; margin: 0 37px 12px 32px; padding: 12px 16px; border: 1px solid var(--closed); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--closed); }
+.pc .alert .at { color: var(--closed); font-weight: 600; }
+.pc .failsq { display: inline-block; width: 8px; height: 8px; background: var(--closed); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const OPTION = (P.get('option') || 'a').toLowerCase();
+const STATE = (P.get('state') || 'full').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const B = (t, cls = '') => `<span class="b ${cls}">${t}</span>`;
+const FINDER = 'Show in Finder';
+
+function shell(inner, o = {}) {
+  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', ''], ['Profile', ''], ['Setup', '']]
+    .map(([t, c]) => `<a class="${t === 'Profile' ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}${t === 'Profile' && o.failed ? '<span class="failsq" title="Part of your profile could not be read"></span>' : ''}</a>`).join('');
+  return `<div class="app pc" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar"><span><span class="sq" style="background: var(--hired); margin-right: 6px; vertical-align: 1px"></span>Claude is ready</span>
+      <div class="seg"><button type="button">System</button><button type="button" class="${THEME === 'light' ? 'on' : ''}">Light</button><button type="button" class="${THEME === 'dark' ? 'on' : ''}">Dark</button></div></footer></div>`;
+}
+const head = (sub) => `<header class="phead"><div><h1>Profile</h1><div class="sub">${sub}</div></div></header>`;
+const SUB = 'Sample Candidate. Claude reads this before it scores a job or writes a CV or a letter.';
+
+// The documents in cv/: masters first, then each application's CV, newest first.
+// st: current | source | profile | none (a .tex with no PDF) | failed. Profile changed marks masters only.
+const DOCS = [
+  { id: 'master', label: 'Master CV', file: 'main_example', master: true, st: 'current', pages: 2, size: '84 KB', built: '3 days ago', art: 'modern' },
+  { id: 'eng', label: 'Master CV, engineer', file: 'main_example_engineer', master: true, st: 'profile', pages: 2, size: '97 KB', built: '12 days ago', art: 'eng' },
+  { id: 'halyard', label: 'Halyard Labs tech lead', file: 'main_halyard_labs_tech_lead', st: 'none', written: 'today' },
+  { id: 'tessel', label: 'Tessel platform lead', file: 'main_tessel_platform_lead', st: 'source', pages: 2, size: '91 KB', built: '2 days ago', art: 'modern' },
+  { id: 'brightwell', label: 'Brightwell eng manager', file: 'main_brightwell_eng_manager', st: 'failed', size: '88 KB', built: 'yesterday' },
+  { id: 'ardent', label: 'Ardent backend engineer', file: 'main_ardent_backend_engineer', st: 'current', pages: 2, size: '86 KB', built: '4 days ago', art: 'modern' },
+  { id: 'granite', label: 'Granite Cloud staff engineer', file: 'main_granite_cloud_staff_engineer', st: 'current', pages: 3, size: '102 KB', built: '9 days ago', art: 'modern' },
+  { id: 'orchard', label: 'Orchard Systems architect', file: 'main_orchard_systems_architect', st: 'current', pages: 2, size: '83 KB', built: '2 weeks ago', art: 'eng' },
+];
+const STALE = DOCS.filter((d) => ['source', 'profile', 'none'].includes(d.st)).length;
+// The tag each state takes, and its ink.
+const TAG = {
+  current: ['Current', 'plain'],
+  source: ['Source newer', 'interview'],
+  profile: ['Profile changed', 'interview'],
+  none: ['Not built yet', 'interview'],
+  failed: ['Render failed', 'closed'],
+};
+const SQ = { source: 'interview', profile: 'interview', none: 'interview', failed: 'closed' };
+const tag = (st) => `<span class="tag c-${TAG[st][1]}">${TAG[st][0]}</span>`;
+
+const PICK = { full: 'master', source: 'tessel', profile: 'eng', missing: 'halyard', failed: 'brightwell', loading: 'granite' }[STATE] || 'master';
+
+// The rail: the eleven topics as Profile.html draws them, then the CV documents group at the foot.
+function rail(o = {}) {
+  const groups = [
+    ['On your CV', [['Identity and languages', 'Filled'], ['Experience', '2 to fill', 'f'], ['Education', 'Filled'], ['Skills', '1 to fill', 'f'], ['Projects and publications', 'Filled'], ['References', 'Filled'], ['Profile statements', 'Filled']]],
+    ['What guides Claude', [['How I work', 'Filled'], ['Goals and deal-breakers', 'Filled'], ['Interview stories', '3 to fill', 'f'], ['Job search', 'Filled']]],
+  ];
+  const all = groups.flatMap(([, l]) => l);
+  const filled = all.filter(([, s]) => s === 'Filled').length;
+  const marks = all.map(([, s]) => `<i class="${s === 'Filled' ? '' : 'f'}"></i>`).join('');
+  const rows = groups.map(([g, l]) => `<div class="gt">${g}</div>` + l.map(([t, s, c]) => `<div class="tr"><span class="t">${t}</span><span class="s ${c || ''}">${s}</span></div>`).join('')).join('');
+  const word = o.word || [`${STALE} out of date`, 'f'];
+  return `<aside class="rail" aria-label="Topics"><div class="sh">Topics <span class="n num">${filled} of ${all.length} filled</span></div>
+    <div class="tl" role="img" aria-label="${filled} of ${all.length} topics filled">${marks}</div><div class="rows">${rows}${o.bar ? '<span class="bar-y"></span>' : ''}</div>
+    <div class="built"><div class="gt">Built from your profile</div>
+      <div class="tr on"><span class="t">CV documents</span><span class="s ${word[1]}">${word[0]}</span></div></div></aside>`;
+}
+
+// A page of a CV, as the rasterised PDF would show it. Stand-in text and lines, in the page tokens.
+function art(kind, n) {
+  const lines = (k, widths) => widths.slice(0, k).map((w) => `<i style="width:${w}%"></i>`).join('');
+  const W = [100, 96, 88, 100, 92, 70, 98, 84];
+  const entry = (title, k) => `<div class="en"><div><i class="d"></i></div><div><b>${title}</b>${lines(k, W)}</div></div>`;
+  if (kind === 'eng') {
+    const side = `<div class="sec">Skills</div>${lines(6, [90, 70, 84, 60, 76, 66])}<div class="sec">Languages</div>${lines(3, [70, 56, 62])}<div class="sec">Education</div>${lines(4, [92, 80, 64, 70])}`;
+    const main1 = `<div class="sec">Experience</div>${entry('Lead Software Engineer', 5)}${entry('Senior Backend Engineer', 4)}${entry('Software Engineer', 3)}`;
+    if (n === 1) return `<div class="art eng"><div class="band"><div class="nm">Sample Candidate</div><div class="ro">Lead Software Engineer</div><div style="margin-top: 12px; width: 60%">${lines(2, [100, 72])}</div></div><div class="cols"><div>${side}</div><div><div class="sec">Profile</div>${lines(4, W)}${main1}</div></div></div>`;
+    return `<div class="art eng"><div class="cols" style="padding-top: 36px"><div><div class="sec">Projects</div>${lines(5, [90, 76, 84, 66, 72])}</div><div><div class="sec">Experience</div>${entry('Junior Developer', 3)}<div class="sec">Publications</div>${lines(4, W)}<div class="sec">References</div>${lines(2, [70, 54])}</div></div></div>`;
+  }
+  if (n === 1) return `<div class="art"><div class="nm">Sample Candidate</div><div class="ro">Lead Software Engineer</div>
+    <div class="two" style="margin-top: 12px">${lines(2, [86, 60])}<div>${lines(2, [74, 90])}</div></div>
+    <div class="sec">Profile</div>${lines(4, W)}<div class="sec">Experience</div>${entry('Lead Software Engineer', 5)}${entry('Senior Backend Engineer', 4)}${entry('Software Engineer', 3)}</div>`;
+  if (n === 2) return `<div class="art"><div class="sec" style="margin-top: 4px">Experience</div>${entry('Junior Developer', 3)}
+    <div class="sec">Education</div>${entry('MSc Computer Science', 2)}<div class="sec">Skills</div><div class="two">${lines(4, [90, 70, 84, 60])}<div>${lines(4, [76, 66, 88, 58])}</div></div>
+    <div class="sec">Languages</div>${lines(2, [62, 48])}<div class="sec">Projects</div>${lines(3, W)}</div>`;
+  return `<div class="art"><div class="sec" style="margin-top: 4px">Publications</div>${lines(5, W)}<div class="sec">References</div>${lines(3, [70, 54, 62])}</div>`;
+}
+
+// The pages, scaled after layout to the room's height, at most a page and a bit of gap per row.
+function pages(d, o = {}) {
+  if (o.loading) return `<div class="pages" data-fit="2">${[1, 2].map(() => `<div class="pw"><div class="pg skel"></div><span class="sk" style="width: 60px; height: 10px"></span></div>`).join('')}</div>`;
+  if (d.st === 'none') return `<div class="pages" data-fit="1"><div class="pw"><div class="pg none">No PDF yet. It shows here once /build-cv has built it.</div></div></div>`;
+  if (d.st === 'failed') return `<div class="pbox" role="group" aria-label="This PDF could not be rendered"><div class="at">This PDF could not be rendered.</div>
+      <div>The file itself is unchanged, and Open PDF still opens it in your PDF viewer. What the renderer said:</div>
+      <div class="code">Unsupported font program in page 1 (Type 3 font)</div></div>`;
+  return `<div class="pages" data-fit="${Math.min(d.pages, 3)}">${Array.from({ length: d.pages }, (_, i) => `<div class="pw"><div class="pg">${art(d.art, i + 1)}</div><span class="cap num">Page ${i + 1} of ${d.pages}</span></div>`).join('')}</div>`;
+}
+
+// What the state means and what to do about it, under the meta line.
+function why(d) {
+  const tex = '<span class="path">.tex</span>';
+  const act = (l) => B(l, 'sm');
+  switch (d.st) {
+    case 'current': return `<div class="why">${tag('current')}<span class="w">Built after its ${tex} and your profile last changed.</span></div>`;
+    case 'source': return `<div class="why">${tag('source')}<span class="w">Its ${tex} changed today, after this PDF was built. Run /build-cv in the launcher to build it again.</span>${act('Rebuild the PDF…')}</div>`;
+    case 'profile': return `<div class="why">${tag('profile')}<span class="w">Your profile changed 5 days ago, after this PDF was built. /build-cv builds it again from its ${tex} as it is, so check that it holds your change.</span>${act('Rebuild the PDF…')}</div>`;
+    case 'none': return `<div class="why">${tag('none')}<span class="w">Its ${tex} has no PDF beside it yet. Run /build-cv in the launcher to build one.</span>${act('Build the PDF…')}</div>`;
+    case 'failed': return `<div class="why">${tag('failed')}<span class="w">The file is there, but Jobdesk could not draw its pages.</span></div>`;
+  }
+  return '';
+}
+
+function docHead(d, o = {}) {
+  const meta = d.st === 'none'
+    ? `<span class="path">${d.file}.tex</span><span>written ${d.written}</span>`
+    : `<span class="path">${d.file}.pdf</span><span>${d.pages && !o.loading ? `${d.pages} pages, ` : ''}${d.size}, built ${d.built}</span>${o.loading ? '<span>Rendering the pages…</span>' : ''}`;
+  const acts = d.st === 'none' ? B(FINDER, 'sm') : `${B('Open PDF', 'sm')}${B(FINDER, 'sm')}`;
+  return `<header class="dh"><div class="top"><div class="hd"><h2>${d.label}</h2><div class="meta">${meta}</div></div><div class="acts">${acts}</div></div>${why(d)}</header>`;
+}
+
+const foot = (d) => `<footer class="dfoot"><span>Kept in <span class="path">cv/</span>, beside the <span class="path">.tex</span> each PDF is built from</span><span class="r">Jobdesk shows these PDFs. /build-cv builds them.</span></footer>`;
+
+function stripA() {
+  const tab = (d) => `<span class="${d.id === PICK ? 'on' : ''}">${SQ[d.st] ? `<i class="sq" style="background: var(--${SQ[d.st]})"></i>` : ''}${d.label}</span>`;
+  return `<nav class="strip" aria-label="CV documents">${DOCS.filter((d) => d.master).map(tab).join('')}<span class="gap" aria-hidden="true"></span>${DOCS.filter((d) => !d.master).map(tab).join('')}</nav>`;
+}
+
+function listB() {
+  const row = (d) => `<div class="tr${d.id === PICK ? ' on' : ''}"><span class="t">${d.label}</span>${d.st === 'current' ? '' : tag(d.st)}</div>`;
+  return `<nav class="dlist" aria-label="CV documents"><div class="gt">Masters</div>${DOCS.filter((d) => d.master).map(row).join('')}
+    <div class="gt">For applications</div>${DOCS.filter((d) => !d.master).map(row).join('')}</nav>`;
+}
+
+function screen() {
+  const d = DOCS.find((x) => x.id === PICK);
+  const loading = STATE === 'loading';
+  const body = `${docHead(d, { loading })}<div class="dscroll">${pages(d, { loading })}</div>`;
+  const paper = OPTION === 'b'
+    ? `<section class="sheetp" aria-label="CV documents"><div class="cvsplit">${listB()}<div class="view">${body}</div></div>${foot(d)}</section>`
+    : `<section class="sheetp" aria-label="CV documents">${stripA()}<div class="view">${body}</div>${foot(d)}</section>`;
+  return shell(`${head(SUB)}<div class="bbody">${rail()}${paper}</div>`);
+}
+
+function emptyScreen() {
+  const body = `<div class="empty"><h3>No CV documents in your folder yet</h3>
+    <p>This page shows each PDF in <span class="path">cv/</span> that has a <span class="path">.tex</span> beside it, and each <span class="path">.tex</span> not built yet. /apply writes one for every application, and /build-cv builds its PDF.</p></div>`;
+  return shell(`${head(SUB)}<div class="bbody">${rail({ word: ['None yet', ''] })}
+    <section class="sheetp" aria-label="CV documents"><header class="dh"><div class="hd"><h2>CV documents</h2><div class="meta">The PDFs built from your profile, as they last built.</div></div></header>
+    <div class="dscroll">${body}</div>${foot()}</section></div>`);
+}
+
+function unreadScreen() {
+  const body = `<div class="empty"><h3>Your CV documents are hidden, not gone</h3>
+    <p>Jobdesk could not read the folder that holds them, so it shows none. Nothing in it was changed. Jobdesk reads it again as soon as the folder changes.</p></div>`;
+  return shell(`${head(SUB)}
+    <div class="alert" role="alert"><div><div class="at">Your CV folder could not be read.</div>
+      <div><span class="path">cv/</span>: permission denied. Give your user read access to the folder, in Finder's Get Info.</div>
+      <div class="muted">Your profile topics still show, and every task still runs.</div></div></div>
+    <div class="bbody">${rail({ word: ['Hidden', 'x'], bar: true })}
+    <section class="sheetp" aria-label="CV documents"><header class="dh"><div class="hd"><h2>CV documents</h2><div class="meta">The PDFs built from your profile, as they last built.</div></div></header>
+    <div class="dscroll">${body}</div>${foot()}</section></div>`, { failed: true });
+}
+
+const pick = { empty: emptyScreen, unread: unreadScreen }[STATE] || screen;
+document.getElementById('root').innerHTML = pick();
+
+// Fit each page to the room's height, as the builder would from the scroll area's height.
+// Pages never draw smaller than the dossier's PAGE_SIZE. Headless Chrome lays out once before its final window size, so fit again.
+function fit() {
+  document.querySelectorAll('.pages[data-fit]').forEach((row) => {
+    const h = Math.max(252, Math.floor(row.parentElement.clientHeight - 32 - 22));
+    const w = Math.round(h * 210 / 297);
+    row.querySelectorAll('.pg').forEach((pg) => {
+      pg.style.height = h + 'px'; pg.style.width = w + 'px';
+      const a = pg.querySelector('.art'); if (a) a.style.transform = `scale(${w / 420})`;
+    });
+  });
+}
+fit();
+addEventListener('resize', fit);
+setTimeout(fit, 300);
+</script>
+</body>
+</html>

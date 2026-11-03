@@ -9,6 +9,7 @@ Brief: a new Profile tab, before Setup, where the user reads their profile by to
 - [Setup's Profile panel](#setups-profile-panel)
 - [Code home](#code-home)
 - [New widgets](#new-widgets)
+- [CV documents](#cv-documents)
 - [Later ideas](#later-ideas)
 
 ## Canvas
@@ -30,7 +31,7 @@ Brief: a new Profile tab, before Setup, where the user reads their profile by to
 
 ## Layout
 
-The rail is a slip of pickable rows in two groups: On your CV and What guides Claude. The groups tell the user which topics print on a CV and which only steer Claude. A fat tally above the rows gives one mark per topic: `text` when filled, `interview` when something is left to fill, `closed` when hidden. The topic sits on paper with its head (title, one line on what it is for, and its actions), the document scrolling under it, and a footnote strip that names the file. One topic stays in view, so the actions in the head always belong to what the user reads, and the rail shows what is left at a glance.
+The rail is a slip of pickable rows in two groups: On your CV and What guides Claude. The groups tell the user which topics print on a CV and which only steer Claude. A third group, pinned at the foot, opens the CV documents (see [CV documents](#cv-documents)). A fat tally above the rows gives one mark per topic: `text` when filled, `interview` when something is left to fill, `closed` when hidden. The topic sits on paper with its head (title, one line on what it is for, and its actions), the document scrolling under it, and a footnote strip that names the file. One topic stays in view, so the actions in the head always belong to what the user reads, and the rail shows what is left at a glance.
 
 ## Topics
 
@@ -116,9 +117,103 @@ Eleven topics, matched by the headings of the upstream templates. `TOPICS` in `s
 
 The rail is built from existing parts: `slip`, `group_title`, `pick_row` with the state word in `Type::NOTE` or `Type::TAG` and an optional `tag`, and the tally that takes runs of `(count, ink)` at the fat size. The Updated mark is the existing `tag` in `Tone::Active`.
 
+## CV documents
+
+Brief: a rail entry on Profile that previews the CV PDFs built from the `.tex` files in the job search folder's `cv/` folder, with how fresh each one is. Preview only: Jobdesk builds nothing, and the user runs `/build-cv` (it builds a PDF from its `.tex` with no content edits) from the launcher. Round 1, not approved yet.
+
+### Canvases
+
+`ProfileCv.html?option=a|b&state=…&theme=light|dark`, scope `.pc`, built on `Profile.html`'s shell. Each PNG is 1280x820. Option A has the `ProfileCv-a-*.png` family, option B `ProfileCv-b-*.png`. Every state draws the same eight documents, so only the picked one changes.
+
+| State | PNGs | What it shows |
+| --- | --- | --- |
+| `full` | `-a-full`, `-b-full`, both `-full-dark` | Master CV picked, Current, its two pages. |
+| `source` | `-a-source`, `-b-source` | An application's CV whose `.tex` changed after the PDF: Source newer, and Rebuild the PDF…. |
+| `profile` | `-a-profile`, `-b-profile` | The engineer master, built before the last profile change: Profile changed, and Rebuild the PDF…. |
+| `missing` | `-a-missing`, `-b-missing` | A `.tex` with no PDF: Not built yet, an empty page frame, and Build the PDF…. |
+| `failed` | `-a-failed`, `-b-failed` | A PDF the renderer refused: Render failed, and the reason in a closed prompt box. |
+| `loading` | `-a-loading`, `-b-loading` | The picker and head are drawn from the snapshot. The pages are skeletons while they render. |
+| `empty` | `ProfileCv-empty.png` | No `.tex` or PDF in `cv/`. No picker, so both options draw it alike. |
+| `unread` | `ProfileCv-unread.png` | `cv/` cannot be read: the alert, the rail row Hidden, the tab's failed square. Also shows the topics scrolling above the pinned group when the rail is short. |
+
+### The two options
+
+- **A, a strip above the pages**: the dossier's `segmented` strip across the top of the paper, masters first, then a `GUTTER` gap, then the applications. A tab that is not current carries a `STATUS_DOT` square in its tag's tone before its label. It wraps to a second line as `segmented` does, so with many applications it eats into the page height.
+- **B, a list column beside the pages**: a column `RUN_SIDE` wide inside the paper, with a `line` hairline at its right. `rail_title` Masters and For applications head `pick_row`s, each with the label and, when not current, a `row_tag` with its state word. A long label is cut, with the full label on hover. The column scrolls on its own, so many applications cost no page height, and the pages draw larger than in A.
+
+### Rules
+
+**Rail**
+- A third group, Built from your profile, holds one row, CV documents. It is pinned to the rail's foot under a `line` hairline. When the window is short, the eleven topics scroll above it, so the row stays in view. It is not a topic, so it stays out of the tally and "N of 11 filled".
+- Its state word: "N out of date" in `interview` (Source newer, Profile changed and Not built yet), "N documents" in `muted` when all are current, "None yet" in `muted` when `cv/` holds none, "Hidden" in `closed` when `cv/` cannot be read.
+
+**Which documents**
+- A document is a `.tex` in `cv/`, with the PDF of the same name beside it when there is one. Masters are the stems that start with `main_example`. Every other stem is one application's CV.
+- Masters come first, then applications, newest first by the later of the `.tex` and PDF modification times. The screen opens on the first master.
+- Labels: a master reads "Master CV", plus ", engineer" for the rest of its stem. An application reads its stem without `main_`, with spaces for underscores and a capital first letter. The exact file name shows only in the head's meta line.
+
+**Head** (`headed_paper`'s head)
+- The label in `Type::DEAL`. Under it, the file name in mono, then "N pages, size, built <relative time>" in `muted`. A `.tex` with no PDF reads "written <relative time>".
+- At the right: `small_button` Open PDF, which opens the file in the system's PDF viewer, and `small_button` Show in Finder (Show in Explorer on Windows, the wording Settings › General already uses). A `.tex` with no PDF shows only Show in Finder, which selects the `.tex`.
+- Under the meta line, the state line: a `tag`, one sentence in `muted`, and, at the right, a `small_command_action` when a build would help.
+
+| Tag | Tone | When | Sentence | Action |
+| --- | --- | --- | --- | --- |
+| Current | `Plain` | none of the below | Built after its .tex and your profile last changed. | none |
+| Source newer | `Interview` | the `.tex` is newer than the PDF | Its .tex changed <when>, after this PDF was built. Run /build-cv in the launcher to build it again. | Rebuild the PDF… |
+| Profile changed | `Interview` | a master only: a profile file is newer than the PDF | Your profile changed <when>, after this PDF was built. /build-cv builds it again from its .tex as it is, so check that it holds your change. | Rebuild the PDF… |
+| Not built yet | `Interview` | a `.tex` with no PDF | Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one. | Build the PDF… |
+| Render failed | `Closed` | the renderer refused the PDF | The file is there, but Jobdesk could not draw its pages. | none |
+
+- One tag at a time. Source newer wins over Profile changed, because it is certain and Profile changed is only likely.
+- Profile changed marks masters only. An application's CV is tailored to one posting at one time, so every profile edit would mark them all, and the user would learn to ignore the tag.
+- "Profile file" means the files `TOPICS` names. It compares modification times, never contents.
+- The action opens the launcher with `/build-cv`, and nothing runs until the user starts it there, as AGENTS.md says. Its label ends in "…" for that reason. It is disabled while a run works ("Another run is active. One run at a time keeps your files safe."). There is no button that builds.
+
+**Pages**
+- Each page sits in `page_frame` on the paper, side by side with `PAGE_GAP` between, wrapping and scrolling down from the third page. A page takes the scroll area's height less its caption, never less than `PAGE_SIZE`. Its width follows the rendered page, A4 portrait in practice. Under it, "Page N of M" in `Type::NOTE`, `faint`.
+- Pages render on the worker threads that render the dossier's, keyed by path and modification time, so a PDF that `/build-cv` rewrites renders again and its tag updates on the next snapshot. They need a larger raster than the dossier's thumbnails, so the render takes the target size.
+- **Loading**: `skeleton` blocks at page size with a short caption skeleton. The picker and head come from the snapshot and show at once, with "Rendering the pages…" at the end of the meta line.
+- **Not built yet**: one empty `page_frame` at page size on `card`, saying "No PDF yet. It shows here once /build-cv has built it." in `muted`, centred.
+- **Render failed**: `prompt_box_tone` in `Closed` at the top of the scroll area: "This PDF could not be rendered.", a sentence saying the file is unchanged and Open PDF still opens it, then the renderer's reason in a `copyable` `code_box`, as plain text with control, escape, bidi and zero-width characters removed.
+- The footnote strip: "Kept in cv/, beside the .tex each PDF is built from", and at the right "Jobdesk shows these PDFs. /build-cv builds them."
+
+**Other states**
+- **Empty**: the paper head reads CV documents and "The PDFs built from your profile, as they last built." Under it, `empty_note`: "No CV documents in your folder yet", and that /apply writes one for every application and /build-cv builds its PDF. No action, because nothing to build exists.
+- **Unread**: `alert` under the page head names `cv/`, says what is wrong and how to fix it, and says the topics still show. The paper says "Your CV documents are hidden, not gone". The tab takes the `STATUS_DOT` square in `closed`, as for an unreadable profile file.
+
+**Trust**: CV PDFs carry text tailored from postings, so they render only as page images: no text layer, no links, no forms, no embedded actions. Open PDF hands the file to the system viewer. Every listed path stays inside the workspace through `within_workspace`, and a link that leaves `cv/` is skipped.
+
+**Words**: "built" on this screen, matching `/build-cv`: built 3 days ago, Not built yet, Build the PDF…. The brief's "Not compiled yet" became Not built yet, so one verb runs through the screen. The dossier keeps its Compiled PDFs heading.
+
+### New widgets
+
+- **`segmented_marked`** (A only): `segmented` whose options can carry a `STATUS_DOT` square in a `Tone` before the label, and a `GUTTER` break between two runs of options. The square takes the tab's on fill like its label does.
+- **`fitted_pages`**: rendered pages in `page_frame`, sized to the height they are given (at least `PAGE_SIZE`), with `PAGE_GAP` between and a "Page N of M" caption in `Type::NOTE`. Loading draws `skeleton` blocks in the same frames.
+- **`blank_page`**: an empty `page_frame` at page size, filled `card`, with one centred line in `muted`.
+
+No new token. B's list column reuses `RUN_SIDE`.
+
+### Doc changes
+
+For the planner's docs step, once approved:
+- `docs/guide.md` › Profile: a paragraph on CV documents: where it sits on the rail, what it lists and in which order, the five state words and what each means, that Jobdesk never builds a PDF and Rebuild the PDF… only opens `/build-cv` in the launcher, Open PDF and Show in Finder, and that application CVs never read Profile changed.
+- `ARCHITECTURE.md` › Features: the `profile` row adds "CV document, staleness" to its language and "the `.tex` and PDF files in `cv/` and their modification times" to what it reads. Its compare with the profile files' times stays in `profile`'s domain.
+- `ARCHITECTURE.md` › Runtime: the PDF page line says pages also render for Profile's CV documents, at the size the screen asks for.
+- `ARCHITECTURE.md` › Trust: CV PDFs render as page images only, and their paths pass `within_workspace`.
+
+### Open
+
+- Drawn: A (strip) and B (list column). The user has not picked one yet.
+- Does `/build-cv` take the `.tex` as an argument? If so, the action opens the launcher on `/build-cv cv/<stem>.tex`. If not, it opens bare `/build-cv`.
+- Profile changed: `/build-cv` makes no content edits, so it cannot carry a profile change into the `.tex`. Should the master's tag stay, or is there a command that rewrites a master's `.tex` that the action should open instead?
+- Keep Rebuild the PDF…, or keep the hint as text only?
+- Should a PDF with no `.tex` beside it be listed too, read only with no tag?
+- Does `CLAUDE.md` count as a profile file for Profile changed? It also changes for workflow edits, which would mark masters for nothing.
+- Once a picker is approved, `Profile.html`'s rail gains the pinned group too, and its PNGs are drawn again.
+
 ## Later ideas
 
 Out of scope now:
 - A small upstream PR to `ai-job-search` could add `/setup` sections for interview stories and profile statements, and name the valid section values, so both topics can get Update with Claude….
-- A CV PDF preview beside the topic.
 - A history or diff of profile changes, including what the last task changed.

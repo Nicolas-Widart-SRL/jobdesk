@@ -210,24 +210,47 @@ fn the_system_keychain_is_reached_from_one_place() {
     assert!(occurrences(&read_all("tests"), &keychain_call()).is_empty(), "tests must never touch the real keychain");
 }
 
-/// On Windows a console program opens a console window unless `no_window` starts it. Explorer is a window program,
-/// and the login-shell call runs on Unix only.
+/// The files whose code outside tests starts more processes than it calls `no_window` for. On Windows a console program
+/// opens a console window unless `no_window` starts it. The definition of `no_window` is no call. Explorer is a window
+/// program, and the login-shell call runs on Unix only.
+fn console_window_violations(sources: &[(PathBuf, String)]) -> Vec<String> {
+    let exempt = [Path::new("src/settings/infrastructure/folder_reveal.rs"), Path::new("src/shared_kernel/host_path.rs")];
+    sources
+        .iter()
+        .filter(|(file, _)| !exempt.contains(&file.as_path()))
+        .filter_map(|(file, text)| {
+            let code = production_source(text);
+            let starts = code.matches("Command::new(").count();
+            let calls = code.matches("no_window(").count() - code.matches("fn no_window(").count();
+            (starts > calls).then(|| format!("{}: {starts} process starts but {calls} no_window calls", file.display()))
+        })
+        .collect()
+}
+
 #[test]
 fn every_process_starts_without_a_console_window() {
-    let exempt = [Path::new("src/settings/infrastructure/folder_reveal.rs"), Path::new("src/shared_kernel/host_path.rs")];
-    let violations: Vec<String> = read_all("src")
-        .into_iter()
-        .filter(|(file, text)| {
-            let code = production_source(text);
-            code.contains("Command::new(") && !code.contains("no_window(") && !exempt.contains(&file.as_path())
-        })
-        .map(|(file, _)| format!("{}: starts a process without no_window", file.display()))
-        .collect();
+    let violations = console_window_violations(&read_all("src"));
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
 
 fn source(path: &str, text: &str) -> (PathBuf, String) {
     (PathBuf::from(path), text.to_owned())
+}
+
+#[test]
+fn the_console_window_check_needs_a_call_for_each_start() {
+    let file = |text: &str| source("src/runs/infrastructure/gateway.rs", text);
+    let start = "let mut command = Command::new(program);\n";
+    let call = "no_window(&mut command);\n";
+    assert!(console_window_violations(&[file(&format!("{start}{call}"))]).is_empty());
+    assert!(console_window_violations(&[file("let x = 1;\n")]).is_empty(), "no start needs no call");
+    assert_eq!(console_window_violations(&[file(start)]).len(), 1, "a start without a call is rejected");
+    assert_eq!(console_window_violations(&[file(&format!("{start}{call}{start}"))]).len(), 1, "two starts need two calls");
+    let definition = format!("pub fn no_window(command: &mut Command) {{}}\n{start}");
+    assert_eq!(console_window_violations(&[file(&definition)]).len(), 1, "the definition is no call");
+    assert!(console_window_violations(&[file(&format!("fn a() {{}}\n#[cfg(test)]\nmod tests {{\n{start}}}\n"))]).is_empty(), "tests may start any");
+    assert!(console_window_violations(&[source("src/settings/infrastructure/folder_reveal.rs", start)]).is_empty());
+    assert!(console_window_violations(&[source("src/shared_kernel/host_path.rs", start)]).is_empty());
 }
 
 #[test]

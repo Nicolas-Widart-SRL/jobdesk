@@ -28,14 +28,23 @@ pub fn kill_tree(pid: u32) {
     }
 }
 
-/// Kills a process and every process it started.
+/// Kills a process and every process it started. A `SystemRoot` that names no `taskkill` falls back to the usual one.
 #[cfg(windows)]
 pub fn kill_tree(pid: u32) {
-    let taskkill = crate::shared_kernel::host_path::system_program(std::env::var_os("SystemRoot").as_deref(), &["System32", "taskkill.exe"]);
-    let mut command = Command::new(taskkill);
-    command.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
-    no_window(&mut command);
-    let _ = command.status();
+    use crate::shared_kernel::host_path::system_program;
+
+    const TASKKILL: [&str; 2] = ["System32", "taskkill.exe"];
+    let kill = |taskkill: &std::path::Path| {
+        let mut command = Command::new(taskkill);
+        command.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        no_window(&mut command);
+        command.status()
+    };
+    let inherited = system_program(std::env::var_os("SystemRoot").as_deref(), &TASKKILL);
+    let usual = system_program(None, &TASKKILL);
+    if kill(&inherited).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) && inherited != usual {
+        let _ = kill(&usual);
+    }
 }
 
 #[cfg(test)]
@@ -82,7 +91,7 @@ mod windows_tests {
     use std::process::Stdio;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use super::*;
     use crate::shared_kernel::host_path::system_program;
@@ -106,7 +115,17 @@ mod windows_tests {
         }
 
         kill_tree(child.id());
-        child.wait().unwrap();
+        // Waiting without a deadline would pass a kill that did nothing, once `ping` ended by itself.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut ended = child.try_wait().unwrap().is_some();
+        while !ended && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+            ended = child.try_wait().unwrap().is_some();
+        }
+        if !ended {
+            let _ = child.kill();
+        }
+        assert!(ended, "cmd still runs after the kill");
 
         let (sent, closed) = mpsc::channel();
         thread::spawn(move || {

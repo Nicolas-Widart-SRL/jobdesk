@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 #[cfg(unix)]
 const MARKER: &str = "__JOBDESK_PATH__";
 
-/// What a program's file name may end in on Windows, in the order Windows tries them.
+/// What a program's file name may end in on Windows, in the order Jobdesk tries them.
 const WINDOWS_EXTENSIONS: [&str; 3] = ["exe", "cmd", "bat"];
 
 /// An app opened from the Finder has none of the PATH set in shell profiles, so `claude`,

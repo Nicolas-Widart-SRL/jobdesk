@@ -85,8 +85,8 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
-  # Screen snapshots are macOS baselines, so the full suite runs on macOS only.
-  # The Installers workflow runs clippy and the platform-neutral tests on Windows before a release.
+  # Screen snapshots are macOS baselines, so only the macOS job compares them, and it adds coverage.
+  # The Windows job runs the same tests with the snapshot compares skipped.
   test:
     name: Build and test (macOS)
     needs: changes
@@ -127,3 +127,21 @@ jobs:
           name: coverage
           path: target/llvm-cov/html
           if-no-files-found: error
+
+  test-windows:
+    name: Build and test (Windows)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # Build scripts and tests come from the pull request, so they get no token in the Git config.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --no-fail-fast

@@ -3,7 +3,7 @@
 use egui::{CursorIcon, Grid, Role, ScrollArea, Theme, Ui};
 use egui_commonmark::CommonMarkCache;
 use egui_kittest::kittest::{NodeT, Queryable};
-use egui_kittest::{Harness, SnapshotOptions};
+use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
 use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
@@ -20,6 +20,28 @@ use jobdesk::ui_kit::{
     small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
     status_waits, step_line, strong, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, undo_row,
 };
+
+/// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
+const SNAPSHOTS: bool = cfg!(target_os = "macos");
+
+/// Gives the harness the renderer that draws snapshots, where they are compared.
+fn with_renderer<State>(builder: HarnessBuilder<State>) -> HarnessBuilder<State> {
+    if SNAPSHOTS { builder.wgpu() } else { builder }
+}
+
+/// Compares the harness to the baseline `name`, where snapshots are compared.
+fn compare(harness: &mut Harness, name: &str) {
+    if SNAPSHOTS {
+        harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(clippy::assertions_on_constants)]
+fn snapshots_compare_on_macos() {
+    assert!(SNAPSHOTS);
+}
 
 /// The width of a side slip in the in-tray's rail.
 const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
@@ -774,13 +796,12 @@ const PROFILE_HEIGHT: f32 = 2200.0;
 
 fn render_profile(theme: Theme, name: &str) {
     let mut harness =
-        Harness::builder().with_size([1000.0, PROFILE_HEIGHT]).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(
-            |ui| {
+        with_renderer(Harness::builder().with_size([1000.0, PROFILE_HEIGHT]).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+            .build_ui(|ui| {
                 jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, profile_gallery));
-            },
-        );
+            });
     harness.run_steps(3);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]
@@ -795,14 +816,15 @@ fn ui_kit_gallery_profile_light() {
 
 fn render(theme: Theme, name: &str) {
     // One point per pixel: at more, the sheet is taller than the 8192px a texture holds.
-    let mut harness = Harness::builder().with_size(SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(|ui| {
-        jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
-    });
+    let mut harness = with_renderer(Harness::builder().with_size(SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(|ui| {
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, gallery));
+        });
     harness.run_steps(3);
     // The pointer rests on one row, so the sheet shows hover beside picked.
     harness.get_by_label(HOVERED_ROW).hover();
     harness.run_steps(2);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// The usage sheet's size: the main sheet is already as tall as a texture holds.
@@ -904,8 +926,8 @@ fn usage(ui: &mut Ui) {
 
 /// The usage widgets on a page of paper, as Settings shows them.
 fn usage_sheet(theme: Theme, name: &str) {
-    let mut harness =
-        Harness::builder().with_size(USAGE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look).wgpu().build_ui(|ui| {
+    let mut harness = with_renderer(Harness::builder().with_size(USAGE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(|ui| {
             jobdesk::ui_kit::desk(ui, |ui| {
                 jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {
                     paper(ui, false, |ui| {
@@ -919,7 +941,7 @@ fn usage_sheet(theme: Theme, name: &str) {
     let day: egui::Rect = harness.ctx.data(|data| data.get_temp(egui::Id::NULL.with(HOVERED_DAY))).expect("the hovered day was drawn");
     harness.hover_at(day.center());
     harness.run_steps(4);
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 /// The settings sheet's size: room for every row and the open popover under the last one.
@@ -1019,16 +1041,11 @@ fn settings_page_of(ui: &mut Ui, confirm: &mut Option<bool>) {
 
 fn settings_sheet(theme: Theme, name: &str) {
     let mut confirm = Some(true);
-    let mut harness = Harness::builder()
-        .with_size(SETTINGS_SHEET)
-        .with_pixels_per_point(1.0)
-        .with_theme(theme)
-        .with_context_setup(install_look)
-        .wgpu()
+    let mut harness = with_renderer(Harness::builder().with_size(SETTINGS_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
         .build_ui(move |ui| settings_page_of(ui, &mut confirm));
     harness.run_steps(4);
     assert!(harness.get_by_label("Keep them").accesskit_node().is_focused(), "Keep them takes the focus first");
-    harness.snapshot_options(name, &SnapshotOptions::new().threshold(2.0).max_failed_pixels(200));
+    compare(&mut harness, name);
 }
 
 #[test]

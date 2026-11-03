@@ -135,7 +135,11 @@ jobs:
           BUILT: ${{ matrix.built }}
           NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
         run: |
-          mapfile -t files < <(compgen -G "target/packages/$BUILT")
+          # bash 3.2 on macOS has no mapfile; compgen exits 1 on no match.
+          files=()
+          while IFS= read -r f; do
+            if [ -n "$f" ]; then files+=("$f"); fi
+          done < <(compgen -G "target/packages/$BUILT" || true)
           if [ "${#files[@]}" -ne 1 ]; then
             echo "::error::Expected one $BUILT in target/packages, found ${#files[@]}."
             exit 1

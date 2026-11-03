@@ -4627,6 +4627,7 @@ fn rebuild_opens_the_launcher_and_starts_nothing() {
     harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD).click();
     harness.run_steps(3);
     assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/build-cv main_tessel_platform_lead").count() > 0, "the line is filled in");
     assert_eq!(calls.lock().unwrap().starts, 0, "no run starts");
 }
 

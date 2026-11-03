@@ -254,4 +254,16 @@ mod tests {
         launcher.prefill("/setup");
         assert_eq!(launcher.line(), "/setup");
     }
+
+    /// A command with a plain field gets everything after its name, a flag-like word included.
+    #[test]
+    fn a_plain_name_fills_the_first_field() {
+        let mut launcher = Launcher::default();
+        launcher.prefill("/build-cv main_tessel_platform_lead");
+        assert_eq!((launcher.command.name, launcher.line().as_str()), ("/build-cv", "/build-cv main_tessel_platform_lead"));
+        launcher.prefill("/build-cv --all");
+        assert_eq!(launcher.line(), "/build-cv --all");
+        launcher.prefill("/build-cv");
+        assert_eq!(launcher.line(), "/build-cv");
+    }
 }

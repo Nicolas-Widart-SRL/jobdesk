@@ -2,6 +2,22 @@
 
 All notable changes to this project are listed here.
 <!-- git-cliff: end of header -->
+## [0.2.0] - 2026-11-03
+
+### Features
+
+- *(settings)* Add How tasks sign in row to About (#41)
+- *(profile)* Preview CV PDFs and show how fresh each is (#43)
+
+### Bug fixes
+
+- *(packaging)* Ad-hoc sign the macOS app (#42)
+
+### Documentation
+
+- Split ARCHITECTURE.md by topic (#40)
+- Refresh README and docs, drop the auth review (#39)
+
 ## [0.1.0] - 2026-11-03
 
 ### Features

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use chrono::NaiveDate;
 
-use crate::discovery::application::JobBoard;
+use crate::discovery::application::{JobBoard, YourTerms};
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
 use crate::profile::application::{ProfileView, topic_counts};
@@ -18,6 +18,8 @@ use crate::{discovery, dossier, insights, profile, tracking, workspace};
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Snapshot {
     pub board: JobBoard,
+    /// Your day-rate floor and commute tiers, with whether each file could be read.
+    pub terms: YourTerms,
     pub pipeline: Pipeline,
     pub insights: SearchInsights,
     pub band: WorkflowBand,
@@ -51,7 +53,8 @@ impl Snapshot {
     pub fn load(root: &Path, today: NaiveDate) -> Self {
         let read_at = Some(Instant::now());
         let mut issues = Vec::new();
-        let board = discovery::load_board(root, today).unwrap_or_else(|error| {
+        let terms = discovery::load_terms(root);
+        let board = discovery::load_board(root, today, &terms.gates()).unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Jobs, error });
             JobBoard::default()
         });
@@ -83,6 +86,6 @@ impl Snapshot {
         let counts = topic_counts(&profile);
         let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
         let (usage, usage_read, usage_asked) = (UsageReport::default(), false, 0);
-        Self { archives, workspace, profile, insights, band, board, pipeline, skill_gaps, usage, usage_read, usage_asked, issues, today, read_at }
+        Self { archives, workspace, profile, insights, band, board, terms, pipeline, skill_gaps, usage, usage_read, usage_asked, issues, today, read_at }
     }
 }

@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::discovery::domain::{CommuteTier, FetchFailure, FitLevel, FreelanceTerms, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
+use crate::discovery::domain::{CommuteTier, FetchFailure, FitLevel, Gate, Job, JobRepository, JobStatus, RankAssessment, Verdict};
 use crate::shared_kernel::dates::parse_iso_date;
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::shared_kernel::{LoadError, WebUrl};
 
 const SOURCE: &str = "job_scraper/seen_jobs.json";
-const CANDIDATE_PROFILE: &str = ".claude/skills/job-application-assistant/01-candidate-profile.md";
-const JOB_EVALUATION: &str = ".claude/skills/job-application-assistant/04-job-evaluation.md";
+const SKILLS: &str = ".claude/skills/job-application-assistant";
+const CANDIDATE_PROFILE: &str = "01-candidate-profile.md";
+const JOB_EVALUATION: &str = "04-job-evaluation.md";
 const COMMUTE_LINE: &str = "Commute tiers";
 
 /// `seen_jobs.json`. Old checkouts store the map bare, without the `seen` wrapper.
@@ -115,10 +117,25 @@ fn job_from(key: String, entry: Entry) -> Job {
     }
 }
 
-/// A missing profile only means the gates cannot judge, so it is not a load error.
-pub fn read_terms(root: &Path) -> FreelanceTerms {
-    let read = |file: &str| fs::read_to_string(root.join(file)).unwrap_or_default();
-    FreelanceTerms { day_rate_floor: floor_in(&read(CANDIDATE_PROFILE)), commute: commute_tiers_in(&read(JOB_EVALUATION)) }
+/// What each profile file gave, or why it could not be read.
+pub struct TermsRead {
+    pub floor: Result<Option<u32>, LoadError>,
+    /// The place the tiers are measured from, and the tiers.
+    pub commute: Result<(Option<String>, Vec<CommuteTier>), LoadError>,
+}
+
+/// Reads each profile file once. A missing file only means the term is not stated, so it reads as empty.
+/// A file that exists and cannot be read fails its own part, named by its bare file name.
+pub fn read_your_terms(root: &Path) -> TermsRead {
+    TermsRead { floor: read_part(root, CANDIDATE_PROFILE, floor_in), commute: read_part(root, JOB_EVALUATION, commute_tiers_in) }
+}
+
+fn read_part<T>(root: &Path, file: &str, parse: impl FnOnce(&str) -> T) -> Result<T, LoadError> {
+    match fs::read_to_string(root.join(SKILLS).join(file)) {
+        Ok(text) => Ok(parse(&text)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(parse("")),
+        Err(error) => Err(LoadError::new(file, error)),
+    }
 }
 
 /// Reads `day-rate floor EUR 700` from anywhere in the profile.
@@ -131,11 +148,18 @@ fn floor_in(profile: &str) -> Option<u32> {
     })
 }
 
-/// Reads the tiers line of the evaluation framework: `**name** Place, Place (note); ...`.
-fn commute_tiers_in(evaluation: &str) -> Vec<CommuteTier> {
-    let Some(line) = evaluation.lines().find(|line| line.trim_start().starts_with(COMMUTE_LINE)) else { return Vec::new() };
-    let tiers = line.split_once(':').map_or("", |(_, tiers)| tiers);
-    tiers.split(';').filter_map(commute_tier).collect()
+/// Reads the tiers line of the evaluation framework: `Commute tiers from Place (by car): **name** Place, Place (note); ...`.
+/// Gives the origin, which is the text between the label and the colon, and the tiers.
+fn commute_tiers_in(evaluation: &str) -> (Option<String>, Vec<CommuteTier>) {
+    let Some(line) = evaluation.lines().find(|line| line.trim_start().starts_with(COMMUTE_LINE)) else { return (None, Vec::new()) };
+    let (head, tiers) = line.split_once(':').unwrap_or((line, ""));
+    let origin = shown(head.trim_start().strip_prefix(COMMUTE_LINE).unwrap_or_default());
+    ((!origin.is_empty()).then_some(origin), tiers.split(';').filter_map(commute_tier).collect())
+}
+
+/// A checkout's text is untrusted, so only what shows on screen is kept.
+fn shown(text: &str) -> String {
+    visible_chars(text).collect::<String>().trim().to_owned()
 }
 
 fn commute_tier(segment: &str) -> Option<CommuteTier> {
@@ -143,9 +167,9 @@ fn commute_tier(segment: &str) -> Option<CommuteTier> {
     let (name, rest) = rest.split_once("**")?;
     let (places, note) = rest.split_once('(').unwrap_or((rest, ""));
     Some(CommuteTier {
-        name: name.trim().to_lowercase(),
-        places: places.split(',').map(|place| place.trim().to_owned()).filter(|place| !place.is_empty()).collect(),
-        note: note.split(')').next().unwrap_or_default().trim().to_owned(),
+        name: shown(name).to_lowercase(),
+        places: places.split(',').map(shown).filter(|place| !place.is_empty()).collect(),
+        note: shown(note.split(')').next().unwrap_or_default()),
     })
 }
 
@@ -189,16 +213,35 @@ mod tests {
     #[test]
     fn reads_commute_tiers() {
         let line = "Commute tiers from Denée (by car): **ideal** Namur, Dinant (<45 min); **borderline** Leuven (1h30-2h, only with hybrid); **too far** >2h unless fully remote.";
-        let tiers = commute_tiers_in(&format!("intro\n{line}\nafter"));
+        let (origin, tiers) = commute_tiers_in(&format!("intro\n{line}\nafter"));
+        assert_eq!(origin.as_deref(), Some("from Denée (by car)"));
         assert_eq!(tiers.len(), 3);
         assert_eq!(tiers[0], CommuteTier { name: "ideal".into(), places: vec!["Namur".into(), "Dinant".into()], note: "<45 min".into() });
         assert_eq!(tiers[1].note, "1h30-2h, only with hybrid");
     }
 
     #[test]
-    fn a_missing_profile_sets_no_terms() {
+    fn a_blank_origin_is_none_and_hidden_characters_are_dropped() {
+        assert_eq!(
+            commute_tiers_in("Commute tiers: **ideal** Namur"),
+            (None, vec![CommuteTier { name: "ideal".into(), places: vec!["Namur".into()], note: String::new() }])
+        );
+        let (origin, tiers) = commute_tiers_in("Commute tiers from Na\u{202e}mur: **id\u{202e}eal** Na\u{202e}mur (<45\u{202e} min)");
+        assert_eq!(origin.as_deref(), Some("from Namur"));
+        assert_eq!(tiers, vec![CommuteTier { name: "ideal".into(), places: vec!["Namur".into()], note: "<45 min".into() }]);
+    }
+
+    #[test]
+    fn a_missing_profile_reads_as_empty_and_an_unreadable_one_fails_by_its_file_name() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read_terms(dir.path()), FreelanceTerms::default());
+        let read = read_your_terms(dir.path());
+        assert_eq!((read.floor, read.commute), (Ok(None), Ok((None, vec![]))));
+        let skills = dir.path().join(SKILLS);
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join(CANDIDATE_PROFILE), [0xff, 0xfe]).unwrap();
+        let read = read_your_terms(dir.path());
+        assert_eq!(read.floor.unwrap_err().source, CANDIDATE_PROFILE);
+        assert_eq!(read.commute, Ok((None, vec![])));
     }
 
     #[test]

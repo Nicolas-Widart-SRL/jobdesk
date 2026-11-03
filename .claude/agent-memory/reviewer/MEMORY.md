@@ -51,3 +51,8 @@ PR 40 docs/architecture/settings.md: "the theme and zoom eframe restored are kep
 PR 40 docs/architecture/today-queue.md: the rank order left out that an overdue date ranks before the rest, ahead of dates in the Coming up range. Class: copy says less than the code does.
 PR 40 docs/architecture/trust.md: did not say `within_workspace` is lexical and resolves no symlink, so an in-workspace link can lead a dossier read outside the workspace. Class: copy claims more than the code does.
 PR 40 docs/architecture/trust.md: said the mask holds no quote or backslash, but it copies a long key's last four and `ApiKey::parse` accepts `"` and `\`. Class: copy claims more than the code does.
+PR 39 CONTRIBUTING.md: "Re-run failed jobs builds the same commit" mixed a noun form with a verb and a wrong tense. Class: grammar.
+PR 39 CONTRIBUTING.md: the `scripts/release.sh` prerequisites left out `perl`, which the script runs. Class: undocumented prerequisite.
+PR 39 CONTRIBUTING.md: "Every other assertion in those files runs on every system" claimed more than the files hold. Class: overclaim.
+PR 39 docs/guide.md: "Cmd+, , Ctrl+, on Windows" had a stray comma and named no platform for Cmd. Class: platform wording.
+PR 39 docs/guide.md: the Today section said the range is 7 or 30 days while the code and the Settings section offer 7, 14 or 30. Class: inconsistent values.

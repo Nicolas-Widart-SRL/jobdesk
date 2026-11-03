@@ -658,6 +658,25 @@ mod tests {
         assert_eq!(desk.run(&id).unwrap().last_heard, Some(base + secs(180)), "no prompt, no send");
     }
 
+    #[test]
+    fn a_decision_that_leaves_the_turn_done_for_now_holds_the_clock() {
+        let (mut desk, base, at) = desk_on_a_scripted_clock();
+        let secs = Duration::from_secs;
+        let id = desk.start("/rank", &options(), now()).unwrap();
+        let prompt = Prompt { request_id: "r".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None };
+        desk.sink_for(&id)(AgentEvent::PromptRaised(prompt));
+        desk.sink_for(&id)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        assert!(desk.run(&id).unwrap().elapsed.is_running(), "the open prompt waits on the user");
+        at(30);
+        desk.decide(&id, "r", Decision::Allow { remember: false });
+        let run = desk.run(&id).unwrap();
+        assert!(!run.elapsed.is_running(), "nothing works and nothing is asked: done for now");
+        at(90);
+        assert_eq!(desk.run(&id).unwrap().elapsed.total(desk.now()), secs(30), "it stands still");
+        assert_eq!(desk.run(&id).unwrap().last_heard, Some(base + secs(30)));
+    }
+
     struct Restored(Run);
 
     impl RunHistory for Restored {

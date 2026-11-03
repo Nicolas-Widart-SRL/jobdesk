@@ -5,7 +5,7 @@ use egui::layers::ShapeIdx;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Galley, Label, OutputCommand, Pos2, Rect, Response, RichText, Shape, Stroke, TextStyle, TextWrapMode, Ui, WidgetText};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer, RenderHtmlFn};
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown::only_comments;
 use crate::shared_kernel::placeholders::Piece;
@@ -223,6 +223,192 @@ fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, html: Option<&Re
     copyable(ui, |ui| viewer.show(ui, cache, &text));
     centre_bullets(ui, first);
     ui.ctx().output_mut(|output| keep_web_links(&mut output.commands, before));
+}
+
+/// Release notes from the update feed, rendered as docs/architecture/trust.md says: Markdown with no image loading and no
+/// links. Hidden characters go before anything parses. A link shows as its words in body ink and never opens, an image
+/// as its alt text in `muted`, raw HTML as its text, and every heading at the section size. Bold and lists stay.
+/// Any url the viewer still asks to open is dropped.
+pub fn release_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    // The rewrite runs once per distinct text, and is kept while the text stays on screen.
+    let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<LinkFreeCache>().get(text).clone());
+    let before = ui.ctx().output(|output| output.commands.len());
+    ui.scope(|ui| {
+        let styles = &mut ui.style_mut().text_styles;
+        styles.insert(TextStyle::Heading, Type::SECTION.font());
+        styles.insert(TextStyle::Body, Type::BODY.font());
+        let first = ui.painter().add(Shape::Noop);
+        // The viewer hands inline math to this, and the rewrite leaves no math but the alt text it marked.
+        CommonMarkViewer::new().render_math_fn(Some(&alt_text)).show(ui, cache, &text);
+        centre_bullets(ui, first);
+    });
+    ui.ctx().output_mut(|output| no_urls(&mut output.commands, before));
+}
+
+/// An image's alt text in release notes, where the image stood.
+fn alt_text(ui: &mut Ui, alt: &str, _inline: bool) {
+    ui.add(Label::new(rich(ui, alt, Type::BODY, Ink::Muted)));
+}
+
+/// Drops every url opened after `from`.
+fn no_urls(commands: &mut Vec<OutputCommand>, from: usize) {
+    let mut index = 0;
+    commands.retain(|command| {
+        let kept = index < from || !matches!(command, OutputCommand::OpenUrl(_));
+        index += 1;
+        kept
+    });
+}
+
+#[derive(Default)]
+struct LinkFree;
+
+impl egui::cache::ComputerMut<&str, Arc<str>> for LinkFree {
+    fn compute(&mut self, text: &str) -> Arc<str> {
+        link_free(text).into()
+    }
+}
+
+type LinkFreeCache = egui::cache::FrameCache<Arc<str>, LinkFree>;
+
+/// The parser's options for release notes: the viewer's own, with math, which the viewer turns on once it has a math
+/// callback.
+fn release_options() -> Options {
+    markdown::options() | Options::ENABLE_MATH
+}
+
+/// Release notes as the viewer may show them: hidden characters removed line by line, each link swapped for its own
+/// words as written, each image for its alt text marked as inline math so `alt_text` paints it, any math of the notes'
+/// own escaped to plain text, and every heading made a top-level one. The result is parsed again to confirm it holds
+/// no link, no image and no math but the marks. Should it not, the alt text goes in plain, and failing that the whole
+/// text shows as plain characters.
+fn link_free(text: &str) -> String {
+    let visible = text.split('\n').map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n");
+    for mark in [true, false] {
+        let (out, marks) = rewritten(&visible, mark);
+        if settled(&out, &marks) {
+            return out;
+        }
+    }
+    escaped(&visible)
+}
+
+/// The outermost link or image a rewrite is inside.
+struct Outer {
+    /// The whole link or image, as written.
+    range: Range<usize>,
+    image: bool,
+    /// Its words, as plain text.
+    words: String,
+    /// Where its words are written, from the first thing inside it to the last.
+    inner: Option<Range<usize>>,
+    /// Whether it holds no image and no math, so its words can stand as written: a link holds no link.
+    plain: bool,
+}
+
+/// One rewrite of `text`, as `link_free` says. A link that holds an image or math becomes its escaped words instead.
+/// Returns it with the alt texts marked as math, in order, which only happens while `mark` holds.
+fn rewritten(text: &str, mark: bool) -> (String, Vec<String>) {
+    let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+    let (mut outer, mut depth, mut marks): (Option<Outer>, usize, Vec<String>) = (None, 0, Vec::new());
+    for (event, range) in Parser::new_ext(text, release_options()).into_offset_iter() {
+        if let Some(outer) = outer.as_mut().filter(|_| !matches!(event, Event::End(TagEnd::Link | TagEnd::Image)) || depth > 1) {
+            outer.inner = Some(outer.inner.take().map_or(range.clone(), |inner| inner.start.min(range.start)..inner.end.max(range.end)));
+            if matches!(event, Event::Start(Tag::Image { .. }) | Event::InlineMath(_) | Event::DisplayMath(_)) {
+                outer.plain = false;
+            }
+        }
+        match event {
+            Event::Start(tag @ (Tag::Link { .. } | Tag::Image { .. })) => {
+                if depth == 0 {
+                    outer = Some(Outer { range, image: matches!(tag, Tag::Image { .. }), words: String::new(), inner: None, plain: true });
+                }
+                depth += 1;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) => {
+                depth -= 1;
+                if depth == 0
+                    && let Some(Outer { range, image, words, inner, plain }) = outer.take()
+                {
+                    let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let shown = if image && mark && math_safe(&words) {
+                        let shown = format!("${words}$");
+                        marks.push(words);
+                        shown
+                    } else if !image && plain {
+                        inner.map_or_else(String::new, |inner| text[inner].to_owned())
+                    } else {
+                        escaped(&words)
+                    };
+                    edits.push((range, shown));
+                }
+            }
+            Event::Text(part) | Event::Code(part) | Event::InlineHtml(part) | Event::InlineMath(part) | Event::DisplayMath(part) if depth > 0 => {
+                if let Some(outer) = outer.as_mut() {
+                    outer.words.push_str(&part);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak if depth > 0 => {
+                if let Some(outer) = outer.as_mut() {
+                    outer.words.push(' ');
+                }
+            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => edits.push((range.clone(), escaped(&text[range]))),
+            Event::Start(Tag::Heading { level, .. }) if level != HeadingLevel::H1 => edits.extend(top_heading(text, range)),
+            _ => {}
+        }
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut out = String::new();
+    let mut copied = 0;
+    for (range, shown) in edits {
+        if range.start < copied {
+            continue;
+        }
+        out.push_str(&text[copied..range.start]);
+        out.push_str(&shown);
+        copied = range.end;
+    }
+    out.push_str(&text[copied..]);
+    (out, marks)
+}
+
+/// Whether alt text can stand inside `$…$` as one inline math span and nothing else: letters, digits, spaces and
+/// punctuation that opens no other inline element, and no space at either end.
+fn math_safe(words: &str) -> bool {
+    !words.is_empty() && words.trim() == words && words.chars().all(|c| c.is_alphanumeric() || c == ' ' || ".,:;!?'\"()-/&%+=@#".contains(c))
+}
+
+/// The edit that makes the heading at `range` a top-level one: an ATX heading's run of `#` becomes one, a setext
+/// heading's underline of `-` becomes `=`.
+fn top_heading(text: &str, range: Range<usize>) -> Option<(Range<usize>, String)> {
+    let heading = &text[range.clone()];
+    let indent = heading.len() - heading.trim_start_matches(' ').len();
+    let hashes = heading[indent..].len() - heading[indent..].trim_start_matches('#').len();
+    if hashes > 0 {
+        let start = range.start + indent;
+        return Some((start..start + hashes, "#".to_owned()));
+    }
+    let body = heading.trim_end_matches(['\n', '\r']);
+    let underline = body.rfind('\n').map_or(0, |at| at + 1);
+    let line = &body[underline..];
+    let first = line.find('-')?;
+    let last = line.rfind('-')? + 1;
+    let start = range.start + underline + first;
+    Some((start..start + (last - first), line[first..last].replace('-', "=")))
+}
+
+/// Whether a rewritten text holds no link, no image, and no math but its `marks`, each as written.
+fn settled(text: &str, marks: &[String]) -> bool {
+    let mut maths = Vec::new();
+    for event in Parser::new_ext(text, release_options()) {
+        match event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) | Event::DisplayMath(_) => return false,
+            Event::InlineMath(math) => maths.push(math.into_string()),
+            _ => {}
+        }
+    }
+    maths == marks
 }
 
 /// The first line of a text the viewer painted: where it starts, the rows it spans, its baseline, and its type.
@@ -665,7 +851,7 @@ mod tests {
     use std::rc::Rc;
 
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     use super::*;
 
@@ -1287,5 +1473,114 @@ mod tests {
         assert_eq!((moved.len(), kept.len()), (2, 2), "{moved:?} {kept:?}");
         assert_eq!(moved[0].0, kept[0].0, "the bare bullet moved");
         assert!((moved[1].0 - moved[1].1).abs() <= 0.75, "the bullet beside one sits at {}, its text at {}", moved[1].0, moved[1].1);
+    }
+
+    /// Release notes that try every way out: a link, an autolink, an image, and the same two in raw HTML.
+    const RELEASE_TRAPS: &str = "### Features\n\n- **settings**: see [the pull request](https://x.example/pull/41)\n- mail <https://x.example/inbox>\n\n![The new Data page](https://x.example/img.png)\n\nRaw <a href=\"https://x.example/a\">anchor words</a> here.\n\n<img src=\"https://x.example/b.png\" alt=\"html image\">\n";
+
+    /// Renders release notes, clicks the middle of every node a screen reader finds, and returns every url a frame asked
+    /// to open, with the harness to look in.
+    fn release_clicks(source: &'static str) -> (Vec<String>, Harness<'static>) {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&opened);
+        let mut cache = CommonMarkCache::default();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([600.0, 500.0]).with_context_setup(setup).build_ui(move |ui| {
+            release_markdown(ui, &mut cache, source);
+            let urls: Vec<String> = ui.ctx().output(|output| {
+                output.commands.iter().filter_map(|command| if let OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
+            });
+            seen.borrow_mut().extend(urls);
+        });
+        harness.run();
+        // The harness draws at one point per pixel, so a node's bounds are in points.
+        let spots: Vec<Pos2> = harness
+            .query_all_by(|_| true)
+            .filter_map(|node| node.accesskit_node().bounding_box())
+            .map(|bounds| egui::pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32))
+            .collect();
+        assert!(spots.len() > 5, "the notes show {} nodes", spots.len());
+        for at in spots {
+            for pressed in [true, false] {
+                harness.input_mut().events.push(egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                harness.run();
+            }
+        }
+        (opened.take(), harness)
+    }
+
+    #[test]
+    fn release_notes_open_nothing() {
+        let (opened, harness) = release_clicks(RELEASE_TRAPS);
+        assert_eq!(opened, Vec::<String>::new());
+        assert!(harness.query_by_role(egui::accesskit::Role::Link).is_none(), "the notes hold a link");
+        for words in ["the pull request", "https://x.example/inbox", "The new Data page", "anchor words", "Features"] {
+            assert!(harness.query_by_label_contains(words).is_some(), "{words} is not shown");
+        }
+        assert!(harness.query_by_label_contains("x.example/img.png").is_none(), "an image's address shows");
+    }
+
+    #[test]
+    fn release_notes_drop_hidden_characters() {
+        let hidden = ['\u{200B}', '\u{200D}', '\u{FEFF}', '\u{202E}', '\u{2066}', '\u{2069}'];
+        let source = "## Fi\u{200B}xes\n\n- **to\u{202E}day**: a sk\u{2066}ipped\u{2069} card [st\u{200D}ays](https://x.example) put\u{FEFF}\n\n![lo\u{200B}go](https://x.example/l.png)\n";
+        let (_, harness) = release_clicks(source);
+        // A label keeps its words as its value.
+        let labels: Vec<String> = harness.query_all_by(|_| true).filter_map(|node| node.accesskit_node().value().or(node.accesskit_node().label())).collect();
+        for words in ["Fixes", "today", "skipped", "stays", "logo"] {
+            assert!(labels.iter().any(|label| label.contains(words)), "{words} is not in {labels:?}");
+        }
+        for label in &labels {
+            assert!(!label.chars().any(|c| hidden.contains(&c)), "{label:?} keeps a hidden character");
+        }
+    }
+
+    #[test]
+    fn release_notes_swap_links_and_images_before_the_viewer() {
+        assert_eq!(link_free("A [link **here**](https://x.example) now."), "A link **here** now.");
+        assert_eq!(link_free("<https://x.example/a>"), "https://x.example/a");
+        assert_eq!(link_free("[two\nlines](https://x.example)"), "two\nlines");
+        assert_eq!(link_free("[](https://x.example) gone"), " gone");
+        assert_eq!(link_free("[sum $x$](https://x.example)"), "sum x");
+        assert_eq!(link_free("![The new page](https://x.example/p.png)"), "$The new page$");
+        assert_eq!(link_free("[![badge](https://x.example/b.svg)](https://x.example)"), "badge");
+        assert_eq!(link_free("![a {brace}](https://x.example/p.png)"), "a \\{brace\\}");
+        assert_eq!(link_free("![first](a)![second](b)"), "$first$$second$");
+        assert_eq!(link_free("Sum $x+1$ ![logo](l)"), "Sum \\$x\\+1\\$ $logo$");
+        assert_eq!(link_free("[ref][r]\n\n[r]: https://x.example"), "ref\n\n[r]: https://x.example");
+        assert_eq!(link_free("`[code](https://x.example)`"), "`[code](https://x.example)`");
+    }
+
+    #[test]
+    fn release_notes_hold_every_heading_to_the_section_size() {
+        assert_eq!(link_free("### Features\n\nText"), "# Features\n\nText");
+        assert_eq!(link_free("  ## Fixes ##\n"), "  # Fixes ##\n");
+        assert_eq!(link_free("Fixes\n---\n"), "Fixes\n===\n");
+        assert_eq!(link_free("- ###### Deep\n"), "- # Deep\n");
+        assert_eq!(link_free("# Top\n"), "# Top\n");
+        let line = Rc::new(RefCell::new(0.0));
+        let seen = Rc::clone(&line);
+        let mut cache = CommonMarkCache::default();
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = Harness::builder().with_size([600.0, 300.0]).with_context_setup(setup).build_ui(move |ui| {
+            *seen.borrow_mut() = wrapped_height(ui, "Fit", Type::SECTION, f32::INFINITY);
+            release_markdown(ui, &mut cache, "Fit\n===\n\n### Gap\n\nBody text.");
+        });
+        harness.run();
+        for heading in ["Fit", "Gap"] {
+            let height = harness.get_by_label(heading).rect().height();
+            assert!((height - *line.borrow()).abs() <= 2.0, "{heading} is {height} px, one section line is {}", line.borrow());
+        }
     }
 }

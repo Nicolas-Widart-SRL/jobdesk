@@ -18,7 +18,7 @@ use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
     add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
-    rich, strong, table_head, wrapped,
+    release_markdown, rich, strong, table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
@@ -26,10 +26,11 @@ use crate::ui_kit::tokens::{
     EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_INLINE_NUMBER, FIELD_PADDING, FIGURE_BAR_MARGIN,
     FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, NODE_ARROW, NODE_GAP, NODE_PADDING,
-    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD,
-    RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
-    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
-    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
+    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, NOTES_BODY_PADDING, NOTES_GAP, NOTES_HEAD_PADDING, NOTES_HEIGHT, NOTES_INLINE, NOTES_SLIP_PADDING,
+    NOTES_WIDTH, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
+    ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP,
+    SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING,
+    SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STATUS_PROGRESS_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
     TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
@@ -991,6 +992,158 @@ pub fn confirm_popover(button: &Response, state: &mut Option<bool>, words: &Conf
         });
     *state = (open && !keep && !act).then_some(focus);
     act
+}
+
+/// What a `release_notes_popover` shows. Every word but the notes is the caller's own.
+#[derive(Debug, Clone, Copy)]
+pub struct ReleaseNotes<'a> {
+    /// The title, such as "Jobdesk 0.2.0".
+    pub title: &'a str,
+    /// One `muted` line under it, such as "Released Fri 30 Oct. You have 0.1.0.".
+    pub released: &'a str,
+    /// The release's notes: untrusted Markdown from the network, shown through `release_markdown`.
+    pub notes: &'a str,
+    /// The `faint` line under the notes on where they come from and what they cannot do.
+    pub trust: &'a str,
+    /// What the primary action does, on a slip above the actions, once the update is ready. `None` before.
+    pub slip: Option<&'a str>,
+    /// The primary action, such as "Download 0.2.0" or "Restart to update".
+    pub primary: &'a str,
+    /// Why the primary action waits, said on hover while it is disabled. `None` while it can go.
+    pub primary_wait: Option<&'a str>,
+    /// The size beside the primary action, such as "14.2 MB".
+    pub size: Option<&'a str>,
+    /// The link to the release page, such as "Open the release page".
+    pub open_page: &'a str,
+    /// The `faint` words on Esc: under the actions, or at the end of their row beside a slip.
+    pub esc_note: &'a str,
+}
+
+/// What the user picked in a `release_notes_popover`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotesAction {
+    /// The primary action. It closes the popover too.
+    Primary,
+    /// The release page link. The caller opens the address it builds itself, never one from the notes.
+    OpenPage,
+}
+
+/// A release's notes in a popover above `anchor`, their right edges level, built as `confirm_popover` is: the title and
+/// its line over a hairline, the notes on paper at a fixed height with the scroll bar shown at rest, the trust line, the
+/// slip once there is one, then the primary action, the size and the release page link, and the Esc note.
+/// The caller flips `open` when `anchor` is clicked. Each time it opens, the primary action takes the focus, so Enter
+/// acts, unless it waits: then it is disabled and says why on hover. Esc, a click outside and the primary action close
+/// it. Returns what was picked this frame.
+pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &ReleaseNotes, cache: &mut CommonMarkCache) -> Option<NotesAction> {
+    let popup = Popup::from_response(anchor);
+    let id = popup.get_id();
+    let focus_id = id.with("release_notes_focus");
+    // A popover not shown last frame opens now, with the focus to give. Its first frame is a sizing pass, which cannot.
+    let opening = anchor.ctx.read_response(id).is_none();
+    let mut focus = opening || anchor.ctx.data(|data| data.get_temp::<bool>(focus_id)).unwrap_or(false);
+    let mut picked = None;
+    let frame = Frame::popup(&anchor.ctx.global_style()).inner_margin(0);
+    popup
+        .open_bool(open)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .align(RectAlign::TOP_END)
+        .gap(ITEM_GAP)
+        .width(NOTES_WIDTH)
+        .frame(frame)
+        .accessible_name(notes.title)
+        .show(|ui| {
+            let p = Palette::of(ui);
+            ui.set_width(NOTES_WIDTH - 2.0 * HAIRLINE);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (top, bottom) = NOTES_HEAD_PADDING;
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top, bottom }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add_text(ui, notes.title, Type::CALL_TITLE, Ink::Text);
+                ui.add_space(SETTING_HELP_GAP + 1.0);
+                ui.add(egui::Label::new(rich(ui, notes.released, Type::NOTE, Ink::Muted)).wrap());
+            });
+            divider(ui);
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom: 0 }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let height = NOTES_HEIGHT - 2.0 * HAIRLINE;
+                    egui::ScrollArea::vertical()
+                        .id_salt(id.with("release_notes"))
+                        .auto_shrink([false, false])
+                        .min_scrolled_height(height)
+                        .max_height(height)
+                        .show(ui, |ui| {
+                            let (left, top, right, bottom) = NOTES_BODY_PADDING;
+                            Frame::new().inner_margin(Margin { left, right, top, bottom }).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = ITEM_GAP;
+                                release_markdown(ui, cache, notes.notes);
+                            });
+                        });
+                });
+                ui.add_space(ROW_GAP);
+                ui.add(egui::Label::new(rich(ui, notes.trust, Type::SMALL, Ink::Faint)).wrap());
+                if let Some(slip) = notes.slip {
+                    ui.add_space(NOTES_GAP);
+                    Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(margin(NOTES_SLIP_PADDING)).show(
+                        ui,
+                        |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(egui::Label::new(rich(ui, slip, Type::NOTE, Ink::Text)).wrap());
+                        },
+                    );
+                }
+            });
+            let bottom = if notes.slip.is_some() { NOTES_HEAD_PADDING.0 } else { NOTES_GAP as i8 };
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = STATUS_PROGRESS_GAP;
+                    let wait = notes.primary_wait;
+                    let primary = enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| primary_button(ui, notes.primary));
+                    if focus && !ui.is_sizing_pass() {
+                        if wait.is_none() {
+                            primary.request_focus();
+                        }
+                        focus = false;
+                    }
+                    if primary.clicked() {
+                        picked = Some(NotesAction::Primary);
+                    }
+                    if notes.slip.is_some() {
+                        if link(ui, notes.open_page).clicked() {
+                            picked = Some(NotesAction::OpenPage);
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| add_text(ui, notes.esc_note, Type::SMALL, Ink::Faint));
+                    } else {
+                        if let Some(size) = notes.size {
+                            add_text(ui, size, Type::NOTE, Ink::Muted);
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if link(ui, notes.open_page).clicked() {
+                                picked = Some(NotesAction::OpenPage);
+                            }
+                        });
+                    }
+                });
+                if notes.slip.is_none() {
+                    ui.add_space(ROW_GAP);
+                    ui.add(egui::Label::new(rich(ui, notes.esc_note, Type::SMALL, Ink::Faint)).wrap());
+                }
+            });
+        });
+    if picked == Some(NotesAction::Primary) {
+        *open = false;
+    }
+    anchor.ctx.data_mut(|data| {
+        if *open {
+            data.insert_temp(focus_id, focus);
+        } else {
+            data.remove::<bool>(focus_id);
+        }
+    });
+    picked
 }
 
 /// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.

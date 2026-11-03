@@ -9,16 +9,17 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, Palette, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert, amount_field, attention_count,
-    bar, blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row, confirm_popover, copy_button,
-    danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document, doughnut, empty_state,
-    enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane,
-    lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
-    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, reveal_command, rich, role_entry,
-    ruled_note_with_command, score, search_field, secret_field, segmented, select_row, setting_check, setting_check_amount, setting_check_number,
-    setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button,
-    small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head, status_button, status_dot, status_frame, status_line,
-    status_waits, step_line, strong, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, undo_row,
+    KnotState, NodeMarks, NotesAction, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row, alert,
+    amount_field, attention_count, bar, blank_card, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box, command_button, command_row,
+    confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal, deal_footer, divider, document,
+    doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading, flow_band, folder_tab, index_card, key_button,
+    key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame, page_head, panel, panel_body, panel_header,
+    panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title,
+    release_notes_popover, reveal_command, rich, role_entry, ruled_note_with_command, score, search_field, secret_field, segmented, select_row, setting_check,
+    setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
+    skeleton_lines, slip, slip_bar, small_button, small_danger_button, small_key_button, small_toggle, solid_tag, stamp, stamp_square, stamped_head,
+    status_action, status_button, status_divider, status_dot, status_frame, status_line, status_mark_button, status_progress, status_waits, step_line, strong,
+    table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, undo_row,
 };
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
@@ -1048,6 +1049,204 @@ fn settings_sheet(theme: Theme, name: &str) {
     compare(&mut harness, name);
 }
 
+/// The update sheet's size: the bar in each state, then two bars with their notes open above them.
+const UPDATE_SHEET: [f32; 2] = [1000.0, 1640.0];
+/// The room the open notes take above their bar, without and with the ready slip.
+const NOTES_ROOM: f32 = 500.0;
+const READY_NOTES_ROOM: f32 = 560.0;
+const RESTART_WAITS: &str = "A task is running. Restart once it finishes, so it is not cut off halfway.";
+/// Fictional notes, as git-cliff writes them, with a link, an image and raw HTML, which all show as plain words.
+const RELEASE_NOTES: &str = "### Features\n\n- **settings**: keep run logs for 30 days, 90 days or forever ([#41](https://example.com/jobdesk/pull/41))\n- **today**: Later can set a card aside until Monday\n- **tasks**: reopen a stopped task with a reply ([#44](https://example.com/jobdesk/pull/44))\n\n![The new Data and privacy page](https://example.com/jobdesk/data.png)\n\n### Bug fixes\n\n- **jobs**: a cut title shows in full on hover\n- **profile**: Save keeps your draft when the file changed on disk\n- **shell**: the window keeps its size between launches\n- **settings**: search finds Spend at most again <img src=\"https://example.com/x.png\">\n";
+const NOTES: ReleaseNotes = ReleaseNotes {
+    title: "Jobdesk 0.2.0",
+    released: "Released Fri 30 Oct. You have 0.1.0.",
+    notes: RELEASE_NOTES,
+    trust: "From the GitHub release. Its links and images do not open here.",
+    slip: None,
+    primary: "Download 0.2.0",
+    primary_wait: None,
+    size: Some("14.2 MB"),
+    open_page: "Open the release page",
+    esc_note: "Nothing installs until you choose Restart to update. Esc closes.",
+};
+const READY_NOTES: ReleaseNotes = ReleaseNotes {
+    slip: Some("Jobdesk closes, installs 0.2.0 and opens again with the same folder and settings. Restart waits while a task is open."),
+    primary: "Restart to update",
+    primary_wait: Some(RESTART_WAITS),
+    size: None,
+    esc_note: "Esc closes",
+    ..NOTES
+};
+
+/// A status strip as the shell lays it out: Claude on the left, then on the right Settings, the divider and `group`,
+/// which lays out right to left. Returns what `group` returns.
+fn status_strip<R>(ui: &mut Ui, group: impl FnOnce(&mut Ui) -> R) -> R {
+    status_frame(ui)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                status_line(ui, true, "Claude is ready");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    status_button(ui, "Settings", &["Cmd", ","], false);
+                    ui.add_space(12.0);
+                    status_divider(ui);
+                    ui.add_space(12.0);
+                    group(ui)
+                })
+                .inner
+            })
+            .inner
+        })
+        .inner
+}
+
+/// The update group in each state, then two with their notes open: `open` and `cache` are the notes' state.
+fn update_widgets(ui: &mut Ui, open: &mut [bool; 2], caches: &mut [CommonMarkCache; 2]) {
+    ui.set_width(ui.available_width());
+    ui.heading("Status bar");
+    ui.add_space(6.0);
+    status_strip(ui, |ui| {
+        status_action(ui, "Download");
+        status_mark_button(ui, Ink::Text, "Jobdesk 0.2.0 is out", false);
+    });
+    ui.add_space(8.0);
+    status_strip(ui, |ui| {
+        status_button(ui, "Cancel", &[], false);
+        status_progress(ui, "Downloading 0.2.0", 0.38, "38%, 5.4 of 14.2 MB");
+    });
+    ui.add_space(8.0);
+    status_strip(ui, |ui| {
+        status_action(ui, "Restart to update");
+        status_mark_button(ui, Tone::Hired, "0.2.0 is downloaded and checked", false);
+    });
+    ui.add_space(8.0);
+    status_strip(ui, |ui| {
+        enabled_when(ui, false, RESTART_WAITS, |ui| status_action(ui, "Restart to update"));
+        status_mark_button(ui, Tone::Hired, "0.2.0 is downloaded and checked", false);
+    });
+    ui.add_space(8.0);
+    status_strip(ui, |ui| {
+        status_action(ui, "Retry");
+        status_mark_button(ui, Tone::Closed, "Download of 0.2.0 stopped at 41%: the connection dropped", false);
+    });
+    ui.add_space(8.0);
+    status_strip(ui, |ui| {
+        status_action(ui, "Retry");
+        status_mark_button(ui, Tone::Closed, "0.2.0 failed its signature check. It was deleted, not installed.", false);
+    });
+    ui.add_space(8.0);
+    // In a narrow window the words are cut first.
+    ui.allocate_ui(egui::vec2(560.0, 40.0), |ui| {
+        status_strip(ui, |ui| {
+            status_action(ui, "Retry");
+            status_mark_button(ui, Tone::Closed, "Download of 0.2.0 stopped at 41%: the connection dropped", false);
+        });
+    });
+    ui.add_space(24.0);
+    ui.heading("Release notes");
+    for (index, (notes, room)) in [(NOTES, NOTES_ROOM), (READY_NOTES, READY_NOTES_ROOM)].into_iter().enumerate() {
+        ui.add_space(room);
+        let (square, words) = if notes.slip.is_some() { (Tone::Hired.into(), "0.2.0 is downloaded and checked") } else { (Ink::Text, "Jobdesk 0.2.0 is out") };
+        let mark = status_strip(ui, |ui| {
+            status_action(ui, if notes.slip.is_some() { "Restart to update" } else { "Download" });
+            status_mark_button(ui, square, words, open[index])
+        });
+        if mark.clicked() {
+            open[index] = !open[index];
+        }
+        release_notes_popover(&mark, &mut open[index], &notes, &mut caches[index]);
+    }
+}
+
+fn update_page(ui: &mut Ui, open: &mut [bool; 2], caches: &mut [CommonMarkCache; 2]) {
+    jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| update_widgets(ui, open, caches)));
+}
+
+fn update_sheet(theme: Theme, name: &str) {
+    let (mut open, mut caches) = ([true, true], [CommonMarkCache::default(), CommonMarkCache::default()]);
+    let mut harness = with_renderer(Harness::builder().with_size(UPDATE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(move |ui| update_page(ui, &mut open, &mut caches));
+    harness.run_steps(4);
+    assert!(harness.get_by_label("Download 0.2.0").accesskit_node().is_focused(), "Download takes the focus first");
+    compare(&mut harness, name);
+}
+
+#[test]
+fn ui_kit_gallery_update_dark() {
+    update_sheet(Theme::Dark, "ui_kit_gallery_update_dark");
+}
+
+#[test]
+fn ui_kit_gallery_update_light() {
+    update_sheet(Theme::Light, "ui_kit_gallery_update_light");
+}
+
+/// The notes open with their primary action focused and close on Esc, a click outside and the primary action. The
+/// release page link keeps them open, and a primary action that waits is disabled, says why and takes no focus.
+#[test]
+fn release_notes_popover_opens_on_its_primary_action() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct Shown {
+        open: bool,
+        wait: bool,
+        picked: Vec<NotesAction>,
+    }
+    let shown = Rc::new(RefCell::new(Shown::default()));
+    let state = Rc::clone(&shown);
+    let mut cache = CommonMarkCache::default();
+    let mut harness = Harness::builder().with_size([900.0, 700.0]).with_context_setup(install_look).build_ui(move |ui| {
+        let mut state = state.borrow_mut();
+        ui.label("Outside");
+        ui.add_space(600.0);
+        let mark = status_mark_button(ui, Ink::Text, "Jobdesk 0.2.0 is out", state.open);
+        if mark.clicked() {
+            state.open = !state.open;
+        }
+        let notes = ReleaseNotes { primary_wait: state.wait.then_some(RESTART_WAITS), ..NOTES };
+        let Shown { open, picked, .. } = &mut *state;
+        picked.extend(release_notes_popover(&mark, open, &notes, &mut cache));
+    });
+    harness.run();
+    let open = |harness: &Harness| harness.query_by_label("Download 0.2.0").is_some();
+    assert!(!open(&harness));
+
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    assert!(harness.get_by_label("Download 0.2.0").accesskit_node().is_focused(), "Download takes the focus first");
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(!open(&harness), "Esc closes");
+
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    assert!(harness.get_by_label("Download 0.2.0").accesskit_node().is_focused(), "Download takes the focus again");
+    harness.get_by_label("Outside").click();
+    harness.run();
+    assert!(!open(&harness), "a click outside closes");
+
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    harness.get_by_label("Open the release page").click();
+    harness.run();
+    assert!(open(&harness), "the release page link keeps the notes open");
+    harness.get_by_label("Download 0.2.0").click();
+    harness.run();
+    assert!(!open(&harness), "the primary action closes");
+    assert_eq!(shown.borrow().picked, [NotesAction::OpenPage, NotesAction::Primary]);
+
+    shown.borrow_mut().wait = true;
+    harness.get_by_label("Jobdesk 0.2.0 is out").click();
+    harness.run();
+    let primary = harness.get_by_label("Download 0.2.0");
+    assert!(primary.accesskit_node().is_disabled() && !primary.accesskit_node().is_focused(), "a waiting action takes no focus");
+    primary.hover();
+    harness.run_steps(4);
+    assert!(harness.query_by_label_contains("A task is running").is_some(), "a waiting action says why");
+}
+
 #[test]
 fn ui_kit_gallery_settings_dark() {
     settings_sheet(Theme::Dark, "ui_kit_gallery_settings_dark");
@@ -1112,6 +1311,18 @@ fn every_clickable_widget_shows_the_hand() {
     harness.get_by_label("Ask a second reader").hover();
     harness.step();
     assert_eq!(harness.output().platform_output.cursor_icon, CursorIcon::Default, "a disabled radio keeps the arrow");
+
+    // The update sheet, with both notes open, so their actions are hovered too.
+    let (mut open, mut caches) = ([true, true], Default::default());
+    let mut harness = Harness::builder()
+        .with_size(UPDATE_SHEET)
+        .with_pixels_per_point(1.0)
+        .with_context_setup(install_look)
+        .build_ui(move |ui| update_page(ui, &mut open, &mut caches));
+    harness.run();
+    // Nine Settings, eight enabled actions and Cancel, eight mark buttons, and in the notes Download and two release
+    // page links. Both Restart buttons that wait keep the arrow.
+    assert_eq!(hands(&mut harness), 28, "the update sheet's clickable widgets");
 }
 
 /// Hovers every enabled clickable widget and checks each shows the pointing hand. Returns how many it hovered.

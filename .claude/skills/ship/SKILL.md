@@ -317,6 +317,6 @@ Run `scripts/cleanup.sh <change-branch>` after each step merges.
   Give the planner the change's branch, the canvas paths, the index and every changed handoff file of the canvases' folder
   (`mockups/README.md` and `mockups/handoff/` by default). It reads them with `git show <change>:<path>`.
   The planner puts the handoff files' Doc changes in a handoff step, and that step deletes the section from each file after applying it.
-  The handoff step goes to `builder`, because it edits `mockups/handoff/`, which `docs-writer` may not edit.
+  The handoff step goes to a builder (`builder` or `builder-sonnet`, as step 3 says), never to `docs-writer`, because it edits `mockups/handoff/`, which `docs-writer` may not edit.
 
 Use cheap models only for work that is fully written down.

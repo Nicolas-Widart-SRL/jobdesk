@@ -32,7 +32,7 @@ The Jobs view filters in Settings hide rows from every list on Jobs:
 
 Every filter starts off. A job with no score is never hidden by the score.
 
-The filters hide rows only and never change a job's lane, because `/rank` owns the lists. Today still deals a flagged ad as Check this ad until the user keeps it. A kept ad gets no Check this ad card: Today deals it as it deals an unflagged job, which gets a card only on the shortlist. On that card the safety row stays Unclear, and the summary reads "The safety check flagged this ad and you kept it."
+The filters hide rows only and never change a job's lane, because `/rank` owns the lists. Today still deals a flagged ad as Check this ad until the user keeps it. A kept ad gets no Check this ad card: Today deals it as it deals an unflagged job, which gets a card only on the shortlist. On that card the safety row stays Unclear. The summary names the kept ad only when every other check passes.
 
 Jobs counts what the filters hide in the open list and offers Show them, then Hide them.
 

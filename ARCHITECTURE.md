@@ -82,7 +82,7 @@ A feature that fails to load reports an issue, and the others keep working. Its 
 - Until the first snapshot arrives, every screen shows a loading view, not an empty one.
 - A screen whose source failed shows the alert and says its content is hidden, never that it is empty.
 
-Jobs, Applications, Insights, Profile, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs and Applications get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile shows only the alert. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
+Jobs, Applications, Insights, Profile, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs and Applications get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile hides a failed file's topics through its own `ProfileView`. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
 
 Tasks, the launcher and Dossier take no `ScreenState`: the shell draws the alert above their head. For Dossier the shell also draws the loading view and, when the tracker failed, the note that the application is hidden.
 

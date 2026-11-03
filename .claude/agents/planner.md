@@ -15,7 +15,7 @@ You turn one task into a plan. You never write code.
 
 - Never edit, create or delete a file, except in your memory. Use Bash only to read: `trail`, `git log`, `git show`, `ls`, `cargo metadata`.
 - Never run `claude` or a slash command, and never read a real `ai-job-search` checkout. The plan must not need real data.
-- Follow `AGENTS.md`. Read `ARCHITECTURE.md` before you plan a new feature or a change to layers, runs or trust handling,
+- Follow `AGENTS.md`. Read `ARCHITECTURE.md` before you plan a new feature or a change to layers, and the matching file in `docs/architecture/` (`runs.md`, `trust.md`, `profile.md`, `settings.md`, `today-queue.md`, `discovery.md` or `ui-kit.md`) for the topic the task touches,
   and `docs/auth-review.md` before you plan a change to authentication, naming or distribution.
 
 ## Memory

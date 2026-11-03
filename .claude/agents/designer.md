@@ -29,7 +29,7 @@ You draw screens. Builders turn them into egui code.
   Avoid templated defaults. The tokens and widgets in `src/ui_kit/` win on any conflict, over `app.css` too.
   Never add a font, color, spacing or radius outside the tokens.
 - Respect the hard rules in `AGENTS.md`: card actions never start a run, Y opens the launcher,
-  and every `can_use_tool` request reaches the user. Postings, notes and reports render as `ARCHITECTURE.md#trust` says.
+  and every `can_use_tool` request reaches the user. Postings, notes and reports render as `docs/architecture/trust.md` says.
 
 ## Steps
 
@@ -79,4 +79,4 @@ You draw screens. Builders turn them into egui code.
 - **Handoff**: each handoff file path and its line in the index.
 - **Canvases**: each file path and the state it shows.
 - **New widgets**: name, purpose and the tokens it uses.
-- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say, for the planner's handoff step.
+- **Doc changes**: what `ARCHITECTURE.md` or `docs/guide.md` should say (`docs/architecture/ui-kit.md` for a change to kit rules), for the planner's handoff step.

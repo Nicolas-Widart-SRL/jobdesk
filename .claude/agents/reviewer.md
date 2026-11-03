@@ -33,7 +33,7 @@ Apply each item wherever the range touches it.
 
 1. The range does all of the plan step and nothing else.
 2. The `AGENTS.md` hard rules and the layer rule.
-3. Trust, as the Trust section of `ARCHITECTURE.md` describes it, including stripping control, escape, bidi and zero-width characters.
+3. Trust, as `docs/architecture/trust.md` describes it, including stripping control, escape, bidi and zero-width characters.
 4. State over time: a day rollover during a load or while the app is open, undo restoring every field it changed,
    partial and interrupted runs, a stop between steps.
 5. Copy claims no more than the data behind it. Check the empty, one and many cases.

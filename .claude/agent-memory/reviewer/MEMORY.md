@@ -43,3 +43,11 @@ A builder appends new escapes in its commit. The reviewer never edits this file.
 - PR 28 `docs/guide.md`: "One of two or more columns" reads as one column out of many; say "a table of two or more columns". Class: ambiguous wording.
 PR 30 docs/guide.md: the review missed a stale "other sections open in later versions" sentence left after the last Settings page was built. Class: copy claims more than the data.
 PR 34 src/dossier/domain/archive.rs: the Windows device-name list missed the superscript digits COM¹-COM³ and LPT¹-LPT³. Class: untrusted text.
+PR 40 ARCHITECTURE.md: said the shell tells each screen its state through `ScreenState`, but Tasks, the launcher and Dossier take none and keep the shell's alert above their head, and Today takes its own context. Class: copy claims more than the code does.
+PR 40 docs/architecture/discovery.md: said Today always deals a flagged ad as Check this ad, but a kept ad skips that card in `derive_cards`. Class: copy claims more than the code does.
+PR 40 docs/architecture/profile.md: said the save copy takes the file's permission bits, but `write_copy` keeps them only when the file exists. Class: copy claims more than the code does.
+PR 40 docs/architecture/runs.md: said each run owns one `claude -p` process, but a reply to a finished run starts a new process resuming the same session. Class: copy claims more than the code does.
+PR 40 docs/architecture/settings.md: "the theme and zoom eframe restored are kept and saved" had no clear actor and read as a garden path. Class: ambiguous wording.
+PR 40 docs/architecture/today-queue.md: the rank order left out that an overdue date ranks before the rest, ahead of dates in the Coming up range. Class: copy says less than the code does.
+PR 40 docs/architecture/trust.md: did not say `within_workspace` is lexical and resolves no symlink, so an in-workspace link can lead a dossier read outside the workspace. Class: copy claims more than the code does.
+PR 40 docs/architecture/trust.md: said the mask holds no quote or backslash, but it copies a long key's last four and `ApiKey::parse` accepts `"` and `\`. Class: copy claims more than the code does.

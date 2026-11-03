@@ -1,7 +1,9 @@
+mod cv;
 mod document;
 mod fill;
 mod topic;
 
+pub use cv::{CvFiles, CvTag, FileStamp, Freshness, Shelf, buildable, freshness, label, shelf, tag};
 pub use document::{Block, BlockKey, blocks, find, heading_len, insert_at, replace, role_heading, select};
 pub use fill::{Fill, SaveCheck, check, topic_fill};
 pub use topic::{Group, ProfileFile, SectionRef, TOPICS, TopicId, TopicSpec};

@@ -224,11 +224,16 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
         Page::About => {
             let about = AboutView { version: view.version, claude: view.claude, update: &view.update.about, restart_wait: view.restart_wait };
             let mut auto = view.settings.preferences().check_updates.is_on();
-            let (_, asked) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &mut auto, &query));
+            let (_, (asked, providers)) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &mut auto, &query));
             if auto != view.settings.preferences().check_updates.is_on() {
                 view.settings.set_check_updates(auto);
             }
             request = asked.or(request);
+            if providers {
+                // A search that hides Providers would send the rail straight back to its first hit, so the jump clears it.
+                screen.query.clear();
+                screen.page = Page::Providers;
+            }
         }
         Page::Terms => {
             let lead = if matches!(view.terms, TermsState::Reading) { terms::READING } else { page.lead() };
@@ -1274,6 +1279,45 @@ mod tests {
         harness.get_by_label("2.1.4");
         assert!(harness.get_by_label("Show licences").accesskit_node().is_disabled(), "there is no licence file to show yet");
         assert!(!harness.get_by_label("Open the changelog").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn how_tasks_sign_in_opens_providers() {
+        let state = state();
+        on(&state, Page::About);
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("How tasks sign in");
+        harness.get_by_label("Open Providers").click();
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::Providers);
+        assert_eq!(state.borrow().asked, None, "a jump inside Settings asks the shell for nothing");
+        harness.get_by_label(Page::Providers.lead());
+    }
+
+    #[test]
+    fn open_providers_works_during_a_search_that_finds_only_about() {
+        let state = state();
+        on(&state, Page::About);
+        let only_about = "How tasks sign in";
+        let hits = search(only_about, Drawn::folder(true)).expect("a query");
+        assert_eq!(hits.pages.iter().map(|&(page, _)| page).collect::<Vec<_>>(), vec![Page::About]);
+        state.borrow_mut().screen.query = only_about.to_owned();
+        let mut harness = harness(state.clone());
+        harness.run();
+        harness.get_by_label("Open Providers").click();
+        harness.run();
+        harness.run();
+        assert_eq!(state.borrow().screen.page, Page::Providers);
+        assert_eq!(state.borrow().screen.query, "", "the jump clears the search, which would hide Providers");
+        harness.get_by_label(Page::Providers.lead());
+    }
+
+    #[test]
+    fn a_search_finds_how_tasks_sign_in() {
+        let about = |query: &str| search(query, Drawn::folder(true)).is_some_and(|hits| hits.pages.iter().any(|&(page, _)| page == Page::About));
+        assert!(about("How tasks sign in"));
+        assert!(about("optional API key"));
     }
 
     #[test]

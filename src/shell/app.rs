@@ -340,7 +340,7 @@ impl Shell {
         Self { providers, ..self }
     }
 
-    /// Reads `now` as the time for every age Providers shows, so snapshots never move with the wall clock.
+    /// Reads `now` as the time for every age Providers and Profile show, so snapshots never move with the wall clock.
     pub fn with_now(self, now: NaiveDateTime) -> Self {
         Self { now: Some(now), ..self }
     }
@@ -369,6 +369,11 @@ impl Shell {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.reload = Some(Reload::new(sender));
         receiver
+    }
+
+    /// Renders PDF pages, for Profile's CV documents and the dossier, through `pages`, for tests.
+    pub fn with_page_store(self, pages: PageStore) -> Self {
+        Self { pages: Some(pages), ..self }
     }
 
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
@@ -763,6 +768,11 @@ impl Shell {
         }
         if let Some(open) = &mut self.open_dossier {
             open.view = None;
+        }
+        // A PDF read while a task was still writing it failed to render, and may be whole now with the same modification time.
+        if let Some(pages) = &mut self.pages {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            pages.retry_failures(now);
         }
     }
 
@@ -1173,13 +1183,34 @@ impl Shell {
                 // arrives. A save in between would be marked as the run's, so Save waits for that load too, for
                 // `RUN_READ_WAIT` at most.
                 let reading = self.save_waits_for_load();
-                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: Local::now().naive_local() };
+                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: self.now() };
                 let asked = match self.profile_editor.as_mut() {
-                    Some(editor) => profile::ui::show(ui, &mut self.profile_screen, &state(whole), &snapshot.profile, editor, &mut self.marks, moment),
+                    Some(editor) => profile::ui::show(
+                        ui,
+                        &mut self.profile_screen,
+                        &state(whole),
+                        &snapshot.profile,
+                        &snapshot.cv_documents,
+                        self.pages.as_mut(),
+                        editor,
+                        &mut self.marks,
+                        moment,
+                    ),
                     None => None,
                 };
                 match asked {
                     Some(ProfileRequest::Saved) => self.read_back_profile(),
+                    // Each checks the name again against `cv/` before the system's program gets the file.
+                    Some(ProfileRequest::OpenPdf(name)) => {
+                        if let Some(workspace) = &self.workspace {
+                            profile::open_cv_pdf(workspace.path(), &name);
+                        }
+                    }
+                    Some(ProfileRequest::Reveal(name)) => {
+                        if let Some(workspace) = &self.workspace {
+                            profile::reveal_cv_file(workspace.path(), &name);
+                        }
+                    }
                     Some(ProfileRequest::Leave) => {
                         if let Some(screen) = self.leave_to.take() {
                             self.screen = screen;
@@ -1530,7 +1561,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Jobs => (Some(Screen::Jobs), true),
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
-        Source::Profile => (Some(Screen::Profile), false),
+        Source::Profile | Source::CvDocuments => (Some(Screen::Profile), false),
         Source::Decisions => (None, false),
     }
 }
@@ -1546,6 +1577,7 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
         }
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
         Source::Profile => ("Part of your profile could not be read.", "Everything else still works."),
+        Source::CvDocuments => ("Your CV folder could not be read.", "Your profile topics still show, and every task still runs."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }

@@ -82,7 +82,10 @@ body { margin: 0; }
 .pf .tr .s.x { color: var(--closed); font-weight: 600; }
 .pf .tr.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); font-weight: 600; }
 .pf .tr.on .s { font-weight: 600; }
-.pf .rail .rfoot { margin-top: auto; padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+/* The topics scroll when the window is short. Built from your profile stays pinned at the rail's foot, under a hairline. */
+.pf .rail .rows { flex: 0 1 auto; min-height: 0; overflow: hidden; position: relative; }
+.pf .rail .rows .bar-y { top: 6px; right: 3px; height: 70%; }
+.pf .rail .built { flex: none; margin-top: auto; padding-bottom: 6px; border-top: 1px solid var(--line); }
 
 /* The topic on paper: a head with the topic's actions, the scrolling document, a footnote strip. */
 .pf .sheetp { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
@@ -231,9 +234,12 @@ function rail(on, o = {}) {
     return `<div class="tr${t === on ? ' on' : ''}"><span class="t">${t}</span>${tag}<span class="s ${cls}">${w}</span></div>`;
   }).join('')).join('');
   return `<aside class="rail" aria-label="Topics"><div class="sh">Topics <span class="n num">${filled} of ${all.length} filled</span></div>
-    <div class="tl" role="img" aria-label="${filled} of ${all.length} topics filled">${marks}</div>${rows}
-    ${o.cvx ? '' : '<div class="rfoot">Each topic saves to your job search folder. Claude reads the change on its next task.</div>'}</aside>`;
+    <div class="tl" role="img" aria-label="${filled} of ${all.length} topics filled">${marks}</div><div class="rows">${rows}${o.bar ? '<span class="bar-y"></span>' : ''}</div>${built()}</aside>`;
 }
+
+// The CV documents row, pinned at the rail's foot. Its state word counts Source newer and Not built yet. ProfileCv.html draws its screen.
+const built = (word = '<span class="s f">2 out of date</span>') => `<div class="built"><div class="gt">Built from your profile</div>
+  <div class="tr"><span class="t">CV documents</span>${word}</div></div>`;
 
 // Experience, as roles.
 const ROLES = [
@@ -329,7 +335,7 @@ function a_loading() {
   const roleSk = () => `<article class="role"><div class="when">${sk(80)}</div><div class="what" style="display: flex; flex-direction: column; gap: 8px">${sk(240, 'height: 16px')}${sk(180)}${sk(520)}${sk(460)}${sk(380)}</div><div></div></article>`;
   return shell(`${head('Reading your profile…')}<div class="bbody">
     <aside class="rail" aria-label="Topics"><div class="sh">Topics</div><div class="tl">${Array.from({ length: 11 }, () => '<i class="o"></i>').join('')}</div>
-      <div class="gt">On your CV</div>${rows}<div class="gt">What guides Claude</div>${rows2}</aside>
+      <div class="rows"><div class="gt">On your CV</div>${rows}<div class="gt">What guides Claude</div>${rows2}</div>${built(`<span style="margin-left: auto">${sk(44)}</span>`)}</aside>
     <section class="sheetp"><header class="dh"><div style="display: flex; flex-direction: column; gap: 10px; padding-top: 6px">${sk(220, 'height: 22px')}${sk(380)}</div></header>
       <div class="dscroll">${roleSk()}${roleSk()}${roleSk()}</div></section></div>`);
 }
@@ -341,7 +347,7 @@ function a_failed() {
     <div class="alert" role="alert"><div><div class="at">Part of your profile could not be read.</div>
       <div><span class="path">01-candidate-profile.md</span>: not UTF-8 text. Open it in a text editor and save it as UTF-8.</div>
       <div class="muted">The other topics still show, and every task still runs.</div></div></div>
-    <div class="bbody">${rail('Experience', { cvx: true })}
+    <div class="bbody">${rail('Experience', { cvx: true, bar: true })}
     ${paper(body, { title: 'Experience', lead: 'Roles, newest first. Claude picks from these for each CV.', file: '01-candidate-profile.md', under: 'Professional Experience', noEdit: true, bar: false, busy: true })}</div>`, { failed: true });
 }
 

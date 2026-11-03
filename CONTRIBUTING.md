@@ -26,7 +26,7 @@ Output lands in `target/packages`. On Windows use `--formats nsis`. Run the Inst
 
 The `dmg` artifact also holds the app as `Jobdesk-…-macos-arm64.app.tar.gz`, the file a copy of Jobdesk downloads to update itself. On Windows that file is the setup. The Installers workflow never sees the [update key](#the-update-key), so what it builds is never signed for updates, and no copy will install it as an update. Only a release signs.
 
-These builds are not signed with a developer identity. macOS warns on other machines until the app is signed with a Developer ID and notarized. Windows warns because the installer is unsigned, and SmartScreen can keep warning after signing until the certificate builds a reputation. The app icons live in `assets/brand/`.
+macOS builds are ad-hoc signed, not signed with a Developer ID or notarized, so macOS still warns on other machines that the developer cannot be verified. Windows warns because the installer is unsigned, and SmartScreen can keep warning after signing until the certificate builds a reputation. The app icons live in `assets/brand/`.
 
 ## Release
 

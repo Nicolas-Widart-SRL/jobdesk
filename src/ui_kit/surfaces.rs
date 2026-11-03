@@ -1520,18 +1520,47 @@ pub fn headed_paper<R>(ui: &mut Ui, head: impl FnOnce(&mut Ui), body: impl FnOnc
                     })
                     .inner
             },
-            |ui| {
-                divider(ui);
-                Frame::new().inner_margin(margin(DEAL_FOOT_PADDING)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        foot(ui);
-                    });
-                });
-            },
+            |ui| foot_strip(ui, foot),
         )
     })
+}
+
+/// A paper's one-line footnote strip under a hairline, laid out left to right with no gap of its own.
+fn foot_strip(ui: &mut Ui, foot: impl FnOnce(&mut Ui)) {
+    divider(ui);
+    Frame::new().inner_margin(margin(DEAL_FOOT_PADDING)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            foot(ui);
+        });
+    });
+}
+
+/// A sheet of paper that takes all the height it has, split over a footnote strip. At its left, a list column
+/// `side_width` wide, but never more than half the paper, ruled off by a `line` hairline at its right and scrolling on
+/// its own. Beside it, `main`, which scrolls only where it puts a scroll area. `foot` runs under both, as in `headed_paper`.
+pub fn split_paper(ui: &mut Ui, side_width: f32, list: impl FnOnce(&mut Ui), main: impl FnOnce(&mut Ui), foot: impl FnOnce(&mut Ui)) {
+    paper(ui, false, |ui| {
+        let height = ui.available_height();
+        let body = pinned_footer(ui, height, |ui| foot_strip(ui, foot));
+        let side_width = side_width.min(body.width() / 2.0);
+        let rule = Rect::from_min_max(pos2(body.left() + side_width - HAIRLINE, body.top()), pos2(body.left() + side_width, body.bottom()));
+        ui.painter().rect_filled(rule, 0.0, Palette::of(ui).line);
+        let list_rect = Rect::from_min_max(body.min, pos2(rule.left(), body.bottom()));
+        let main_rect = Rect::from_min_max(pos2(rule.right(), body.top()), body.max);
+        let id = ui.next_auto_id();
+        let column = |rect: Rect, salt: &str| UiBuilder::new().id_salt(id.with(salt)).max_rect(rect).layout(Layout::top_down(Align::Min));
+        let mut list_ui = ui.new_child(column(list_rect, "split_paper_list"));
+        list_ui.shrink_clip_rect(list_rect);
+        egui::ScrollArea::vertical().id_salt(id.with("split_paper_list")).auto_shrink([false, false]).show(&mut list_ui, |ui| {
+            ui.set_width(ui.available_width());
+            list(ui);
+        });
+        let mut main_ui = ui.new_child(column(main_rect, "split_paper_main"));
+        main_ui.shrink_clip_rect(main_rect);
+        main(&mut main_ui);
+    });
 }
 
 /// What `add` lays out, faded to `FADED_OPACITY`, such as a template's outline shown for what it holds.
@@ -1547,19 +1576,10 @@ pub fn faded<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// where otherwise the two take what the body needs, up to it. `fresh` opens the body at the top.
 pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui)) -> R {
     let room = ui.available_size();
-    let kept = KeptHeight::read(ui, ui.scope_id().with("footed_footer"), 0.0);
+    let kept = KeptHeight::read(ui, footer_id(ui), 0.0);
     let needed = KeptHeight::read(ui, ui.scope_id().with("footed_body"), room.y);
     let height = if fill { room.y } else { (needed.height + kept.height).min(room.y) };
-    let inner = Rect::from_min_size(ui.cursor().min, vec2(room.x, height));
-    ui.advance_cursor_after_rect(inner);
-    // The footer goes in first, at the foot, so the body takes what it leaves.
-    // One height is kept for whatever the body shows, so only a footer of a new height costs a pass.
-    let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
-    let mut foot = ui.new_child(UiBuilder::new().id_salt("footed_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
-    foot.shrink_clip_rect(foot_rect);
-    footer(&mut foot);
-    kept.keep(ui, foot.min_rect().height().min(room.y), "a footer changed height");
-    let body_rect = Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()));
+    let body_rect = pinned_footer(ui, height, footer);
     let mut body_ui = ui.new_child(UiBuilder::new().id_salt("footed_body").max_rect(body_rect).layout(Layout::top_down(Align::Min)));
     body_ui.shrink_clip_rect(body_rect);
     let scroll = egui::ScrollArea::vertical().id_salt("footed_body").auto_shrink([false, false]);
@@ -1569,6 +1589,26 @@ pub(in crate::ui_kit) fn footed<R>(ui: &mut Ui, fill: bool, fresh: bool, body: i
         needed.keep(ui, shown.content_size.y, "a body changed height");
     }
     shown.inner
+}
+
+fn footer_id(ui: &Ui) -> egui::Id {
+    ui.scope_id().with("footed_footer")
+}
+
+/// Takes a block `height` tall at `ui`'s cursor, lays `footer` out at its foot, and returns the rect left above it.
+fn pinned_footer(ui: &mut Ui, height: f32, footer: impl FnOnce(&mut Ui)) -> Rect {
+    let room = ui.available_size();
+    let kept = KeptHeight::read(ui, footer_id(ui), 0.0);
+    let inner = Rect::from_min_size(ui.cursor().min, vec2(room.x, height));
+    ui.advance_cursor_after_rect(inner);
+    // The footer goes in first, at the foot, so the body takes what it leaves.
+    // One height is kept for whatever the body shows, so only a footer of a new height costs a pass.
+    let foot_rect = Rect::from_min_max(pos2(inner.left(), (inner.bottom() - kept.height).max(inner.top())), inner.max);
+    let mut foot = ui.new_child(UiBuilder::new().id_salt("footed_footer").max_rect(foot_rect).layout(Layout::top_down(Align::Min)));
+    foot.shrink_clip_rect(foot_rect);
+    footer(&mut foot);
+    kept.keep(ui, foot.min_rect().height().min(room.y), "a footer changed height");
+    Rect::from_min_max(inner.min, pos2(inner.right(), foot_rect.top()))
 }
 
 /// The row under a body that holds its actions, ruled off on top and padded `(x, y)`.

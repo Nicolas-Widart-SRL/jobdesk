@@ -28,8 +28,9 @@ pub struct AboutView<'a> {
 }
 
 /// The two versions with Copy details, the updates, the links to read more, then who makes Jobdesk. No logo shows
-/// anywhere. Returns what the user asked of the updates. The switch is saved here, and the shell follows it.
-pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Option<SettingsRequest> {
+/// anywhere. Returns what the user asked of the updates, and true when Open Providers is clicked, so Settings switches to
+/// Providers. The switch is saved here, and the shell follows it.
+pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> (Option<SettingsRequest>, bool) {
     let &[
         this_copy,
         jobdesk,
@@ -42,6 +43,8 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Optio
         _,
         latest,
         read_more,
+        sign_in,
+        sign_in_help,
         changed,
         changed_help,
         licences,
@@ -49,7 +52,7 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Optio
         maker,
     ] = index(Page::About)
     else {
-        return None;
+        return (None, false);
     };
     setting_section(ui, this_copy, None, query);
     setting_row(ui, jobdesk, jobdesk_help, query, |ui| {
@@ -77,6 +80,9 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Optio
     let mut request = None;
     setting_row_lines(ui, latest, &help, query, |ui| request = latest_controls(ui, update, view.restart_wait));
     setting_section(ui, read_more, None, query);
+    // An in-app jump: no browser, no run and no setting change.
+    let mut providers = false;
+    setting_row(ui, sign_in, sign_in_help, query, |ui| providers = link(ui, "Open Providers").clicked());
     setting_row(ui, changed, changed_help, query, |ui| open(ui, "Open the changelog", CHANGELOG_URL));
     setting_row(ui, licences, licences_help, query, |ui| {
         // A link paints no disabled look of its own, so it fades here.
@@ -84,7 +90,7 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> Optio
         enabled_when(ui, false, NO_LICENCES, |ui| link(ui, "Show licences"));
     });
     page_note(ui, maker, query);
-    request
+    (request, providers)
 }
 
 /// Latest version's controls, laid out from the right: Check now or the step to take, then what leads to it.

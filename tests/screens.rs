@@ -2735,6 +2735,10 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
             Source::Profile => {
                 fs::write(root.join(".claude/skills/job-application-assistant/02-behavioral-profile.md"), b"# Behavioral Profile\n\nCaf\xe9\n").unwrap()
             }
+            Source::CvDocuments => {
+                fs::remove_dir_all(root.join("cv")).unwrap();
+                fs::write(root.join("cv"), b"").unwrap();
+            }
             Source::Decisions => unreachable!("the tray reports its own file"),
         }
     }
@@ -2830,6 +2834,14 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             alert: "Part of your profile could not be read.",
             shown: &["6 of 11 profile topics filled, 1 hidden"],
             not_shown: &["7 of 11 profile topics filled", "6 of 10 profile topics filled", "Insights, could not be read"],
+        },
+        Case {
+            screen: Screen::Profile,
+            broken: &[Source::CvDocuments],
+            subtitle: "Claude reads this before it scores a job or writes a CV or a letter.",
+            alert: "Your CV folder could not be read.",
+            shown: &["Your profile topics still show, and every task still runs."],
+            not_shown: &[],
         },
     ];
     for (index, case) in cases.iter().enumerate() {
@@ -4431,7 +4443,11 @@ fn rewrite(root: &Path, relative: &str, from: &str, to: &str) {
 
 /// The sample on Profile, with a `/setup` run working and the feed that hands the shell snapshots, as the folder watcher does.
 fn profile_with_run(name: &str) -> (Shell, std::path::PathBuf, SharedSink, std::sync::mpsc::Sender<Snapshot>) {
-    let root = sample_root(name);
+    profile_with_run_on(sample_root(name))
+}
+
+/// The same on a folder a test has prepared.
+fn profile_with_run_on(root: std::path::PathBuf) -> (Shell, std::path::PathBuf, SharedSink, std::sync::mpsc::Sender<Snapshot>) {
     let mut shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
     let feed = shell.snapshot_feed();
     let sink = SharedSink::default();
@@ -4784,6 +4800,665 @@ fn profile_updated_light() {
     feed.send(Snapshot::load(&root, day())).unwrap();
     harness.run_steps(3);
     compare(&mut harness, "profile_updated_light");
+}
+
+const CV_DOCUMENTS: &str = "CV documents";
+const REBUILD: &str = "Rebuild the PDF…";
+const CV_SHOWS: &str = "Jobdesk shows these PDFs. /build-cv builds them.";
+
+/// The moment the CV documents' ages count to.
+fn cv_now() -> NaiveDateTime {
+    run_started()
+}
+
+/// A stem, the hours since its `.tex` and its PDF changed, the PDF's size and its pages.
+type CvFile = (&'static str, Option<i64>, Option<i64>, usize, usize);
+
+/// The canvas's nine CV documents, by stem: hours before `cv_now` their `.tex` and PDF were last changed, if they exist,
+/// the PDF's size and its pages. Halyard has no PDF yet, Tessel's `.tex` changed after its PDF, Brightwell's PDF is one
+/// no renderer reads (no pages), and Linden has no `.tex`.
+const CV_FILES: [CvFile; 9] = [
+    ("main_example", Some(5 * 24), Some(3 * 24), 84_000, 2),
+    ("main_example_engineer", Some(14 * 24), Some(12 * 24), 97_000, 2),
+    ("main_halyard_labs_tech_lead", Some(1), None, 0, 0),
+    ("main_tessel_platform_lead", Some(3), Some(2 * 24), 91_000, 2),
+    ("main_brightwell_eng_manager", Some(3 * 24), Some(24), 88_000, 0),
+    ("main_ardent_backend_engineer", Some(6 * 24), Some(4 * 24), 86_000, 2),
+    ("main_granite_cloud_staff_engineer", Some(10 * 24), Some(9 * 24), 102_000, 3),
+    ("main_orchard_systems_architect", Some(16 * 24), Some(14 * 24), 83_000, 2),
+    ("main_linden_analytics_data_lead", None, Some(35 * 24), 79_000, 2),
+];
+
+/// Words only the fictional CV's pages hold, so a test can tell they never reach the screen as text.
+const CV_PAGE_WORDS: [&str; 2] = ["Verbena Quarry Freight", "Ostrava rail yard"];
+
+/// What one page of the fictional CV draws: a name on the first, then sections, each a bar, a title and grey lines.
+fn cv_page_content(page: usize) -> String {
+    let mut content = String::new();
+    let mut y = 770;
+    if page == 0 {
+        content.push_str(&format!("0.15 0.2 0.28 rg BT /F1 26 Tf 56 {y} Td (Sample Candidate) Tj ET\n"));
+        content.push_str(&format!("BT /F1 11 Tf 56 {} Td (Lead Software Engineer at {}) Tj ET\n", y - 22, CV_PAGE_WORDS[0]));
+        y -= 70;
+    }
+    let sections = [["Profile", "Experience", "Projects"], ["Experience", "Education", "Skills"], ["Languages", "References", "Projects"]];
+    for (index, title) in sections[page % 3].iter().enumerate() {
+        content.push_str(&format!("0.15 0.2 0.28 rg 56 {} 40 4 re f BT /F1 12 Tf 104 {} Td ({title}) Tj ET\n", y + 3, y));
+        if index == 1 {
+            content.push_str(&format!("BT /F1 9 Tf 104 {} Td ({}) Tj ET\n", y - 16, CV_PAGE_WORDS[1]));
+        }
+        y -= 28;
+        for line in 0..5 {
+            let width = 420 - (line * 37) % 120;
+            content.push_str(&format!("0.82 0.86 0.91 rg 104 {y} {width} 4 re f\n"));
+            y -= 11;
+        }
+        y -= 26;
+    }
+    content
+}
+
+/// The fictional CV as a PDF of `pages` pages in Helvetica, with `padding` bytes of comment lines after its header.
+/// The cross-reference offsets are counted as the file is written.
+fn cv_pdf_padded(pages: usize, padding: usize) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut left = padding;
+    while left > 0 {
+        let line = left.min(80);
+        if line > 1 {
+            out.push(b'%');
+            out.extend(std::iter::repeat_n(b'-', line - 2));
+        }
+        out.push(b'\n');
+        left -= line;
+    }
+    let kids: Vec<String> = (0..pages).map(|page| format!("{} 0 R", 4 + 2 * page)).collect();
+    let mut objects = vec![
+        "<</Type/Catalog/Pages 2 0 R>>".to_owned(),
+        format!("<</Type/Pages/Kids[{}]/Count {pages}>>", kids.join(" ")),
+        "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".to_owned(),
+    ];
+    for page in 0..pages {
+        objects.push(format!("<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents {} 0 R/Resources<</Font<</F1 3 0 R>>>>>>", 5 + 2 * page));
+        let content = cv_page_content(page);
+        objects.push(format!("<</Length {}>>\nstream\n{content}\nendstream", content.len()));
+    }
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{object}\nendobj\n", index + 1).bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for offset in offsets {
+        out.extend(format!("{offset:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+    out
+}
+
+/// The fictional CV of `pages` pages, padded to exactly `size` bytes. No pages gives a file that only starts like a PDF.
+fn cv_pdf(pages: usize, size: usize) -> Vec<u8> {
+    if pages == 0 {
+        let mut bytes = b"%PDF-1.4\nThis file was cut short before its first object.\n".to_vec();
+        bytes.resize(size, b'\n');
+        return bytes;
+    }
+    let mut padding = 0;
+    // The offsets grow with the padding, and only their digits can change the length again, so this settles at once.
+    for _ in 0..4 {
+        let bytes = cv_pdf_padded(pages, padding);
+        if bytes.len() == size {
+            return bytes;
+        }
+        padding = (padding + size).checked_sub(bytes.len()).expect("the CV fits in its size");
+    }
+    panic!("the CV did not settle at {size} bytes");
+}
+
+/// Writes `bytes` to `path`, changed `hours` before `cv_now`.
+fn write_aged(path: &Path, bytes: &[u8], hours: i64) {
+    use chrono::TimeZone;
+    fs::write(path, bytes).unwrap();
+    let at = chrono::Local.from_local_datetime(&(cv_now() - chrono::Duration::hours(hours))).unwrap();
+    fs::File::options().write(true).open(path).unwrap().set_modified(at.into()).unwrap();
+}
+
+/// Empties the sample's `cv/`.
+fn empty_cv(root: &Path) {
+    for entry in fs::read_dir(root.join("cv")).unwrap().flatten() {
+        fs::remove_file(entry.path()).unwrap();
+    }
+}
+
+/// The command file that gives the folder `/build-cv`, which the sample does not hold.
+const BUILD_CV: &str = ".claude/commands/build-cv.md";
+
+/// Gives the folder `/build-cv`, so an out-of-date document offers its build.
+fn add_build_cv(root: &Path) {
+    fs::write(root.join(BUILD_CV), "Builds a CV PDF from its .tex.\n").unwrap();
+}
+
+/// Puts the canvas's nine documents in place of the sample's `cv/`, in a folder that has `/build-cv`. Each PDF is the
+/// fictional CV, at its size.
+fn fill_cv(root: &Path) {
+    add_build_cv(root);
+    empty_cv(root);
+    for (stem, tex, built, size, pages) in CV_FILES {
+        if let Some(hours) = tex {
+            write_aged(&root.join(format!("cv/{stem}.tex")), b"\\documentclass{article}\n\\begin{document}\nSample Candidate\n\\end{document}\n", hours);
+        }
+        if let Some(hours) = built {
+            write_aged(&root.join(format!("cv/{stem}.pdf")), &cv_pdf(pages, size), hours);
+        }
+    }
+}
+
+/// The sample with the canvas's nine CV documents, on Profile, its ages counted to `cv_now`.
+fn cv_shell(name: &str) -> (Shell, std::path::PathBuf) {
+    let root = sample_root(name);
+    fill_cv(&root);
+    cv_shell_on(root)
+}
+
+/// The same in a folder with no `/build-cv`.
+fn cv_shell_without_build_cv(name: &str) -> (Shell, std::path::PathBuf) {
+    let root = sample_root(name);
+    fill_cv(&root);
+    fs::remove_file(root.join(BUILD_CV)).unwrap();
+    cv_shell_on(root)
+}
+
+/// The shell on a folder whose `cv/` a test has filled.
+fn cv_shell_on(root: std::path::PathBuf) -> (Shell, std::path::PathBuf) {
+    let snapshot = Snapshot::load(&root, day());
+    assert!(snapshot.issues.is_empty(), "{:?}", snapshot.issues);
+    (Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), snapshot).with_now(cv_now()), root)
+}
+
+/// Opens CV documents from the rail.
+fn open_cv(harness: &mut Harness) {
+    pick_topic(harness, CV_DOCUMENTS);
+}
+
+/// The row under the topics counts what a build would help, and the sample's two PDFs with no `.tex` read as documents.
+#[test]
+fn the_cv_row_says_how_many_are_out_of_date() {
+    let harness = tray_harness(cv_shell("profile_cv_row").0);
+    assert!(is_shown(&harness, "CV documents, 2 out of date"));
+    assert!(harness.query_all_by_label("7 of 11 filled").count() > 0, "the row stays out of the count");
+    let harness = tray_harness(shell(Screen::Profile, "profile_cv_row_sample"));
+    assert!(is_shown(&harness, "CV documents, 2 documents"));
+}
+
+/// Masters come first, then applications newest first, and only a tag that is not Current shows on a row.
+#[test]
+fn cv_documents_list_masters_then_applications() {
+    let mut harness = tray_harness(cv_shell("profile_cv_list").0);
+    open_cv(&mut harness);
+    let rows = [
+        "Master CV",
+        "Master CV, engineer",
+        "Halyard labs tech lead, Not built yet",
+        "Tessel platform lead, Source newer",
+        "Brightwell eng manager",
+        "Ardent backend engineer",
+        "Granite cloud staff engineer",
+        "Orchard systems architect",
+        "Linden analytics data lead",
+    ];
+    let tops: Vec<f32> = rows.iter().map(|row| harness.get_by_role_and_label(egui::accesskit::Role::Button, row).rect().top()).collect();
+    assert!(tops.is_sorted(), "{tops:?}");
+    assert!(is_shown(&harness, "main_example.pdf"), "the first document opens");
+    assert!(is_shown(&harness, "84 KB, built 3 days ago"));
+    assert!(is_shown(&harness, "Its .tex has not changed since this PDF was built."));
+    assert!(is_shown(&harness, CV_SHOWS));
+}
+
+/// A row cuts a long label, and keyboard focus on the row shows the whole label, as the pointer does.
+#[test]
+fn a_cut_cv_label_shows_in_full_on_focus() {
+    let mut harness = tray_harness(cv_shell("profile_cv_focus_tip").0);
+    open_cv(&mut harness);
+    let label = "Granite cloud staff engineer";
+    let before = harness.query_all_by_label(label).count();
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, label).focus();
+    harness.run_steps(4);
+    assert!(harness.get_by_role_and_label(egui::accesskit::Role::Button, label).is_focused());
+    assert_eq!(harness.query_all_by_label(label).count(), before + 1, "the tooltip shows the whole label");
+}
+
+/// Rebuild the PDF… opens the launcher with the document's stem, and the user starts the run there.
+#[test]
+fn rebuild_opens_the_launcher_and_starts_nothing() {
+    let calls = SharedCalls::default();
+    let (mut shell, _root) = cv_shell("profile_cv_rebuild");
+    *shell.desk_slot() = Some(RunDesk::new(Box::new(RecordingGateway(SharedSink::default(), Arc::clone(&calls))), Arc::new(|| {})));
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Its .tex changed 3 hours ago, after this PDF was built. Run /build-cv in the launcher to build it again."));
+    let rebuild = harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD);
+    rebuild.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Opens the launcher with /build-cv main_tessel_platform_lead. Nothing runs until you start it there."));
+
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label("/build-cv main_tessel_platform_lead").count() > 0, "the line is filled in");
+    assert_eq!(calls.lock().unwrap().starts, 0, "no run starts");
+}
+
+/// While a run works, the build waits and says why.
+#[test]
+fn rebuild_waits_while_a_run_works() {
+    let root = sample_root("profile_cv_busy");
+    fill_cv(&root);
+    let (shell, _root, _sink, _feed) = profile_with_run_on(root);
+    let mut harness = tray_harness(shell.with_now(cv_now()));
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    let rebuild = harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD);
+    assert!(rebuild.accesskit_node().is_disabled(), "a run works");
+    rebuild.hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, "Another run is active. One run at a time keeps your files safe."));
+}
+
+/// A stem that would not read as one word on the command line gets no build to open.
+#[test]
+fn a_stem_that_cannot_be_typed_gets_no_build() {
+    let root = sample_root("profile_cv_bad_stem");
+    add_build_cv(&root);
+    empty_cv(&root);
+    write_aged(&root.join("cv/main_bad name.tex"), b"\\documentclass{article}\n", 1);
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day())).with_now(cv_now());
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Bad name, Not built yet"), "the document is listed");
+    assert!(is_shown(&harness, "Its .tex has no PDF beside it yet. Run /build-cv in the launcher to build one."));
+    assert!(harness.query_by_label("Build the PDF…").is_none(), "no build for a stem with a space");
+}
+
+/// What an out-of-date document says in a folder with no `/build-cv`.
+const NO_BUILD_CV: &str = "This folder has no /build-cv command, so update your ai-job-search checkout to a version that has it.";
+
+/// A folder with no `/build-cv` keeps each tag and the rail word, says why, and offers no build, disabled or not.
+#[test]
+fn a_folder_with_no_build_cv_offers_no_build() {
+    let mut harness = tray_harness(cv_shell_without_build_cv("profile_cv_no_command").0);
+    assert!(is_shown(&harness, "CV documents, 2 out of date"), "the rail word is unchanged");
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Its .tex has not changed since this PDF was built."), "a Current line is unchanged");
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none(), "no build without the command");
+    assert!(is_shown(&harness, "Open PDF"));
+    harness.get_by_label("Halyard labs tech lead, Not built yet").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex has no PDF beside it yet. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label("Build the PDF…").is_none());
+    assert!(is_shown(&harness, if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Explorer" }));
+}
+
+/// While a run works, the no-command line stays as it is: there is no build to disable.
+#[test]
+fn a_folder_with_no_build_cv_says_the_same_while_a_run_works() {
+    let root = sample_root("profile_cv_no_command_busy");
+    fill_cv(&root);
+    fs::remove_file(root.join(BUILD_CV)).unwrap();
+    let (shell, _root, _sink, _feed) = profile_with_run_on(root);
+    let mut harness = tray_harness(shell.with_now(cv_now()));
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none());
+}
+
+/// A checkout update that adds `/build-cv` brings the build back on the next snapshot.
+#[test]
+fn adding_build_cv_brings_the_build_back() {
+    let (mut shell, root) = cv_shell_without_build_cv("profile_cv_command_added");
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    harness.get_by_label("Tessel platform lead, Source newer").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label(REBUILD).is_none());
+
+    add_build_cv(&root);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Its .tex changed 3 hours ago, after this PDF was built. Run /build-cv in the launcher to build it again."));
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Button, REBUILD).is_some(), "the build is back");
+}
+
+/// A draft with unsaved changes asks before CV documents open in its place.
+#[test]
+fn a_draft_asks_before_cv_documents_open() {
+    let (shell, _root) = profile_at("profile_edit_leave_for_cv");
+    let mut harness = tray_harness(shell);
+    fill_the_budget(&mut harness);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, DISCARD_ASK));
+    assert!(harness.query_by_label_contains("Opening CV documents drops them.").is_some());
+    button(&harness, "Keep editing").click();
+    harness.run_steps(3);
+    assert!(field(&harness).value().unwrap_or_default().ends_with(BUDGET_FILLED), "the draft stays");
+    assert!(!is_shown(&harness, CV_SHOWS));
+
+    open_cv(&mut harness);
+    button(&harness, "Discard changes").click();
+    harness.run_steps(3);
+    assert!(!editing(&harness));
+    assert!(is_shown(&harness, CV_SHOWS), "CV documents opened");
+}
+
+/// No `.tex` or PDF in `cv/`: no list, and a note on what fills it.
+#[test]
+fn profile_cv_empty_light() {
+    let root = sample_root("profile_cv_empty_light");
+    empty_cv(&root);
+    let shell = Shell::with_snapshot(Screen::Profile, jobdesk::workspace::open(&root).unwrap(), Snapshot::load(&root, day()));
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "No CV documents in your folder yet"));
+    assert!(is_shown(&harness, "CV documents, None yet"));
+    compare(&mut harness, "profile_cv_empty_light");
+}
+
+/// `cv/` cannot be read: the alert, the row Hidden, and hidden, not gone on paper.
+#[test]
+fn profile_cv_unread_light() {
+    let mut harness = probed_wgpu(probed(broken_shell(Screen::Profile, "profile_cv_unread_light", &[Source::CvDocuments]), FixedTools), Theme::Light);
+    open_cv(&mut harness);
+    assert!(is_shown(&harness, "Your CV documents are hidden, not gone"));
+    assert!(is_shown(&harness, "CV documents, Hidden"));
+    compare(&mut harness, "profile_cv_unread_light");
+}
+
+const RENDERING: &str = "Rendering the pages…";
+const BRIGHTWELL: &str = "Brightwell eng manager";
+const NOT_RENDERED: &str = "This PDF could not be rendered.";
+
+/// Steps until the picked document's pages are no longer rendering, ten seconds at most.
+fn rendered(harness: &mut Harness) {
+    let start = std::time::Instant::now();
+    harness.run_steps(1);
+    while is_shown(harness, RENDERING) && start.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        harness.run_steps(1);
+    }
+    harness.run_steps(3);
+}
+
+/// Picks the document whose row reads `row`, then takes the pointer off the window, so no hover shows.
+fn pick_cv(harness: &mut Harness, row: &str) {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, row).click();
+    harness.run_steps(3);
+    harness.event(egui::Event::PointerGone);
+    harness.run_steps(2);
+}
+
+/// The renderer the app uses, for a shell that renders PDF pages.
+fn page_store() -> jobdesk::profile::application::PageStore {
+    jobdesk::dossier::page_store(Arc::new(|| {}))
+}
+
+/// CV documents on a rendering harness. Brightwell renders first, so its row says Render failed as the canvas shows,
+/// then the document whose row reads `row` opens, and the scene waits for its pages.
+fn cv_scene(shell: Shell, theme: Theme, row: &str) -> Harness<'static> {
+    let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
+    open_cv(&mut harness);
+    pick_cv(&mut harness, BRIGHTWELL);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, NOT_RENDERED), "Brightwell's PDF is one no renderer reads");
+    pick_cv(&mut harness, row);
+    rendered(&mut harness);
+    harness
+}
+
+fn render_cv(theme: Theme, row: &str, name: &str) -> Harness<'static> {
+    let mut harness = cv_scene(cv_shell(name).0.with_page_store(page_store()), theme, row);
+    compare(&mut harness, name);
+    harness
+}
+
+/// Master CV, Current, its two pages side by side, and each tag in the list.
+#[test]
+fn profile_cv_full_light() {
+    let harness = render_cv(Theme::Light, "Master CV", "profile_cv_full_light");
+    assert!(is_shown(&harness, "2 pages, 84 KB, built 3 days ago"), "the page count comes from the render");
+    assert!(is_shown(&harness, "Page 1 of 2") && is_shown(&harness, "Page 2 of 2"));
+    assert!(is_shown(&harness, "Brightwell eng manager, Render failed"), "a refused render stays on its row");
+}
+
+#[test]
+fn profile_cv_full_dark() {
+    render_cv(Theme::Dark, "Master CV", "profile_cv_full_dark");
+}
+
+/// An application's `.tex` changed after its PDF: Source newer, and Rebuild the PDF….
+#[test]
+fn profile_cv_source_light() {
+    render_cv(Theme::Light, "Tessel platform lead, Source newer", "profile_cv_source_light");
+}
+
+/// The same while a run works: Rebuild the PDF… waits.
+#[test]
+fn profile_cv_busy_light() {
+    let root = sample_root("profile_cv_busy_light");
+    fill_cv(&root);
+    let (shell, _root, _sink, _feed) = profile_with_run_on(root);
+    let mut harness = cv_scene(shell.with_now(cv_now()).with_page_store(page_store()), Theme::Light, "Tessel platform lead, Source newer");
+    assert!(harness.get_by_role_and_label(egui::accesskit::Role::Button, REBUILD).accesskit_node().is_disabled());
+    compare(&mut harness, "profile_cv_busy_light");
+}
+
+/// A `.tex` with no PDF: Not built yet, an empty page, Show in Finder only, and Build the PDF….
+#[test]
+fn profile_cv_missing_light() {
+    let harness = render_cv(Theme::Light, "Halyard labs tech lead, Not built yet", "profile_cv_missing_light");
+    assert!(is_shown(&harness, "No PDF yet. It shows here once /build-cv has built it."));
+    assert!(!is_shown(&harness, "Open PDF"), "there is no PDF to open");
+    assert!(is_shown(&harness, "Build the PDF…"));
+}
+
+/// A PDF with no `.tex`: Current, and nothing to build it from.
+#[test]
+fn profile_cv_notex_light() {
+    let harness = render_cv(Theme::Light, "Linden analytics data lead", "profile_cv_notex_light");
+    assert!(is_shown(&harness, "No .tex sits beside this PDF, so there is nothing to build it from again."));
+    assert!(is_shown(&harness, "Open PDF"));
+}
+
+/// A PDF the renderer refused: Render failed, and its reason in a closed box.
+#[test]
+fn profile_cv_failed_light() {
+    let harness = render_cv(Theme::Light, "Brightwell eng manager, Render failed", "profile_cv_failed_light");
+    assert!(is_shown(&harness, NOT_RENDERED));
+    assert!(is_shown(&harness, "The file is there, but Jobdesk could not draw its pages."));
+    assert!(is_shown(&harness, "88 KB, built yesterday"), "no page count for pages that never rendered");
+    assert!(is_shown(&harness, "Open PDF"), "the system's viewer may still open it");
+}
+
+/// The folder has no `/build-cv`: the application CV keeps Source newer, says the command is missing, and offers no build.
+#[test]
+fn profile_cv_nocommand_light() {
+    let shell = cv_shell_without_build_cv("profile_cv_nocommand_light").0.with_page_store(page_store());
+    let mut harness = cv_scene(shell, Theme::Light, "Tessel platform lead, Source newer");
+    assert!(is_shown(&harness, &format!("Its .tex changed 3 hours ago, after this PDF was built. {NO_BUILD_CV}")));
+    assert!(harness.query_by_label(REBUILD).is_none());
+    assert!(is_shown(&harness, "Halyard labs tech lead, Not built yet"), "the list still tags it");
+    compare(&mut harness, "profile_cv_nocommand_light");
+}
+
+/// Refuses Brightwell's PDF at once, and renders no other.
+struct Stuck;
+
+impl jobdesk::dossier::application::PageRasterizer for Stuck {
+    fn render(&self, path: &Path) -> Result<jobdesk::profile::application::RenderedPages, String> {
+        if path.to_string_lossy().contains("brightwell") {
+            return Err("The file is not a PDF the renderer can read.".into());
+        }
+        loop {
+            std::thread::park();
+        }
+    }
+}
+
+/// The list and head show at once, and the pages are skeletons while they render.
+#[test]
+fn profile_cv_loading_light() {
+    let store = jobdesk::profile::application::PageStore::new(Arc::new(Stuck), Arc::new(|| {}));
+    let shell = cv_shell("profile_cv_loading_light").0.with_page_store(store);
+    let mut harness = probed_wgpu(probed(shell, FixedTools), Theme::Light);
+    open_cv(&mut harness);
+    pick_cv(&mut harness, BRIGHTWELL);
+    rendered(&mut harness);
+    pick_cv(&mut harness, "Granite cloud staff engineer");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, RENDERING));
+    assert!(is_shown(&harness, "102 KB, built 9 days ago"), "no page count before the render");
+    assert!(!is_shown(&harness, "Page 1 of 2"));
+    compare(&mut harness, "profile_cv_loading_light");
+}
+
+/// Pages reach the screen as images only: the one text a page gives assistive technology is its alt, never the PDF's words.
+#[test]
+fn cv_pages_reach_the_screen_as_images_only() {
+    let mut harness = tray_harness(cv_shell("profile_cv_images_only").0.with_page_store(page_store()));
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, "Master CV page 1") && is_shown(&harness, "Master CV page 2"));
+    for words in CV_PAGE_WORDS.into_iter().chain(["Sample Candidate"]) {
+        assert!(harness.query_by_label_contains(words).is_none(), "{words} stays in the page image");
+    }
+    let images = harness.query_all_by_role(egui::accesskit::Role::Image).filter_map(|node| node.accesskit_node().label());
+    let alts: Vec<String> = images.filter(|alt| alt != "Jobdesk mark").collect();
+    assert_eq!(alts, ["Master CV page 1", "Master CV page 2"]);
+}
+
+/// A PDF that `/build-cv` rewrites renders again, and its page count follows.
+#[test]
+fn a_rebuilt_cv_pdf_renders_again() {
+    let (shell, root) = cv_shell("profile_cv_rebuilt");
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, "2 pages, 84 KB, built 3 days ago"));
+    write_aged(&root.join("cv/main_example.pdf"), &cv_pdf(3, 84_000), 1);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, "3 pages, 84 KB, built 1 hour ago"), "the new build rendered");
+    assert!(is_shown(&harness, "Page 3 of 3"));
+}
+
+/// Master CV, its PDF replaced by `bytes`, opened on a shell that renders it. The feed hands the shell new snapshots.
+fn master_cv_as(name: &str, bytes: &[u8]) -> (Harness<'static>, std::path::PathBuf, std::sync::mpsc::Sender<Snapshot>) {
+    let (shell, root) = cv_shell(name);
+    write_aged(&root.join("cv/main_example.pdf"), bytes, 3 * 24);
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    (harness, root, feed)
+}
+
+/// A PDF longer than the render shows its first pages, and never passes them off as the whole.
+#[test]
+fn a_long_cv_says_only_its_first_pages_show() {
+    let (harness, _root, _feed) = master_cv_as("profile_cv_long", &cv_pdf(8, 84_000));
+    assert!(is_shown(&harness, "8 pages, the first 6 shown, 84 KB, built 3 days ago"));
+    assert!(is_shown(&harness, "Page 6 of 8"));
+    assert!(!is_shown(&harness, "Page 6 of 6") && !is_shown(&harness, "Page 7 of 8"));
+}
+
+/// A PDF with no page is no CV to show: the render failed, with the reason.
+#[test]
+fn a_cv_with_no_pages_failed_to_render() {
+    let (harness, _root, _feed) = master_cv_as("profile_cv_no_pages", &cv_pdf_padded(0, 0));
+    assert!(is_shown(&harness, NOT_RENDERED));
+    assert!(is_shown(&harness, "This PDF has no pages."));
+    assert!(is_shown(&harness, "Master CV, Render failed"));
+    assert!(harness.query_by_label_contains("0 pages").is_none());
+}
+
+/// A PDF read while `/build-cv` was still writing it renders once the folder is read again, even when the finished file
+/// keeps the same modification time to the second.
+#[test]
+fn a_cv_read_half_written_renders_once_whole() {
+    let whole = cv_pdf(2, 84_000);
+    let (shell, root) = cv_shell("profile_cv_half_written");
+    let path = root.join("cv/main_example.pdf");
+    // Written a few seconds ago, and read before the task finished writing it.
+    let written = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+    fs::write(&path, &whole[..whole.len() / 3]).unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(written).unwrap();
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    assert!(is_shown(&harness, NOT_RENDERED), "the half-written file failed");
+
+    // The task finishes within the same second, so the file keeps the time the failed read saw.
+    fs::write(&path, &whole).unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(written).unwrap();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    rendered(&mut harness);
+    assert!(!is_shown(&harness, NOT_RENDERED), "the failure did not stick");
+    assert!(is_shown(&harness, "Page 2 of 2"));
+}
+
+/// A PDF that failed and has not changed for a while stays failed when the folder is read again, so it does not render
+/// over and over.
+#[test]
+fn an_old_cv_that_failed_stays_failed() {
+    let (mut harness, root, feed) = master_cv_as("profile_cv_old_failure", b"%PDF-1.4\nnot a PDF after all\n");
+    assert!(is_shown(&harness, NOT_RENDERED));
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, RENDERING), "no new render started");
+    assert!(is_shown(&harness, NOT_RENDERED));
+}
+
+/// A broken PDF written a few seconds ago is tried once more, then stays failed however often a task makes the folder
+/// read again, so the pages area does not flip between loading and failed.
+#[test]
+fn a_broken_cv_just_written_is_tried_again_only_once() {
+    let (shell, root) = cv_shell("profile_cv_broken_just_written");
+    let path = root.join("cv/main_example.pdf");
+    fs::write(&path, b"%PDF-1.4\nnot a PDF after all\n").unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(5)).unwrap();
+    let mut shell = shell.with_page_store(page_store());
+    let feed = shell.snapshot_feed();
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    let mut harness = tray_harness(shell);
+    open_cv(&mut harness);
+    rendered(&mut harness);
+    feed.send(Snapshot::load(&root, day())).unwrap();
+    harness.run_steps(1);
+    assert!(is_shown(&harness, RENDERING), "the one retry");
+    rendered(&mut harness);
+    for _ in 0..3 {
+        feed.send(Snapshot::load(&root, day())).unwrap();
+        harness.run_steps(1);
+        assert!(!is_shown(&harness, RENDERING), "no second retry");
+        assert!(is_shown(&harness, NOT_RENDERED));
+    }
 }
 
 /// The last line of the sample's first role, and the same with its blank filled in.

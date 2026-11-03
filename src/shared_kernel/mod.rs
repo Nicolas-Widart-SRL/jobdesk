@@ -14,6 +14,7 @@ pub mod sign_in;
 pub mod source;
 pub mod visible_text;
 pub mod web_url;
+pub mod workspace_path;
 
 pub use api_key::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, inherited_env, key_route_refusal};
 pub use check_state::CheckState;

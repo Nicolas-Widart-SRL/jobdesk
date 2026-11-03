@@ -126,6 +126,14 @@ pub const CATALOG: &[CommandSpec] = &[
     spec("/expand", "Find new competency signals in your documents", "skill files", CommandGroup::Profile, &[], 3),
     spec("/add-portal", "Generate a search skill for a job board", ".agents/skills/", CommandGroup::Profile, &[text("url", "Portal URL")], 3),
     spec("/add-template", "Register a CV or cover letter template", "templates/", CommandGroup::Profile, &[text("path", "Template file path")], 2),
+    spec(
+        "/build-cv",
+        "Build CV PDFs from their .tex files",
+        "cv/*.pdf",
+        CommandGroup::Profile,
+        &[text("name", "CV name, --all, --list, or empty for the master")],
+        1,
+    ),
     CommandSpec {
         destructive: true,
         ..spec(
@@ -293,7 +301,17 @@ mod tests {
 
     #[test]
     fn every_command_is_listed_once_and_only_reset_is_destructive() {
-        assert_eq!(CATALOG.len(), 14);
+        assert_eq!(CATALOG.len(), 15);
         assert!(CATALOG.iter().all(|spec| spec.destructive == (spec.name == "/reset")));
+    }
+
+    #[test]
+    fn build_cv_takes_one_plain_name() {
+        let build = spec_for_line("/build-cv main_x").unwrap();
+        assert_eq!((build.group, build.fields.len(), build.fields[0].flag), (CommandGroup::Profile, 1, None));
+        assert_eq!(compose_line(build, |_| " main_x \n".into()), "/build-cv main_x");
+        assert_eq!(compose_line(build, |_| String::new()), "/build-cv");
+        let profile: Vec<_> = CATALOG.iter().filter(|spec| spec.group == CommandGroup::Profile).map(|spec| spec.name).collect();
+        assert_eq!(profile, ["/setup", "/expand", "/add-portal", "/add-template", "/build-cv", "/reset"]);
     }
 }

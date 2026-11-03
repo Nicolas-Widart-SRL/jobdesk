@@ -16,7 +16,7 @@ Only what is not built yet stays here.
 | --- | --- |
 | [Settings-general.png](../Settings-general.png) | Folder, start screen, notifications. |
 | [Settings-appearance.png](../Settings-appearance.png) | Theme, text size, reduce motion. |
-| [Settings-about.png](../Settings-about.png) | Versions and links. |
+| [Settings-about.png](../Settings-about.png) | Versions, Updates, then Read more: How tasks sign in, What changed, Licences. The PNG predates the How tasks sign in row, which `Settings.html` draws. |
 
 ## Pages
 

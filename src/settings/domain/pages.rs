@@ -265,10 +265,17 @@ const DATA: [&str; 11] = [
     "Run logs and decisions are readable only by your user account. Only tasks send your job search out, through Claude Code. The update check asks GitHub for the latest release, with Jobdesk's version and nothing about your job search. Turn it off in About.",
 ];
 
+/// Who holds the sign-in, on About. Windows keeps the key in Credential Manager, as Providers says.
+const SIGN_IN_HELP: &str = if cfg!(windows) {
+    "Claude Code signs in on its own. Jobdesk keeps only an optional API key, in Credential Manager."
+} else {
+    "Claude Code signs in on its own. Jobdesk keeps only an optional API key, in your keychain."
+};
+
 /// The versions, the updates, the links, then the line on who makes Jobdesk. The switch has a help for on and one for
 /// off, and `drawn_index` keeps the one it shows. Latest version's help says the state of the check, so a search cannot
 /// look through it.
-const ABOUT: [&str; 16] = [
+const ABOUT: [&str; 18] = [
     "This copy",
     "Jobdesk",
     "Version and build, for a bug report.",
@@ -280,6 +287,8 @@ const ABOUT: [&str; 16] = [
     AUTO_CHECK_OFF,
     "Latest version",
     "Read more",
+    "How tasks sign in",
+    SIGN_IN_HELP,
     "What changed",
     "Every release, newest first.",
     "Licences",

@@ -1,6 +1,6 @@
 [package]
 name = "jobdesk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
@@ -17,6 +17,9 @@ resources = ["assets/fonts/*-OFL.txt"]
 out-dir = "target/packages"
 before-packaging-command = "cargo build --release --locked"
 binaries = [{ path = "jobdesk", main = true }]
+
+[package.metadata.packager.macos]
+signing-identity = "-"
 
 [lib]
 path = "src/lib.rs"

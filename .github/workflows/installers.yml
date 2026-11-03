@@ -3,10 +3,10 @@
 # Run it from the Actions tab to build the installers of a branch without a release.
 # A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
 # tag-release.yml has no `quick` input, so a release always tests.
-# The installers are not signed: see the Install section of README.md and the Package section of CONTRIBUTING.md.
-# `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. On Windows that file is
-# the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the sign job
-# of tag-release.yml signs, and only for a release.
+# The Windows installer is not signed. The macOS app is ad-hoc signed but not notarized. See the Install section of README.md and the Package section of CONTRIBUTING.md.
+# `dmg` also holds the ad-hoc signed app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. On Windows
+# that file is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the
+# sign job of tag-release.yml signs, and only for a release.
 name: Installers
 
 on:

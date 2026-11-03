@@ -7,14 +7,31 @@ pub mod ui;
 
 use std::path::Path;
 
-use crate::profile::application::{ProfileEditor, ProfileStore, ProfileView, profile_view};
-use crate::profile::infrastructure::ProfileFiles;
+use crate::profile::application::{CvShelf, ProfileEditor, ProfileStore, ProfileView, cv_shelf, profile_view};
+use crate::profile::infrastructure::{CvFolder, ProfileFiles};
 use crate::shared_kernel::LoadError;
 
 /// Each profile file that exists but cannot be read gives one error, and hides only the topics it feeds.
 pub fn load(root: &Path) -> (ProfileView, Vec<LoadError>) {
     let files = ProfileFiles::in_workspace(root);
     profile_view(&|file| files.read(file))
+}
+
+/// The CV documents of `cv/`, with whether the checkout has `/build-cv` to build them. A folder that cannot be read is
+/// an error, and a missing one is an empty shelf.
+pub fn load_cv(root: &Path) -> Result<CvShelf, LoadError> {
+    let folder = CvFolder::in_workspace(root);
+    folder.list().map(|files| cv_shelf(files, folder.has_build_cv()))
+}
+
+/// Opens one PDF of `cv/` in the system's viewer, when the name still passes the check.
+pub fn open_cv_pdf(root: &Path, name: &str) {
+    CvFolder::in_workspace(root).open_pdf(name);
+}
+
+/// Shows one file of `cv/` in the system's file manager, when the name still passes the check.
+pub fn reveal_cv_file(root: &Path, name: &str) {
+    CvFolder::in_workspace(root).reveal(name);
 }
 
 /// The editor saves one block at a time into the checkout, the only write Jobdesk makes there.
@@ -260,5 +277,53 @@ mod tests {
         let after = fs::read(&file).unwrap();
         assert!(after.starts_with("\u{feff}## Identity\n".as_bytes()), "{:?}", &after[..16]);
         assert_eq!(String::from_utf8(after).unwrap(), before.replacen("Namur, Belgium", "Dinant, Belgium", 1));
+    }
+
+    /// The page key Profile and the dossier give one application's CV PDF, through the tracker's `.tex` path and
+    /// through the conventional name.
+    fn page_keys(root: &Path) -> Vec<(PathBuf, u64)> {
+        let CvShelf::Read { documents, .. } = load_cv(root).unwrap() else { panic!("read") };
+        let profile = documents.iter().find(|doc| doc.stem == "main_acme_lead").and_then(|doc| doc.pdf_document()).unwrap();
+        let mut keys = vec![(profile.path, profile.modified)];
+        for cv_file in ["cv/main_acme_lead.tex", ""] {
+            let reference = crate::dossier::application::ApplicationRef {
+                folder: "acme_lead".into(),
+                company: "Acme Corp".into(),
+                cv_file: cv_file.into(),
+                cover_letter_file: String::new(),
+            };
+            let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 2).unwrap();
+            let dossier = crate::dossier::load_archive(root, &reference, today).documents.remove(0);
+            keys.push((dossier.path, dossier.modified));
+        }
+        keys
+    }
+
+    /// Profile keys a CV's pages as the dossier does, so the PDF renders once and a failure seen in one shows in the other.
+    #[test]
+    fn a_cv_pdf_keys_its_pages_as_the_dossier_does() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("cv")).unwrap();
+        fs::write(dir.path().join("cv/main_acme_lead.tex"), b"x").unwrap();
+        fs::write(dir.path().join("cv/main_acme_lead.pdf"), b"x").unwrap();
+        let keys = page_keys(dir.path());
+        assert_eq!(keys[0].0, dir.path().join("cv/main_acme_lead.pdf"));
+        assert!(keys.iter().all(|key| *key == keys[0]), "{keys:?}");
+    }
+
+    /// The same with the checkout reached through a link, whose resolved path differs from the one both screens name.
+    #[cfg(unix)]
+    #[test]
+    fn a_cv_pdf_keys_its_pages_as_the_dossier_does_through_a_linked_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("checkout");
+        fs::create_dir_all(checkout.join("cv")).unwrap();
+        fs::write(checkout.join("cv/main_acme_lead.tex"), b"x").unwrap();
+        fs::write(checkout.join("cv/main_acme_lead.pdf"), b"x").unwrap();
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(&checkout, &linked).unwrap();
+        let keys = page_keys(&linked);
+        assert_eq!(keys[0].0, linked.join("cv/main_acme_lead.pdf"));
+        assert!(keys.iter().all(|key| *key == keys[0]), "{keys:?}");
     }
 }

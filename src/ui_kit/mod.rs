@@ -4,6 +4,7 @@
 mod controls;
 mod fonts;
 mod marks;
+mod pages;
 mod palette;
 mod surfaces;
 mod text;
@@ -13,6 +14,7 @@ mod tray;
 pub use controls::*;
 pub use fonts::{Face, install_fonts};
 pub use marks::*;
+pub use pages::*;
 pub use palette::{Ink, Palette, Tone, install_theme};
 pub use surfaces::*;
 pub use text::*;

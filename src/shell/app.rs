@@ -336,6 +336,11 @@ impl Shell {
         receiver
     }
 
+    /// Renders PDF pages, for Profile's CV documents and the dossier, through `pages`, for tests.
+    pub fn with_page_store(self, pages: PageStore) -> Self {
+        Self { pages: Some(pages), ..self }
+    }
+
     pub fn open_dossier(&mut self, folder: &str, pages: PageStore) {
         self.pages = Some(pages);
         self.show_dossier(folder.to_owned());
@@ -1028,6 +1033,7 @@ impl Shell {
                         &state(whole),
                         &snapshot.profile,
                         &snapshot.cv_documents,
+                        self.pages.as_mut(),
                         editor,
                         &mut self.marks,
                         moment,
@@ -1036,6 +1042,17 @@ impl Shell {
                 };
                 match asked {
                     Some(ProfileRequest::Saved) => self.read_back_profile(),
+                    // Each checks the name again against `cv/` before the system's program gets the file.
+                    Some(ProfileRequest::OpenPdf(name)) => {
+                        if let Some(workspace) = &self.workspace {
+                            profile::open_cv_pdf(workspace.path(), &name);
+                        }
+                    }
+                    Some(ProfileRequest::Reveal(name)) => {
+                        if let Some(workspace) = &self.workspace {
+                            profile::reveal_cv_file(workspace.path(), &name);
+                        }
+                    }
                     Some(ProfileRequest::Leave) => {
                         if let Some(screen) = self.leave_to.take() {
                             self.screen = screen;

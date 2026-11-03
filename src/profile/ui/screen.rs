@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::profile::application::{
-    BlockKey, CvShelf, Fill, Mark, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UNREADABLE, UpdatedMarks, rail_word,
-    topic_counts,
+    BlockKey, CvShelf, Fill, Mark, PageStore, ProfileEditor, ProfileFile, ProfileView, SectionView, TOPICS, TopicId, TopicView, UNREADABLE, UpdatedMarks,
+    rail_word, topic_counts,
 };
-use crate::profile::ui::cv::cv_paper;
+use crate::profile::ui::cv::{CvScreen, cv_paper};
 use crate::profile::ui::editor::{Answer, Ask, Edit, Hold, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
 use crate::profile::ui::rail::{Pick, UPDATED_HOVER, loading_rail, rail};
 use crate::shared_kernel::visible_text::visible_chars;
@@ -32,12 +32,12 @@ const NO_SECTION: &str = "This topic's section is not in the file. Update with C
 /// The same for a topic `/setup` has no section for.
 const NO_SECTION_BY_HAND: &str = "This topic's section is not in the file, so there is nothing to edit yet.";
 
-/// What stays between frames: the topic or CV documents on paper, the CV document picked by its stem, whether a topic's
-/// empty state shows its command, the rendered Markdown, the one edit on show, and the ask that waits on it.
+/// What stays between frames: the topic or CV documents on paper, the CV document picked and its pages, whether a
+/// topic's empty state shows its command, the rendered Markdown, the one edit on show, and the ask that waits on it.
 #[derive(Default)]
 pub struct ProfileScreen {
     picked: Option<Pick>,
-    cv_picked: Option<String>,
+    cv: CvScreen,
     show_command: bool,
     markdown: CommonMarkCache,
     edit: Option<Edit>,
@@ -91,12 +91,16 @@ pub enum Away {
 }
 
 /// What the screen asks of the shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileRequest {
     /// A block was written, so the profile on show is out of date.
     Saved,
     /// The user dropped their draft to leave for the tab they picked.
     Leave,
+    /// Open this PDF of `cv/`, named as the folder listed it, in the system's viewer.
+    OpenPdf(String),
+    /// Show this file of `cv/`, named as the folder listed it, in Finder or Explorer.
+    Reveal(String),
 }
 
 /// The moment the screen draws in: whether a run works, so Save and Update with Claude… wait, whether Jobdesk is still
@@ -123,7 +127,8 @@ impl Moment {
 
 /// The rail of topics beside the one picked, on paper. Until a topic is picked, the first with something left to fill opens.
 /// A picked topic is open, so its rail mark clears, and picking another leaves it, so its head line goes. The CV documents
-/// row under the topics opens `cv` on paper instead.
+/// row under the topics opens `cv` on paper instead, with the picked document's pages rendered by `pages`, the store the
+/// dossier shares.
 /// One block at a time opens in the editor. Unsaved text asks before it goes, and Save waits while a run works.
 /// Every Claude action and every build only opens the launcher: nothing here starts a run.
 #[allow(clippy::too_many_arguments)]
@@ -133,6 +138,7 @@ pub fn show(
     state: &ScreenState,
     view: &ProfileView,
     cv: &CvShelf,
+    pages: Option<&mut PageStore>,
     editor: &mut ProfileEditor,
     marks: &mut UpdatedMarks,
     moment: Moment,
@@ -202,12 +208,13 @@ pub fn show(
                     });
                 }
                 None => {
-                    ui.push_id("profile cv documents", |ui| cv_paper(ui, cv, &mut screen.cv_picked, moment.busy, moment.now));
+                    let asked = ui.push_id("profile cv documents", |ui| cv_paper(ui, cv, &mut screen.cv, pages, moment.busy, moment.now)).inner;
+                    request = request.take().or(asked);
                 }
             },
         );
         if let (Some(intent), Some(topic)) = (intent, topic) {
-            request = request.or(screen.follow(intent, topic.id, editor, moment));
+            request = request.take().or(screen.follow(intent, topic.id, editor, moment));
         }
         if let Some(next) = chosen.filter(|&next| next != picked) {
             if editor.is_dirty() {

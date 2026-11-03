@@ -8,7 +8,12 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
-Everything else Jobdesk writes stays in its data folder, except Restart to update, which replaces Jobdesk itself. How Save works is in [profile](docs/architecture/profile.md#save).
+Everything else Jobdesk writes stays in its data folder, with two exceptions:
+
+- Restart to update replaces Jobdesk itself.
+- On macOS, a copy that runs from a `.app` bundle writes beside the bundle at each launch. A build with an update key makes and removes a `.Jobdesk.app.probe-<pid>` folder there, to learn whether an update may apply. Every build deletes the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders that a Jobdesk which no longer runs left there. See [Where an update may apply](docs/architecture/trust.md#where-an-update-may-apply).
+
+How Save works is in [profile](docs/architecture/profile.md#save).
 
 ## Features
 

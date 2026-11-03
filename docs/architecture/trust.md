@@ -143,12 +143,12 @@ Each copy checks a download against the update key built into it from `assets/up
 
 ### Where an update may apply
 
-- macOS: only a copy that runs from a `.app` bundle, in a folder where Jobdesk can make a folder beside it. A mounted disk image or a copy macOS moved aside to open cannot.
+- macOS: only a copy that runs from a `.app` bundle, in a folder where Jobdesk can make a folder beside it. A mounted disk image or a copy macOS moved aside to open cannot. A build with an update key checks this at each launch: it makes a `.Jobdesk.app.probe-<pid>` folder beside the bundle and removes it at once.
 - Windows: only a copy with `uninstall.exe` beside it, which the installer puts there.
 - The macOS archive must hold only `Jobdesk.app/`. A path that leaves it, a link that is absolute or climbs with `..`, a path through a link, a hard link or a device refuses the whole archive. Unpacked files drop their set-id bits and group and other write.
 - The new bundle trades places with the old one in one step, with `renamex_np` and `RENAME_SWAP`. Where the disk cannot, the old one moves aside and comes back if the new one does not go in.
 - When Restart to update cannot apply, Jobdesk writes an `apply-failed` note in `updates/` and opens the old copy again while it is still there. The next launch reads the note once. On Windows, once the setup has started, Jobdesk notes nothing more.
-- At launch, `clear_downloads` empties `updates/`, but for that note and the folder of any Jobdesk that still runs. It removes links and never follows them. So a past session's download is never applied. On macOS it also removes what a Restart to update that died partway left beside the bundle.
+- At launch, `clear_downloads` empties `updates/`, but for that note and the folder of any Jobdesk that still runs. It removes links and never follows them. So a past session's download is never applied. On macOS it also deletes, beside the bundle, the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders of a Jobdesk that no longer runs: what a Restart to update or a launch check that died partway left there.
 
 ### Accepted residuals
 

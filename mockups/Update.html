@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Updates in the status bar</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* An update, told in the status bar. Choose with ?state=…&theme=light|dark.
+   available|notes|notes-ready|downloading|ready|ready-busy|failed|bad-signature
+   Grid.html's scoped shell, copied under .ud, so app.css and the other canvases are unchanged. Fictional data only. */
+body { margin: 0; }
+.ud {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; position: relative;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.ud[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.ud .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.ud .num { font-variant-numeric: tabular-nums; }
+
+/* Shell, as Grid.html draws it. */
+.ud .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.ud .menu .brand { margin-right: 0; }
+.ud .menu .brand svg path:last-child { stroke: var(--sheet); }
+.ud .tabs { display: flex; gap: 6px; }
+.ud .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.ud .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.ud .tabs a.on { color: var(--text); font-weight: 600; }
+.ud .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.ud .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.ud .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.ud .newtask .keys { color: var(--muted); }
+.ud .sq { display: inline-block; flex: none; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* The status strip. Left: Claude and tasks. Right: Jobdesk itself, the update group, then Settings. */
+.ud .statusbar { position: relative; flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.ud .statusbar .upd { margin-left: auto; display: flex; align-items: center; gap: 6px; position: relative; }
+.ud .statusbar .sdiv + .sbtn { margin-left: 0; }
+/* status_button, as built: clear at rest, raised while on. */
+.ud .sbtn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: 3px; color: var(--muted); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.ud .sbtn .keys { font: 500 12.5px/1 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.ud .sbtn.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.ud .sbtn.hov { background: var(--panel); }
+/* NEW status_mark_button: a status_button led by a STATUS_DOT square in the update's tone, its words in text ink. */
+.ud .sbtn.mk { gap: 0; color: var(--text); }
+.ud .sbtn.mk.on { font-weight: 500; }
+/* NEW status_action: a plain button at the strip's segment height. card fill, line hairline. The one bordered thing in the strip. */
+.ud .sact { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.ud .sact.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
+/* NEW status_divider: a line hairline between Jobdesk's own group and Settings. */
+.ud .sdiv { flex: none; width: 1px; height: 16px; background: var(--line); }
+/* NEW status_progress: the words, a bar on off, the share done. */
+.ud .sprog { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.ud .sprog .bar { display: block; width: 120px; height: 8px; background: var(--off); }
+.ud .sprog .bar i { display: block; height: 100%; background: var(--text); }
+.ud .stext { white-space: nowrap; }
+.ud .stext.bad { color: var(--closed); }
+
+/* Controls, as UiPass.html draws them. */
+.ud .b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; white-space: nowrap; }
+.ud .b.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.ud .b.pri { background: var(--pri); border-color: var(--pri); color: var(--on-pri); }
+.ud .b.foc { outline: 2px solid var(--active); outline-offset: 1px; }
+.ud .b .kb { color: var(--muted); }
+.ud .lk { display: inline-flex; align-items: center; height: 24px; color: var(--active); font-size: 13px; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; white-space: nowrap; }
+.ud .tip { position: absolute; z-index: 7; max-width: 300px; padding: 6px 9px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); color: var(--text); font-size: 13px; line-height: 1.4; font-weight: 400; white-space: normal; }
+.ud .ptr { position: absolute; z-index: 8; width: 18px; height: 22px; pointer-events: none; }
+
+/* NEW release_notes_popover: egui's popup look, as confirm_popover draws it, opened upward from the strip. */
+.ud .notes { position: absolute; z-index: 6; right: 112px; bottom: 44px; width: 468px; display: flex; flex-direction: column; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); }
+.ud .notes .nh { padding: 14px 18px 12px; border-bottom: 1px solid var(--line); }
+.ud .notes .nh h2 { margin: 0; font: 600 26px/1.15 var(--slab); }
+.ud .notes .nh p { margin-top: 3px; font-size: 13px; color: var(--muted); }
+/* The notes sit on paper, as Claude's documents do, and scroll with their bar shown at rest. */
+.ud .notes .nb { position: relative; height: 288px; overflow: hidden; margin: 12px 18px 0; padding: 4px 22px 12px 16px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ud .notes .nb h3 { margin: 10px 0 4px; font: 600 17px/1.3 var(--slab); }
+.ud .notes .nb ul { margin: 0; padding: 0 0 0 18px; }
+.ud .notes .nb li { margin: 3px 0; line-height: 1.45; }
+.ud .notes .nb li::marker { color: var(--muted); }
+.ud .notes .nb b { font-weight: 600; }
+.ud .notes .nb .alt { color: var(--muted); }
+.ud .notes .nb .bar-y { position: absolute; top: 6px; right: 5px; width: 6px; height: 58%; border-radius: 3px; background: var(--line); }
+.ud .notes .ntrust { margin: 8px 18px 0; font-size: 12.5px; line-height: 1.4; color: var(--faint); }
+.ud .notes .nf { display: flex; align-items: center; gap: 10px; padding: 12px 18px 14px; }
+.ud .notes .nf .r { margin-left: auto; }
+.ud .notes .nf .esc { font-size: 12.5px; color: var(--faint); }
+.ud .notes .nready { margin: 12px 18px 0; padding: 9px 12px; border-radius: 4px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); font-size: 13px; line-height: 1.45; }
+
+/* Today, as Grid.html draws it. */
+.ud .btn { background: var(--card); }
+.ud .btn.pri { background: var(--pri); }
+.ud .bhead { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 32px 14px; }
+.ud .bhead h1 { margin: 0; font: 600 44px/1.05 var(--slab); }
+.ud .bhead .sub { margin-top: 4px; font-size: 15px; color: var(--muted); }
+.ud .stampring { flex: none; width: 84px; height: 84px; }
+.ud .bbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 32px 14px; }
+.ud .split2 { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: stretch; }
+.ud .col-a { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.ud .col-b { flex: 0 0 292px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.ud .tabrow2 { display: flex; align-items: flex-end; }
+.ud .ktab2 { display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 14px; border-radius: 6px 6px 0 0; background: var(--card); box-shadow: inset 1px 1px 0 var(--line), inset -1px 0 0 var(--line); font-weight: 600; color: var(--drafted); }
+.ud .ktab2 .when { font-weight: 500; color: var(--muted); }
+.ud .pos { margin-left: auto; padding: 0 4px 6px; font-size: 13px; color: var(--muted); }
+.ud .card2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-radius: 0 4px 4px 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ud .cbody2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 14px; }
+.ud .cbody2 h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.ud .cfoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 22px 14px; border-top: 1px solid var(--line); }
+.ud .cfoot .why { margin-left: auto; text-align: right; font-size: 13px; color: var(--muted); line-height: 1.4; }
+.ud .cfoot .why a { color: var(--active); }
+.ud .edges i { display: block; height: 5px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 3px 3px; background: var(--raised); }
+.ud .slip2 { border-radius: 4px; background: var(--panel); }
+.ud .slip2 .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.ud .slip2 .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.ud .slip2 .sb { padding: 10px 14px 12px; }
+.ud .ag { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; border-top: 1px solid var(--line); }
+.ud .ag:first-child { border-top: 0; }
+.ud .ag .d2 { font-size: 13px; color: var(--muted); }
+.ud .now { display: inline-block; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; line-height: 20px; }
+.ud .foot { padding-top: 8px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+
+/* Tasks, a run Claude is working on. */
+.ud .phead { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 32px 10px; }
+.ud .phead .acts { margin-left: auto; display: flex; gap: 8px; }
+.ud .cmdline { font: 700 16px/1.3 var(--type); }
+.ud .paperbox { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ud .dband { flex: none; display: grid; grid-template-columns: 1fr 1fr 1.4fr; border-radius: 4px; background: var(--panel); overflow: hidden; }
+.ud .dband .tb { display: flex; flex-direction: column; gap: 1px; padding: 9px 16px 10px; border-left: 1px solid var(--line); }
+.ud .dband .tb:first-child { border-left: 0; }
+.ud .dband .k { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.ud .dband b { font: 600 22px/1.15 var(--slab); }
+.ud .tl { display: flex; gap: 2px; }
+.ud .tl i { display: block; width: 5px; height: 12px; background: var(--off); }
+.ud .tl i.d { background: var(--text); }
+.ud .story { padding: 10px 16px 12px; min-height: 0; overflow: hidden; }
+.ud .story h3 { margin: 0 0 6px; font: 600 17px/1.3 var(--slab); }
+.ud .facts .fr { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
+.ud .facts .fr:first-child { border-top: 0; }
+.ud .fbar { height: 8px; background: var(--off); margin: 2px 0 6px; }
+.ud .fbar i { display: block; height: 100%; width: 37%; background: var(--text); }
+.ud .act { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.ud .act:first-of-type { border-top: 0; }
+.ud .act .t { flex: 0 0 64px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const STATE = (P.get('state') || 'available').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
+const kb = (k) => `<span class="kb">${k}</span>`;
+const SQ = (tone) => `<span class="sq" style="background: var(--${tone})"></span>`;
+
+// ---------- The update group, one per state. ----------
+// mk: status_mark_button, act: status_action, sb: status_button.
+const mk = (tone, t, on) => `<span class="sbtn mk${on ? ' on' : ''}">${SQ(tone)}${t}</span>`;
+const act = (t, dis) => `<span class="sact${dis ? ' dis' : ''}">${t}</span>`;
+const sb = (t) => `<span class="sbtn" style="margin-left: 0">${t}</span>`;
+const GROUP = {
+  available: (o) => mk('text', 'Jobdesk 0.2.0 is out', o.open) + act('Download'),
+  downloading: () => `<span class="sprog"><span>Downloading 0.2.0</span><span class="bar"><i style="width: 38%"></i></span><span class="num">38%, 5.4 of 14.2 MB</span></span>` + sb('Cancel'),
+  ready: (o) => mk('hired', '0.2.0 is downloaded and checked', o.open) + act('Restart to update', o.busy),
+  failed: () => mk('closed', 'Download of 0.2.0 stopped at 41%: the connection dropped') + act('Retry'),
+  bad: () => mk('closed', '0.2.0 failed its signature check. It was deleted, not installed.') + act('Retry'),
+};
+
+function status(group, o = {}) {
+  return `<footer class="statusbar">${o.left || `<span>${SQ('hired')}Claude is ready</span>`}
+    <div class="upd">${group}${o.extra || ''}</div><span class="sdiv"></span>
+    <span class="sbtn">Settings <span class="keys">Cmd ,</span></span></footer>`;
+}
+
+function shell(on, inner, foot, o = {}) {
+  const tabs = [['Today', o.today ?? '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', o.tasks || ''], ['Profile', '']]
+    .map(([t, c]) => `<a class="${t === on ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}</a>`).join('');
+  return `<div class="app ud" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>${foot}${o.over || ''}</div>`;
+}
+
+// ---------- The desk behind: Today, as Grid.html draws it. ----------
+function stamp(total, done) {
+  const ticks = [];
+  for (let i = 0; i < total; i++) {
+    const a = -Math.PI / 2 + (i + 0.5) * (2 * Math.PI / total);
+    const c = (r) => [40 + r * Math.cos(a), 40 + r * Math.sin(a)].map((v) => v.toFixed(1));
+    const [x1, y1] = c(29.5), [x2, y2] = c(36);
+    ticks.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${i < done ? 'var(--text)' : 'var(--off)'}" stroke-width="4.5"/>`);
+  }
+  return `<svg class="stampring" viewBox="0 0 80 80" role="img" aria-label="Saturday 31 October. ${done} of ${total} decided today.">
+    <circle cx="40" cy="40" r="38.5" fill="var(--sheet)"/>${ticks.join('')}
+    <circle cx="40" cy="40" r="38.5" fill="none" stroke="var(--text)"/><circle cx="40" cy="40" r="27" fill="none" stroke="var(--text)"/>
+    <text x="40" y="28" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Sat</text>
+    <text x="40" y="48.5" text-anchor="middle" font-size="24.8" font-weight="600" font-family="Zilla Slab, serif" fill="var(--text)">31</text>
+    <text x="40" y="61" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Oct</text></svg>`;
+}
+function today() {
+  const tally = Array.from({ length: 10 }, (_, i) => `<i class="${i < 3 ? '' : 'off'}"></i>`).join('');
+  return `<header class="bhead">${stamp(10, 3)}<div><h1>7 things need you</h1><div class="sub">About 10 minutes.</div></div></header>
+    <div class="bbody"><div class="split2">
+      <section class="col-a">
+        <div class="tabrow2"><div class="ktab2">Ready to send<span class="when">Deadline in 3 days</span></div><span class="pos num">4 of 10</span></div>
+        <article class="card2">
+          <div class="cbody2"><div class="col" style="gap: 2px"><span class="muted">Harbor Bank</span><h2>Lead Java Engineer</h2><span class="muted">CV and Cover letter compiled</span></div>
+            <p class="take">Send it from your own mail or the portal, then mark it sent.</p></div>
+          <div class="cfoot"><button class="btn pri" type="button">Mark as sent… ${kb('Y')}</button><button class="btn" type="button">Later ${kb('L')}</button>
+            <span class="why">Opens the task that records it as sent. The app never sends for you.<br><a href="#">Show the command</a></span></div>
+        </article>
+        <div class="edges">${[1, 2, 3, 4, 5].map((i) => `<i style="margin-inline: ${i * 5}px"></i>`).join('')}</div>
+      </section>
+      <aside class="col-b">
+        <section class="slip2"><div class="sh">Done today <span class="n num">3 of 10</span></div>
+          <div class="sb"><div class="tally fat" style="margin-bottom: 8px">${tally}</div><p class="muted" style="font-size: 13px">Each decision lands here. U undoes the last one.</p></div></section>
+        <section class="slip2"><div class="sh">Coming up <span class="n">2 weeks</span></div><div class="sb">
+          <div class="ag"><span class="d2">Tue 3</span><span class="trunc">Harbor Bank deadline</span><span class="now">Now</span></div>
+          <div class="ag"><span class="d2">Wed 4</span><span class="trunc">Tessel Group technical interview</span><span></span></div>
+          <div class="ag"><span class="d2">Thu 5</span><span class="trunc">Meridian Rail Systems closes</span><span></span></div>
+          <div class="foot">Nothing else dated before Fri 13 Nov.</div></div></section>
+      </aside></div></div>`;
+}
+
+// ---------- A run Claude is working on, for Restart's disabled state. ----------
+function running() {
+  const tl = '<span class="tl"><i class="d"></i><i class="d"></i><i></i><i></i><i></i></span>';
+  const a = (t, s) => `<div class="act"><span class="t num">${t}</span><span>${s}</span></div>`;
+  return `<header class="phead"><span class="cmdline">/rank --limit 10</span><div class="acts"><button class="btn sm" type="button">Stop run</button></div></header>
+    <div class="bbody" style="gap: 12px">
+      <div class="dband">
+        <div class="tb"><span class="k">Where ${tl}</span><b>2 Score, working</b><span class="muted">4 of 9 postings scored</span></div>
+        <div class="tb"><span class="k">Whose turn</span><b>Claude's</b><span class="muted">Working for 3m 12s</span></div>
+        <div class="tb"><span class="k">What next</span><b>Nothing for you yet</b><span class="muted">Today fills in as it works.</span></div>
+      </div>
+      <div class="split2">
+        <section class="col-a paperbox story"><h3>The run so far</h3>
+          ${a('14:02', 'Read 9 new postings from seen_jobs.json')}
+          ${a('14:03', 'Checked each posting for hidden instructions. None found.')}
+          ${a('14:04', 'Scored Kestrel Payments, Solution Architect: 78')}
+          ${a('14:05', 'Scored Brightwell Energy, Backend Lead: 71')}
+          ${a('14:05', 'Scoring Lumen Telecom, Technical Lead…')}
+        </section>
+        <aside class="col-b"><section class="slip2"><div class="sh">This run</div><div class="sb facts">
+          <div class="fr"><span class="muted">Cost</span><span class="num">$1.12 of $3.00</span></div><div class="fbar"><i></i></div>
+          <div class="fr"><span class="muted">Elapsed</span><span class="num">3m 12s</span></div>
+          <div class="fr"><span class="muted">Model</span><span>Sonnet</span></div></div></section></aside>
+      </div></div>`;
+}
+
+// ---------- The release notes, rendered from the GitHub release body as untrusted text. ----------
+// Source, as git-cliff writes it (fictional):
+//   ### Features
+//   - **settings**: keep run logs for 30 days, 90 days or forever ([#41](https://github.com/…/pull/41))
+//   …
+//   ![The new Data and privacy page](https://…/data.png)
+//   ### Bug fixes …
+// Rendered: headings held to the section size, bold kept, a link as its words in body ink, an image as its alt text.
+const NOTES = `
+  <h3>Features</h3>
+  <ul>
+    <li><b>settings</b>: keep run logs for 30 days, 90 days or forever (#41)</li>
+    <li><b>today</b>: Later can set a card aside until Monday</li>
+    <li><b>tasks</b>: reopen a stopped task with a reply (#44)</li>
+  </ul>
+  <p class="alt" style="margin: 6px 0 0 18px">The new Data and privacy page</p>
+  <h3>Bug fixes</h3>
+  <ul>
+    <li><b>jobs</b>: a cut title shows in full on hover</li>
+    <li><b>profile</b>: Save keeps your draft when the file changed on disk</li>
+    <li><b>shell</b>: the window keeps its size between launches</li>
+    <li><b>settings</b>: search finds Spend at most again</li>
+  </ul>`;
+
+function notes(o = {}) {
+  const head = `<div class="nh"><h2>Jobdesk 0.2.0</h2><p>Released Fri 30 Oct. You have 0.1.0.</p></div>`;
+  const body = `<div class="nb" aria-label="What changed in 0.2.0">${NOTES}<span class="bar-y"></span></div>
+    <p class="ntrust">From the GitHub release. Its links and images do not open here.</p>`;
+  const foot = o.ready
+    ? `<div class="nready">Jobdesk closes, installs 0.2.0 and opens again on this screen, with the same folder and settings. Restart waits while a task runs.</div>
+       <div class="nf"><span class="b pri foc">Restart to update</span><span class="lk">Open the release page</span><span class="esc r">Esc closes</span></div>`
+    : `<div class="nf"><span class="b pri foc">Download 0.2.0</span><span class="muted" style="font-size: 13px">14.2 MB</span><span class="lk r">Open the release page</span></div>
+       <div class="esc" style="padding: 0 18px 12px; margin-top: -6px; font-size: 12.5px; color: var(--faint)">Nothing installs until you choose Restart to update. Esc closes.</div>`;
+  return `<section class="notes" role="dialog" aria-label="Jobdesk 0.2.0">${head}${body}${foot}</section>`;
+}
+
+// ---------- States ----------
+const S = {
+  available: () => shell('Today', today(), status(GROUP.available({}))),
+  notes: () => shell('Today', today(), status(GROUP.available({ open: true })), { over: notes() }),
+  'notes-ready': () => shell('Today', today(), status(GROUP.ready({ open: true })), { over: notes({ ready: true }) }),
+  downloading: () => shell('Today', today(), status(GROUP.downloading())),
+  ready: () => shell('Today', today(), status(GROUP.ready({}))),
+  'ready-busy': () => shell('Tasks', running(), status(GROUP.ready({ busy: true })), {
+    tasks: '', over: `<div class="tip" style="width: 300px">A task is running. Restart once it finishes, so it is not cut off halfway.</div>${ARROW(0, 0)}`,
+  }),
+  failed: () => shell('Today', today(), status(GROUP.failed())),
+  'bad-signature': () => shell('Today', today(), status(GROUP.bad())),
+};
+document.getElementById('root').innerHTML = (S[STATE] || S.available)();
+
+// egui places a popup by its anchor: the notes open upward from the open mark button, their right edges level,
+// and a disabled button's tip sits above it, with the pointer resting on it.
+const app = document.querySelector('.ud');
+const box = app.getBoundingClientRect();
+const pop = app.querySelector('.notes');
+const anchor = app.querySelector('.sbtn.mk.on');
+if (pop && anchor) {
+  const r = anchor.getBoundingClientRect();
+  pop.style.right = `${box.right - r.right}px`;
+  pop.style.bottom = `${box.bottom - r.top + 6}px`;
+}
+const dis = app.querySelector('.sact.dis');
+const tip = app.querySelector(':scope > .tip');
+if (dis && tip) {
+  const r = dis.getBoundingClientRect();
+  tip.style.right = `${box.right - r.right}px`;
+  tip.style.bottom = `${box.bottom - r.top + 10}px`;
+  const ptr = app.querySelector(':scope > .ptr');
+  ptr.style.left = `${r.left + r.width * 0.55}px`;
+  ptr.style.top = 'auto';
+  ptr.style.bottom = `${box.bottom - r.bottom - 8}px`;
+}
+</script>
+</body>
+</html>

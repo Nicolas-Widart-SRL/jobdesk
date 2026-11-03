@@ -61,7 +61,7 @@ The API key has one path: the system keychain, then the environment of that task
 ### Masking
 
 - Each line a task's process prints on stdout has the whole key it was given replaced by the mask, before the run log and the events see it. So does its failure from stderr.
-- The mask's dots and `sk-ant-` hold no quote or backslash, but for a long key its last four characters are the key's own. So a stream-json line stays JSON for a key with no `"` or `\` in it. `ApiKey::parse` does not reject those two, as it accepts any visible ASCII.
+- The mask's dots and `sk-ant-` hold no quote or backslash, but for a long key its last four characters are the key's own. So a stream-json line stays JSON only when the key holds no `"` or `\` and appears only inside JSON strings, as any `sk-ant-` key does. `ApiKey::parse` checks neither, as it accepts any visible ASCII: a key such as `1234567890123` can match a bare number, and its mask would break the line.
 - Test connection's error, what Claude Code said, renders as plain text with hidden characters removed and the key masked wherever it appears, cut to 8 lines and 500 characters.
 - A part of the key, or the key encoded some other way, is not caught.
 

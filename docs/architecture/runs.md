@@ -7,7 +7,9 @@ This page covers a task's `claude` processes: how one starts, stops and signs in
 A run's `claude -p` child process speaks the stream-json protocol over stdin and stdout. A run has at most one process at a time, but not always the same one:
 
 - A reply while the run's process is up goes to that process.
-- A reply to a finished run starts a new process, which resumes the same Claude session with `--resume`.
+- A reply to a run whose process has ended starts a new process, which resumes the same Claude session with `--resume`. A process ends when it exits or fails, or when the user presses End session or Force stop. Stop run only sends an interrupt, and does not end the process.
+
+Jobdesk drives each process like this:
 
 - A supervisor thread owns the child, and a reader thread turns stdout lines into domain events.
 - The UI thread applies them once per frame through `RunDesk::poll`.

@@ -181,6 +181,11 @@ mod tests {
         let answers: [ServiceEvent; 1] = wait(&mut service).try_into().unwrap();
         let [ServiceEvent::Checked(Ok(found))] = answers else { panic!("{answers:?}") };
         assert_eq!(found.version, Version { major: 0, minor: 2, patch: 0 });
+        // The worker repaints after it sends, so wait for that call.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while repaints.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
+            thread::yield_now();
+        }
         assert_eq!(repaints.load(Ordering::SeqCst), 1);
         assert!(!data.path().join("updates").exists(), "a check writes nothing");
     }

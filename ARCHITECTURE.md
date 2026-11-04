@@ -117,7 +117,7 @@ PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no P
 
 Posting text, notes and reports are third-party or generated data. Screens render them as plain text, and a link opens only on click and only for `http` or `https`.
 Claude's replies and prep packs render as Markdown with no image loading.
-The API key goes only from the system keychain into the environment of a `claude` process, and the whole key is masked in what that process prints.
+The API key goes only from the system keychain, read once per launch, until a read succeeds, and held in memory, into the environment of a `claude` process, and the whole key is masked in what that process prints.
 By default `RunDesk` allows tool permissions and records them in the activity, and Settings › Permissions turns prompts on.
 An update downloads only over https from addresses built from its version, and applies only when its signature checks against the key built into Jobdesk.
 

@@ -11,8 +11,8 @@ use crate::shared_kernel::placeholders::Piece;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{
-    danger_button, dialog_open, enabled_when, field_in, interactive, interactive_part, interactive_row, link, paint_pick_edge, pick_look,
-    plain_shortcut_button, pointer_over, pressed, primary_button, reveal_command,
+    SweepForm, danger_button, dialog_open, enabled_when, field_in, interactive, interactive_part, interactive_row, link, live_sweep, paint_pick_edge,
+    pick_look, plain_shortcut_button, pointer_over, pressed, primary_button, reveal_command,
 };
 use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
@@ -25,7 +25,7 @@ use crate::ui_kit::tokens::{
     CHECK_BOX, CODE_PADDING, DEAL_FOOT_PADDING, DEAL_PADDING, DISABLED_OPACITY, DOC_MEASURE, EDITOR_GAP, EDITOR_PADDING, EDITOR_ROWS, EDITOR_ROWS_CHANGED,
     EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_INLINE_NUMBER, FIELD_PADDING, FIGURE_BAR_MARGIN,
     FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING,
-    HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, NODE_ARROW, NODE_GAP, NODE_PADDING,
+    HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, MARK_RULE, NODE_ARROW, NODE_GAP, NODE_PADDING,
     NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD,
     RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
     SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
@@ -1771,6 +1771,19 @@ fn painted(ui: &Ui, id: egui::Id, at: Pos2, galley: Arc<Galley>, under: Color32,
 /// Labels, values and notes line up across the cells. When `compact`, each cell is one line, label then value, with no note.
 /// `group_label` names the band and `tally_label` its tally for screen readers.
 pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label: &str, tally_label: &str) -> Response {
+    turn_band_live(ui, cells, compact, group_label, tally_label, None)
+}
+
+/// A turn band with a live run's signal: `sweep` puts `live_sweep` in its form, `seconds` into its sweep,
+/// along the bottom edge of the cell at its index, the Whose turn cell. The caller schedules the frames, by `sweep_moves`.
+pub fn turn_band_live(
+    ui: &mut Ui,
+    cells: &[BandCell; 3],
+    compact: bool,
+    group_label: &str,
+    tally_label: &str,
+    sweep: Option<(usize, SweepForm, f64)>,
+) -> Response {
     let p = Palette::of(ui);
     let width = ui.available_width();
     let parts: f32 = BAND_COLUMNS.iter().sum();
@@ -1856,8 +1869,21 @@ pub fn turn_band(ui: &mut Ui, cells: &[BandCell; 3], compact: bool, group_label:
         if index > 0 {
             ui.painter().rect_filled(Rect::from_min_size(cell_rect.left_top(), vec2(HAIRLINE, rect.height())), 0.0, p.line);
         }
+        if let Some((_, form, seconds)) = sweep.filter(|&(at, ..)| at == index) {
+            live_sweep(ui, Rect::from_min_max(pos2(cell_rect.left(), cell_rect.bottom() - MARK_RULE), cell_rect.right_bottom()), form, seconds);
+        }
     }
     response
+}
+
+/// Gives the note of the band's cell at `index` other words for screen readers than it shows, such as a note that
+/// counts the seconds: it is then read the same until the words change. A compact band has no note, so nothing changes.
+pub fn band_note_spoken(ui: &Ui, band: &Response, index: usize, spoken: &str) {
+    let id = band.id.with(index).with("note");
+    if ui.ctx().has_accesskit_node(id) {
+        // A label's words are its node's value.
+        ui.ctx().accesskit_node_builder(id, |node| node.set_value(spoken));
+    }
 }
 
 /// One plain line for a step: its knot, its name, one sentence and an optional toggle on the right, such as "Show 3 actions".

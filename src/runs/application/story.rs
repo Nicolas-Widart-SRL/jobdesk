@@ -1,5 +1,7 @@
+use std::time::{Duration, Instant};
+
 use crate::runs::application::{closing_question, command_word, first_filled_line, first_line, last_line, stop_point, wants_reply};
-use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Run, RunStatus, ToolState, phrases_for, stop_points};
+use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Quiet, Run, RunStatus, ToolState, phrases_for, quiet, stop_points};
 use crate::shared_kernel::visible_text::visible_chars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,16 @@ pub struct BandText {
     pub tone: BandTone,
 }
 
+/// What the Whose turn cell's bottom edge shows while it is Claude's turn: a sweep that slows when the run is quiet,
+/// and a still rule once it is long quiet or stopping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sweep {
+    Working,
+    Quiet,
+    LongQuiet,
+    Stopping,
+}
+
 /// The three cells at the top of a run: where it is, whose turn it is and what to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Band {
@@ -48,6 +60,25 @@ pub struct Band {
     /// One mark per step, empty for a command without a rail.
     pub marks: Vec<StepState>,
     pub tally: String,
+    /// The live run's signal on the Whose turn cell, only while it is Claude's turn.
+    pub sweep: Option<Sweep>,
+    /// What a screen reader hears for the Whose turn cell while its note counts the seconds.
+    /// It names the quiet state, not the count, so it changes only when the state does.
+    pub who_spoken: Option<String>,
+}
+
+/// The cells, and the live signal of the Whose turn cell.
+struct Cells {
+    place: BandText,
+    who: BandText,
+    next: BandText,
+    sweep: Option<Sweep>,
+    who_spoken: Option<String>,
+}
+
+/// Cells with no live signal: it is not Claude's turn.
+fn still(place: BandText, who: BandText, next: BandText) -> Cells {
+    Cells { place, who, next, sweep: None, who_spoken: None }
 }
 
 /// The state of every step of the rail, or `None` for a command without one.
@@ -162,12 +193,13 @@ pub fn action_noun(count: usize) -> &'static str {
     if count == 1 { "action" } else { "actions" }
 }
 
-pub fn band(run: &Run) -> Band {
+/// The band at `now`, which sets how long the run has been quiet.
+pub fn band(run: &Run, now: Instant) -> Band {
     let states = step_states(run);
     let done = states.iter().flatten().filter(|state| **state == StepState::Done).count();
     let tally = states.as_ref().map(|states| format!("{done} of {} steps done", states.len())).unwrap_or_default();
-    let (place, who, next) = cells(run, done);
-    Band { place, who, next, marks: states.unwrap_or_default(), tally }
+    let Cells { place, who, next, sweep, who_spoken } = cells(run, done, now);
+    Band { place, who, next, marks: states.unwrap_or_default(), tally, sweep, who_spoken }
 }
 
 fn say(value: &str, note: &str, tone: BandTone) -> BandText {
@@ -193,7 +225,7 @@ fn what_is_asked(prompt: &Prompt) -> String {
     if asked.is_empty() { "Answer Claude's question".to_owned() } else { asked }
 }
 
-fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
+fn cells(run: &Run, done: usize, now: Instant) -> Cells {
     use BandTone::{Claude, Failed, Plain, Yours};
     let rail = run.steps.as_ref();
     let nobody = |note: &str| say("Nobody", note, Plain);
@@ -203,9 +235,9 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
             // A stderr tail ends on its error. A turn's result text opens with it.
             let reason = if run.failed_on_stderr { last_line(reason) } else { first_filled_line(reason) };
             let reason = if reason.is_empty() { "The run ended with an error." } else { &reason };
-            (say(&where_value(run, ", failed"), "", Failed), nobody(reason), resume)
+            still(say(&where_value(run, ", failed"), "", Failed), nobody(reason), resume)
         }
-        RunStatus::Stopped => (say(&where_value(run, ", stopped"), "", Plain), nobody("You stopped this run"), resume),
+        RunStatus::Stopped => still(say(&where_value(run, ", stopped"), "", Plain), nobody("You stopped this run"), resume),
         RunStatus::Closed => match rail {
             Some(rail) if rail.is_complete() => {
                 let finished = command_word(&run.line) == "/apply";
@@ -214,18 +246,20 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
                 } else {
                     say("Nothing for now", "Reply to resume this session.", Plain)
                 };
-                (say(&format!("All {} steps", rail.labels.len()), "", Plain), nobody("The session is closed"), next)
+                still(say(&format!("All {} steps", rail.labels.len()), "", Plain), nobody("The session is closed"), next)
             }
             Some(_) => {
                 let place = if current_step_finished(run) { where_value(run, ", done") } else { where_value(run, "") };
-                (say(&place, "", Plain), nobody("The session is closed"), say("Reply to resume", "", Plain))
+                still(say(&place, "", Plain), nobody("The session is closed"), say("Reply to resume", "", Plain))
             }
-            None => (say(&where_value(run, ""), "", Plain), nobody("The session is closed"), say("Nothing for now", "Reply to resume this session.", Plain)),
+            None => {
+                still(say(&where_value(run, ""), "", Plain), nobody("The session is closed"), say("Nothing for now", "Reply to resume this session.", Plain))
+            }
         },
         _ if run.needs_user() => {
             let place_note = if rail.is_some() { "Paused inside the step" } else { "" };
             let asked = run.current_prompt().map(what_is_asked).unwrap_or_default();
-            (say(&where_value(run, ""), place_note, Plain), say("Yours", "Claude asked", Yours), say(&asked, "The choices are right below.", Plain))
+            still(say(&where_value(run, ""), place_note, Plain), say("Yours", "Claude asked", Yours), say(&asked, "The choices are right below.", Plain))
         }
         RunStatus::AwaitingReply if !run.is_busy() && !wants_reply(run) => {
             let place = match rail {
@@ -233,7 +267,7 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
                 _ if current_step_finished(run) => where_value(run, ", done"),
                 _ => where_value(run, ", paused"),
             };
-            (say(&place, "", Plain), nobody("Claude is done for now"), say("Reply to continue", "Or end the session.", Plain))
+            still(say(&place, "", Plain), nobody("Claude is done for now"), say("Reply to continue", "Or end the session.", Plain))
         }
         RunStatus::AwaitingReply if !run.is_busy() => {
             let (place, place_note) = match (stop_point(run), rail) {
@@ -248,22 +282,73 @@ fn cells(run: &Run, done: usize) -> (BandText, BandText, BandText) {
             } else {
                 say("Reply to continue", "Or end the session.", Plain)
             };
-            (say(&place, &place_note, Plain), say("Yours", "Claude stopped", Yours), next)
+            still(say(&place, &place_note, Plain), say("Yours", "Claude stopped", Yours), next)
         }
         status => {
-            let starting = *status == RunStatus::Starting;
-            let stopping = *status == RunStatus::Stopping;
-            let (place_note, who_note, next_note) = match (starting, stopping, rail) {
-                (true, _, _) => ("Starting the CLI".to_owned(), "", ""),
-                (_, true, Some(rail)) => (format!("{done} of {} steps done", rail.labels.len()), "Stopping", ""),
-                (_, true, None) => (String::new(), "Stopping", ""),
-                (_, _, Some(rail)) => {
-                    (format!("{done} of {} steps done", rail.labels.len()), "Claude is working", "You can leave. The Tasks tab marks it when it needs you.")
-                }
-                (_, _, None) => (String::new(), "Claude is working", "You can leave. The Tasks tab marks it when it needs you."),
+            let counted = rail.map(|rail| format!("{done} of {} steps done", rail.labels.len())).unwrap_or_default();
+            let quiet = quiet(run.last_heard.map_or(Duration::ZERO, |heard| now.saturating_duration_since(heard)));
+            let moving = match quiet {
+                Quiet::Fresh(_) => Sweep::Working,
+                Quiet::Quiet(_) => Sweep::Quiet,
+                Quiet::Long(_) => Sweep::LongQuiet,
             };
-            (say(&where_value(run, ""), &place_note, Plain), say("Claude's", who_note, Claude), say("Nothing for now", next_note, Plain))
+            let (place_note, who_note, next_note, sweep, who_spoken) = match status {
+                RunStatus::Starting => ("Starting the CLI".to_owned(), "Starting Claude Code".to_owned(), "", moving, None),
+                RunStatus::Stopping => (counted, "Stopping".to_owned(), "", Sweep::Stopping, None),
+                _ => {
+                    let next_note = match quiet {
+                        Quiet::Long(_) => "Long writes can be quiet. Stop run keeps the files so far.",
+                        _ => "You can leave. The Tasks tab marks it when it needs you.",
+                    };
+                    (counted, quiet_note(quiet), next_note, moving, Some(quiet_spoken(quiet)))
+                }
+            };
+            Cells {
+                place: say(&where_value(run, ""), &place_note, Plain),
+                who: say("Claude's", &who_note, Claude),
+                next: say("Nothing for now", next_note, Plain),
+                sweep: Some(sweep),
+                who_spoken,
+            }
         }
+    }
+}
+
+/// How long since the stream last said anything: "Last update 3s ago", "No update for 48s", then whole minutes.
+fn quiet_note(quiet: Quiet) -> String {
+    match quiet {
+        Quiet::Fresh(since) => format!("Last update {}s ago", since.as_secs()),
+        Quiet::Quiet(since) => format!("No update for {}s", since.as_secs()),
+        Quiet::Long(since) => format!("No update for {} min", since.as_secs() / 60),
+    }
+}
+
+/// The Whose turn cell for a screen reader: the quiet state, without the count that changes each second.
+fn quiet_spoken(quiet: Quiet) -> String {
+    let state = match quiet {
+        Quiet::Fresh(_) => "Last update under 30 seconds ago",
+        Quiet::Quiet(_) => "No update for over 30 seconds",
+        Quiet::Long(_) => "No update for over 2 minutes",
+    };
+    format!("Claude's turn. {state}")
+}
+
+/// "About $1.24 of $10.00" while part of the cost is an estimate, then "$1.24 of $10.00".
+pub fn cost_text(run: &Run) -> String {
+    let cost = run.shown_cost();
+    let about = if cost.estimated { "About " } else { "" };
+    format!("{about}${:.2} of ${:.2}", cost.usd, run.budget_usd)
+}
+
+/// The line under the cost while it reads About, or `None` when it is exact.
+/// The estimate of a process that ended without its result never turns exact, so the line does not promise it will.
+pub fn cost_note(run: &Run) -> Option<&'static str> {
+    if !run.shown_cost().estimated {
+        None
+    } else if run.keeps_an_ended_estimate() {
+        Some("Includes an estimate: a session ended without its final cost.")
+    } else {
+        Some("Estimated until Claude's turn ends.")
     }
 }
 
@@ -291,18 +376,26 @@ fn strip_root<'a>(path: &'a str, root: &str) -> Option<&'a str> {
     path.strip_prefix(root)
 }
 
+/// "0:45" and "14:20" under an hour, "1:02:05" from there.
 pub fn elapsed_text(ms: u64) -> String {
     let seconds = ms / 1000;
-    match seconds / 60 {
-        0 => format!("{seconds}s"),
-        minutes => format!("{minutes}m {}s", seconds % 60),
-    }
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 { format!("{hours}:{minutes:02}:{seconds:02}") } else { format!("{minutes}:{seconds:02}") }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::domain::{AgentEvent, Question, RunRequest};
+    use crate::runs::domain::{AgentEvent, Question, RunRequest, Tokens};
+
+    /// The band of a run that has not been quiet: these tests are about the cells, not the time.
+    fn band(run: &Run) -> Band {
+        super::band(run, run.last_heard.unwrap_or_else(Instant::now))
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
 
     fn run(line: &str) -> Run {
         Run::new(&RunRequest {
@@ -371,19 +464,96 @@ mod tests {
     fn starting_reads_nothing_for_now() {
         let band = band(&run("/apply x"));
         assert_eq!(band.place, cell("0 Fetch", "Starting the CLI", BandTone::Plain));
-        assert_eq!(band.who, cell("Claude's", "", BandTone::Claude));
+        assert_eq!(band.who, cell("Claude's", "Starting Claude Code", BandTone::Claude));
         assert_eq!(band.next, cell("Nothing for now", "", BandTone::Plain));
         assert_eq!(band.tally, "0 of 7 steps done");
+        assert_eq!(band.sweep, Some(Sweep::Working), "the sweep runs from the start");
     }
 
     #[test]
     fn working_counts_the_steps_done() {
-        let band = band(&at_draft_working());
+        let mut run = at_draft_working();
+        let heard = Instant::now();
+        run.heard(heard);
+        let band = super::band(&run, heard + secs(3));
         assert_eq!(band.place, cell("2 Draft", "2 of 7 steps done", BandTone::Plain));
-        assert_eq!(band.who, cell("Claude's", "Claude is working", BandTone::Claude));
+        assert_eq!(band.who, cell("Claude's", "Last update 3s ago", BandTone::Claude));
         assert_eq!(band.next, cell("Nothing for now", "You can leave. The Tasks tab marks it when it needs you.", BandTone::Plain));
         assert_eq!(band.tally, "2 of 7 steps done");
         assert_eq!(band.marks[..4], [StepState::Done, StepState::Done, StepState::Working, StepState::Next]);
+        assert_eq!(band.sweep, Some(Sweep::Working));
+    }
+
+    #[test]
+    fn a_quiet_run_says_for_how_long() {
+        let mut run = at_draft_working();
+        let heard = Instant::now();
+        run.heard(heard);
+        let quiet = super::band(&run, heard + secs(48));
+        assert_eq!(quiet.who, cell("Claude's", "No update for 48s", BandTone::Claude));
+        assert_eq!(quiet.next.note, "You can leave. The Tasks tab marks it when it needs you.");
+        assert_eq!(quiet.sweep, Some(Sweep::Quiet));
+        let long = super::band(&run, heard + secs(199));
+        assert_eq!(long.who, cell("Claude's", "No update for 3 min", BandTone::Claude), "whole minutes");
+        assert_eq!(long.next, cell("Nothing for now", "Long writes can be quiet. Stop run keeps the files so far.", BandTone::Plain));
+        assert_eq!(long.sweep, Some(Sweep::LongQuiet));
+    }
+
+    #[test]
+    fn the_spoken_cell_changes_only_with_the_quiet_state() {
+        let mut run = at_draft_working();
+        let heard = Instant::now();
+        run.heard(heard);
+        let spoken = |after: u64| super::band(&run, heard + secs(after)).who_spoken;
+        assert_eq!(spoken(3).as_deref(), Some("Claude's turn. Last update under 30 seconds ago"));
+        assert_eq!(spoken(3), spoken(29));
+        assert_eq!(spoken(30).as_deref(), Some("Claude's turn. No update for over 30 seconds"));
+        assert_eq!(spoken(30), spoken(119));
+        assert_eq!(spoken(120).as_deref(), Some("Claude's turn. No update for over 2 minutes"));
+        assert_eq!(spoken(120), spoken(600));
+    }
+
+    #[test]
+    fn only_claudes_turn_has_a_sweep() {
+        assert_eq!(band(&at_the_stop()).sweep, None, "a stop point");
+        let mut asking = at_draft_working();
+        asks(&mut asking, "Pick a CV template");
+        assert_eq!(band(&asking).sweep, None, "a question");
+        let mut done = started("/rank");
+        ends_turn(&mut done);
+        assert_eq!(band(&done).sweep, None, "done for now");
+        assert_eq!(band(&done).who_spoken, None);
+    }
+
+    #[test]
+    fn the_cost_says_about_while_it_is_an_estimate() {
+        let mut run = started("/rank");
+        assert_eq!(cost_text(&run), "$0.00 of $1.00");
+        let tokens = Tokens { output: 40_000, ..Tokens::default() };
+        run.apply(AgentEvent::MessageUsage { id: "m1".into(), model: "claude-opus-4-5".into(), tokens });
+        assert_eq!(cost_text(&run), "About $1.00 of $1.00");
+        ends_turn(&mut run);
+        assert_eq!(cost_text(&run), "$0.50 of $1.00", "the result replaces the estimate");
+    }
+
+    #[test]
+    fn the_cost_note_says_what_the_estimate_holds() {
+        let used = |run: &mut Run, id: &str| {
+            let tokens = Tokens { output: 4_000, ..Tokens::default() };
+            run.apply(AgentEvent::MessageUsage { id: id.into(), model: "claude-opus-4-5".into(), tokens });
+        };
+        let mut run = started("/rank");
+        assert_eq!(cost_note(&run), None, "an exact cost");
+        used(&mut run, "m1");
+        assert_eq!(cost_note(&run), Some("Estimated until Claude's turn ends."), "a live turn");
+        run.apply(AgentEvent::ProcessExited { failure: Some("killed".into()) });
+        run.note_reply("again");
+        run.note_process_start(crate::shared_kernel::SignIn::ClaudeSignIn);
+        ends_turn(&mut run);
+        assert!(cost_text(&run).starts_with("About "), "{}", cost_text(&run));
+        assert_eq!(cost_note(&run), Some("Includes an estimate: a session ended without its final cost."));
+        used(&mut run, "m2");
+        assert_eq!(cost_note(&run), Some("Includes an estimate: a session ended without its final cost."), "the part that never turns exact wins");
     }
 
     fn at_draft_working() -> Run {
@@ -495,6 +665,7 @@ mod tests {
         assert_eq!(band.place, cell("2 Draft", "2 of 7 steps done", BandTone::Plain));
         assert_eq!(band.who, cell("Claude's", "Stopping", BandTone::Claude));
         assert_eq!(band.next, cell("Nothing for now", "", BandTone::Plain));
+        assert_eq!(band.sweep, Some(Sweep::Stopping));
         assert_eq!(step_states(&run).unwrap()[2], StepState::Working);
     }
 
@@ -727,7 +898,10 @@ mod tests {
 
     #[test]
     fn elapsed_text_reads_minutes_and_seconds() {
-        assert_eq!(elapsed_text(45_000), "45s");
-        assert_eq!(elapsed_text(860_000), "14m 20s");
+        assert_eq!(elapsed_text(0), "0:00");
+        assert_eq!(elapsed_text(45_000), "0:45");
+        assert_eq!(elapsed_text(860_000), "14:20");
+        assert_eq!(elapsed_text(3_599_999), "59:59");
+        assert_eq!(elapsed_text(3_725_000), "1:02:05");
     }
 }

@@ -2,6 +2,18 @@
 
 All notable changes to this project are listed here.
 <!-- git-cliff: end of header -->
+## [0.3.0] - 2026-11-04
+
+### Features
+
+- *(runs)* Show a task is running, with live Elapsed and Cost (#48)
+- *(updates)* Check for, download and apply signed updates (#47)
+
+### Bug fixes
+
+- *(runs)* Ignore the exit of a closed session (#45)
+- *(settings)* Read the API key from the keychain once per launch (#46)
+
 ## [0.2.0] - 2026-11-03
 
 ### Features

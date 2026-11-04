@@ -28,6 +28,8 @@ const NOT_YET: &str = "Not available yet.";
 /// Why a test waits for one the page no longer shows: of the other method, or one the user turned away from.
 const OTHER_TEST: &str = "Another test is still finishing.";
 const BLANK: &str = "Paste a key first.";
+/// While a task's start reads the keychain, perhaps behind its prompt, the page does not know yet whether a key is saved.
+const KEYCHAIN_WAIT: &str = "Waiting for the keychain…";
 const TEST: &str = "Test connection";
 const USE_FOR_TASKS: &str = "Use for tasks";
 const NO_TASK_YET: &str = "The sign-in each task uses shows here after your first task. Claude Code reports it itself.";
@@ -528,6 +530,10 @@ fn key_detail(
     detail_head(ui, title, tag);
     let in_use = in_use == SignIn::ApiKey;
     match providers.saved().clone() {
+        // No action until the keychain answers, so a key saved there is never replaced unseen, and nothing writes the keychain
+        // while a task's read waits on its prompt. A failure from before that read may no longer be the answer.
+        Saved::NotRead => keychain_wait(ui),
+        Saved::Unreadable(_) if providers.keychain_busy() => keychain_wait(ui),
         Saved::Present(mask) if !screen.replacing => match providers.key_failure().cloned() {
             // A test of the key that runs again shows as running, not as the failure before it.
             Some(failure) if providers.testing() != Some(TestTarget::Key) => failed_key(ui, screen, settings, providers, view, &mask, &failure),
@@ -537,6 +543,10 @@ fn key_detail(
         _ => key_entry(ui, screen, settings, providers, view),
     }
     problem_line(ui, screen);
+}
+
+fn keychain_wait(ui: &mut Ui) {
+    ui.add(Label::new(rich(ui, KEYCHAIN_WAIT, Type::BODY, Ink::Muted)).wrap());
 }
 
 /// The field to paste a key, Save key, Cancel and the way to the Console. Save key writes the key to the keychain and

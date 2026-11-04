@@ -59,6 +59,8 @@ const SETTINGS_KEYS: [&str; 2] = command_chord(",");
 /// How long Save waits after a run for the snapshot worker's next load. Past it, Jobdesk reads the profile itself, so a
 /// worker that died cannot hold Save off.
 const RUN_READ_WAIT: Duration = Duration::from_secs(5);
+/// How often Providers looks again while a task's start reads the keychain, perhaps behind its prompt.
+const KEYCHAIN_LOOK_AGAIN: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -136,7 +138,7 @@ pub struct Shell {
     settings: Settings,
     /// The Permissions setting the desk last took. A change reaches the desk once, on the frame after it is made.
     permissions: PermissionMode,
-    /// How tasks sign in, the saved key and Test connection. The keychain is read once, when Providers first shows.
+    /// How tasks sign in, the saved key and Test connection. The keychain is read once per launch, until a read succeeds, and the key then held in memory.
     providers: Providers,
     /// The sign-in the desk last took. A change reaches the desk once, as Permissions does.
     sign_in: SignIn,
@@ -369,7 +371,7 @@ impl Shell {
     /// The tool check starts at launch, so the first run can say whether Claude Code is installed.
     /// It only asks each tool for its version, on a worker thread.
     /// The preferences reach the window here, before the first frame, and after that only when one changes.
-    /// The system keychain is reached from here alone, and nothing reads it until Providers shows or a task starts.
+    /// The system keychain is reached from here alone, and nothing reads it until Providers shows, a test runs or a task starts on the key.
     fn start(ctx: &egui::Context, path: Option<PathBuf>, data: Option<PathBuf>) -> Self {
         let repaint = ctx.clone();
         let environment = workspace::environment_checks(Arc::new(move || repaint.request_repaint()));
@@ -424,7 +426,7 @@ impl Shell {
                 self.usage_due = 0;
                 if let Some(data) = &self.data {
                     let repaint = ctx.clone();
-                    // Each task's process reads the key through this, from the keychain, as it starts.
+                    // Each task's process gets the key through this as it starts: the one held in memory, or the keychain's on the first read.
                     let mut desk = runs::open_desk(root.path(), data.join("runs"), Arc::new(move || repaint.request_repaint()), self.providers.key_reader());
                     self.permissions = self.settings.preferences().permissions;
                     desk.set_asks_permission(self.permissions.asks());
@@ -1198,7 +1200,8 @@ impl Shell {
             None if checking => ClaudeVersion::Checking,
             None => ClaudeVersion::NotFound,
         };
-        // The keychain is read once, on the first frame Providers shows, never at launch and never again after.
+        // The mask is read on the first frame Providers shows, never at launch. It asks the keychain only when no test or task asked it yet,
+        // and never waits on a read a task's start has under way. Each later frame only picks up a key read since a failed read, or one under way.
         if self.settings_screen.page() == Page::Providers {
             self.providers.read_once();
         }
@@ -1263,9 +1266,13 @@ impl Shell {
         }
         let ctx = ui.ctx().clone();
         // Providers picked this frame drew before the read, so it reads now and draws again.
-        if self.settings_screen.page() == Page::Providers && self.providers.saved() == &Saved::NotRead {
-            self.providers.read_once();
-            ctx.request_repaint();
+        // While a task's start reads the keychain, it looks again a little later instead of waiting on that prompt.
+        if self.settings_screen.page() == Page::Providers && (self.providers.saved() == &Saved::NotRead || self.providers.keychain_busy()) {
+            if self.providers.read_once() {
+                ctx.request_repaint_after(KEYCHAIN_LOOK_AGAIN);
+            } else {
+                ctx.request_repaint();
+            }
         }
         match asked {
             Some(SettingsRequest::Back) => {

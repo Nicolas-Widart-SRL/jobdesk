@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FEATURES: [&str; 9] = ["discovery", "dossier", "insights", "intray", "profile", "runs", "settings", "tracking", "workspace"];
-const IMPURE: [&str; 10] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit", "keyring"];
+const FEATURES: [&str; 10] = ["discovery", "dossier", "insights", "intray", "profile", "runs", "settings", "tracking", "updates", "workspace"];
+const IMPURE: [&str; 12] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit", "keyring", "ureq", "minisign"];
 const APPEARANCE: [&str; 15] = [
     "Color32",
     "Palette",

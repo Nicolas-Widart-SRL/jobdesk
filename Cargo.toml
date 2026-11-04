@@ -29,6 +29,7 @@ name = "jobdesk"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 csv = "1"
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "persistence", "wgpu", "wayland", "x11"] }
@@ -37,15 +38,21 @@ egui_commonmark = { version = "0.26", default-features = false }
 egui_extras = "0.37"
 hayro = "0.8"
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native"] }
+minisign-verify = "0.2"
 notify = "8"
 pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

@@ -89,6 +89,24 @@ impl StartScreen {
     }
 }
 
+/// Whether Jobdesk looks for a new version by itself, at launch and about every 6 hours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoCheck {
+    #[default]
+    On,
+    Off,
+}
+
+impl AutoCheck {
+    pub fn is_on(self) -> bool {
+        self == AutoCheck::On
+    }
+
+    pub fn from_on(on: bool) -> Self {
+        if on { AutoCheck::On } else { AutoCheck::Off }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Preferences {
     pub theme: ThemeChoice,
@@ -104,6 +122,7 @@ pub struct Preferences {
     pub key_test: Option<KeyTest>,
     pub queue: TodayQueue,
     pub jobs_view: JobFilters,
+    pub check_updates: AutoCheck,
 }
 
 pub trait PreferencesStore {
@@ -154,5 +173,13 @@ mod tests {
         assert_eq!(preferences.key_test, None);
         assert_eq!(preferences.queue, TodayQueue::default());
         assert_eq!(preferences.jobs_view, JobFilters::default());
+        assert_eq!(preferences.check_updates, AutoCheck::On, "Jobdesk looks for updates until the user switches it off");
+    }
+
+    #[test]
+    fn the_update_switch_reads_as_a_flag() {
+        assert!(AutoCheck::On.is_on());
+        assert!(!AutoCheck::Off.is_on());
+        assert_eq!((AutoCheck::from_on(true), AutoCheck::from_on(false)), (AutoCheck::On, AutoCheck::Off));
     }
 }

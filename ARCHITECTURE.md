@@ -8,7 +8,12 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
-Everything else Jobdesk writes stays in its data folder. How Save works is in [profile](docs/architecture/profile.md#save).
+Everything else Jobdesk writes stays in its data folder, with two exceptions:
+
+- Restart to update replaces Jobdesk itself.
+- On macOS, a copy that runs from a `.app` bundle writes beside the bundle at each launch. A build with an update key makes and removes a `.Jobdesk.app.probe-<pid>` folder there, to learn whether an update may apply. Every build deletes the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders that a Jobdesk which no longer runs left there. See [Where an update may apply](docs/architecture/trust.md#where-an-update-may-apply).
+
+How Save works is in [profile](docs/architecture/profile.md#save).
 
 ## Features
 
@@ -24,9 +29,10 @@ Each feature is a bounded context with its own language.
 | `dossier` | archive, document, findings, page | `documents/applications/*`; compiled PDFs; `company_research/`; tracking's and runs' application layers |
 | `profile` | topic, block, placeholder, draft, conflict, updated mark, CV document, staleness | the profile files that `TOPICS` in `profile/domain/topic.rs` names; the `## Candidate Profile` part of `CLAUDE.md`; the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists; dossier's application layer, for the page cache; settings' application layer, for ages and sizes |
 | `workspace` | workspace root, portal, tool check | the checkout folder; installed tools; file changes; profile's application layer |
-| `settings` | preference, page, search hit, run default, command override, spend cap, retention, sign-in method, API key, connection test, Coming up range, Later length, skip reason list, Jobs view filter | its own `settings.json` in the data folder; the system keychain, through a port in `domain` and adapters in `infrastructure`; through the `Snapshot`: runs' and tracking's application layers and discovery's terms; through the shell: workspace's readiness, the count of jobs the Jobs view hides, the data folder's sizes and the tray decision count |
+| `settings` | preference, page, search hit, run default, command override, spend cap, retention, sign-in method, API key, connection test, Coming up range, Later length, skip reason list, Jobs view filter, update switch | its own `settings.json` in the data folder; the system keychain, through a port in `domain` and adapters in `infrastructure`; through the `Snapshot`: runs' and tracking's application layers and discovery's terms; through the shell: workspace's readiness, the count of jobs the Jobs view hides, the data folder's sizes, the tray decision count and, for About, the update view from updates' application layer |
+| `updates` | release, version, feed, download, signature, update key, install block, restart plan, apply failure | `latest.json` on the latest GitHub release, and the build the feed names for this computer; the update key built into the app; its own `updates/` folder in the data folder |
 
-Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell.
+Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
 
 Three modules are not features:
 
@@ -105,6 +111,7 @@ PDF pages render on worker threads with `hayro`, a pure Rust rasterizer, so no P
 - Changing the Today queue, decisions, skip reasons or Later: read [Today queue](docs/architecture/today-queue.md).
 - Changing the freelance gates, Your terms, the Jobs view filters or a job's check rows: read [discovery](docs/architecture/discovery.md).
 - Changing a `ui_kit` token or widget: read [ui_kit](docs/architecture/ui-kit.md).
+- Changing how Jobdesk checks, downloads, verifies or applies its own updates: read [trust](docs/architecture/trust.md#updates).
 
 ## Trust
 
@@ -112,5 +119,6 @@ Posting text, notes and reports are third-party or generated data. Screens rende
 Claude's replies and prep packs render as Markdown with no image loading.
 The API key goes only from the system keychain, read once per launch, until a read succeeds, and held in memory, into the environment of a `claude` process, and the whole key is masked in what that process prints.
 By default `RunDesk` allows tool permissions and records them in the activity, and Settings › Permissions turns prompts on.
+An update downloads only over https from addresses built from its version, and applies only when its signature checks against the key built into Jobdesk.
 
-Changing how untrusted text renders, a path check, the API key's path or tool permissions: read [trust](docs/architecture/trust.md). It also lists the accepted residuals.
+Changing how untrusted text renders, a path check, the API key's path, tool permissions or updates: read [trust](docs/architecture/trust.md). It also lists the accepted residuals.

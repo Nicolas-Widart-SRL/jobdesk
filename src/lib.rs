@@ -9,4 +9,5 @@ pub mod shared_kernel;
 pub mod shell;
 pub mod tracking;
 pub mod ui_kit;
+pub mod updates;
 pub mod workspace;

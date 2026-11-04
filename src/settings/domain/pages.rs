@@ -249,7 +249,8 @@ const PERMISSIONS: [&str; 12] = [
     "Allowing every tool means a posting written to trick Claude could get a command run before you see it. The commands in your job search folder check postings with posting_guard before they score them.",
 ];
 
-/// The data folder's section, the run logs', the tray's, then the line on who can read them.
+/// The data folder's section, the run logs', the tray's, then the line on who can read them and what leaves this
+/// computer.
 const DATA: [&str; 11] = [
     "Data folder",
     "Everything Jobdesk keeps apart from your job search folder.",
@@ -261,7 +262,7 @@ const DATA: [&str; 11] = [
     "Tray decisions",
     "Clear tray decisions",
     "Forgets this folder's decisions on Today and the reasons given for past skips, so Today deals those cards again. Other folders keep theirs, and run logs stay.",
-    "Run logs and decisions are readable only by your user account. Only tasks send anything out, through Claude Code.",
+    "Run logs and decisions are readable only by your user account. Only tasks send your job search out, through Claude Code. The update check asks GitHub for the latest release, with Jobdesk's version and nothing about your job search. Turn it off in About.",
 ];
 
 /// Who holds the sign-in, on About. Windows keeps the key in Credential Manager, as Providers says.
@@ -271,13 +272,20 @@ const SIGN_IN_HELP: &str = if cfg!(windows) {
     "Claude Code signs in on its own. Jobdesk keeps only an optional API key, in your keychain."
 };
 
-/// The versions, the links, then the line on who makes Jobdesk.
-const ABOUT: [&str; 13] = [
+/// The versions, the updates, the links, then the line on who makes Jobdesk. The switch has a help for on and one for
+/// off, and `drawn_index` keeps the one it shows. Latest version's help says the state of the check, so a search cannot
+/// look through it.
+const ABOUT: [&str; 18] = [
     "This copy",
     "Jobdesk",
     "Version and build, for a bug report.",
     "Claude Code",
     "The program each task runs, installed on its own.",
+    "Updates",
+    "Check for updates automatically",
+    AUTO_CHECK_ON,
+    AUTO_CHECK_OFF,
+    "Latest version",
     "Read more",
     "How tasks sign in",
     SIGN_IN_HELP,
@@ -287,6 +295,11 @@ const ABOUT: [&str; 13] = [
     "Jobdesk and the open-source parts it is built from.",
     "Jobdesk runs Claude Code. It is not made by Anthropic.",
 ];
+
+/// The help under Check for updates automatically while it is on, then off, as the updates feature words them.
+const AUTO_CHECK_ON: &str =
+    "When Jobdesk opens and about every 6 hours, it reads the latest release on GitHub. It downloads nothing until you choose Download.";
+const AUTO_CHECK_OFF: &str = "Off. Jobdesk looks for a new version only when you choose Check now.";
 
 /// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
@@ -355,21 +368,29 @@ pub struct Drawn {
     /// Whether the folder is open and read.
     pub folder_read: bool,
     pub terms: TermsDrawn,
+    /// Whether Check for updates automatically is on, which picks the help About shows under it.
+    pub auto_check: bool,
 }
 
 impl Drawn {
-    /// A folder read whole with every term stated, or none: Your terms draws every part, or nothing.
+    /// A folder read whole with every term stated, or none: Your terms draws every part, or nothing. The automatic check
+    /// is on, as it is by default.
     pub fn folder(read: bool) -> Self {
-        Self { folder_read: read, terms: if read { TermsDrawn::STATED } else { TermsDrawn::NOTHING } }
+        Self { folder_read: read, terms: if read { TermsDrawn::STATED } else { TermsDrawn::NOTHING }, auto_check: true }
     }
 }
 
 /// The lines the page draws as things stand: without a folder read, Runtime status leaves out the folder's sections, and
-/// Your terms shows only the parts that read, each with the help for a part stated or not.
+/// Your terms shows only the parts that read, each with the help for a part stated or not, and About shows the help of
+/// the automatic check as it is switched.
 pub fn drawn_index(page: Page, drawn: Drawn) -> Vec<&'static str> {
     match page {
         Page::Runtime if !drawn.folder_read => RUNTIME[..RUNTIME_WITHOUT_FOLDER].to_vec(),
         Page::Terms => terms_index(drawn.terms),
+        Page::About => {
+            let hidden = if drawn.auto_check { AUTO_CHECK_OFF } else { AUTO_CHECK_ON };
+            ABOUT.into_iter().filter(|&line| line != hidden).collect()
+        }
         page => index(page).to_vec(),
     }
 }
@@ -415,7 +436,7 @@ mod tests {
     }
 
     fn terms(rate: PartDrawn, commute: PartDrawn) -> Vec<&'static str> {
-        drawn_index(Page::Terms, Drawn { folder_read: true, terms: TermsDrawn { rate, commute } })
+        drawn_index(Page::Terms, Drawn { folder_read: true, terms: TermsDrawn { rate, commute }, auto_check: true })
     }
 
     #[test]
@@ -462,6 +483,22 @@ mod tests {
         }
         assert_eq!(drawn_index(Page::Runtime, Drawn::folder(true)), index(Page::Runtime));
         assert_eq!(drawn_index(Page::General, Drawn::folder(false)), index(Page::General));
+    }
+
+    #[test]
+    fn about_finds_the_updates_in_the_words_the_page_draws() {
+        let about = index(Page::About);
+        for line in ["Updates", "Check for updates automatically", "Latest version"] {
+            assert!(about.contains(&line), "{line}");
+        }
+        for auto in [true, false] {
+            let help = crate::updates::idle_updates("0.1.0", auto).view().about.auto_help;
+            let drawn = drawn_index(Page::About, Drawn { auto_check: auto, ..Drawn::folder(true) });
+            assert!(drawn.contains(&help), "the switch's help, as the updates feature words it");
+            let other = crate::updates::idle_updates("0.1.0", !auto).view().about.auto_help;
+            assert!(!drawn.contains(&other), "and only the one it shows");
+            assert!(about.contains(&help));
+        }
     }
 
     #[test]

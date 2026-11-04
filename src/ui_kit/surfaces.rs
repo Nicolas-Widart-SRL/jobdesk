@@ -18,7 +18,7 @@ use crate::ui_kit::marks::{FillMarks, KnotState};
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::text::{
     add_cut_text, add_galley, add_job, add_marked, add_text, blank_line, copyable, cut_hover, line, paint_centred, paint_marked, paint_text, profile_markdown,
-    rich, strong, table_head, wrapped,
+    release_markdown, rich, strong, table_head, wrapped,
 };
 use crate::ui_kit::tokens::{
     BAND_COLUMNS, BAND_COMPACT_PADDING, BAND_GAP, BAND_LABEL_HEIGHT, BAND_PADDING, BAND_ROW_GAP, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, CARD_PADDING,
@@ -26,10 +26,11 @@ use crate::ui_kit::tokens::{
     EMPTY_GAP, EMPTY_PADDING, EMPTY_WIDTH, FADED_OPACITY, FIELD_INLINE, FIELD_INLINE_MARGIN, FIELD_INLINE_NUMBER, FIELD_PADDING, FIGURE_BAR_MARGIN,
     FIGURE_SKELETON, FIGURE_SKELETON_MARGIN, FIGURE_SKELETON_NOTES, FOCUS_OFFSET, FOCUS_RING, GRID_PITCH, GUTTER, HAIRLINE, HEAD_GAP, HEAD_PADDING,
     HEAD_TITLE_MIN, HEADER_PADDING, INSET, ITEM_GAP, KNOT_SIZE_SMALL, LANE_GAP, LANE_PADDING, LATER_OPACITY, MARK_RULE, NODE_ARROW, NODE_GAP, NODE_PADDING,
-    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD,
-    RADIUS_PANEL, RAIL_TITLE_PADDING, ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP,
-    SETTING_HELP_GAP, SETTING_NOTE_GAP, SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING,
-    SETTINGS_HEAD_PADDING, SHELL_PADDING, SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
+    NODE_TALLY_HEIGHT, NODE_TALLY_MARGIN, NOTE_PADDING, NOTES_BODY_PADDING, NOTES_GAP, NOTES_HEAD_PADDING, NOTES_HEIGHT, NOTES_INLINE, NOTES_SLIP_PADDING,
+    NOTES_WIDTH, OFFSET_SHADOW, PICK_EDGE, PICK_PADDING, PROMPT_PADDING, RADIO, RADIO_DOT, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, RAIL_TITLE_PADDING,
+    ROLE_DATES, ROLE_PADDING, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SCREEN_PADDING, SETTING_CHECK_GAP, SETTING_CONTROL_GAP, SETTING_HELP_GAP, SETTING_NOTE_GAP,
+    SETTING_ROW_MIN, SETTING_ROW_PADDING, SETTING_SECTION_GAP, SETTINGS_ACTIONS_LIFT, SETTINGS_BODY_PADDING, SETTINGS_HEAD_PADDING, SHELL_PADDING,
+    SKELETON_GAP, SKELETON_LINE, SPLIT_GAP, STATUS_DOT, STATUS_PADDING, STATUS_PROGRESS_GAP, STEP_LINE_GAP, STEP_LINE_HEIGHT, STEP_NAME_WIDTH,
     TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TALLY_BAND, Type, WAITS_EDGE, WINDOW_SHADOW,
 };
 
@@ -675,7 +676,15 @@ fn setting_rule(ui: &mut Ui) {
 /// One setting: `label` in `Type::STRONG` over its `help` in `Type::NOTE` `muted`, held to `DOC_MEASURE`, and the
 /// `control` at the right, centred on them. A hairline sits above. Hits of the search `query` are highlighted.
 pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: impl FnOnce(&mut Ui)) -> Response {
-    let (text, muted) = (setting_ink(ui, Palette::of(ui).text), setting_ink(ui, Palette::of(ui).muted));
+    setting_row_lines(ui, label, &[(help, Ink::Muted)], query, control)
+}
+
+/// A `setting_row` whose help is several lines, each in its own ink, such as a failure in `closed` over what happens
+/// next in `muted`. Each line starts on a line of its own, and an empty one takes no room.
+pub fn setting_row_lines(ui: &mut Ui, label: &str, help: &[(&str, Ink)], query: &str, control: impl FnOnce(&mut Ui)) -> Response {
+    let p = Palette::of(ui);
+    let text = setting_ink(ui, p.text);
+    let help: Vec<(&str, Color32)> = help.iter().filter(|(line, _)| !line.is_empty()).map(|&(line, ink)| (line, setting_ink(ui, ink.color(&p)))).collect();
     // Each row keeps its own measure, so it is keyed on its place among its parent's widgets.
     let id = ui.next_auto_id();
     ui.scope(|ui| {
@@ -696,15 +705,15 @@ pub fn setting_row(ui: &mut Ui, label: &str, help: &str, query: &str, control: i
         let beside = if used.width() > 0.0 { used.width() + SETTING_CONTROL_GAP } else { 0.0 };
         let room = (full - beside).clamp(0.0, DOC_MEASURE);
         let label_lines = wrapped(ui, label, Type::STRONG, text, room);
-        let help_lines = (!help.is_empty()).then(|| wrapped(ui, help, Type::NOTE, muted, room));
-        let words = label_lines.size().y + help_lines.as_ref().map_or(0.0, |help| SETTING_HELP_GAP + help.size().y);
+        let help_lines: Vec<_> = help.iter().map(|&(line, ink)| (line, wrapped(ui, line, Type::NOTE, ink, room))).collect();
+        let words = label_lines.size().y + help_lines.iter().map(|(_, lines)| SETTING_HELP_GAP + lines.size().y).sum::<f32>();
         let height = words.max(used.height()).max(least);
         let place = Rect::from_min_size(pos2(origin.x, top + (height - words) / 2.0), vec2(room, words));
         let mut column = ui.new_child(UiBuilder::new().id_salt("setting_words").max_rect(place).layout(Layout::top_down(Align::Min)));
         column.spacing_mut().item_spacing.y = SETTING_HELP_GAP;
         add_marked(&mut column, label_lines, label, query);
-        if let Some(help_lines) = help_lines {
-            add_marked(&mut column, help_lines, help, query);
+        for (line, lines) in help_lines {
+            add_marked(&mut column, lines, line, query);
         }
         kept.keep(ui, height, "a setting row changed height");
         ui.allocate_rect(Rect::from_min_size(origin, vec2(full, height + SETTING_ROW_PADDING * 2.0)), Sense::hover())
@@ -991,6 +1000,204 @@ pub fn confirm_popover(button: &Response, state: &mut Option<bool>, words: &Conf
         });
     *state = (open && !keep && !act).then_some(focus);
     act
+}
+
+/// What a `release_notes_popover` shows. Every word but the notes is the caller's own.
+#[derive(Debug, Clone, Copy)]
+pub struct ReleaseNotes<'a> {
+    /// The title, such as "Jobdesk 0.2.0".
+    pub title: &'a str,
+    /// One `muted` line under it, such as "Released Fri 30 Oct. You have 0.1.0.".
+    pub released: &'a str,
+    /// The release's notes: untrusted Markdown from the network, shown through `release_markdown`.
+    pub notes: &'a str,
+    /// What a screen reader calls the notes, which take a Tab stop and scroll on the keys, such as "What changed in 0.2.0".
+    pub notes_label: &'a str,
+    /// The `faint` line under the notes on where they come from and what they cannot do.
+    pub trust: &'a str,
+    /// A slip above the actions: what the primary action does once the update is ready, or why there is no step to
+    /// take, such as a download that failed or a copy that cannot update itself. `None` when there is nothing to say.
+    pub slip: Option<&'a str>,
+    /// The primary action, such as "Download 0.2.0" or "Restart to update". `None` when there is no step to take.
+    pub primary: Option<&'a str>,
+    /// Why the primary action waits, said in the slip and on hover while it is disabled, so the keyboard learns it too.
+    /// `None` while it can go.
+    pub primary_wait: Option<&'a str>,
+    /// The size beside the primary action, such as "14.2 MB".
+    pub size: Option<&'a str>,
+    /// The link to the release page, such as "Open the release page". `None` when the page has nothing for this copy.
+    pub open_page: Option<&'a str>,
+    /// The `faint` words on Esc: under the actions, or at the end of their row beside a slip.
+    pub esc_note: &'a str,
+}
+
+/// What the user picked in a `release_notes_popover`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotesAction {
+    /// The primary action. It closes the popover too.
+    Primary,
+    /// The release page link. The caller opens the address it builds itself, never one from the notes.
+    OpenPage,
+}
+
+/// A release's notes in a popover above `anchor`, their right edges level, built as `confirm_popover` is: the title and
+/// its line over a hairline, the notes on paper at a fixed height with the scroll bar shown at rest, the trust line, the
+/// slip once there is one, then the primary action, the size and the release page link, and the Esc note.
+/// The caller flips `open` when `anchor` is clicked. Each time it opens, the primary action takes the focus, so Enter
+/// acts, unless it waits: then it is disabled and says why in the slip and on hover. Esc, a click outside and the primary action close
+/// it. Returns what was picked this frame.
+pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &ReleaseNotes, cache: &mut CommonMarkCache) -> Option<NotesAction> {
+    let popup = Popup::from_response(anchor);
+    let id = popup.get_id();
+    let focus_id = id.with("release_notes_focus");
+    // A popover not shown last frame opens now, with the focus to give. Its first frame is a sizing pass, which cannot.
+    let opening = anchor.ctx.read_response(id).is_none();
+    let mut focus = opening || anchor.ctx.data(|data| data.get_temp::<bool>(focus_id)).unwrap_or(false);
+    let mut picked = None;
+    // A primary action that waits says why under the slip's words, or in a slip of its own.
+    let wait = notes.primary.and(notes.primary_wait);
+    let slip = notes.slip.is_some() || wait.is_some();
+    let frame = Frame::popup(&anchor.ctx.global_style()).inner_margin(0);
+    popup
+        .open_bool(open)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .align(RectAlign::TOP_END)
+        .gap(ITEM_GAP)
+        .width(NOTES_WIDTH)
+        .frame(frame)
+        .accessible_name(notes.title)
+        .show(|ui| {
+            let p = Palette::of(ui);
+            ui.set_width(NOTES_WIDTH - 2.0 * HAIRLINE);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (top, bottom) = NOTES_HEAD_PADDING;
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top, bottom }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                add_text(ui, notes.title, Type::CALL_TITLE, Ink::Text);
+                ui.add_space(SETTING_HELP_GAP + 1.0);
+                ui.add(egui::Label::new(rich(ui, notes.released, Type::NOTE, Ink::Muted)).wrap());
+            });
+            divider(ui);
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom: 0 }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                // Keyed by the release, so other notes start at the top, and back at the top each time it opens.
+                let notes_id = id.with(("release_notes", notes.title));
+                let paper = Frame::new().fill(p.card).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let height = NOTES_HEIGHT - 2.0 * HAIRLINE;
+                    let delta = notes_keys(ui, notes_id, height);
+                    let scroll = egui::ScrollArea::vertical().id_salt(notes_id).auto_shrink([false, false]).min_scrolled_height(height).max_height(height);
+                    let scroll = if opening { scroll.vertical_scroll_offset(0.0) } else { scroll };
+                    scroll.show(ui, |ui| {
+                        if let Some(delta) = delta {
+                            ui.scroll_with_delta_animation(vec2(0.0, delta), egui::style::ScrollAnimation::none());
+                        }
+                        let (left, top, right, bottom) = NOTES_BODY_PADDING;
+                        Frame::new().inner_margin(Margin { left, right, top, bottom }).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            release_markdown(ui, cache, notes.notes);
+                        });
+                    });
+                });
+                // The notes hold nothing to click, so they take a Tab stop of their own, read from the keyboard.
+                let region = ui.interact(paper.response.rect, notes_id, Sense::focusable_noninteractive());
+                region.widget_info(|| WidgetInfo::labeled(Role::ScrollView, true, notes.notes_label));
+                // With no primary action to take the focus, the notes take it, so the keys land inside the popover.
+                let primary_takes = notes.primary.is_some() && notes.primary_wait.is_none();
+                if focus && !primary_takes && !ui.is_sizing_pass() {
+                    region.request_focus();
+                }
+                if region.has_focus() {
+                    ui.painter().rect_stroke(paper.response.rect, RADIUS_PANEL, Stroke::new(FOCUS_RING, p.active), StrokeKind::Inside);
+                }
+                ui.add_space(ROW_GAP);
+                ui.add(egui::Label::new(rich(ui, notes.trust, Type::SMALL, Ink::Faint)).wrap());
+                if slip {
+                    ui.add_space(NOTES_GAP);
+                    Frame::new().fill(p.panel).stroke(Stroke::new(HAIRLINE, p.line)).corner_radius(RADIUS_PANEL).inner_margin(margin(NOTES_SLIP_PADDING)).show(
+                        ui,
+                        |ui| {
+                            ui.set_width(ui.available_width());
+                            if let Some(slip) = notes.slip {
+                                ui.add(egui::Label::new(rich(ui, slip, Type::NOTE, Ink::Text)).wrap());
+                            }
+                            if let Some(wait) = wait {
+                                if notes.slip.is_some() {
+                                    ui.add_space(SETTING_HELP_GAP);
+                                }
+                                ui.add(egui::Label::new(rich(ui, wait, Type::NOTE, Ink::Muted)).wrap());
+                            }
+                        },
+                    );
+                }
+            });
+            let bottom = if slip { NOTES_HEAD_PADDING.0 } else { NOTES_GAP as i8 };
+            Frame::new().inner_margin(Margin { left: NOTES_INLINE, right: NOTES_INLINE, top: NOTES_GAP as i8, bottom }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = STATUS_PROGRESS_GAP;
+                    if let Some(label) = notes.primary {
+                        let primary = enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| primary_button(ui, label));
+                        if focus && !ui.is_sizing_pass() && wait.is_none() {
+                            primary.request_focus();
+                        }
+                        if primary.clicked() {
+                            picked = Some(NotesAction::Primary);
+                        }
+                    }
+                    if !ui.is_sizing_pass() {
+                        focus = false;
+                    }
+                    let mut open_page = |ui: &mut Ui| {
+                        if let Some(label) = notes.open_page
+                            && link(ui, label).clicked()
+                        {
+                            picked = Some(NotesAction::OpenPage);
+                        }
+                    };
+                    if slip {
+                        open_page(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| add_text(ui, notes.esc_note, Type::SMALL, Ink::Faint));
+                    } else {
+                        if let Some(size) = notes.size.filter(|_| notes.primary.is_some()) {
+                            add_text(ui, size, Type::NOTE, Ink::Muted);
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), open_page);
+                    }
+                });
+                if !slip {
+                    ui.add_space(ROW_GAP);
+                    ui.add(egui::Label::new(rich(ui, notes.esc_note, Type::SMALL, Ink::Faint)).wrap());
+                }
+            });
+        });
+    if picked == Some(NotesAction::Primary) {
+        *open = false;
+    }
+    anchor.ctx.data_mut(|data| {
+        if *open {
+            data.insert_temp(focus_id, focus);
+        } else {
+            data.remove::<bool>(focus_id);
+        }
+    });
+    picked
+}
+
+/// How far the notes `id`, a view `height` tall, scroll this frame on the keys, while they have the focus: a line on
+/// Up and Down, a view less a line on Page Up and Page Down, to either end on Home and End. Each key it reads is taken,
+/// and the up and down arrows stay with the notes rather than move the focus. The delta moves the content, so it is
+/// negative going down.
+fn notes_keys(ui: &Ui, id: egui::Id, height: f32) -> Option<f32> {
+    if !ui.memory(|memory| memory.has_focus(id)) {
+        return None;
+    }
+    ui.memory_mut(|memory| memory.set_focus_lock_filter(id, EventFilter { vertical_arrows: true, ..Default::default() }));
+    let line = ui.fonts_mut(|fonts| fonts.row_height(&Type::BODY.font()));
+    let page = (height - line).max(line);
+    let far = 1.0e6;
+    let keys = [(Key::ArrowUp, line), (Key::ArrowDown, -line), (Key::PageUp, page), (Key::PageDown, -page), (Key::Home, far), (Key::End, -far)];
+    ui.input_mut(|input| keys.into_iter().filter(|(key, _)| input.consume_key(Modifiers::NONE, *key)).map(|(_, delta)| delta).reduce(|a, b| a + b))
 }
 
 /// How wide a column of a `pick_table` is: fixed, or a share of the room the fixed ones leave, never under `least`.

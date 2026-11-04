@@ -13,7 +13,7 @@ use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FIELD_HEIGHT, FIELD_PADDING, FOCUS_OFFSET, FOCUS_RING,
     HAIRLINE, KEY_SIZE, KEYS_GAP, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_EDGE, PICK_ROW_HEIGHT,
     PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING,
-    STATUS_DOT, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, SWEEP_DASH, SWEEP_SHARE, TOGGLE_GAP, Type,
+    STATUS_DOT, STATUS_MARK_GAP, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, SWEEP_DASH, SWEEP_SHARE, TOGGLE_GAP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -250,6 +250,11 @@ pub fn toggle_group<T: Copy + PartialEq>(ui: &mut Ui, current: Option<T>, option
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
     press(ui, text, Look::Primary, NORMAL, None)
+}
+
+/// A `primary_button` at a small button's size, for the one step a settings row offers, such as Download 0.2.0.
+pub fn small_primary_button(ui: &mut Ui, text: &str) -> Response {
+    press(ui, text, Look::Primary, SMALL, None)
 }
 
 pub fn danger_button(ui: &mut Ui, text: &str) -> Response {
@@ -732,12 +737,7 @@ pub fn status_button(ui: &mut Ui, text: &str, keys: &[&str], on: bool) -> Respon
     let lead = if glyphs.is_empty() { 0.0 } else { Chord::LEAD };
     let size = vec2(STATUS_SEGMENT_PADDING * 2.0 + widest + lead + chord, STATUS_SEGMENT_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let fill = match (on, pointer_over(&response), pressed(&response)) {
-        (_, _, true) => p.line,
-        (true, _, false) => p.raised,
-        (false, true, false) => p.panel,
-        (false, false, false) => Color32::TRANSPARENT,
-    };
+    let fill = status_fill(&p, &response, on);
     ui.painter().rect_filled(rect, RADIUS_BUTTON, fill);
     let centre_y = rect.center().y;
     paint_text(ui, egui::pos2(rect.left() + STATUS_SEGMENT_PADDING, centre_y - label.size().y / 2.0), label, ink, fill);
@@ -749,6 +749,75 @@ pub fn status_button(ui: &mut Ui, text: &str, keys: &[&str], on: bool) -> Respon
     }
     interactive(ui, &response, RADIUS_BUTTON);
     response.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, text));
+    response
+}
+
+/// A status strip button's fill: clear at rest, `panel` under the pointer, `raised` while on, `line` while pressed.
+fn status_fill(p: &Palette, response: &Response, on: bool) -> Color32 {
+    match (on, pointer_over(response), pressed(response)) {
+        (_, _, true) => p.line,
+        (true, _, false) => p.raised,
+        (false, true, false) => p.panel,
+        (false, false, false) => Color32::TRANSPARENT,
+    }
+}
+
+/// A `status_button` led by a square in `square` ink, its words in `text`, such as the update's news that opens its
+/// notes. `on` while what it opens is open. The words are cut to the room left, with the whole text on hover.
+pub fn status_mark_button(ui: &mut Ui, square: impl Into<Ink>, text: &str, on: bool) -> Response {
+    status_mark_segment(ui, square.into(), text, Some(on))
+}
+
+/// A `status_mark_button` with nothing to open: the same square and words in the same place, which take no click and
+/// no focus. The words are cut to the room left, with the whole text on hover.
+pub fn status_mark(ui: &mut Ui, square: impl Into<Ink>, text: &str) -> Response {
+    status_mark_segment(ui, square.into(), text, None)
+}
+
+/// A square and words at a status segment's size: a button that is `on` or not, or, with `None`, plain words.
+fn status_mark_segment(ui: &mut Ui, square: Ink, text: &str, button: Option<bool>) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    let (square, ink) = (square.color(&p), p.text);
+    let (square, ink) = if enabled { (square, ink) } else { (dimmed(square), dimmed(ink)) };
+    let lead = STATUS_DOT + STATUS_MARK_GAP;
+    let room = (ui.available_width() - STATUS_SEGMENT_PADDING * 2.0 - lead).max(0.0);
+    let label = line(ui, text, Type::SMALL, ink, room);
+    let size = vec2(STATUS_SEGMENT_PADDING * 2.0 + lead + label.size().x, STATUS_SEGMENT_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, if button.is_some() { Sense::click() } else { Sense::hover() });
+    let fill = button.map_or(Color32::TRANSPARENT, |on| status_fill(&p, &response, on));
+    ui.painter().rect_filled(rect, RADIUS_BUTTON, fill);
+    let left = rect.left() + STATUS_SEGMENT_PADDING;
+    let dot = Rect::from_min_size(egui::pos2(left, rect.center().y - STATUS_DOT / 2.0), vec2(STATUS_DOT, STATUS_DOT));
+    ui.painter().rect_filled(dot, 0.0, square);
+    let response = cut_hover(response, &label, text);
+    paint_text(ui, egui::pos2(left + lead, rect.center().y - label.size().y / 2.0), label, ink, fill);
+    match button {
+        Some(on) => {
+            interactive(ui, &response, RADIUS_BUTTON);
+            response.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, text));
+        }
+        None => response.widget_info(|| WidgetInfo::labeled(Role::Label, enabled, text)),
+    }
+    response
+}
+
+/// The next step in the status strip, such as Download: a plain button at the strip's height, on `card` with a `line`
+/// hairline even on the sheet, the one bordered control there, so the eye finds it. It is never cut.
+/// It paints its own disabled look: give the reason with `enabled_when`.
+pub fn status_action(ui: &mut Ui, text: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    let ink = if enabled { p.text } else { dimmed(p.text) };
+    let galley = line(ui, text, Type::SMALL, ink, f32::INFINITY);
+    let size = vec2(galley.size().x + STATUS_SEGMENT_PADDING * 2.0, STATUS_SEGMENT_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (fill, border) =
+        if enabled { look_colors(&p, Look::Plain, pointer_over(&response), pressed(&response), true) } else { disabled_colors(&p, Look::Plain, true) };
+    ui.painter().rect(rect, RADIUS_BUTTON, fill, Stroke::new(HAIRLINE, border), StrokeKind::Inside);
+    paint_centred(ui, rect, galley, ink, fill);
+    interactive(ui, &response, RADIUS_BUTTON);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, text));
     response
 }
 

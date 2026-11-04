@@ -4,7 +4,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 ## Building a canvas
 
-`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html` and `Settings.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
+`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html`, `Settings.html` and `Update.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`, `.ud`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
 
 ## Canvases
 
@@ -15,7 +15,8 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `UiPass.html` | `?scene=states\|jobs\|failed\|loading\|empty&theme=light\|dark` | 6 `UiPass-*.png` | [ui-pass](handoff/ui-pass.md) |
 | `Profile.html` | `?state=view\|edit\|busy\|conflict\|empty\|loading\|failed\|updated\|setup&theme=light\|dark` | 10 `Profile-*.png` | [profile](handoff/profile.md) |
 | `ProfileCv.html` | `?state=full\|source\|busy\|missing\|notex\|failed\|loading\|empty\|unread\|nocommand&theme=light\|dark` | 11 `ProfileCv-*.png` | [profile](handoff/profile.md) |
-| `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|search\|nav&theme=light\|dark` | 24 `Settings-*.png` | [settings](handoff/settings.md) |
+| `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|about-checking\|about-failed\|about-update\|about-ready-waits\|search\|nav&theme=light\|dark` | 29 `Settings-*.png` | [settings](handoff/settings.md), [update](handoff/update.md) |
+| `Update.html` | `?state=available\|notes\|notes-ready\|downloading\|ready\|ready-busy\|failed\|bad-signature&theme=light\|dark` | 10 `Update-*.png` | [update](handoff/update.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
 
 ## Handoff files
@@ -26,6 +27,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **UI pass**: the rules for hover, selected, pressed, disabled, links, copyable text, and loading, failed and empty states → see [handoff/ui-pass.md](handoff/ui-pass.md). Open it before adding or changing a clickable widget or an empty, loading or failed state.
 - **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature, and CV documents (the CV PDF preview: a list column beside the pages, its four tags, the `/build-cv <name>` launcher action, and the line that replaces it when the folder has no `/build-cv` command) → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen, how Jobdesk writes profile files, or how it shows CV PDFs.
 - **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.
+- **Updates**: the update group in the status bar, the release notes popover and how the notes render, Restart while a Claude session is open, and Settings › About's Updates section → see [handoff/update.md](handoff/update.md). Open it when you change how Jobdesk updates itself or the right side of the status bar.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
 
 A new round writes or updates one handoff file per screen or topic it changes, its canvas's row in the Canvases table, and its line under Handoff files (`.claude/agents/designer.md` step 6).

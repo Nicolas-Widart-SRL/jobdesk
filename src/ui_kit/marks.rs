@@ -11,12 +11,12 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::motion_time;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::on_desk;
-use crate::ui_kit::text::{add_galley, add_job, add_text, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_galley, add_job, add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE,
     DAY_STAMP_SIZE, DAY_STAMP_TICK, FADED_OPACITY, HAIRLINE, HEAT_LABELS, HEAT_SIDE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD,
-    RADIUS_STAMP, ROW_GAP, ROW_TAG_HEIGHT, ROW_TAG_PADDING, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING,
-    TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
+    RADIUS_STAMP, ROW_GAP, ROW_TAG_HEIGHT, ROW_TAG_PADDING, STAMP_HEIGHT, STAMP_MIN_WIDTH, STAMP_PADDING, STAMP_RULE_GAP, STATUS_DIVIDER_HEIGHT, STATUS_DOT,
+    STATUS_PROGRESS_BAR, STATUS_PROGRESS_GAP, STATUS_SEGMENT_HEIGHT, TAG_HEIGHT, TAG_PADDING, TALLY_FAT, TALLY_GAP_Y, TALLY_THIN, TallySize, Type,
 };
 
 /// Painted at its own size, so table cells and wrapped rows cannot stretch it.
@@ -415,6 +415,72 @@ fn squared_status(ui: &mut Ui, square: Color32, text: &str) -> Response {
 pub fn status_note(ui: &mut Ui, text: &str, alert: bool) -> Response {
     let p = Palette::of(ui);
     add_galley(ui, line(ui, text, Type::NOTE, if alert { p.closed } else { p.muted }, f32::INFINITY))
+}
+
+/// The `line` hairline between Jobdesk's own group and Settings in the status strip.
+pub fn status_divider(ui: &mut Ui) {
+    let color = Palette::of(ui).line;
+    let (rect, _) = ui.allocate_exact_size(vec2(HAIRLINE, STATUS_DIVIDER_HEIGHT), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, color);
+}
+
+/// A download in the status strip: `words` in `muted`, a bar at a fixed width in `text` on `off`, then `figures`, the
+/// share and size done, in `muted` with every digit as wide as the widest, so the strip holds still as they count.
+/// The words are cut to the room left, with the whole text on hover.
+pub fn status_progress(ui: &mut Ui, words: &str, fraction: f32, figures: &str) -> Response {
+    let p = Palette::of(ui);
+    let share = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
+    let counted = Tabular::new(ui, figures, Type::NOTE, p.muted);
+    let fixed = STATUS_PROGRESS_GAP * 2.0 + STATUS_PROGRESS_BAR + counted.width;
+    let label = line(ui, words, Type::NOTE, p.muted, (ui.available_width() - fixed).max(0.0));
+    let (rect, response) = ui.allocate_exact_size(vec2(label.size().x + fixed, STATUS_SEGMENT_HEIGHT), Sense::hover());
+    let centre = rect.center().y;
+    let track = Rect::from_min_size(pos2(rect.left() + label.size().x + STATUS_PROGRESS_GAP, centre - BAR_HEIGHT / 2.0), vec2(STATUS_PROGRESS_BAR, BAR_HEIGHT));
+    ui.painter().rect_filled(track, 0.0, p.off);
+    ui.painter().rect_filled(Rect::from_min_size(track.min, vec2(track.width() * share, BAR_HEIGHT)), 0.0, p.text);
+    let response = cut_hover(response, &label, words);
+    paint_text(ui, pos2(rect.left(), centre - label.size().y / 2.0), label, p.muted, Color32::TRANSPARENT);
+    counted.paint(ui, track.right() + STATUS_PROGRESS_GAP, centre, p.muted);
+    response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ProgressIndicator, true, format!("{words}, {figures}"));
+        info.value = Some(f64::from(share));
+        info
+    });
+    response
+}
+
+/// A short run of figures, such as "38%, 5.4 of 14.2 MB", with every digit in a cell as wide as the widest digit, so a
+/// count that changes moves nothing beside it. The faces have no tabular figures of their own.
+struct Tabular {
+    glyphs: Vec<(Arc<Galley>, f32)>,
+    width: f32,
+}
+
+impl Tabular {
+    fn new(ui: &Ui, text: &str, style: Type, color: Color32) -> Self {
+        let laid = |c: char| line(ui, c.encode_utf8(&mut [0; 4]), style, color, f32::INFINITY);
+        let cell = ('0'..='9').map(|digit| laid(digit).size().x).fold(0.0, f32::max);
+        let glyphs: Vec<_> = text
+            .chars()
+            .map(|c| {
+                let glyph = laid(c);
+                let width = if c.is_ascii_digit() { cell } else { glyph.size().x };
+                (glyph, width)
+            })
+            .collect();
+        let width = glyphs.iter().map(|(_, width)| width).sum();
+        Self { glyphs, width }
+    }
+
+    /// Paints the figures from `left`, centred on `centre_y`, each digit centred in its cell.
+    fn paint(self, ui: &Ui, left: f32, centre_y: f32, color: Color32) {
+        let mut x = left;
+        for (glyph, width) in self.glyphs {
+            let at = pos2(x + (width - glyph.size().x) / 2.0, centre_y - glyph.size().y / 2.0);
+            paint_text(ui, at, glyph, color, Color32::TRANSPARENT);
+            x += width;
+        }
+    }
 }
 
 /// The stamp-ink chip that counts what waits on the user, laid out but not yet placed.

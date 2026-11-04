@@ -1,9 +1,13 @@
 use egui::{OpenUrl, Response, Ui};
 
-use crate::settings::application::{ClaudeVersion, Page, about_details, index};
-use crate::settings::ui::page_note;
+use crate::settings::application::{
+    AboutAction, AboutButton, AboutUpdate, BarAction, CHECK_NOW, CHECKING_WORD, ClaudeVersion, Mark, Page, about_details, index,
+};
+use crate::settings::ui::{SettingsRequest, page_note};
 use crate::ui_kit::tokens::DISABLED_OPACITY;
-use crate::ui_kit::{Ink, Type, enabled_when, link, rich, setting_row, setting_section, small_button};
+use crate::ui_kit::{
+    Ink, Tone, Type, enabled_when, link, rich, setting_check, setting_row, setting_row_lines, setting_section, small_button, small_primary_button, tag,
+};
 
 /// Where the changelog is read. A fixed `https` address, never read from a file.
 const CHANGELOG_URL: &str = "https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md";
@@ -17,15 +21,38 @@ pub struct AboutView<'a> {
     pub version: &'a str,
     /// Claude Code's version as the tool check knows it.
     pub claude: ClaudeVersion<'a>,
+    /// The updates: the switch, the latest version and the step to take.
+    pub update: &'a AboutUpdate,
+    /// Why Restart to update waits, if it does.
+    pub restart_wait: Option<&'a str>,
 }
 
-/// The two versions with Copy details, the links to read more, then who makes Jobdesk. No logo shows anywhere.
-/// Returns true when Open Providers is clicked, so Settings switches to Providers.
-pub fn body(ui: &mut Ui, view: AboutView, query: &str) -> bool {
-    let &[this_copy, jobdesk, jobdesk_help, claude, claude_help, read_more, sign_in, sign_in_help, changed, changed_help, licences, licences_help, maker] =
-        index(Page::About)
+/// The two versions with Copy details, the updates, the links to read more, then who makes Jobdesk. No logo shows
+/// anywhere. Returns what the user asked of the updates, and true when Open Providers is clicked, so Settings switches to
+/// Providers. The switch is saved here, and the shell follows it.
+pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> (Option<SettingsRequest>, bool) {
+    let &[
+        this_copy,
+        jobdesk,
+        jobdesk_help,
+        claude,
+        claude_help,
+        updates,
+        check_auto,
+        _,
+        _,
+        latest,
+        read_more,
+        sign_in,
+        sign_in_help,
+        changed,
+        changed_help,
+        licences,
+        licences_help,
+        maker,
+    ] = index(Page::About)
     else {
-        return false;
+        return (None, false);
     };
     setting_section(ui, this_copy, None, query);
     setting_row(ui, jobdesk, jobdesk_help, query, |ui| {
@@ -46,6 +73,17 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) -> bool {
             ui.label(rich(ui, "Not found", Type::BODY, Ink::Muted));
         }
     });
+    setting_section(ui, updates, None, query);
+    let update = view.update;
+    setting_check(ui, auto, check_auto, update.auto_help, query);
+    let mut help: Vec<(&str, Ink)> = update.help.iter().map(|line| (line.text.as_str(), if line.failed { Tone::Closed.into() } else { Ink::Muted })).collect();
+    // A Restart to update that waits says why under it as well as on hover, so the keyboard learns it too.
+    let restart = update.buttons.iter().any(|button| button.action == AboutAction::Bar(BarAction::Restart));
+    if let Some(wait) = view.restart_wait.filter(|_| restart) {
+        help.push((wait, Ink::Muted));
+    }
+    let mut request = None;
+    setting_row_lines(ui, latest, &help, query, |ui| request = latest_controls(ui, update, view.restart_wait));
     setting_section(ui, read_more, None, query);
     // An in-app jump: no browser, no run and no setting change.
     let mut providers = false;
@@ -57,7 +95,50 @@ pub fn body(ui: &mut Ui, view: AboutView, query: &str) -> bool {
         enabled_when(ui, false, NO_LICENCES, |ui| link(ui, "Show licences"));
     });
     page_note(ui, maker, query);
-    providers
+    (request, providers)
+}
+
+/// Latest version's controls, laid out from the right: Check now or the step to take, then what leads to it.
+fn latest_controls(ui: &mut Ui, update: &AboutUpdate, restart_wait: Option<&str>) -> Option<SettingsRequest> {
+    let mut request = None;
+    // Check now waits only while a check runs, which the first help line says.
+    if let Some(enabled) = update.check_now
+        && enabled_when(ui, enabled, update.help.first().map_or("", |line| line.text.as_str()), |ui| small_button(ui, CHECK_NOW)).clicked()
+    {
+        request = Some(SettingsRequest::CheckForUpdates);
+    }
+    for button in update.buttons.iter().rev() {
+        if about_button(ui, button, restart_wait).clicked() {
+            request = Some(match button.action {
+                AboutAction::WhatsNew => SettingsRequest::OpenReleaseNotes,
+                AboutAction::ReleasePage => SettingsRequest::OpenReleasePage,
+                AboutAction::Bar(BarAction::Download | BarAction::Retry) => SettingsRequest::DownloadUpdate,
+                AboutAction::Bar(BarAction::Cancel) => SettingsRequest::CancelUpdate,
+                AboutAction::Bar(BarAction::Restart) => SettingsRequest::RestartToUpdate,
+            });
+        }
+    }
+    if update.checking {
+        ui.label(rich(ui, CHECKING_WORD, Type::BODY, Ink::Muted));
+    }
+    if let Some((word, mark)) = update.tag {
+        tag(ui, word, if mark == Mark::Failed { Tone::Closed } else { Tone::Hired });
+    }
+    request
+}
+
+/// One of About's update steps: What's new and the release page as links, Cancel as a plain button, the step to take
+/// as the primary one. Restart to update waits while a task is open, and says why on hover and in the help.
+fn about_button(ui: &mut Ui, button: &AboutButton, restart_wait: Option<&str>) -> Response {
+    let label = button.label.as_str();
+    match button.action {
+        AboutAction::WhatsNew | AboutAction::ReleasePage => link(ui, label),
+        AboutAction::Bar(BarAction::Restart) => {
+            enabled_when(ui, restart_wait.is_none(), restart_wait.unwrap_or_default(), |ui| small_primary_button(ui, label))
+        }
+        _ if button.primary => small_primary_button(ui, label),
+        _ => small_button(ui, label),
+    }
 }
 
 /// A link that opens `url` in the browser on click, with the address on hover.

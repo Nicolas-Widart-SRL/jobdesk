@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key and handles tool permissions, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -16,8 +16,9 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A run's notices | Plain text, with hidden characters removed: see [Notices](#notices) |
 | Test connection's error | Plain text: see [Masking](#masking) |
 | PDFs, in the dossier and in CV documents | Page images only: see [CV files](#cv-files) |
+| Release notes from the update feed | Markdown with no image loading and no links, through `release_markdown`. A link shows as its words in body ink and never opens, an image as its alt text, and raw HTML as its text. Headings render at the section size, and hidden characters are removed before parsing. |
 
-A link opens only on click, and only for `http` or `https`.
+A link opens only on click, and only for `http` or `https`. Release notes have no link: their one way out is Open the release page, whose address Jobdesk builds itself.
 
 ## Profile text
 
@@ -114,3 +115,48 @@ This trades away the prompt as a check against injected posting text. Postings r
 Notices other than allowances, such as why a run failed or stopped or which action was denied, show inline in the story. They render as plain text with hidden characters removed, one row per non-blank line.
 
 The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover.
+
+## Updates
+
+The `updates` feature reads the feed, downloads a build, checks its signature and applies it on Restart to update. None of it is a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics.
+
+### Addresses and the network
+
+- The feed is `latest.json` on the latest release, at the fixed address `FEED_URL`.
+- The download's address and the release page's address are built from `REPOSITORY` and the version tag, such as `v0.2.0`. No address is ever read from the feed or the notes.
+- `HttpsTransport` requests `https` only, after a redirect too, follows at most 5 redirects, checks certificates with the system's verifier and uses the proxy the environment names. It sends no cookie and no credential, only `Jobdesk/<version>` as its user agent.
+- A failure shows in Jobdesk's own words, such as "the connection timed out" or "GitHub answered with the error 404". No text from the server reaches the screen.
+
+### The feed and its limits
+
+- The feed holds the version, the release date, the notes, and each build's signature and size. Any other field is never read.
+- A feed over 256 KiB is refused whole, and notes are cut at 64 KiB.
+- The version must be exactly three numbers, such as `0.2.0` or `v0.2.0`. Only a version newer than this copy is offered.
+- A download stops at the size the feed gives, and never goes past 200 MiB.
+- The feed request must end within 20 seconds. A download fails when its next bytes take over 30 seconds, when a minute brings under 16 KiB, or after an hour.
+
+### Signature checks
+
+Each copy checks a download against the update key built into it from `assets/update/jobdesk-update.pub`. The committed file is a placeholder, so a build that carries it has no key: it still checks the feed and shows a new version, but says it cannot check a download and offers only the release page. The Tag release workflow refuses to publish while the file is the placeholder.
+
+- A download is written to a `.part` file in `updates/<pid>/` of the data folder, which on macOS only the user can read. It gets its final name only once its signature checks.
+- The signature's trusted comment must name exactly one file, the versioned name of the build, such as `Jobdesk-v0.2.0-windows-x64-setup.exe`. So a signature of another build or another version fails.
+- A file that fails its check is deleted and never applied.
+- Restart to update reads the file once and checks those bytes again, against the signature of the release it was downloaded for, before it uses them. On macOS it unpacks those same bytes. On Windows it copies them into a new `apply-<pid>` folder, holds the copy open so nothing may write or delete it, checks the bytes read through that handle, then starts that copy.
+- Only the `sign` job of `tag-release.yml` holds the private key, and only on a release. Before tagging, the publish job checks both signatures against the public key of the previous release, because that is the key installed copies trust, or at the first release with a real key, against this commit's own. How to create and change the key is in [CONTRIBUTING](../../CONTRIBUTING.md#the-update-key).
+
+### Where an update may apply
+
+- macOS: only a copy that runs from a `.app` bundle, in a folder where Jobdesk can make a folder beside it. A mounted disk image or a copy macOS moved aside to open cannot. A build with an update key checks this at each launch: it makes a `.Jobdesk.app.probe-<pid>` folder beside the bundle and removes it at once.
+- Windows: only a copy with `uninstall.exe` beside it, which the installer puts there.
+- The macOS archive must hold only `Jobdesk.app/`. A path that leaves it, a link that is absolute or climbs with `..`, a path through a link, a hard link or a device refuses the whole archive. Unpacked files drop their set-id bits and group and other write.
+- The new bundle trades places with the old one in one step, with `renamex_np` and `RENAME_SWAP`. Where the disk cannot, the old one moves aside and comes back if the new one does not go in.
+- When Restart to update cannot apply, Jobdesk writes an `apply-failed` note in `updates/` and opens the old copy again while it is still there. The next launch reads the note once. On Windows, once the setup has started, Jobdesk notes nothing more.
+- At launch, `clear_downloads` empties `updates/`, but for that note and the folder of any Jobdesk that still runs. It removes links and never follows them. So a past session's download is never applied. On macOS it also deletes, beside the bundle, the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders of a Jobdesk that no longer runs: what a Restart to update or a launch check that died partway left there.
+
+### Accepted residuals
+
+1. The feed itself is not signed. Whoever can change `latest.json` on the latest release can show any version number and notes, or hide a release. They cannot get a file applied without a signature from the update key.
+2. Whoever holds the update key and its password, and can publish a release in this repository, can ship a build every copy installs.
+3. The macOS app is not signed with a Developer ID, so macOS App Management may stop Jobdesk from replacing the bundle. Then the swap fails, the old copy opens again, and the next launch says the new copy could not be put in place.
+4. The Windows setup, in its passive mode, closes every running `jobdesk.exe` without asking, so another Jobdesk window closes too, whatever it was doing. Restart to update waits only on the sessions of the window it runs in.

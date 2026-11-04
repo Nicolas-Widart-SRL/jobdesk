@@ -4,6 +4,9 @@
 # A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
 # tag-release.yml has no `quick` input, so a release always tests.
 # The Windows installer is not signed. The macOS app is ad-hoc signed but not notarized. See the Install section of README.md and the Package section of CONTRIBUTING.md.
+# `dmg` also holds the ad-hoc signed app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. On Windows
+# that file is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the
+# sign job of tag-release.yml signs, and only for a release.
 name: Installers
 
 on:
@@ -108,11 +111,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # bundle is the app a copy of Jobdesk downloads to update itself, packed as update_suffix.
           - os: macos-latest
             formats: app,dmg
             artifact: dmg
             built: '*.dmg'
             suffix: macos-arm64.dmg
+            bundle: Jobdesk.app
+            update_suffix: macos-arm64.app.tar.gz
           - os: windows-latest
             formats: nsis
             artifact: setup
@@ -130,10 +136,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - run: cargo packager --release --formats ${{ matrix.formats }}
-      - name: Name the installer
+      - name: Name the installer and pack the update
         env:
           BUILT: ${{ matrix.built }}
           NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
+          BUNDLE: ${{ matrix.bundle }}
+          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.update_suffix }}
         run: |
           # bash 3.2 on macOS has no mapfile; compgen exits 1 on no match.
           files=()
@@ -146,6 +154,14 @@ jobs:
           fi
           mkdir -p dist
           mv "${files[0]}" "dist/$NAME"
+          # The app holds one top folder, Jobdesk.app/, with no macOS metadata, as the app's unpacker expects.
+          if [ -n "$BUNDLE" ]; then
+            if [ ! -d "target/packages/$BUNDLE" ]; then
+              echo "::error::No $BUNDLE in target/packages."
+              exit 1
+            fi
+            COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "dist/$UPDATE_NAME" -C target/packages "$BUNDLE"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

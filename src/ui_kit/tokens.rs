@@ -168,6 +168,22 @@ pub const SCREEN_GAP: f32 = 28.0;
 pub const STATUS_PADDING: (f32, f32) = (28.0, 6.0);
 pub const STATUS_GAP: (f32, f32) = (18.0, 4.0);
 pub const STATUS_DOT: f32 = 8.0;
+/// The room between a status mark button's square and its words.
+pub const STATUS_MARK_GAP: f32 = 6.0;
+/// The hairline between Jobdesk's own group and Settings in the status strip.
+pub const STATUS_DIVIDER_HEIGHT: f32 = 16.0;
+/// A download's bar in the status strip, and the room either side of it.
+pub const STATUS_PROGRESS_BAR: f32 = 120.0;
+pub const STATUS_PROGRESS_GAP: f32 = 10.0;
+/// The release notes popover: its outer width, its inline padding, its head's padding above and below, the height of
+/// the notes, the notes' padding (left, top, right, bottom), the room between its parts, and the ready slip's padding.
+pub const NOTES_WIDTH: f32 = 468.0;
+pub const NOTES_INLINE: i8 = 18;
+pub const NOTES_HEAD_PADDING: (i8, i8) = (14, 12);
+pub const NOTES_HEIGHT: f32 = 288.0;
+pub const NOTES_BODY_PADDING: (i8, i8, i8, i8) = (16, 4, 22, 12);
+pub const NOTES_GAP: f32 = 12.0;
+pub const NOTES_SLIP_PADDING: (i8, i8) = (12, 9);
 pub const BRAND_MARK_WIDTH: f32 = 26.0;
 pub const BRAND_GAP: f32 = 8.0;
 pub const KEYS_GAP: f32 = 3.0;

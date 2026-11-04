@@ -20,7 +20,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 ## Logs
 
-- Run logs sit in the app's data folder: `~/Library/Application Support/Jobdesk/runs/` on macOS, `%APPDATA%\Jobdesk\data\runs\` on Windows. `intray/` beside `runs/` holds the tray decisions. `settings.json` beside them holds the preferences.
+- Run logs sit in the app's data folder: `~/Library/Application Support/Jobdesk/runs/` on macOS, `%APPDATA%\Jobdesk\data\runs\` on Windows. `intray/` beside `runs/` holds the tray decisions. `settings.json` beside them holds the preferences. `updates/` holds Jobdesk's own downloads, one folder for each Jobdesk that started a download, which a later launch removes once that Jobdesk has closed, and an `apply-failed` note that the next launch reads once.
 - Each run has one `<run id>.jsonl`: a `jobdesk_meta` line, then the raw stream-json. A reopened run adds a `jobdesk_resume` line before its `jobdesk_user` line, and a stop adds a `jobdesk_stop` line. `ls -t` lists the newest first.
 - The app writes no log of its own. A panic prints only to the terminal that started the app.
 - These files hold the user's real job search. Read them only when asked, and never copy a value into a test, a memory or a commit.
@@ -36,6 +36,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 ## Hard rules
 
 - One run works at a time, because two commands could overwrite each other's files.
+- An update applies only from Restart to update, and never while a Claude session is open, even one only waiting on a reply. Checking and downloading an update are not runs: they start no `claude`, write no run log and are not counted in Usage. See [Updates](docs/architecture/trust.md#updates).
 - Card actions never start a run. Y opens the launcher, and the user starts the run there.
 - Tool permissions are allowed and noted in the activity by default, and Settings › Permissions turns prompts on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Tool permissions](docs/architecture/trust.md#tool-permissions).
 - Authentication stays with the `claude` CLI, and Jobdesk offers no login. The one exception is an optional Anthropic Console API key the user pastes in Settings › Providers. It is stored only in the system keychain, read from it once per launch, until a read succeeds, and then held in process memory for the session, and passed only in the environment of the `claude` process, never when an inherited `ANTHROPIC_BASE_URL` is neither `https` nor `http` to this machine without a proxy variable. It never goes in a file, a log, a command line, a panic or a `Debug` impl, and a saved key is never on screen in full. Where the whole key shows up in what a task's process prints, the run log, the activity and the failure get its mask. The one exception is the key being typed, while the user presses Show.

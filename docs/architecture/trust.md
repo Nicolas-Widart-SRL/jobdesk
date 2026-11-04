@@ -137,7 +137,7 @@ The `updates` feature reads the feed, downloads a build, checks its signature an
 
 ### Signature checks
 
-Each copy checks a download against the update key built into it from `assets/update/jobdesk-update.pub`. The committed file is a placeholder, so a build that carries it has no key: it still checks the feed and shows a new version, but says it cannot check a download and offers only the release page. The Tag release workflow refuses to publish while the file is the placeholder.
+Each copy checks a download against the update key built into it from `assets/update/jobdesk-update.pub`, which holds the public key releases are signed with. A build whose file holds no key it can read has no key: it still checks the feed and shows a new version, but says it cannot check a download and offers only the release page. The Tag release workflow refuses to publish while the file holds the word `PLACEHOLDER` in place of a key.
 
 - A download is written to a `.part` file in `updates/<pid>/` of the data folder, which on macOS only the user can read. It gets its final name only once its signature checks.
 - The signature's trusted comment must name exactly one file, the versioned name of the build, such as `Jobdesk-v0.2.0-windows-x64-setup.exe`. So a signature of another build or another version fails.

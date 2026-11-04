@@ -44,26 +44,22 @@ The Release workflow needs the `RELEASE_TOKEN` secret: a fine-grained personal a
 
 ### The update key
 
-Each copy of Jobdesk checks a download against the public key built into it, from `assets/update/jobdesk-update.pub`. The committed file is a placeholder: until the real key replaces it, no copy can update itself, and the Tag release workflow fails.
+Each copy of Jobdesk checks a download against the public key built into it, from `assets/update/jobdesk-update.pub`. That file holds the public key of the key pair the Tag release workflow signs with. The private key and its password are the `JOBDESK_UPDATE_KEY` and `JOBDESK_UPDATE_KEY_PASSWORD` secrets.
 
-Create the key once, on your own computer. It asks for a password:
+The key pair was created on the maintainer's own computer, and a new one is created the same way. It asks for a password:
 
 ```bash
 cargo packager signer generate --path ~/.jobdesk/update.key
 ```
 
-It writes the private key to `~/.jobdesk/update.key` and the public key to `~/.jobdesk/update.key.pub`. Put the public key in place of the placeholder and merge it through a pull request:
-
-```bash
-cp ~/.jobdesk/update.key.pub assets/update/jobdesk-update.pub
-```
-
-Then store the private key and its password as secrets:
+It writes the private key to `~/.jobdesk/update.key` and the public key to `~/.jobdesk/update.key.pub`. The public key file is committed unchanged as `assets/update/jobdesk-update.pub`, through a pull request. The private key and its password are stored as secrets:
 
 ```bash
 gh secret set JOBDESK_UPDATE_KEY < ~/.jobdesk/update.key
 gh secret set JOBDESK_UPDATE_KEY_PASSWORD
 ```
+
+To change the key, take these two steps in the order the list below gives.
 
 - Keep an offline backup of the private key and its password. With the key lost, no release can reach the copies already installed, and every user has to install the next one by hand.
 - Copies of releases made before the first signed release with updates cannot update themselves, so their users install that release by hand once.

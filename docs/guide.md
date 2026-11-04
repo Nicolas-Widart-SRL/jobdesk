@@ -107,7 +107,7 @@ Some copies cannot update themselves. In place of Download, the notes and About 
 
 - "Jobdesk cannot replace itself where it is installed." On macOS, a copy that runs from the disk image, or that macOS moved aside to open, says this.
 - "This copy was not installed by a Jobdesk installer, so it cannot update itself."
-- "This build has no update key, so it cannot check a download." Builds say this until the real update key is in place.
+- "This build has no update key, so it cannot check a download." A build made without an update key it can read says this.
 - "Jobdesk publishes no build for this computer, so it cannot update itself." Such a copy checks nothing, and About says this under Latest version.
 - "This copy has no version number Jobdesk can read, so it cannot tell whether a newer one is out." Such a copy checks nothing, and the word beside About reads Version unknown.
 

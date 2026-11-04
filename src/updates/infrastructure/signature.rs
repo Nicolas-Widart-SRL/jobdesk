@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use minisign_verify::{PublicKey, Signature};
 
 /// The public half of the key that signs each release, as `cargo packager signer generate` writes it.
-/// The committed file is a placeholder until the real key replaces it, and a build that carries it cannot update.
+/// The committed file holds the release public key in base64.
 const EMBEDDED: &str = include_str!("../../../assets/update/jobdesk-update.pub");
 
 /// The key a download must be signed with.
@@ -15,7 +15,7 @@ const EMBEDDED: &str = include_str!("../../../assets/update/jobdesk-update.pub")
 pub struct UpdateKey(PublicKey);
 
 impl UpdateKey {
-    /// The key built into this copy. `None` while it is still the placeholder.
+    /// The key built into this copy. `None` only when the built-in text is not a readable key.
     pub fn embedded() -> Option<UpdateKey> {
         Self::decode(EMBEDDED)
     }
@@ -90,8 +90,8 @@ pub mod tests {
     const OLDER: &str = "Jobdesk-v0.1.9-windows-x64-setup.exe";
 
     #[test]
-    fn the_placeholder_key_is_no_key_and_a_real_one_reads() {
-        assert_eq!(UpdateKey::embedded().is_none(), EMBEDDED.starts_with("PLACEHOLDER"), "the built-in key is the placeholder or a key that reads");
+    fn the_built_in_key_reads_and_text_that_is_no_key_does_not() {
+        assert!(UpdateKey::embedded().is_some(), "the committed key reads");
         assert!(UpdateKey::decode("PLACEHOLDER: this build has no update key.").is_none());
         assert!(UpdateKey::decode("").is_none());
         assert!(UpdateKey::decode("not base64 at all").is_none());

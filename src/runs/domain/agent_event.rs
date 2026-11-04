@@ -1,3 +1,5 @@
+use crate::runs::domain::Tokens;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuestionOption {
     pub label: String,
@@ -62,6 +64,14 @@ pub enum AgentEvent {
         request_id: String,
     },
     UsageChanged(Usage),
+    /// What one assistant message used. Claude can repeat a message's id, and the figures are the same or larger.
+    MessageUsage {
+        id: String,
+        model: String,
+        tokens: Tokens,
+    },
+    /// A line of the stream that carried no other event. It shows the run is alive.
+    Heard,
     /// How many subagents still work in the background. They can outlive the turn that started them.
     BackgroundTasksChanged {
         count: usize,

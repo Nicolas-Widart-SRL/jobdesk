@@ -96,6 +96,10 @@ pub const DAY_STAMP_MAX_TICKS: usize = 40;
 pub const DAY_STAMP_SETTLE: f32 = 1.04;
 /// How far a decided card slides toward the rail. How long it moves for is `motion_time`, which reduced motion zeroes.
 pub const MOTION_SLIDE: f32 = 12.0;
+/// The live sweep's segment, as a share of its edge's width.
+pub const SWEEP_SHARE: f32 = 0.3;
+/// The long-quiet edge's dashes: a dash, then a gap.
+pub const SWEEP_DASH: (f32, f32) = (6.0, 4.0);
 pub const AGENDA_DAY_WIDTH: f32 = 50.0;
 pub const AGENDA_TIP_WIDTH: f32 = 250.0;
 /// The stamp-ink edge on a card that waits on the user.

@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{AD_ALONE, CheckRow, FreelanceGate, FreelanceGates, JobBoard, JobChecks, JobView, Lane, failed_gate, fit_band};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Due, Effect, GateRow, Subject};
-use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, first_line, stop_point, wants_reply};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, cost_text, first_line, stop_point, wants_reply};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -85,7 +85,8 @@ fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> 
         over: None,
         subject: Subject::Run(run.id.clone()),
         title: words.title,
-        subtitle: format!("{line} {}, ${:.2} of ${:.2} spent", words.status, run.cost_usd, run.budget_usd),
+        // The cost as Tasks shows it, About while it holds an estimate, so the two screens agree.
+        subtitle: format!("{line} {}, {} spent", words.status, cost_text(run)),
         take: words.take.into(),
         when: words.when.into(),
         due: None,
@@ -767,6 +768,29 @@ mod tests {
 
     fn says(run: &mut Run, text: &str) {
         run.apply(AgentEvent::AssistantText { text: text.into(), nested: false });
+    }
+
+    #[test]
+    fn a_run_card_spends_the_cost_tasks_shows() {
+        let mut run = paused(PromptKind::Questions(vec![]));
+        let tokens = crate::runs::application::Tokens { output: 40_000, ..Default::default() };
+        run.apply(AgentEvent::MessageUsage { id: "m1".into(), model: "claude-opus-4-5".into(), tokens });
+        assert_eq!(turn_card_of(&run).unwrap().subtitle, "/apply x is paused, About $1.00 of $3.00 spent", "the estimate counts before the result");
+        end_turn(&mut run, 0.5);
+        assert_eq!(turn_card_of(&run).unwrap().subtitle, "/apply x is paused, $0.50 of $3.00 spent", "the result is exact");
+    }
+
+    #[test]
+    fn an_estimate_a_session_left_stays_marked_on_the_run_card() {
+        let mut run = run_of("r2", "/rank");
+        let tokens = crate::runs::application::Tokens { output: 40_000, ..Default::default() };
+        run.apply(AgentEvent::MessageUsage { id: "m1".into(), model: "claude-opus-4-5".into(), tokens });
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        run.note_reply("go on");
+        run.note_process_start(crate::shared_kernel::SignIn::ClaudeSignIn);
+        says(&mut run, "Rank all postings, or only the shortlist?");
+        end_turn(&mut run, 0.5);
+        assert_eq!(turn_card_of(&run).unwrap().subtitle, "/rank is waiting, About $1.50 of $2.00 spent");
     }
 
     #[test]

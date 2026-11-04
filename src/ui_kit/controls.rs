@@ -13,7 +13,7 @@ use crate::ui_kit::tokens::{
     BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FIELD_HEIGHT, FIELD_PADDING, FOCUS_OFFSET, FOCUS_RING,
     HAIRLINE, KEY_SIZE, KEYS_GAP, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_EDGE, PICK_ROW_HEIGHT,
     PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING,
-    STATUS_DOT, STATUS_MARK_GAP, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, TOGGLE_GAP, Type,
+    STATUS_DOT, STATUS_MARK_GAP, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, SWEEP_DASH, SWEEP_SHARE, TOGGLE_GAP, Type,
 };
 
 #[derive(Clone, Copy)]
@@ -404,6 +404,79 @@ pub fn set_reduced_motion(ctx: &egui::Context, reduced: bool) {
 pub fn motion_time(ctx: &egui::Context) -> f32 {
     let reduced = ctx.data(|data| data.get_temp::<bool>(reduced_motion_id())).unwrap_or(false);
     if reduced { 0.0 } else { MOTION_SECONDS }
+}
+
+/// How long the live sweep takes to cross its edge while Claude works, in seconds.
+const SWEEP_PASS: f64 = 2.4;
+/// How long the sweep rests past the right before the next pass, in seconds.
+const SWEEP_REST: f64 = 0.6;
+/// How much slower a quiet run's sweep goes: one pass every 6 s instead of 3 s.
+const SWEEP_QUIET: f64 = 2.0;
+
+/// What a live run's edge shows, by how long the run has been quiet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepForm {
+    /// An update in the last 30 s: an `active` segment, one pass every 3 s.
+    Working,
+    /// No update for 30 s to 2 min: a `muted` segment at half speed.
+    Quiet,
+    /// No update for 2 min and more: a still dashed rule in `muted`.
+    LongQuiet,
+    /// The stop is settling: a still solid rule in `muted`.
+    Stopping,
+}
+
+/// Where the moving segment sits `seconds` into the sweep, as shares of the edge's width from its left: `(left, right)`.
+/// It enters from outside the left and leaves past the right, so either end may lie outside 0 to 1.
+/// None while the segment rests between passes, and for the still forms.
+pub fn sweep_span(seconds: f64, form: SweepForm) -> Option<(f32, f32)> {
+    let slow = match form {
+        SweepForm::Working => 1.0,
+        SweepForm::Quiet => SWEEP_QUIET,
+        SweepForm::LongQuiet | SweepForm::Stopping => return None,
+    };
+    let pass = SWEEP_PASS * slow;
+    let at = seconds.rem_euclid(pass + SWEEP_REST * slow);
+    if at >= pass {
+        return None;
+    }
+    let t = (at / pass) as f32;
+    let eased = t * t * (3.0 - 2.0 * t);
+    let left = -SWEEP_SHARE + eased * (1.0 + SWEEP_SHARE);
+    Some((left, left + SWEEP_SHARE))
+}
+
+/// Whether the sweep in `form` moves, and so needs frames: never while motion is reduced, nor in a still form.
+pub fn sweep_moves(ctx: &egui::Context, form: SweepForm) -> bool {
+    motion_time(ctx) > 0.0 && matches!(form, SweepForm::Working | SweepForm::Quiet)
+}
+
+/// The live-run signal on `edge`, a strip `MARK_RULE` tall along a band cell's bottom: a segment `seconds` into its sweep,
+/// or a still rule. No track is drawn under the segment. Reduced motion stills it: a solid rule in the segment's ink,
+/// dashed when long quiet. The caller passes the time and schedules the frames: this returns whether the sweep moves.
+/// Decoration only, so it adds nothing for screen readers.
+pub fn live_sweep(ui: &Ui, edge: Rect, form: SweepForm, seconds: f64) -> bool {
+    let p = Palette::of(ui);
+    let painter = ui.painter();
+    let ink = if form == SweepForm::Working { p.active } else { p.muted };
+    let moves = sweep_moves(ui.ctx(), form);
+    if form == SweepForm::LongQuiet {
+        let (dash, gap) = SWEEP_DASH;
+        let mut x = edge.left();
+        while x < edge.right() {
+            painter.rect_filled(Rect::from_min_max(egui::pos2(x, edge.top()), egui::pos2((x + dash).min(edge.right()), edge.bottom())), 0.0, ink);
+            x += dash + gap;
+        }
+    } else if !moves {
+        painter.rect_filled(edge, 0.0, ink);
+    } else if let Some((left, right)) = sweep_span(seconds, form) {
+        let from = (edge.left() + edge.width() * left).max(edge.left());
+        let to = (edge.left() + edge.width() * right).min(edge.right());
+        if to > from {
+            painter.rect_filled(Rect::from_min_max(egui::pos2(from, edge.top()), egui::pos2(to, edge.bottom())), 0.0, ink);
+        }
+    }
+    moves
 }
 
 fn command_request_id() -> egui::Id {
@@ -1458,6 +1531,64 @@ mod tests {
         assert!(secret.borrow().shown);
         assert_eq!(harness.get_by_label("Show").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
         harness.get_by_role(egui::accesskit::Role::TextInput);
+    }
+
+    fn span(seconds: f64, form: SweepForm) -> (f32, f32) {
+        sweep_span(seconds, form).unwrap_or_else(|| panic!("no segment at {seconds} s"))
+    }
+
+    #[test]
+    fn a_working_sweep_crosses_in_2_4_seconds_then_rests() {
+        let (left, right) = span(0.0, SweepForm::Working);
+        assert!((left + SWEEP_SHARE).abs() < 1e-6 && right.abs() < 1e-6, "starts just outside the left: {left}, {right}");
+        let (left, right) = span(1.2, SweepForm::Working);
+        assert!((left - 0.35).abs() < 1e-4 && (right - 0.65).abs() < 1e-4, "halfway at 1.2 s: {left}, {right}");
+        let (left, _) = span(2.399, SweepForm::Working);
+        assert!(left > 0.99, "leaves past the right: {left}");
+        for rest in [2.4, 2.7, 2.99] {
+            assert_eq!(sweep_span(rest, SweepForm::Working), None, "rests at {rest} s");
+        }
+        assert_eq!(sweep_span(3.0, SweepForm::Working), sweep_span(0.0, SweepForm::Working));
+        assert_eq!(sweep_span(7.2, SweepForm::Working), sweep_span(1.2, SweepForm::Working));
+    }
+
+    #[test]
+    fn a_working_sweep_eases_in_and_out() {
+        let at = |seconds| span(seconds, SweepForm::Working).0;
+        let start = at(0.24) - at(0.0);
+        let middle = at(1.32) - at(1.08);
+        let end = at(2.399) - at(2.159);
+        assert!(start < middle && end < middle, "{start}, {middle}, {end}");
+    }
+
+    #[test]
+    fn the_segment_is_thirty_percent_of_the_edge() {
+        for seconds in [0.1, 0.8, 1.6, 2.3, 4.0] {
+            let (left, right) = span(seconds, SweepForm::Working);
+            assert!((right - left - 0.3).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn a_quiet_sweep_takes_twice_as_long() {
+        assert_eq!(span(2.4, SweepForm::Quiet), span(1.2, SweepForm::Working));
+        assert!(sweep_span(4.7, SweepForm::Quiet).is_some());
+        for rest in [4.8, 5.5, 5.99] {
+            assert_eq!(sweep_span(rest, SweepForm::Quiet), None, "rests at {rest} s");
+        }
+        assert_eq!(sweep_span(6.0, SweepForm::Quiet), sweep_span(0.0, SweepForm::Quiet));
+    }
+
+    #[test]
+    fn still_forms_have_no_segment_and_never_move() {
+        let ctx = egui::Context::default();
+        for form in [SweepForm::LongQuiet, SweepForm::Stopping] {
+            assert_eq!(sweep_span(1.2, form), None);
+            assert!(!sweep_moves(&ctx, form));
+        }
+        assert!(sweep_moves(&ctx, SweepForm::Working) && sweep_moves(&ctx, SweepForm::Quiet));
+        set_reduced_motion(&ctx, true);
+        assert!(!sweep_moves(&ctx, SweepForm::Working) && !sweep_moves(&ctx, SweepForm::Quiet));
     }
 
     #[test]

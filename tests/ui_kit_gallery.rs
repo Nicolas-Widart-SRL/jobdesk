@@ -6,21 +6,21 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
 use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
-use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, RUN_SIDE, TRAY_RAIL};
+use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, MARK_RULE, ROW_GAP, RUN_SIDE, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, NotesAction, PageSet, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, TabMark, Title, Tone, Type, agenda_return, agenda_row,
-    alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box,
+    KnotState, NodeMarks, NotesAction, PageSet, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, SweepForm, TabMark, Title, Tone, Type, agenda_return,
+    agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box,
     command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal,
-    deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, faint_mono, fat_tally, figure, figure_band, figure_band_loading,
-    fitted_pages, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, measure, muted, note, page_frame,
-    page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, profile_markdown,
-    prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich, role_entry, row_tag, ruled_note_with_command, score, search_field,
-    secret_field, segmented, select_row, setting_check, setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page,
-    shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_command_action_hinted, small_danger_button,
-    small_key_button, small_toggle, solid_tag, split_paper, stamp, stamp_square, stamped_head, status_action, status_button, status_divider, status_dot,
-    status_frame, status_line, status_mark_button, status_progress, status_waits, step_line, strong, table_head, tag, tally, tally_strip, text_field,
-    toggle_group, turn_band, undo_row,
+    deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure, figure_band,
+    figure_band_loading, fitted_pages, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, live_sweep,
+    measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button,
+    primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich, role_entry, row_tag,
+    ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check, setting_check_amount,
+    setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip,
+    slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle, solid_tag, split_paper, stamp, stamp_square,
+    stamped_head, status_action, status_button, status_divider, status_dot, status_frame, status_line, status_mark_button, status_progress, status_waits,
+    step_line, strong, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, turn_band_live, undo_row,
 };
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
@@ -501,7 +501,7 @@ fn runs(ui: &mut Ui) {
         ui,
         &[
             BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
-            BandCell { label: "Whose turn", value: "Claude's", note: "Working for 1m 50s", look: CellLook::Ink(Tone::Active), marks: &[] },
+            BandCell { label: "Whose turn", value: "Claude's", note: "Last update 3s ago", look: CellLook::Ink(Tone::Active), marks: &[] },
             BandCell {
                 label: "What next",
                 value: "Nothing for now",
@@ -518,7 +518,7 @@ fn runs(ui: &mut Ui) {
     turn_band(
         ui,
         &[
-            BandCell { label: "Where", value: "All 7 steps", note: "Finished in 14m 20s", look: CellLook::Plain, marks: &finished },
+            BandCell { label: "Where", value: "All 7 steps", note: "Finished in 14:20", look: CellLook::Plain, marks: &finished },
             BandCell { label: "Whose turn", value: "Nobody", note: "The session is closed", look: CellLook::Plain, marks: &[] },
             BandCell { label: "What next", value: "Read the documents", note: "Open the dossier, then send it yourself.", look: CellLook::Plain, marks: &[] },
         ],
@@ -1084,6 +1084,93 @@ fn usage_sheet(theme: Theme, name: &str) {
     harness.hover_at(day.center());
     harness.run_steps(4);
     compare(&mut harness, name);
+}
+
+/// The live sheet's size: the main sheet is already as tall as a texture holds.
+const LIVE_SHEET: [f32; 2] = [1000.0, 1270.0];
+/// The width of a key frame of the sweep.
+const SWEEP_FRAME: f32 = 130.0;
+
+/// One band of a live run, with the sweep in `form` at `seconds` on the Whose turn cell. `reduced` stills it as Reduce motion does.
+fn live_band(ui: &mut Ui, title: &str, form: SweepForm, seconds: f64, reduced: bool, who: &str, next: (&str, &str)) {
+    desk_label(ui, title, Type::NOTE, Ink::Muted);
+    let working = [(2, Some(Ink::Text)), (1, Some(Ink::Status(Tone::Active))), (4, None)];
+    set_reduced_motion(ui.ctx(), reduced);
+    turn_band_live(
+        ui,
+        &[
+            BandCell { label: "Where", value: "2 Draft", note: "2 of 7 steps done", look: CellLook::Plain, marks: &working },
+            BandCell { label: "Whose turn", value: "Claude's", note: who, look: CellLook::Ink(Tone::Active), marks: &[] },
+            BandCell { label: "What next", value: next.0, note: next.1, look: CellLook::Plain, marks: &[] },
+        ],
+        false,
+        "Where the run is",
+        "2 of 7 steps done",
+        Some((1, form, seconds)),
+    );
+    set_reduced_motion(ui.ctx(), false);
+    ui.add_space(14.0);
+}
+
+/// Every form of a live run's sweep at a fixed time, its key frames, and the estimate note under Cost.
+fn live(ui: &mut Ui) {
+    let leave = ("Nothing for now", "You can leave. The Tasks tab marks it when it needs you.");
+    live_band(ui, "Working, 1.2 s into a pass", SweepForm::Working, 1.2, false, "Last update 3s ago", leave);
+    desk_label(ui, "Working, its key frames, then at rest", Type::NOTE, Ink::Muted);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
+        for seconds in [0.4, 0.8, 1.2, 1.6, 2.0, 2.6] {
+            ui.vertical(|ui| {
+                let (edge, _) = ui.allocate_exact_size(egui::vec2(SWEEP_FRAME, MARK_RULE), egui::Sense::hover());
+                // The track shows here only to place the segment.
+                ui.painter().rect_filled(edge, 0.0, Palette::of(ui).off);
+                live_sweep(ui, edge, SweepForm::Working, seconds);
+                desk_label(ui, format!("{seconds} s"), Type::SMALL, Ink::Muted);
+            });
+        }
+    });
+    ui.add_space(14.0);
+    live_band(ui, "Quiet, 30 s to 2 min: half speed, 2.4 s into a pass", SweepForm::Quiet, 2.4, false, "No update for 48s", leave);
+    let quiet = ("Nothing for now", "Long writes can be quiet. Stop run keeps the files so far.");
+    live_band(ui, "Long quiet, 2 min and more", SweepForm::LongQuiet, 1.2, false, "No update for 3 min", quiet);
+    live_band(ui, "Stopping", SweepForm::Stopping, 1.2, false, "Stopping", ("Nothing for now", ""));
+    live_band(ui, "Reduced motion, working", SweepForm::Working, 1.2, true, "Last update 3s ago", leave);
+    live_band(ui, "Reduced motion, quiet", SweepForm::Quiet, 2.4, true, "No update for 48s", leave);
+    live_band(ui, "Reduced motion, long quiet", SweepForm::LongQuiet, 1.2, true, "No update for 3 min", quiet);
+    ui.allocate_ui(egui::vec2(RUN_SIDE, 200.0), |ui| {
+        slip(ui, |ui| {
+            panel_header(ui, "This run", None);
+            panel_body(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = ROW_GAP;
+                ui.horizontal(|ui| {
+                    muted(ui, "Cost");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| desk_label(ui, "About $1.24 of $10.00", Type::BODY, Ink::Text));
+                });
+                slip_bar(ui, 0.124, Ink::Text);
+                estimate_note(ui, "Estimated until Claude's turn ends.");
+            });
+        });
+    });
+}
+
+fn live_sheet(theme: Theme, name: &str) {
+    let mut harness = with_renderer(Harness::builder().with_size(LIVE_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(|ui| {
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, live));
+        });
+    harness.run_steps(3);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn ui_kit_gallery_live_dark() {
+    live_sheet(Theme::Dark, "ui_kit_gallery_live_dark");
+}
+
+#[test]
+fn ui_kit_gallery_live_light() {
+    live_sheet(Theme::Light, "ui_kit_gallery_live_light");
 }
 
 /// The settings sheet's size: room for every row and the open popover under the last one.

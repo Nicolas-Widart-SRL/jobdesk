@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use serde_json::{Map, Value, json};
 
-use crate::runs::domain::{AgentEvent, Decision, ModelCost, Prompt, PromptKind, Question, QuestionOption, Usage};
+use crate::runs::domain::{AgentEvent, Decision, ModelCost, Prompt, PromptKind, Question, QuestionOption, Tokens, Usage};
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// Longest tool input shown on a permission card. Longer input is cut with a clear marker.
@@ -12,27 +14,32 @@ fn text_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
-/// Translates one line of `claude --output-format stream-json`. Unknown lines mean nothing here.
+/// Translates one line of `claude --output-format stream-json`, on its own. Unknown lines mean nothing here.
+/// The app reads through `StreamReader`, which needs the lines in order.
+#[cfg(test)]
 pub fn parse_line(line: &str) -> Vec<AgentEvent> {
-    let Ok(event) = serde_json::from_str::<Value>(line) else { return Vec::new() };
-    match text_of(&event, "type") {
-        "system" if text_of(&event, "subtype") == "init" => {
+    serde_json::from_str::<Value>(line).map_or_else(|_| Vec::new(), |event| parse_event(&event))
+}
+
+fn parse_event(event: &Value) -> Vec<AgentEvent> {
+    match text_of(event, "type") {
+        "system" if text_of(event, "subtype") == "init" => {
             vec![AgentEvent::SessionStarted {
-                session_id: text_of(&event, "session_id").to_owned(),
-                model: text_of(&event, "model").to_owned(),
-                api_key_source: text_of(&event, "apiKeySource").to_owned(),
+                session_id: text_of(event, "session_id").to_owned(),
+                model: text_of(event, "model").to_owned(),
+                api_key_source: text_of(event, "apiKeySource").to_owned(),
             }]
         }
-        "system" if text_of(&event, "subtype") == "background_tasks_changed" => {
+        "system" if text_of(event, "subtype") == "background_tasks_changed" => {
             vec![AgentEvent::BackgroundTasksChanged { count: event.get("tasks").and_then(Value::as_array).map_or(0, Vec::len) }]
         }
-        "stream_event" => text_delta(&event).into_iter().collect(),
-        "assistant" => assistant_message(&event),
-        "user" => tool_results(&event),
-        "rate_limit_event" => vec![AgentEvent::UsageChanged(usage(&event))],
-        "control_request" => prompt(&event).map(AgentEvent::PromptRaised).into_iter().collect(),
-        "control_cancel_request" => vec![AgentEvent::PromptWithdrawn { request_id: text_of(&event, "request_id").to_owned() }],
-        "result" => vec![turn_ended(&event)],
+        "stream_event" => stream_event(event),
+        "assistant" => assistant_message(event),
+        "user" => tool_results(event),
+        "rate_limit_event" => vec![AgentEvent::UsageChanged(usage(event))],
+        "control_request" => prompt(event).map(AgentEvent::PromptRaised).into_iter().collect(),
+        "control_cancel_request" => vec![AgentEvent::PromptWithdrawn { request_id: text_of(event, "request_id").to_owned() }],
+        "result" => vec![turn_ended(event)],
         _ => Vec::new(),
     }
 }
@@ -52,18 +59,115 @@ fn text_delta(event: &Value) -> Option<AgentEvent> {
 fn assistant_message(event: &Value) -> Vec<AgentEvent> {
     let nested = is_nested(event);
     let blocks = event.pointer("/message/content").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
-    blocks
-        .iter()
-        .filter_map(|block| match text_of(block, "type") {
-            "text" => Some(AgentEvent::AssistantText { text: text_of(block, "text").to_owned(), nested }),
-            "tool_use" => {
-                let name = text_of(block, "name").to_owned();
-                let summary = tool_summary(&name, block.get("input").unwrap_or(&Value::Null));
-                Some(AgentEvent::ToolStarted { id: text_of(block, "id").to_owned(), name, summary, nested })
-            }
-            _ => None,
-        })
-        .collect()
+    let events = blocks.iter().filter_map(|block| match text_of(block, "type") {
+        "text" => Some(AgentEvent::AssistantText { text: text_of(block, "text").to_owned(), nested }),
+        "tool_use" => {
+            let name = text_of(block, "name").to_owned();
+            let summary = tool_summary(&name, block.get("input").unwrap_or(&Value::Null));
+            Some(AgentEvent::ToolStarted { id: text_of(block, "id").to_owned(), name, summary, nested })
+        }
+        _ => None,
+    });
+    events.chain(message_usage(event.get("message"))).collect()
+}
+
+/// What the message used, when it names itself and says. A subagent's message costs too, so nesting does not matter.
+/// An `assistant` line and a `message_start` both carry this, but with the output count of the start, which is low.
+fn message_usage(message: Option<&Value>) -> Option<AgentEvent> {
+    let message = message?;
+    let usage = message.get("usage").filter(|usage| usage.is_object())?;
+    usage_event(text_of(message, "id"), text_of(message, "model"), usage)
+}
+
+/// With partial messages on, the final figures of a message come in its `message_delta`, which names neither model nor id:
+/// the id is the line's own `api_message_id`, which is assumed to be the `message.id` of the lines before it.
+/// The model is left empty here. `StreamReader` fills in the one it saw for the id, and drops the event when it saw none.
+fn message_delta_usage(event: &Value) -> Option<AgentEvent> {
+    let usage = event.pointer("/event/usage").filter(|usage| usage.is_object())?;
+    usage_event(text_of(event, "api_message_id"), "", usage)
+}
+
+fn usage_event(id: &str, model: &str, usage: &Value) -> Option<AgentEvent> {
+    if id.is_empty() {
+        return None;
+    }
+    // A message that took several calls lists each in `iterations`. The larger of the total and their sum stands.
+    let iterations = usage.get("iterations").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    let count = |key: &str| {
+        let total = usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let summed = iterations.iter().fold(0u64, |sum, call| sum.saturating_add(call.get(key).and_then(Value::as_u64).unwrap_or(0)));
+        total.max(summed)
+    };
+    let tokens = Tokens {
+        input: count("input_tokens"),
+        output: count("output_tokens"),
+        cache_write: count("cache_creation_input_tokens"),
+        cache_read: count("cache_read_input_tokens"),
+    };
+    Some(AgentEvent::MessageUsage { id: id.to_owned(), model: model.to_owned(), tokens })
+}
+
+/// The most messages whose model and figures `StreamReader` keeps. A message's lines come close together,
+/// so far fewer than this are ever in flight.
+const MESSAGES_KEPT: usize = 512;
+
+/// Reads the lines of one process in order. It remembers each message's model and largest figures,
+/// so a `message_delta`, which names no model and may leave a figure out, still gives the whole of its message.
+#[derive(Debug, Default)]
+pub struct StreamReader {
+    seen: HashMap<String, (String, Tokens)>,
+}
+
+impl StreamReader {
+    pub fn read(&mut self, line: &str) -> Vec<AgentEvent> {
+        let Ok(value) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+        let from_delta = is_message_delta(&value);
+        parse_event(&value)
+            .into_iter()
+            .filter_map(|event| match event {
+                AgentEvent::MessageUsage { id, model, tokens } => self.remember(id, model, tokens, from_delta),
+                other => Some(other),
+            })
+            .collect()
+    }
+
+    /// A message's figures only grow, so the larger of each one stands. A model not named is the one seen before.
+    /// A `message_delta` for an id the reader has not seen start is dropped, because it names no model to price it by,
+    /// and its id may not be the one its message's other lines went by: a guess could count the message twice.
+    /// So the estimate can read low there, but never double. A `message_start` or `assistant` line that names its own id
+    /// but no model is kept, and priced by the fallback of `price_for`.
+    fn remember(&mut self, id: String, model: String, tokens: Tokens, from_delta: bool) -> Option<AgentEvent> {
+        if from_delta && !self.seen.contains_key(&id) {
+            return None;
+        }
+        if self.seen.len() >= MESSAGES_KEPT && !self.seen.contains_key(&id) {
+            self.seen.clear();
+        }
+        let (known_model, known) = self.seen.entry(id.clone()).or_default();
+        if !model.is_empty() {
+            *known_model = model;
+        }
+        *known = Tokens {
+            input: known.input.max(tokens.input),
+            output: known.output.max(tokens.output),
+            cache_write: known.cache_write.max(tokens.cache_write),
+            cache_read: known.cache_read.max(tokens.cache_read),
+        };
+        Some(AgentEvent::MessageUsage { id, model: known_model.clone(), tokens: *known })
+    }
+}
+
+fn is_message_delta(event: &Value) -> bool {
+    text_of(event, "type") == "stream_event" && event.pointer("/event/type").and_then(Value::as_str) == Some("message_delta")
+}
+
+/// A `stream_event`: a partial text, or the usage of the message it belongs to.
+fn stream_event(event: &Value) -> Vec<AgentEvent> {
+    match event.pointer("/event/type").and_then(Value::as_str) {
+        Some("message_start") => message_usage(event.pointer("/event/message")).into_iter().collect(),
+        Some("message_delta") => message_delta_usage(event).into_iter().collect(),
+        _ => text_delta(event).into_iter().collect(),
+    }
 }
 
 /// The one thing about a tool call a person wants to read.
@@ -302,9 +406,51 @@ fn session_scoped(suggestions: Option<&str>) -> Value {
     rules
 }
 
+/// The lines of one assistant message as `claude` writes them with partial messages on, with fictional values.
+/// `parent` is the JSON of `parent_tool_use_id`: `null`, or a quoted tool id for a subagent's message.
+#[cfg(test)]
+pub(super) mod captured {
+    fn usage(output: u64) -> String {
+        format!(
+            r#"{{"input_tokens":6,"cache_creation_input_tokens":1500,"cache_read_input_tokens":20000,"cache_creation":{{"ephemeral_5m_input_tokens":1500,"ephemeral_1h_input_tokens":0}},"output_tokens":{output},"service_tier":"standard","inference_geo":"global","speed":"standard"}}"#
+        )
+    }
+
+    fn message(id: &str, content: &str, output: u64) -> String {
+        format!(
+            r#"{{"model":"claude-haiku-4-5","id":"{id}","type":"message","role":"assistant","content":[{content}],"stop_reason":null,"stop_sequence":null,"usage":{}}}"#,
+            usage(output)
+        )
+    }
+
+    /// The first line of a message. Its output count is only the first few tokens.
+    pub fn message_start(id: &str, parent: &str, output: u64) -> String {
+        format!(
+            r#"{{"type":"stream_event","event":{{"type":"message_start","message":{}}},"session_id":"s1","parent_tool_use_id":{parent},"uuid":"u1","api_message_id":"{id}"}}"#,
+            message(id, "", output)
+        )
+    }
+
+    /// The line that carries a content block. It comes before the message ends, so it repeats the start's usage.
+    pub fn assistant(id: &str, parent: &str, content: &str, output: u64) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{},"parent_tool_use_id":{parent},"session_id":"s1","uuid":"u2","timestamp":"2026-10-31T10:00:00.000Z","request_id":"req_1"}}"#,
+            message(id, content, output)
+        )
+    }
+
+    /// The last line of a message, with its final figures. It names no model and no message id, only the line's `api_message_id`.
+    pub fn message_delta(id: &str, parent: &str, output: u64) -> String {
+        format!(
+            r#"{{"type":"stream_event","event":{{"type":"message_delta","delta":{{"stop_reason":"end_turn","stop_sequence":null}},"usage":{{"input_tokens":6,"cache_creation_input_tokens":1500,"cache_read_input_tokens":20000,"output_tokens":{output},"output_tokens_details":{{"thinking_tokens":0}},"iterations":[{{"input_tokens":6,"output_tokens":{output}}}]}}}},"session_id":"s1","parent_tool_use_id":{parent},"uuid":"u3","api_message_id":"{id}"}}"#
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::domain::estimate_usd;
 
     #[test]
     fn reads_a_session_start() {
@@ -319,6 +465,171 @@ mod tests {
         assert_eq!(parse_line(tool), [AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "ls".into(), nested: true }]);
         let delta = r#"{"type":"stream_event","parent_tool_use_id":"p","event":{"delta":{"type":"text_delta","text":"x"}}}"#;
         assert_eq!(parse_line(delta), []);
+    }
+
+    const HAIKU: &str = "claude-haiku-4-5";
+
+    fn tokens(output: u64) -> Tokens {
+        Tokens { input: 6, output, cache_write: 1500, cache_read: 20000 }
+    }
+
+    fn used(id: &str, model: &str, output: u64) -> AgentEvent {
+        AgentEvent::MessageUsage { id: id.into(), model: model.into(), tokens: tokens(output) }
+    }
+
+    #[test]
+    fn a_message_start_gives_the_usage_it_opens_with() {
+        assert_eq!(parse_line(&captured::message_start("msg_a1", "null", 2)), [used("msg_a1", HAIKU, 2)]);
+    }
+
+    #[test]
+    fn an_assistant_line_gives_its_content_and_the_usage_of_the_start() {
+        let content = r#"{"type":"text","text":"Looking"},{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}"#;
+        assert_eq!(
+            parse_line(&captured::assistant("msg_a1", "null", content, 2)),
+            [
+                AgentEvent::AssistantText { text: "Looking".into(), nested: false },
+                AgentEvent::ToolStarted { id: "t".into(), name: "Bash".into(), summary: "ls".into(), nested: false },
+                used("msg_a1", HAIKU, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_message_delta_gives_the_final_figures_under_the_line_id_with_no_model() {
+        assert_eq!(parse_line(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", "", 48)]);
+    }
+
+    #[test]
+    fn a_subagent_message_costs_through_all_three_lines() {
+        let parent = r#""toolu_p1""#;
+        let content = r#"{"type":"text","text":"x"}"#;
+        assert_eq!(parse_line(&captured::message_start("msg_b1", parent, 2)), [used("msg_b1", HAIKU, 2)]);
+        let [AgentEvent::AssistantText { nested: true, .. }, usage] = &parse_line(&captured::assistant("msg_b1", parent, content, 2))[..] else { panic!() };
+        assert_eq!(*usage, used("msg_b1", HAIKU, 2));
+        assert_eq!(parse_line(&captured::message_delta("msg_b1", parent, 30)), [used("msg_b1", "", 30)]);
+    }
+
+    #[test]
+    fn the_reader_gives_a_delta_the_model_and_the_largest_figures_of_its_message() {
+        let mut reader = StreamReader::default();
+        let content = r#"{"type":"text","text":"Hi"}"#;
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        reader.read(&captured::assistant("msg_a1", "null", content, 2));
+
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", HAIKU, 48)]);
+        assert_eq!(reader.read(&captured::assistant("msg_a1", "null", content, 2)).last(), Some(&used("msg_a1", HAIKU, 48)), "a late repeat never lowers it");
+    }
+
+    #[test]
+    fn the_reader_keeps_a_figure_a_delta_leaves_out() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        let delta =
+            r#"{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":48}},"parent_tool_use_id":null,"api_message_id":"msg_a1"}"#;
+
+        assert_eq!(reader.read(delta), [used("msg_a1", HAIKU, 48)]);
+    }
+
+    #[test]
+    fn the_reader_drops_figures_for_a_message_it_never_saw_named() {
+        let mut reader = StreamReader::default();
+        assert_eq!(reader.read(&captured::message_delta("msg_zz", "null", 48)), []);
+        assert!(reader.seen.is_empty(), "nothing is kept for it either");
+    }
+
+    /// A gateway may leave the model out. The message names its own id, so it is kept, and priced as the dearest model.
+    #[test]
+    fn a_start_or_assistant_line_with_no_model_is_kept_and_priced_as_opus() {
+        let without_model = |line: String| line.replace(r#""model":"claude-haiku-4-5","#, "");
+        let content = r#"{"type":"text","text":"Hi"}"#;
+        for line in [without_model(captured::message_start("msg_a1", "null", 2)), without_model(captured::assistant("msg_a1", "null", content, 2))] {
+            assert!(!line.contains("haiku"));
+            let events = StreamReader::default().read(&line);
+            let Some(AgentEvent::MessageUsage { model, tokens, .. }) = events.last().cloned() else { panic!("{events:?}") };
+            assert_eq!(model, "");
+            assert_eq!(estimate_usd(&tokens, &model), estimate_usd(&tokens, "claude-opus-4-5"));
+        }
+    }
+
+    #[test]
+    fn a_delta_after_a_start_with_no_model_counts_and_is_priced_as_opus_too() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2).replace(r#""model":"claude-haiku-4-5","#, ""));
+
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", "", 48)]);
+    }
+
+    /// If `api_message_id` were not the id of the message's other lines, the delta would price a second message.
+    #[test]
+    fn a_delta_under_another_id_adds_nothing() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+
+        assert_eq!(reader.read(&captured::message_delta("msg_other", "null", 48)), []);
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), [used("msg_a1", HAIKU, 48)], "the real one still counts");
+    }
+
+    #[test]
+    fn a_delta_after_the_reader_cleared_its_memory_is_dropped_not_priced() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        for n in 0..MESSAGES_KEPT {
+            reader.read(&captured::message_start(&format!("msg_n{n}"), "null", 1));
+        }
+
+        assert_eq!(reader.read(&captured::message_delta("msg_a1", "null", 48)), []);
+    }
+
+    #[test]
+    fn a_delta_takes_the_larger_of_its_total_and_its_calls_summed() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        let delta = |iterations: &str| {
+            format!(
+                r#"{{"type":"stream_event","event":{{"type":"message_delta","usage":{{"input_tokens":6,"output_tokens":10,"cache_creation_input_tokens":1500,"cache_read_input_tokens":20000,"iterations":{iterations}}}}},"parent_tool_use_id":null,"api_message_id":"msg_a1"}}"#
+            )
+        };
+        let calls = r#"[{"input_tokens":4,"output_tokens":30,"cache_creation_input_tokens":0,"cache_read_input_tokens":9000},{"input_tokens":3,"output_tokens":20,"cache_read_input_tokens":12000}]"#;
+
+        let expected = Tokens { input: 7, output: 50, cache_write: 1500, cache_read: 21000 };
+        assert_eq!(reader.read(&delta(calls)), [AgentEvent::MessageUsage { id: "msg_a1".into(), model: HAIKU.into(), tokens: expected }]);
+
+        for odd in ["null", r#""none""#, "[]", r#"[null, 5, {"output_tokens":"a"}, {"output_tokens":-1}]"#, "{}"] {
+            let mut fresh = StreamReader::default();
+            fresh.read(&captured::message_start("msg_a1", "null", 2));
+            assert_eq!(fresh.read(&delta(odd)), [used("msg_a1", HAIKU, 10)], "{odd}");
+        }
+    }
+
+    #[test]
+    fn the_reader_keeps_messages_apart_and_keeps_no_more_than_its_limit() {
+        let mut reader = StreamReader::default();
+        reader.read(&captured::message_start("msg_a1", "null", 2));
+        reader.read(&captured::message_start("msg_a2", r#""toolu_p1""#, 2));
+        assert_eq!(reader.read(&captured::message_delta("msg_a2", "null", 9)), [used("msg_a2", HAIKU, 9)]);
+
+        for n in 0..MESSAGES_KEPT {
+            reader.read(&captured::message_start(&format!("msg_n{n}"), "null", 1));
+        }
+        assert!(reader.seen.len() <= MESSAGES_KEPT);
+        assert_eq!(reader.read(&captured::message_delta("msg_a2", "null", 9)), [], "cleared with the rest");
+    }
+
+    #[test]
+    fn missing_or_odd_usage_gives_no_event_or_zero_figures() {
+        let no_usage = r#"{"type":"assistant","message":{"id":"msg_03","model":"m","content":[{"type":"text","text":"x"}]},"parent_tool_use_id":null}"#;
+        assert_eq!(parse_line(no_usage), [AgentEvent::AssistantText { text: "x".into(), nested: false }]);
+        let no_id = r#"{"type":"assistant","message":{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        assert_eq!(parse_line(no_id), []);
+        let delta = |usage: &str| format!(r#"{{"type":"stream_event","event":{{"type":"message_delta","usage":{usage}}},"api_message_id":"msg_a1"}}"#);
+        assert_eq!(parse_line(&delta("null")), []);
+        assert_eq!(parse_line(&delta(r#""lots""#)), []);
+        assert_eq!(parse_line(r#"{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":5}}}"#), [], "no id to key it by");
+        assert_eq!(parse_line(r#"{"type":"stream_event","event":{"type":"message_start"}}"#), []);
+        assert_eq!(parse_line(r#"{"type":"stream_event","event":null}"#), []);
+        let odd = delta(r#"{"input_tokens":"6","output_tokens":-3,"cache_read_input_tokens":null,"cache_creation_input_tokens":1.5}"#);
+        assert_eq!(parse_line(&odd), [AgentEvent::MessageUsage { id: "msg_a1".into(), model: String::new(), tokens: Tokens::default() }]);
     }
 
     #[test]

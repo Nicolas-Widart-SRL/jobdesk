@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tasks: a run that shows it is alive</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* Tasks while a run is open: the sweep on the Whose turn cell says Claude is working, Elapsed ticks from the send
+   to the run's end, the user's turn included, and Cost counts up as an estimate.
+   Choose with ?state=working|quiet|turn|sheet and ?theme=light|dark. Add &motion=on in a browser to watch the sweep
+   and the clock tick. The PNGs are still frames. Grid.html's scoped styles, copied and scoped to .rl, so app.css and
+   the other canvases are unchanged. Fictional data. */
+body { margin: 0; }
+.rl {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.rl[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.rl .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.rl .num { font-variant-numeric: normal; } /* egui has no tabular figures: figures that tick stay right-aligned. */
+
+/* Menu, as Grid.html. */
+.rl .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.rl .menu .brand { margin-right: 0; }
+.rl .menu .brand svg path:last-child { stroke: var(--sheet); }
+.rl .tabs { display: flex; gap: 6px; }
+.rl .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.rl .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; color: inherit; }
+.rl .tabs a.on { color: var(--text); font-weight: 600; }
+.rl .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.rl .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.rl .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.rl .newtask .keys, .rl .statusbar .keys { color: var(--muted); }
+.rl .statusbar { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 32px; padding: 0 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.rl .btn { background: var(--card); }
+.rl .btn.bad { background: var(--card); }
+.rl .btn.pri { background: var(--pri); }
+
+/* Head and body. */
+.rl .phead { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 32px 10px; }
+.rl .phead .acts { margin-left: auto; display: flex; gap: 8px; }
+.rl .cmdline { font: 700 16px/1.3 var(--type); }
+.rl .bbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 32px 14px; }
+.rl .split2 { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: stretch; }
+.rl .col-a { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.rl .col-b { flex: 0 0 280px; min-width: 0; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.rl .slip2, .rl .rrow { min-width: 0; }
+.rl .paperbox { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* The band, as built: three cells, label, value and note. */
+.rl .dband { flex: none; display: grid; grid-template-columns: 1fr 1fr 1.4fr; border-radius: 4px; background: var(--panel); overflow: hidden; }
+.rl .dband .tb { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 16px 12px; border-left: 1px solid var(--line); }
+.rl .dband .tb:first-child { border-left: 0; }
+.rl .dband .k { display: flex; align-items: center; gap: 10px; height: 20px; font-size: 13px; color: var(--muted); }
+.rl .dband b { font: 600 22px/1.15 var(--slab); }
+.rl .dband b.claude { color: var(--active); }
+.rl .dband .tb.yours { background: var(--turn); color: var(--on-turn); border-left: 0; }
+.rl .dband .tb.yours .k, .rl .dband .tb.yours .muted { color: var(--on-turn); }
+.rl .tl { display: flex; gap: 2px; }
+.rl .tl i { display: block; width: 5px; height: 12px; background: var(--off); }
+.rl .tl i.d { background: var(--text); }
+.rl .tl i.w { background: var(--active); }
+.rl .tl i.h { background: var(--turn); }
+
+/* NEW, live_sweep: a MARK_RULE segment that travels the Whose turn cell's bottom edge, with no track drawn.
+   Working: active, one pass every 3 s. Quiet: muted at half speed. Long quiet: a still dashed rule in muted.
+   Stopping and reduced motion: still solid rules. */
+.rl .sweep { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; overflow: hidden; }
+.rl .frames .sweep { background: var(--off); }
+.rl .sweep i { position: absolute; top: 0; bottom: 0; width: 30%; left: var(--at, 35%); background: var(--active); }
+.rl .sweep.quiet i { background: var(--muted); }
+.rl .sweep.still { background: repeating-linear-gradient(90deg, var(--muted) 0 6px, transparent 6px 10px); }
+.rl .sweep.still i { display: none; }
+.rl .sweep.solid { background: var(--active); }
+.rl .sweep.solid i, .rl .sweep.solidq i { display: none; }
+.rl .sweep.solidq { background: var(--muted); }
+.rl.motion .sweep:not(.still):not(.solid):not(.solidq) i { animation: sweep 3s infinite; }
+.rl.motion .sweep.quiet i { animation-duration: 6s; }
+@keyframes sweep {
+  0% { left: -30%; animation-timing-function: cubic-bezier(.45, 0, .55, 1); }
+  80% { left: 100%; }
+  100% { left: 100%; }
+}
+
+/* The question bar, as Grid.html, with AskUserQuestion's choices in two columns. */
+.rl .dock { flex: none; display: flex; flex-direction: column; gap: 10px; margin-right: 5px; padding: 12px 16px 14px; border: 1px solid var(--turn); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--turn); }
+.rl .dock .q { font-size: 15px; }
+.rl .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+.rl .choices .optrow { cursor: default; border-top: 0; padding: 4px 0; }
+.rl .choices .optrow .t { display: flex; flex-direction: column; gap: 1px; }
+.rl .choices .optrow .t .muted { font-size: 13px; }
+.rl .dock .row { display: flex; gap: 8px; }
+
+/* The story on paper. */
+.rl .story { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.rl .story .sh { flex: none; padding: 10px 16px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.rl .story .scroll { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0 16px; display: flex; flex-direction: column; }
+.rl .sline { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 7px 0; border-top: 1px solid var(--line); }
+.rl .sline .sn { flex: 0 0 74px; font-weight: 600; }
+.rl .sline .st { flex: 1 1 auto; min-width: 0; }
+.rl .sline .who2 { flex: 0 0 74px; font-weight: 600; }
+.rl .knot.now { background: var(--pri); color: var(--on-pri); }
+.rl .doc { max-width: 620px; padding: 12px 0 4px; font-size: 15px; line-height: 1.5; }
+.rl .doc h1 { margin: 0 0 8px; font: 600 17px/1.3 var(--slab); }
+.rl .doc p { margin: 0 0 8px; }
+.rl .gtab { border-collapse: collapse; margin: 2px 0 10px; font-size: 14px; }
+.rl .gtab th { text-align: left; padding: 3px 24px 3px 0; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--text); }
+.rl .gtab td { padding: 5px 24px 5px 0; border-bottom: 1px solid var(--line); }
+
+/* Side column. */
+.rl .slip2 { border-radius: 4px; background: var(--panel); }
+.rl .slip2 .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.rl .slip2 .sb { padding: 8px 14px 12px; }
+.rl .facts .fr { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+.rl .facts .fr:first-child { border-top: 0; }
+.rl .bar { height: 8px; background: var(--off); margin: 2px 0 4px; }
+.rl .bar i { display: block; height: 100%; background: var(--text); }
+.rl .est { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); }
+.rl .rrow { display: flex; align-items: center; gap: 8px; padding: 8px 14px 8px 11px; box-shadow: inset 3px 0 0 var(--text); background: var(--raised); }
+.rl .rrow .mono { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The states sheet. */
+.rl .sheetpage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 16px 32px 14px; }
+.rl .sheetpage h1 { font: 600 24px/1.2 var(--slab); }
+.rl .sheetpage .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.rl .sgrid { display: grid; grid-template-columns: 230px 380px minmax(0, 1fr) 190px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.rl .sgrid > div { display: contents; }
+.rl .sgrid > div > span { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-height: 50px; padding: 5px 12px; border-top: 1px solid var(--line); font-size: 13px; }
+.rl .sgrid > div:first-child > span { min-height: 0; padding: 7px 12px 5px; border-top: 0; border-bottom: 1px solid var(--text); color: var(--muted); font-weight: 600; }
+.rl .sgrid > div:nth-child(2) > span { border-top: 0; }
+.rl .sgrid .cap b { font-size: 13.5px; font-weight: 600; }
+.rl .sgrid .cap .m { color: var(--muted); font-size: 12.5px; line-height: 1.3; }
+.rl .mini { position: relative; display: flex; align-items: baseline; gap: 10px; padding: 8px 12px 10px; border-radius: 0; background: var(--panel); }
+.rl .mini b { font: 600 19px/1.15 var(--slab); }
+.rl .mini b.claude { color: var(--active); }
+.rl .mini.yours { background: var(--turn); color: var(--on-turn); }
+.rl .mini .n { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rl .mini.yours .n { color: var(--on-turn); }
+.rl .frames { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.rl .frames .fr2 { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.rl .frames .sweep { position: relative; }
+.rl .figs { display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
+.rl .figs .muted { font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) { .rl.motion * { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const STATE = (P.get('state') || 'working').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MOTION = P.get('motion') === 'on';
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+
+// Elapsed reads m:ss under an hour and h:mm:ss from there.
+function clock(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+// A figure that ticks: with &motion=on it counts up each second in the browser.
+const tick = (s) => `<span class="num" data-tick="${s}">${clock(s)}</span>`;
+
+function shell(inner, o = {}) {
+  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', o.tasks || ''], ['Profile', '']]
+    .map(([t, c]) => `<a class="${t === 'Tasks' ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}</a>`).join('');
+  return `<div class="app rl${MOTION ? ' motion' : ''}" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar"><span>Settings</span><span class="keys">Cmd ,</span></footer></div>`;
+}
+
+function band(o) {
+  if (o.yours) {
+    const tl = '<span class="tl"><i class="d"></i><i class="h"></i><i></i><i></i><i></i><i></i><i></i></span>';
+    return `<div class="dband" role="group" aria-label="Where the run is">
+      <div class="tb"><span class="k">Where ${tl}</span><b>2 Draft</b><span class="muted">Paused inside the step</span></div>
+      <div class="tb yours"><span class="k">Whose turn</span><b>Yours</b><span class="muted">Claude asked</span></div>
+      <div class="tb"><span class="k">What next</span><b>Pick a CV</b><span class="muted">The choices are right below.</span></div></div>`;
+  }
+  const tl = '<span class="tl"><i class="d"></i><i class="w"></i><i></i><i></i><i></i><i></i><i></i></span>';
+  const sweep = `<span class="sweep ${o.sweep}" style="--at: ${o.at || '38%'}" aria-hidden="true"><i></i></span>`;
+  return `<div class="dband" role="group" aria-label="Where the run is">
+      <div class="tb"><span class="k">Where ${tl}</span><b>2 Draft</b><span class="muted">1 of 7 steps done</span></div>
+      <div class="tb"><span class="k">Whose turn</span><b class="claude">Claude's</b><span class="muted">${o.who}</span>${sweep}</div>
+      <div class="tb"><span class="k">What next</span><b>Nothing for now</b><span class="muted">${o.next}</span></div></div>`;
+}
+
+// AskUserQuestion, on the user's turn: the question bar in stamp ink, the choices in two columns.
+function dock() {
+  return `<div class="dock" role="group" aria-label="Your turn. Claude asks: Which CV should the cover letter go with?">
+      <span class="q"><span class="muted">Claude asks:</span> Which CV should the cover letter go with?</span>
+      <div class="choices">
+        <div class="optrow on"><span class="radio"></span><span class="t"><span>Solution architect CV</span><span class="muted">Leads with the payment platform work</span></span></div>
+        <div class="optrow"><span class="radio"></span><span class="t"><span>Platform engineer CV</span><span class="muted">Leads with the event streaming side project</span></span></div>
+      </div>
+      <div class="row"><button class="btn pri" type="button">Send answer</button><button class="btn" type="button">Decline</button></div></div>`;
+}
+
+function story(o) {
+  const draft = o.yours
+    ? '<div class="sline"><span class="knot yours">2</span><span class="sn">Draft</span><span class="st">Wrote the CV. Waiting for your answer before the cover letter.</span><button class="btn sm" type="button">Show 3 actions so far</button></div>'
+    : '<div class="sline"><span class="knot now">2</span><span class="sn">Draft</span><span class="st">Wrote the CV. Writing the cover letter now.</span><button class="btn sm" type="button">Show 3 actions so far</button></div>';
+  const doc = o.yours
+    ? `<div class="doc"><h1>Job fit evaluation: Solution Architect at Kestrel Payments</h1>
+        <p>Verdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.</p>
+        <p>Shall I go ahead and draft the CV and cover letter?</p></div>`
+    : `<div class="doc"><h1>Job fit evaluation: Solution Architect at Kestrel Payments</h1>
+        <p>Verdict: Strong Fit, 78 out of 100. Every hard gate passes, and the two gaps are small.</p>
+        <table class="gtab"><tr><th>Gate</th><th>In the posting</th><th>Result</th></tr><tr><td>Contract</td><td>Permanent, full time</td><td>Pass</td></tr><tr><td>Work mode</td><td>Hybrid, 2 days a week in Leuven</td><td>Pass</td></tr><tr><td>Salary</td><td>Not stated</td><td>Check</td></tr></table>
+        <h1 style="margin-top: 6px">The two gaps</h1>
+        <p>The posting asks for Kafka in production, and your profile shows it only in a side project. The salary is not stated, so ask on the first call.</p>
+        <p>Shall I go ahead and draft the CV and cover letter?</p></div>`;
+  return `<section class="col-a paperbox story"><div class="sh">The run so far</div>
+    <div class="scroll">
+      <div class="sline" style="border-top: 0"><span class="knot done">1</span><span class="sn">Evaluate</span><span class="st">Read the evaluation guide, looked up salary data, and 2 other actions.</span><button class="btn sm" type="button">Show 4 actions</button></div>
+      ${doc}
+      <div class="sline"><span class="knot none">0</span><span class="who2">You</span><span class="st mono">Go ahead with the draft</span></div>
+      ${draft}
+    </div></section>`;
+}
+
+function side(o) {
+  const tag = o.yours ? '<span class="tag yours">Your turn</span>' : '<span class="tag c-active">Claude\'s turn</span>';
+  return `<aside class="col-b"><section class="slip2"><div class="sh">This run</div><div class="sb facts">
+      <div class="fr"><span class="muted">Cost</span><span class="num">${o.cost} of $10.00</span></div><div class="bar"><i style="width: ${o.pct}%"></i></div>
+      <p class="est">Estimated until Claude's turn ends.</p>
+      <div class="fr"><span class="muted">Elapsed</span>${tick(o.elapsed)}</div>
+      <div class="fr"><span class="muted">Model</span><span>claude-opus-5-5</span></div>
+      <div class="fr"><span class="muted">Session</span><span class="num">3f9a21c0</span></div></div></section>
+    <section class="slip2"><div class="sh">Recent runs</div>
+      <div class="rrow"><span class="mono">/apply https://kestrel.example/jobs/2</span><span class="faint num">${o.cost.replace('About ', '')}</span>${tag}</div></section></aside>`;
+}
+
+function screen(o) {
+  return shell(`
+    <header class="phead"><span class="cmdline">/apply https://kestrel.example/jobs/2</span><div class="acts"><button class="btn sm bad" type="button">Stop run</button></div></header>
+    <div class="bbody">${band(o)}${o.yours ? dock() : ''}<div class="split2">${story(o)}${side(o)}</div></div>`, { tasks: o.yours ? '1' : '' });
+}
+
+const STATES = {
+  working: { who: 'Last update 3s ago', next: 'You can leave. The Tasks tab marks it when it needs you.', sweep: '', at: '38%', cost: 'About $1.24', pct: 12.4, elapsed: 252 },
+  quiet: { who: 'No update for 3 min', next: 'Long writes can be quiet. Stop run keeps the files so far.', sweep: 'still', cost: 'About $1.31', pct: 13.1, elapsed: 460 },
+  // Claude asked at 8:05. The user has been reading for over a minute, and the clock ran on.
+  turn: { yours: true, cost: 'About $1.36', pct: 13.6, elapsed: 571 },
+};
+
+// The states sheet: every state of the sweep, with what Cost and Elapsed show beside it.
+function sheet() {
+  const cell = (cls, value, note, sweep, at) => `<div class="mini${cls === 'yours' ? ' yours' : ''}"><b class="${cls === 'claude' ? 'claude' : ''}">${value}</b><span class="n">${note}</span>${sweep ? `<span class="sweep ${sweep}" style="--at: ${at || '38%'}"><i></i></span>` : ''}</div>`;
+  const figs = (cost, elapsed, note) => `<div class="figs"><span class="num">${cost} <span class="muted">of $10.00</span></span><span class="num">${elapsed} <span class="muted">${note}</span></span></div>`;
+  const row = (title, m, c, next, f) => `<div><span class="cap"><b>${title}</b><span class="m">${m}</span></span><span>${c}</span><span class="muted">${next}</span><span>${f}</span></div>`;
+  const frames = [['0 s', '-30%'], ['0.8 s', '8%'], ['1.6 s', '46%'], ['2.4 s, then rests 0.6 s', '100%']]
+    .map(([t, at]) => `<span class="fr2"><span class="sweep" style="--at: ${at}"><i></i></span>${t}</span>`).join('');
+  return shell(`<div class="sheetpage">
+    <div><h1>The sweep: every state</h1><div class="sub">A segment travels the Whose turn cell's bottom edge while Claude works. Elapsed ticks from your send to the run's end, your turn included. Cost reads About until the turn's result arrives.</div></div>
+    <div class="sgrid">
+      <div><span>State</span><span>Whose turn cell and its edge</span><span>What next, its note</span><span>Cost and Elapsed</span></div>
+      ${row('Starting', 'The process is up, no update yet.', cell('claude', "Claude's", 'Starting Claude Code', ' ', '8%'), 'Nothing for now', figs('$0.00', '0:03', 'ticks'))}
+      ${row('Working', 'An update in the last 30 s. Active ink, 3 s a pass.', cell('claude', "Claude's", 'Last update 3s ago', ' ', '46%'), 'You can leave. The Tasks tab marks it when it needs you.', figs('About $1.24', '4:12', 'ticks'))}
+      ${row('Sweep key frames', 'Ease in and out. The track shows here only to place the segment.', `<div class="frames">${frames}</div>`, '2.4 s across, then 0.6 s at rest. One element moves, nothing else.', '<span class="muted">Repaint at 30 frames a second while it shows</span>')}
+      ${row('Quiet, 30 s to 2 min', 'Muted ink, half speed: 6 s a pass.', cell('claude', "Claude's", 'No update for 48s', 'quiet', '20%'), 'You can leave. The Tasks tab marks it when it needs you.', figs('About $1.31', '5:02', 'ticks'))}
+      ${row('Quiet, 2 min and more', 'The rule stops, dashed in muted.', cell('claude', "Claude's", 'No update for 3 min', 'still'), 'Long writes can be quiet. Stop run keeps the files so far.', figs('About $1.31', '7:40', 'ticks'))}
+      ${row('Your turn', 'A question, a permission or a stop point. No rule. The clock runs on.', cell('yours', 'Yours', 'Claude asked'), 'Pick a CV. The choices are right below.', figs('About $1.36', '9:31', 'ticks'))}
+      ${row('Stopping', 'The rule holds still, solid muted.', cell('claude', "Claude's", 'Stopping', 'solidq'), 'Nothing for now', figs('About $1.40', '9:58', 'ticks'))}
+      ${row('Done for now, finished', 'No rule. The result gives the exact cost.', cell('', 'Nobody', 'Claude is done for now'), 'Reply to continue. A reply starts the clock again from here.', figs('$1.86', '13:14', 'holds'))}
+      ${row('Failed, stopped', 'No rule. About stays if no result came.', cell('', 'Nobody', 'Claude Code ended the run'), 'Reply to resume', figs('About $1.40', '10:00', 'holds'))}
+      ${row('Reduced motion', 'A still rule: active, muted when quiet, dashed after 2 min.', cell('claude', "Claude's", 'Last update 3s ago', 'solid'), 'The clock and the notes still update each second.', figs('About $1.24', '4:12', 'ticks'))}
+    </div></div>`).replace(/<header class="menu">[\s\S]*?<\/header>/, '').replace(/<footer[\s\S]*?<\/footer>/, '');
+}
+
+document.getElementById('root').innerHTML = STATE === 'sheet' ? sheet() : screen(STATES[STATE] || STATES.working);
+if (MOTION) setInterval(() => document.querySelectorAll('[data-tick]').forEach((el) => {
+  const s = Number(el.dataset.tick) + 1; el.dataset.tick = s; el.textContent = clock(s);
+}), 1000);
+</script>
+</body>
+</html>

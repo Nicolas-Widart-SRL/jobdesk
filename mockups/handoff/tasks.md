@@ -2,7 +2,19 @@
 
 The Tasks screen shows one run: where it is, whose turn it is and what comes next, then the story of what Claude did. It answers one complaint: people ended runs because they did not see that Claude was waiting for them. What the user sees is in [docs/guide.md](../../docs/guide.md#tasks). When Claude waits on the user, and how the rail and quick replies work, is in [ARCHITECTURE.md](../../ARCHITECTURE.md#runtime). How messages and questions render is in [ARCHITECTURE.md](../../ARCHITECTURE.md#trust).
 
-Canvas, in `mockups/`: [Grid-tasks-turn.png](../Grid-tasks-turn.png), an `/apply` run stopped after Evaluate.
+Canvases, in `mockups/`: [Grid-tasks-turn.png](../Grid-tasks-turn.png), an `/apply` run stopped after Evaluate, and the `RunLive-*.png` set for an open run: Claude working, quiet, and asking (see [While the run is open](#while-the-run-is-open)).
+
+## Contents
+
+- [Principles](#principles)
+- [The head](#the-head)
+- [The band](#the-band)
+- [The question bar](#the-question-bar)
+- [The story](#the-story)
+- [The side column](#the-side-column)
+- [While the run is open](#while-the-run-is-open): the sweep, live Elapsed and Cost, the quiet state, motion, new widgets
+- [Outside the page](#outside-the-page)
+- [Accessibility](#accessibility)
 
 ## Principles
 
@@ -10,6 +22,7 @@ Canvas, in `mockups/`: [Grid-tasks-turn.png](../Grid-tasks-turn.png), an `/apply
 2. **A report, not a log.** Claude's messages are the main content.
 3. **Plain words first.** Technical rows open only on request.
 4. **Say each thing once.** The band says whose turn it is, so the head carries only the title and the actions.
+5. **Show the run is alive, honestly.** A live run moves, a quiet one says how long it has been quiet, and nothing pretends to know how far along it is.
 
 Stamp ink is magenta because it is the one hue the navy and slate palette lacks, so it stands out in both themes without reading as a job status.
 
@@ -31,13 +44,15 @@ Three cells, Where, Whose turn and What next, each a label, a value and a note, 
 | State | Where | Whose turn | What next |
 | --- | --- | --- | --- |
 | Starting | the step, "Starting the CLI" | Claude's | Nothing for now |
-| Working | "2 Draft", "2 of 7 steps done" | Claude's, "Claude is working" | Nothing for now, "You can leave. The Tasks tab marks it when it needs you." |
+| Working | "2 Draft", "2 of 7 steps done" | Claude's, "Last update 3s ago" | Nothing for now, "You can leave. The Tasks tab marks it when it needs you." |
 | Stopping | as Working | Claude's, "Stopping" | Nothing for now |
 | Stopped at a stop point | "1 Evaluate, done", "Draft waits for your go" | Yours, "Claude stopped" | Answer Claude, "Its question is right below." |
 | Prompt pending | the step, "Paused inside the step" | Yours, "Claude asked" | what is asked, "The choices are right below." |
 | Done for now | the step, done or paused | Nobody, "Claude is done for now" | Reply to continue, "Or end the session." |
 | Failed | "5 Compile, failed" in `closed` | Nobody, the reason as plain text | Reply to resume, "Or leave it. Files so far stay." |
 | Finished `/apply` | "All 7 steps" | Nobody, "The session is closed" | Read the documents, "Open the dossier, then send it yourself." |
+
+While Claude works, the sweep runs along the Whose turn cell's bottom edge, and the Whose turn and What next notes change with the quiet state, as [While the run is open](#while-the-run-is-open) says.
 
 The Where label holds a tally with one mark per step: done in `text`, working in `active`, waiting in `turn`, the rest in `off`. Below a window height of `BAND_COMPACT_HEIGHT`, each cell keeps to one line, label then value, with no note.
 
@@ -62,6 +77,82 @@ Under "The run so far" ("The run" once the session is closed), on paper, in read
 
 A fixed `RUN_SIDE` width, never a share of the split, so long rows cannot push it out of the window. It holds This run and Recent runs and scrolls on its own. Recent runs tags a run that waits with a solid Your turn tag, and a working one "Claude's turn" in `active`. Below `DETAILS_BELOW_WIDTH` it moves behind Run details.
 
+This run's Cost and Elapsed are live while the run is open, as the next section says.
+
+## While the run is open
+
+The brief: a run showed no sign of life while Claude worked, and Cost and Elapsed read 0 until the end, so a live run and a hung one looked the same. The approved answer is the sweep on the Whose turn cell, a live Elapsed that runs from the send to the run's end, and a Cost that counts up as an estimate.
+
+### Canvases
+
+`RunLive.html`, chosen with `?state=working|quiet|turn|sheet&theme=light|dark`. Add `&motion=on` to watch the sweep and the clock tick in a browser. The PNGs are still frames.
+
+| PNG (1280x820) | State |
+| --- | --- |
+| [RunLive-working.png](../RunLive-working.png), [dark](../RunLive-working-dark.png) | Draft under way, an update 3 s ago, the sweep partway across the Whose turn cell. |
+| [RunLive-quiet.png](../RunLive-quiet.png) | No update for 3 min. The edge is a still dashed rule, and What next says long writes can be quiet. |
+| [RunLive-turn.png](../RunLive-turn.png), [dark](../RunLive-turn-dark.png) | Claude asked a question inside Draft (AskUserQuestion). The band is Yours with no sweep, the question bar holds two choices, and Elapsed reads 9:31, past the 8:05 it read when Claude asked: the clock runs on during the user's turn. |
+| [RunLive-sheet.png](../RunLive-sheet.png), [dark](../RunLive-sheet-dark.png) | Every state of the sweep, its key frames, and Cost and Elapsed beside each, marked ticks or holds. |
+
+The screen-level loading, failed and empty states are unchanged: Tasks with no run is `UiPass-tasks-empty.png`, and the run screen itself has no loading view.
+
+### Live figures
+
+- **Elapsed** is measured on the clock from the user's send to the run's end. It ticks every second the whole time the run is open: while Claude works, while Claude waits on the user (a question, a permission prompt or a stop point), and while a stop settles. It holds once the run ends: done for now, finished, failed or stopped. A reply after that adds a new span from its send, so while the app stays open the figure goes on from where it held and never jumps back. A run left waiting overnight with the app open reads hours, which is the true time it stayed open. The run log keeps no clock, so a run read back after a restart or a folder switch shows Claude's own reported time only: the time the user spent away is not kept, and the figure can read less than it did live. A later reply adds clock time on top of it.
+- **Its form** is `m:ss` under an hour and `h:mm:ss` from there, such as 4:12 and 1:02:05, live and final alike. The `elapsed_text` test in `src/runs/application/story.rs` that expects "14m 20s" changes to 14:20, and so does the gallery's "Finished in 14m 20s" note in `tests/ui_kit_gallery.rs`.
+- **Cost** counts up as the run goes, from each Claude message's token use and the model's price, and reads "About $1.24 of $10.00" while it is an estimate. Under the bar, one line in `Type::SMALL` and `muted`: "Estimated until Claude's turn ends." When the turn's result arrives, About and the line go and the exact figure shows. A pending prompt keeps About, since its turn has not ended. A process that ended with no result, such as after Force stop, keeps About for good, and the line then reads "Includes an estimate: a session ended without its final cost." The estimate is approximate and can be off in either direction, because each model family has one list price. The bar fills in `text` as now, with no motion: it moves in steps as messages land.
+- **Recent runs** shows the same live Cost without About, since the row has no room for it.
+- **egui has no tabular figures**, so the ticking figures stay right-aligned in the side column, and their width changes at the left edge only.
+
+### Quiet
+
+An update is any line the run's process prints on its stream: a message, a tool call, a tool result. Jobdesk knows the process is up, and when the last update came. It does not know whether Claude is thinking, writing a long file or stuck, so the words stay calm and never guess.
+
+| Time since the last update | Sweep | Whose turn note | What next note |
+| --- | --- | --- | --- |
+| Under 30 s | `active`, one pass every 3 s | "Last update 3s ago" | as the band table says |
+| 30 s to 2 min | `muted`, one pass every 6 s | "No update for 48s" | as the band table says |
+| 2 min and more | a still dashed rule in `muted` | "No update for 3 min", counted in whole minutes | "Long writes can be quiet. Stop run keeps the files so far." |
+
+No quiet state uses `closed` or `turn` ink, and none starts or stops anything. One long Write of a CV can print nothing for minutes, so 2 min is not a failure. The thresholds stay at 30 s and 2 min.
+
+### Where the sweep and the figures stop
+
+| State | Sweep | Elapsed | Cost |
+| --- | --- | --- | --- |
+| Starting, the process up with no update yet | runs, note "Starting Claude Code" | ticks | $0.00 |
+| Working, quiet | as [Quiet](#quiet) says | ticks | About |
+| Your turn: a question, a permission prompt or a stop point | gone. The question bar is the one loud thing. | ticks | About while the turn is open (a pending prompt), exact once it ended (a stop point) |
+| Stopping | still, a solid `muted` rule | ticks until the process confirms | About |
+| Done for now, finished | gone | holds, the final figure | exact |
+| Failed, stopped | gone | holds, the final figure | exact, or About when no result came |
+
+### The sweep
+
+A `MARK_RULE` segment, 30% of the cell's width, travels the Whose turn cell's bottom edge, from just outside its left to past its right. No track is drawn, so at rest the band looks as it does today.
+
+- **Working**: `active`, 2.4 s across with ease in and out, then 0.6 s at rest, so one pass every 3 s.
+- **Quiet, 30 s to 2 min**: `muted`, half speed, one pass every 6 s. It slows, it does not stop.
+- **2 min and more**: the segment stops and the edge becomes a still dashed rule in `muted`, the whole cell wide. A still line reads "nothing is coming in" without reading "broken".
+- **Stopping**: a still solid rule in `muted`.
+- **Reduced motion**: a still solid rule, `active` while working, `muted` when quiet, dashed after 2 min.
+- **Repaint**: about 30 frames a second, only while the sweep shows on screen. Elsewhere, and on the user's turn, the screen repaints once a second while Elapsed ticks, or not at all once the run ended.
+
+Why: the band is the first thing read, and the cell that says Claude's is where "is it still going" is asked. One small moving line in the cell's own ink says the run is live without a fake percent.
+
+### Motion rules
+
+- One element moves on the screen, slowly. Nothing else animates while a run works: no knot, tally or tab pulses.
+- It moves only while it is Claude's turn and the Tasks screen shows. Settings › Appearance › Reduce motion swaps it for its still form. Elapsed and the notes keep updating, since text that changes is not motion.
+- No fade, glow or blur: flat fills and 1px-class shapes, as the rest of the kit.
+
+### New widgets
+
+| Widget | What it is | Tokens |
+| --- | --- | --- |
+| `live_sweep` | The moving segment on a band cell's bottom edge, with its quiet, long-quiet, stopping and reduced-motion forms | `MARK_RULE`; `active`, `muted`; new motion constants for the pass, the rest and the quiet pass, beside `MOTION_SECONDS` in `controls.rs` and `MOTION_SLIDE` |
+| `estimate_note` | The one muted line under the Cost bar while it is an estimate | `Type::SMALL`, `muted` |
+
 ## Outside the page
 
 - **The Tasks tab** carries a stamp-ink count chip of the runs that wait on the user. It reads "Tasks, 1 need you".
@@ -72,3 +163,5 @@ A fixed `RUN_SIDE` width, never a share of the split, so long rows cannot push i
 - The band is the group "Where the run is", and its tally reads "1 of 7 steps done".
 - The question bar's group reads "Your turn. Claude asks: …".
 - A knot reads its number and state, such as "2, waiting for you".
+- The sweep is decoration. The Whose turn cell reads the quiet state, such as "Claude's turn. Last update under 30 seconds ago", without the count of seconds. Screen readers get the change only when the quiet state changes, never each second.
+- Cost reads "About 1 dollar 24 of 10 dollars, estimated until Claude's turn ends". Elapsed is read on focus, never announced as it ticks.

@@ -40,6 +40,12 @@ pub fn wants_reply(run: &Run) -> bool {
     run.needs_user() || (run.awaits_reply() && (stop_point(run).is_some() || closing_question(run).is_some()))
 }
 
+/// Whether the run's clock ticks: it works, or it waits on the user, whose turn is part of the task.
+/// A turn that ends done for now stops the clock.
+pub fn clock_runs(run: &Run) -> bool {
+    run.is_busy() || wants_reply(run)
+}
+
 /// The last paragraph of this turn's last top-level message, when it asks something.
 /// Claude's text is untrusted: hidden characters are dropped, and a statement is not passed off as a question.
 pub fn closing_question(run: &Run) -> Option<ClosingQuestion> {
@@ -148,6 +154,19 @@ mod tests {
 
     fn prompt() -> Prompt {
         Prompt { request_id: "a".into(), kind: PromptKind::Questions(vec![]), input_json: "{}".into(), suggestions_json: None }
+    }
+
+    #[test]
+    fn the_clock_runs_while_the_run_works_or_waits_on_the_user() {
+        let mut run = run("/apply x");
+        assert!(clock_runs(&run), "working");
+        says(&mut run, "Shall I draft it?");
+        ends_turn(&mut run);
+        assert!(clock_runs(&run), "a closing question is the user's turn");
+        run.note_reply("yes");
+        says(&mut run, "Done.");
+        ends_turn(&mut run);
+        assert!(!clock_runs(&run), "done for now");
     }
 
     #[test]

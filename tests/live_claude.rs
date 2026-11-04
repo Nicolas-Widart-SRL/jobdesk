@@ -54,9 +54,12 @@ fn a_full_session_works() {
         .unwrap();
 
     // Question, then permission with a remembered rule, then a stop point.
-    let (mut asked, mut allowed) = (false, false);
+    let (mut asked, mut allowed, mut estimated_early) = (false, false, false);
     wait(&mut desk, &id, |desk| {
         let run = desk.run(&id).unwrap();
+        // `cost_usd` is the CLI's own figure, which is 0 until the first result.
+        let shown = run.shown_cost();
+        estimated_early |= run.cost_usd == 0.0 && shown.estimated && shown.usd > 0.0;
         if let Some(prompt) = run.current_prompt().cloned() {
             match &prompt.kind {
                 PromptKind::Questions(questions) => {
@@ -77,6 +80,7 @@ fn a_full_session_works() {
     dump(&desk, &id);
     assert_eq!(desk.run(&id).unwrap().status, RunStatus::AwaitingReply);
     assert!(asked && allowed);
+    assert!(estimated_early, "the cost showed as an estimate above 0 before the first result");
     assert!(workspace.join("probe.txt").exists());
     assert!(!workspace.join(".claude/settings.local.json").exists(), "a remembered rule must not reach the checkout");
 
@@ -103,6 +107,7 @@ fn a_full_session_works() {
     let run = &restored.runs()[0];
     assert_eq!(run.status, RunStatus::Closed);
     assert!(run.session_id.is_some() && run.cost_usd > 0.0);
+    assert!((run.cost_usd - cost_usd).abs() < 1e-9, "a resumed run replays with every process's cost: {} against {cost_usd}", run.cost_usd);
     assert!(run.activity.iter().any(|item| matches!(&item.kind, ActivityKind::You(text) if text.contains("THIRD"))));
 
     // Each process's total starts again from zero, so usage must add the processes, not take the last total.
@@ -115,6 +120,29 @@ fn a_full_session_works() {
     let before = log.lines().take(resume_at).filter_map(result_cost).last().expect("a result before the resume");
     let after = log.lines().skip(resume_at).find_map(result_cost).expect("a result after the resume");
     assert!(after < before, "the resumed process reports its own total: {after} after {before}");
+
+    // A `message_delta` names its message only by the line's `api_message_id`. The cost estimate relies on that being the
+    // id of a `message_start` of the same process, so check it here.
+    let (mut started, mut deltas) = (std::collections::HashSet::new(), 0);
+    for line in log.lines() {
+        if line == r#"{"type":"jobdesk_resume"}"# {
+            started.clear();
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        match value.pointer("/event/type").and_then(|kind| kind.as_str()) {
+            Some("message_start") if value["type"] == "stream_event" => {
+                started.insert(value.pointer("/event/message/id").and_then(|id| id.as_str()).unwrap_or_default().to_owned());
+            }
+            Some("message_delta") if value["type"] == "stream_event" => {
+                deltas += 1;
+                let id = value["api_message_id"].as_str().unwrap_or_default();
+                assert!(!id.is_empty() && started.contains(id), "a message_delta names a message this process started: {id:?} in {started:?}");
+            }
+            _ => {}
+        }
+    }
+    assert!(deltas > 0, "the log holds message_delta lines to check");
 
     // Usage adds up both processes from the log.
     let tasks = runs::usage_logs(logs, &workspace).tasks();

@@ -5,15 +5,18 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest};
 use crate::runs::infrastructure::run_logs::RunLog;
-use crate::runs::infrastructure::stream_json::{decision_response, interrupt_request, parse_line, user_message};
+use crate::runs::infrastructure::stream_json::{StreamReader, decision_response, interrupt_request, user_message};
 use crate::shared_kernel::host_path::{find_executable, resolved_path};
 use crate::shared_kernel::process_tree::{kill_tree, no_window, own_group};
 use crate::shared_kernel::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, SignIn, inherited_env, key_route_refusal, redacted};
 
 const STDERR_LINES_KEPT: usize = 12;
+/// How often a line with no event of its own says the run is alive.
+const HEARD_EVERY: Duration = Duration::from_secs(1);
 
 #[cfg(windows)]
 const STORE: &str = "Credential Manager";
@@ -261,10 +264,32 @@ fn write_line(stdin: &mut Option<ChildStdin>, line: &str) {
     }
 }
 
+/// Whether a line that gives no event shows the run is alive, given when the thread last emitted anything.
+/// Partial deltas stream many times a second, so a repaint for each would cost more than it shows.
+fn heard_due(now: Instant, last_emit: Option<Instant>) -> bool {
+    last_emit.is_none_or(|last| now.saturating_duration_since(last) >= HEARD_EVERY)
+}
+
+/// What one line of the stream sends on. A line with events sends them, and any real event counts as an emit.
+/// A line with none sends `Heard`, only when `heard_due` says so.
+fn events_to_emit(events: Vec<AgentEvent>, now: Instant, last_emit: &mut Option<Instant>) -> Vec<AgentEvent> {
+    if !events.is_empty() {
+        *last_emit = Some(now);
+        events
+    } else if heard_due(now, *last_emit) {
+        *last_emit = Some(now);
+        vec![AgentEvent::Heard]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Each line is masked before the log and the events see it. The mask holds no quote or backslash, so a JSON line stays JSON.
 fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn(AgentEvent) + Send + 'static, done: Sender<Outgoing>, masker: KeyMasker) {
     let Some(stdout) = child.stdout.take() else { return };
     thread::spawn(move || {
+        let mut last_emit: Option<Instant> = None;
+        let mut reader = StreamReader::default();
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let line = masker.mask(&line);
             if let Some(log) = &log
@@ -272,7 +297,7 @@ fn read_stdout(child: &mut Child, log: Option<Arc<Mutex<RunLog>>>, emit: impl Fn
             {
                 log.append(&line);
             }
-            parse_line(&line).into_iter().for_each(&emit);
+            events_to_emit(reader.read(&line), Instant::now(), &mut last_emit).into_iter().for_each(&emit);
         }
         let _ = done.send(Outgoing::StreamEnded);
     });
@@ -299,8 +324,36 @@ fn read_tail(stderr: impl Read, tail: &Mutex<VecDeque<String>>) {
 }
 
 #[cfg(test)]
+mod heard_tests {
+    use super::*;
+
+    #[test]
+    fn a_line_with_no_event_is_heard_at_most_once_a_second() {
+        let t0 = Instant::now();
+        assert!(heard_due(t0, None), "the first one always is");
+        assert!(!heard_due(t0 + Duration::from_millis(900), Some(t0)));
+        assert!(heard_due(t0 + Duration::from_secs(1), Some(t0)));
+        assert!(!heard_due(t0, Some(t0 + Duration::from_secs(5))), "a clock that went back is not due");
+    }
+
+    #[test]
+    fn a_real_event_is_never_replaced_and_resets_the_clock() {
+        let t0 = Instant::now();
+        let mut last_emit = None;
+        let text = || vec![AgentEvent::TextDelta("x".into())];
+
+        assert_eq!(events_to_emit(Vec::new(), t0, &mut last_emit), [AgentEvent::Heard], "the first silent line is heard");
+        assert_eq!(events_to_emit(Vec::new(), t0 + Duration::from_millis(500), &mut last_emit), [], "too soon after it");
+        assert_eq!(events_to_emit(text(), t0 + Duration::from_millis(600), &mut last_emit), text(), "events pass as they are, never with a Heard");
+        assert_eq!(events_to_emit(Vec::new(), t0 + Duration::from_millis(1500), &mut last_emit), [], "the event reset the clock");
+        assert_eq!(events_to_emit(Vec::new(), t0 + Duration::from_millis(1600), &mut last_emit), [AgentEvent::Heard], "a second after the event");
+    }
+}
+
+#[cfg(test)]
 mod key_tests {
     use super::*;
+    use crate::runs::infrastructure::stream_json::parse_line;
     use crate::shared_kernel::KeyMask;
     use crate::shared_kernel::api_key::{PLAIN_HTTP_REFUSED, PROXY_REFUSED};
 

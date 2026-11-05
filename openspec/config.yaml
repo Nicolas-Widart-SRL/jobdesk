@@ -1,0 +1,23 @@
+schema: spec-driven
+
+context: |
+  Jobdesk is a Rust and egui desktop app for macOS and Windows over the ai-job-search slash commands. It holds no workflow logic: every action runs an unchanged slash command through the local claude CLI.
+  AGENTS.md holds the hard rules. A proposal that would break one names it as an open question for the user.
+  Work is built only through the ship skill: the planner splits tasks.md into steps, each step holding one or more whole task groups, and builders write code and tick boxes in their own git worktrees. Nothing is written in the main checkout.
+  src/<feature>/ splits into domain, application, infrastructure and ui. domain and application stay free of egui, the file system and serialization crates. Only application calls across features, and only into another feature's application.
+  tests/sample_workspace holds fictional data only, because snapshots are committed. No artifact holds a value from a real job search.
+  Postings, notes and reports are untrusted text, rendered as docs/architecture/trust.md says.
+rules:
+  proposal:
+    - State what is out of scope.
+  tasks:
+    - Group tasks under numbered "## N." headings, in layer order, with shared_kernel first, then domain, application, infrastructure, and ui and shell last. A group never splits across steps, and a step holds one or more whole groups.
+    - Each task names the test or command that proves it.
+    - A visible change names the snapshot tests in tests/screens.rs or tests/ui_kit_gallery.rs it changes.
+operations:
+  apply:
+    guidance:
+      - Implement through the ship skill. Each step holds one or more whole tasks.md groups, and its builder ticks their boxes in its own worktree. Never implement in the main checkout.
+  archive:
+    guidance:
+      - Archive in a builder's worktree as the last step on the change's branch, never in the main checkout.

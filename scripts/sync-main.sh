@@ -6,14 +6,15 @@
 #   main: not a git checkout                     run outside a repository
 #   main: not on main (on <branch>)
 #   main: has uncommitted changes                untracked files do not count
+#   main: has untracked files under openspec/
 #   main: could not fetch origin
 #   main: <n> local commits not on origin/main
 #   main: up to date
 #   main: fast-forwarded to <short sha>
 #   main: could not fast-forward
 #
-# The local checks (branch, uncommitted changes) run before the fetch, so they show even offline.
-# It fast-forwards only when main is checked out, clean, behind origin/main and not ahead.
+# The local checks (branch, uncommitted changes, untracked openspec/ files) run before the fetch, so they show even offline.
+# It fast-forwards only when main is checked out, clean, free of untracked openspec/ files, behind origin/main and not ahead.
 # It never resets, checks out or stashes.
 set -euo pipefail
 
@@ -30,6 +31,11 @@ branch=$(git branch --show-current 2>/dev/null || true)
 # A failing git status counts as dirty.
 if ! status=$(git status --porcelain --untracked-files=no 2>/dev/null) || [ -n "$status" ]; then
   say "has uncommitted changes"
+fi
+
+# Untracked files under openspec/ are a change's work that belongs on its branch, not on main.
+if ! untracked=$(git status --porcelain --untracked-files=all -- openspec 2>/dev/null) || [ -n "$untracked" ]; then
+  say "has untracked files under openspec/"
 fi
 
 git fetch --quiet origin 2>/dev/null || say "could not fetch origin"

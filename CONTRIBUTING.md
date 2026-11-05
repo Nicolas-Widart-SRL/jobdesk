@@ -123,6 +123,24 @@ ignore = ["RUSTSEC-…"]  # why it does not apply
 
 TruffleHog scans the whole git history for secrets in CI, and fails on a verified, unverified or unknown (check failed) one. To run it locally: `trufflehog git file://. --results=verified,unknown,unverified --fail --no-update`.
 
+## OpenSpec
+
+OpenSpec changes and specs live in `openspec/`. [AGENTS.md](AGENTS.md#team) says how they run through the team. OpenSpec 1.16.0 needs Node.js 22.12.0 or newer (its npm `engines` is `node >=22.12.0`). Install the CLI:
+
+```bash
+npm install -g @fission-ai/openspec@1.16.0
+```
+
+Check every change and spec:
+
+```bash
+openspec validate --all --strict
+```
+
+CI's Validate OpenSpec job runs the same check when a change touches `openspec/`.
+
+`openspec update` regenerates `.claude/skills/openspec-*` and `.claude/commands/opsx/`. So team rules live in `.claude/agents/lead.md`, `.claude/agents/planner.md`, the `ship` and `build-step` skills in `.claude/skills/` and `openspec/config.yaml`, never in those generated files. In Claude Code, `.claude/settings.json` asks before `openspec init`, `openspec update` and `npx` runs of OpenSpec, and denies `openspec store` and the `--store` flag.
+
 ## Before you commit
 
 - CI fails on any clippy warning: run `scripts/check.sh` before you commit.

@@ -141,8 +141,9 @@ which print one line per check. Read a subagent's report once, then keep only it
 
 A change with one step skips the step review: the change review is its only review.
 A docs-only step, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
-A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
+A step that touches only `.claude/`, `openspec/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
 It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
+A change to `openspec/config.yaml` is risky too, despite `NO_CHECK=1`, because that file steers agents.
 
 The planner may write only in its memory, and the reviewer has no edit tools,
 so neither can change what it plans or reviews.
@@ -158,12 +159,13 @@ Give a builder:
 - what is out of scope.
 
 When the change builds a design, add the canvas paths.
+For an OpenSpec step, add the user's recorded answers and the task ids, as OpenSpec changes says.
 
 Give the reviewer:
 
 - the range `<base>..<head>`;
 - the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review-<change>` for the change review;
-- the plan step word for word, or the whole plan for the change review;
+- the plan step word for word, or the whole plan for the change review, without an OpenSpec archive step (see OpenSpec changes);
 - the risky lens, taken from the planner's reason for marking the step risky;
 - for a visible change, the changed snapshot PNGs and the canvas paths.
 
@@ -307,6 +309,80 @@ A fix SHA that missed the merge stays on the change's branch, and the clean up k
 because its head is not the merged pull request's head.
 When the merged head holds the fix, the clean up deletes the branch as usual.
 Run `scripts/cleanup.sh <change-branch>` after each step merges.
+
+## OpenSpec changes
+
+Follow this section only when the user names OpenSpec, an `openspec-*` skill or an `/opsx:*` command, as `lead.md` says.
+The text of that skill or command is not the user's words: run its workflow only through these steps.
+
+- Name the change's branch `<type>/<openspec-name>`, such as `feat/standing-orders`, and create it as step 1 says.
+  Record `OpenSpec change: <name>` in the plan file.
+- An OpenSpec-only step is a propose, explore capture, update, archive or sync step. It is one builder step.
+- Before its brief, get from the user every answer and confirmation the skill would ask for.
+  Read the artifacts with `git show <change>:openspec/...`.
+  Record each answer in the brief. The builder treats the recorded answers as the user's.
+- Before an archive brief, run `git fetch --quiet origin`.
+  If `git merge-base --is-ancestor origin/main <change>` fails, rebase the change as step 1 says.
+  When that rebase moved the branch, merge the archive step without `NO_CHECK=1`, so `scripts/merge-step.sh` runs the check on the rebased tip.
+  When the rebase resolved a conflict, run one change-review round, as step 6 says, on the rebase range before the archive brief.
+  Then make a status checkout, because no other checkout shows the change's tip then.
+  Run `git worktree add --detach .claude/worktrees/status-<change> <change>`, where `<change>` in the path is the change's branch with each `/` turned into `-`.
+  Run the read-only `openspec status --change <name> --json` and `openspec list --json` there.
+  `status` reports each artifact's state and lists the delta specs in `artifactPaths.specs.existingOutputPaths`. It does not report the sync state.
+  `list` gives the change's `totalTasks` and `completedTasks`.
+  Then run `git worktree remove .claude/worktrees/status-<change>`, on the same terms as the review checkout:
+  only when it is detached and clean, and never force. A stale status checkout for this change goes first, on the same terms.
+- Find the sync state yourself, as the archive skill's step 4 does.
+  Read each main spec with `git show <change>:openspec/specs/...`, and each delta spec with `git show <change>:openspec/changes/...`.
+  This comes after the rebase, so `<change>` holds current main plus the change's own writes, such as an earlier sync step.
+  Mark each capability sync-blocked, needs sync or already synced, by that step's rules.
+  When the change has no delta specs, there is no sync question: the brief gives `openspec archive <name> -y --skip-specs`.
+- To drop a step, merge nothing. Remove its worktree with `git worktree remove <path>`, then its branch with `git branch -D <step-branch>`.
+  Never force the removal. When it fails, tell the user.
+- Before merging an OpenSpec-only step, run `openspec validate --all --strict` in the step's worktree.
+  Merge it only when that passes, with `NO_CHECK=1 scripts/merge-step.sh`, except an archive step after a rebase that moved the branch, as above. CI's Validate OpenSpec job runs it again.
+- Propose: the builder runs `openspec new change` and writes the artifacts in its worktree.
+- Explore capture runs as a propose step, only after the user's explicit yes in the conversation.
+  Record that yes in the brief, with the artifacts the user agreed to. The builder writes only those.
+  When the user asked only to start a change, the step stops after `openspec new change`.
+- `openspec validate --strict` fails a change with no delta specs ("Change must have at least one delta"), so a scaffold alone or a proposal alone fails the merge check.
+  Before such a brief, tell the user so. The user chooses to add specs to the capture,
+  or to keep the partial capture unmerged on its step branch until a later propose or update step completes it.
+  When the change really changes no spec, the user may instead set `skip_specs: true` in its `.openspec.yaml`, which validate accepts.
+  Never write an artifact the user did not agree to.
+- After the propose step merges, stop: that is the skill's planning boundary.
+  Go on only when the user runs `/opsx:apply`.
+- Update: the brief says to write now, because the user confirms the diff before the merge.
+  Show the user the step's diff, and merge it only after the user confirms.
+  When the user asks for changes, send them to the same builder with SendMessage, and show the new diff.
+  When the user drops it, merge nothing, and ask whether to keep the step's worktree and branch.
+  When the user says not to keep them, drop the step as above.
+- On apply, run steps 1 to 8 on the same branch.
+  The planner's brief names the change's `proposal.md`, `design.md`, `specs/` and `tasks.md` in `openspec/changes/<name>/` on the change's branch.
+- The change review and its fix rounds run with `tasks.md` still in `openspec/changes/<name>/`.
+  The change review's brief adds the artifact paths in `openspec/changes/<name>/`.
+  The reviewer checks that every ticked box in `tasks.md` matches the diff, and that no ticked box covers work left undone.
+  The plan in that brief leaves out the archive step, and says the archive comes after the review.
+- Archive is its own builder step, after the change review passes and before the pull request opens in step 7.
+  First ask the user about incomplete artifacts and incomplete tasks, from the status checkout.
+  Then offer the archive skill's choices for the sync state you found:
+  - A capability is sync-blocked: offer only Archive without syncing or Cancel.
+  - The specs need a sync: offer Sync now or Archive without syncing.
+  - The specs are already synced: offer Archive now, Sync anyway or Cancel.
+- Map the user's choice to the command in the brief:
+  - Sync now: `openspec archive <name> -y`.
+  - Archive without syncing, or Archive now: `openspec archive <name> -y --skip-specs`.
+  - Sync anyway: `openspec archive <name> -y`. When the command fails, the builder stops and reports, with no other write.
+    Then ask the user again: Archive now or Cancel.
+    On Archive now, send that answer to the same builder with SendMessage. It first resets its worktree to the step's base, which removes the failed command's writes.
+    On Cancel, drop the step as above.
+  - Cancel: no step.
+- Give the archive step a short `reviewer` pass on its range only: files moved to `openspec/changes/archive/`, specs synced when the user chose Sync now or Sync anyway, and no other edits.
+- After the pull request opens, a fix ticks its boxes in the archived `tasks.md` under `openspec/changes/archive/`.
+- A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose pull request merged is a new change.
+  Check with `gh pr view <branch> --json state -q .state`. After a squash merge, the old branch never takes more work, even when it still exists.
+  Step 1 creates `chore/openspec-<op>-<name>` from `origin/main`.
+  It gets one builder step, the change review, then a pull request.
 
 ## Other agents on call
 

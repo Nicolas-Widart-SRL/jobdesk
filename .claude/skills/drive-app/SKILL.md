@@ -14,6 +14,8 @@ It works on macOS only for now. Windows needs its own pass.
 
 ## Rules
 
+- Write every path inside double quotes, as one argument, in every command, exactly as the commands below show: `"<checkout>"`, `"<scratchpad>"`, `"<tmp>"` and every path built on them.
+  A space is fine once quoted. When a path holds a double quote, a backtick, a dollar sign or a newline, stop and tell the lead: build nothing, launch nothing, remove nothing.
 - Run only a build from the checkout your brief names, and only once step 3 shows it names `JOBDESK_DATA_DIR` and reads it at startup. Never open `/Applications/Jobdesk.app` and never `open -a Jobdesk`.
 - Use only a copy of `tests/sample_workspace` and a fresh `JOBDESK_DATA_DIR`. The data stays fictional.
   The path must be absolute: the app ignores an empty or relative one and opens the user's real data folder.
@@ -49,7 +51,7 @@ It works on macOS only for now. Windows needs its own pass.
 3. Check that the checkout names `JOBDESK_DATA_DIR` and reads it at startup, with the checkout's absolute path written out:
 
    ```bash
-   git -C <checkout> grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs && git -C <checkout> grep -q -F 'var_os(DATA_DIR_VARIABLE)' -- src/shell/app.rs
+   git -C "<checkout>" grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs && git -C "<checkout>" grep -q -F 'var_os(DATA_DIR_VARIABLE)' -- src/shell/app.rs
    ```
 
    It exits 0 only when `data_folder.rs` names the variable and `app.rs` reads it in `run()` at startup.
@@ -58,21 +60,21 @@ It works on macOS only for now. Windows needs its own pass.
    It exits 128 when `<checkout>` is not a git checkout: a wrong path, or a pruned worktree.
    Any exit but 0 is a stop: build nothing, launch nothing, and never retry the check from another folder.
    Nothing needs cleaning up. Tell the lead the exit code, and that the checkout lacks the `JOBDESK_DATA_DIR` override or is not a checkout.
-4. Run `cargo build` in the checkout. A debug build is fine.
-5. Make a fresh folder: `mktemp -d <scratchpad>/jobdesk.XXXXXX`, with the scratchpad's absolute path. Call the absolute path it prints `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
+4. Build the checkout with `cargo build --manifest-path "<checkout>/Cargo.toml"`. A debug build is fine.
+5. Make a fresh folder: `mktemp -d "<scratchpad>/jobdesk.XXXXXX"`, with the scratchpad's absolute path. Call the absolute path it prints `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
 
    ```bash
-   cp -R <checkout>/tests/sample_workspace <tmp>/ai-job-search
-   mv <tmp>/ai-job-search/CLAUDE.profile.md <tmp>/ai-job-search/CLAUDE.md
-   mkdir -p <tmp>/ai-job-search/.claude/commands <tmp>/data
-   touch <tmp>/ai-job-search/.claude/commands/apply.md
+   cp -R "<checkout>/tests/sample_workspace" "<tmp>/ai-job-search"
+   mv "<tmp>/ai-job-search/CLAUDE.profile.md" "<tmp>/ai-job-search/CLAUDE.md"
+   mkdir -p "<tmp>/ai-job-search/.claude/commands" "<tmp>/data"
+   touch "<tmp>/ai-job-search/.claude/commands/apply.md"
    ```
 
    The app opens only a folder that holds `.claude/commands/apply.md`, so `tests/sample_workspace` itself never opens. Profile reads `CLAUDE.md`.
 6. Launch the binary by its full path in the background, with no `cd` before it, and keep the PID it prints:
 
    ```bash
-   JOBDESK_DATA_DIR=<tmp>/data nohup <checkout>/target/debug/jobdesk --workspace <tmp>/ai-job-search > <tmp>/app.log 2>&1 &
+   JOBDESK_DATA_DIR="<tmp>/data" nohup "<checkout>/target/debug/jobdesk" --workspace "<tmp>/ai-job-search" > "<tmp>/app.log" 2>&1 &
    echo "pid $!"
    ```
 
@@ -85,14 +87,15 @@ It works on macOS only for now. Windows needs its own pass.
    Two windows with your PID: stop, clean up, and report.
 8. Observe with `agent-desktop snapshot --window-id <id> -i --compact`. Act on a ref, then snapshot again to check.
    `click <ref> --wait-for "<role>:<name>"` waits for the result in one call.
-   Take a screenshot with `agent-desktop screenshot --window-id <id> <tmp>/<name>.png`.
+   Take a screenshot with `agent-desktop screenshot --window-id <id> "<tmp>/<name>.png"`.
 9. Clean up, every time, failures included:
    - Snapshot, then click the `button` named `Close` in your window. This closes it the usual way and saves its `app.ron` in `<tmp>/data`.
    - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/debug/jobdesk`, `kill <pid>` once, then check again. Anything else: kill nothing.
    - Run `agent-desktop list-windows --app Jobdesk` again: no entry has your PID. The user's window stays.
    - When your PID still runs or still has a window, kill no more and remove nothing. Stop, and report the window and `<tmp>` left behind.
    - Only once your app is gone, remove `<tmp>`, which holds the copy, the data folder and the screenshots,
-     with one `rm -rf` and its full absolute path written out, never a variable.
+     with one `rm -rf "<tmp>"`, its full absolute path written out inside the quotes, never a variable.
+     First check that the path is the one `mktemp` printed: it starts with the scratchpad's absolute path and ends in `/jobdesk.` and six characters. Otherwise remove nothing, and report `<tmp>` left behind.
    - Never kill, close or touch any other Jobdesk.
 
 ## What the tree shows

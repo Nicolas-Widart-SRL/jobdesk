@@ -1,5 +1,14 @@
-# Releases when a release PR (opened by release.yml) merges: builds the installers on the merge commit,
+# Releases when a release PR (opened by release.yml) merges into main: builds the installers on the merge commit,
 # then tags it and creates the GitHub release from the CHANGELOG.md section.
+#
+# The trigger is a push to main, so the run belongs to refs/heads/main and the `release` environment, which allows
+# only main, accepts it. A pull_request event runs on refs/pull/N/merge and would not pass that rule.
+# A push runs the release jobs only for the merge of a release PR, and only after this check, which fails closed:
+# the commit message must start like a release merge, then the pull requests GitHub lists for the commit must hold
+# exactly one merged PR of this repository, from release/vX.Y.Z into main, whose merge commit is the pushed commit.
+# That holds for a squash merge and for a merge commit. Any other push to main starts nothing: its run shows as skipped.
+# Merge a release PR with Squash and merge. A rebase merge of several commits ends on a commit that is not named
+# chore(release): vX.Y.Z, so nothing starts: run this workflow by hand with the tag instead.
 #
 # The tag exists only once the installers built. A failed build leaves no tag.
 # "Re-run failed jobs" rebuilds the same commit, so it only helps with flaky or infrastructure failures.
@@ -8,9 +17,11 @@
 # The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
 #
 # macOS signing: the installers call asks for a signed release with `sign: true` and passes the six Apple secrets named
-# below, and no other job gets them. installers.yml signs the app with a Developer ID Application certificate and has
-# Apple notarize it, so a release opens on macOS with no Gatekeeper warning. A missing secret fails the build, and
-# nothing is tagged. The Package and macOS signing sections of CONTRIBUTING.md list the secrets.
+# below, and no other job gets them. They are environment secrets of the `release` environment, which only main can
+# deploy to. The called workflow reads them in a job that sets `environment: release`. installers.yml signs the app
+# with a Developer ID Application certificate and has Apple notarize it, so a release opens on macOS with no
+# Gatekeeper warning. A missing secret fails the build, and nothing is tagged. The macOS signing section of
+# CONTRIBUTING.md says how to set the environment and the secrets up.
 #
 # Updates: installers.yml builds with no key. The sign job alone gets the update key, from the two secrets
 # JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD named in its signing step, and runs no build and only actions
@@ -20,8 +31,8 @@
 name: Tag release
 
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
@@ -32,29 +43,42 @@ on:
 permissions:
   contents: read
 
+# Releases queue one after another. A push that cannot be a release gets a group of its own, so it never waits behind
+# a release, and never replaces a release that waits. The message test is the same as in the version job below.
 concurrency:
-  group: tag-release-${{ github.event.pull_request.head.ref || format('release/{0}', inputs.tag) }}
+  group: >-
+    ${{ (github.event_name == 'push' && !(
+      startsWith(github.event.head_commit.message, 'chore(release): v') ||
+      (startsWith(github.event.head_commit.message, 'Merge pull request #') && contains(github.event.head_commit.message, '/release/v'))
+    )) && format('tag-release-skip-{0}', github.sha) || 'tag-release' }}
   cancel-in-progress: false
 
 jobs:
-  # Picks the tag and the commit to build. From here on, both events go the same way.
+  # Picks the tag and the commit to build, and says whether this run is a release at all. From here on, both events go
+  # the same way. A push that is not a release merge ends here with release=false, and every later job skips.
+  # Only this job reads pull requests, to tell a release merge from any other push to main.
   version:
     name: Read the release version
+    # Cheap first test on the commit message, so most pushes to main start no runner. The check in the step is the real one.
     if: >-
       github.event_name == 'workflow_dispatch' || (
-        github.event.pull_request.merged == true &&
-        startsWith(github.event.pull_request.head.ref, 'release/v') &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.base.ref == 'main'
+        github.event_name == 'push' && (
+          startsWith(github.event.head_commit.message, 'chore(release): v') ||
+          (startsWith(github.event.head_commit.message, 'Merge pull request #') && contains(github.event.head_commit.message, '/release/v'))
+        )
       )
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
+      release: ${{ steps.read.outputs.release }}
       tag: ${{ steps.read.outputs.tag }}
       sha: ${{ steps.read.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Read version
         id: read
         shell: bash
@@ -62,27 +86,34 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           INPUT_TAG: ${{ inputs.tag }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ $REF != refs/heads/main ]]; then
+            echo "::error::Run this workflow on main, not on '$REF'."
+            exit 1
+          fi
           if [[ $EVENT == workflow_dispatch ]]; then
-            if [[ $REF != refs/heads/main ]]; then
-              echo "::error::Run this workflow on main, not on '$REF'."
-              exit 1
-            fi
             if ! [[ $INPUT_TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::Tag '$INPUT_TAG' is not vX.Y.Z."
               exit 1
             fi
             tag=$INPUT_TAG
-            sha=$GITHUB_SHA
           else
-            if ! [[ $HEAD_REF =~ ^release/(v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-              echo "::error::Head branch '$HEAD_REF' is not release/vX.Y.Z."
-              exit 1
+            # A release merge is the merge commit of exactly one merged PR of this repository, from release/vX.Y.Z into
+            # main. GitHub lists the PR for a squash merge and for a merge commit alike. A failed API call fails the step.
+            # shellcheck disable=SC2016  # $ENV is jq's, not the shell's.
+            branches=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(
+                .merged_at != null and .base.ref == "main" and .merge_commit_sha == $ENV.SHA and
+                .head.repo.full_name == $ENV.REPO and (.head.ref | test("^release/v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              ) | .head.ref] | unique | .[]')
+            if [ "$(printf '%s' "$branches" | grep -c .)" -ne 1 ]; then
+              echo "::warning::$SHA is not the merge of a release/vX.Y.Z pull request, so no release starts."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
-            tag=${BASH_REMATCH[1]}
-            sha=$MERGE_SHA
+            tag=${branches#release/}
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
             echo "::error::Tag $tag already exists on origin."
@@ -90,15 +121,19 @@ jobs:
           fi
           # installers.yml checks that Cargo.toml holds the same version.
           if ! grep -qF "## [${tag#v}]" CHANGELOG.md; then
-            echo "::error::No CHANGELOG.md section for ${tag#v} at $sha"
+            echo "::error::No CHANGELOG.md section for ${tag#v} at $SHA"
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "release=true"
+            echo "tag=$tag"
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
 
   installers:
     name: Installers
     needs: version
+    if: needs.version.outputs.release == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/installers.yml

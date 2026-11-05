@@ -5,13 +5,16 @@
 # tag-release.yml has no `quick` input, so a release always tests.
 # The Windows installer is not signed. See the Install section of README.md and the Package section of CONTRIBUTING.md.
 # The macOS app is signed with a Developer ID Application certificate and notarized by Apple, only when tag-release.yml
-# calls with `sign: true` and passes the six Apple secrets. A release with a secret missing fails, and never ships
-# ad-hoc signed. A manual run gets no secrets and stays ad-hoc signed and not notarized, so a branch never sees them.
-# The secrets reach only the step that runs cargo-packager on macOS. The build runs in a step before it, with no secrets.
+# calls with `sign: true`. Then the job package-macos-signed runs, and it alone sets `environment: release`. The six
+# Apple secrets are environment secrets of `release`, which allows deployments from main only. tag-release.yml passes
+# each by name, and the environment's value reaches only that job. A branch, a fork and a manual run from the Actions
+# tab get no secret: a manual run has no `sign` input, so it runs package-macos, ad-hoc signed and not notarized. A
+# release with a secret missing fails, and never ships ad-hoc signed.
+# The secrets reach only the step that runs cargo-packager. The build runs in a step before it, with no secrets.
 # `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. It is packed from the
-# signed, notarized app, and the workflow checks the unpacked copy again. On Windows that file is the setup.
-# This workflow never sees the update key, and nothing it builds is signed for updates: only the sign job of
-# tag-release.yml signs, and only for a release.
+# signed, notarized app, and the workflow checks the unpacked copy and the app on the DMG again. On Windows that file
+# is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the sign
+# job of tag-release.yml signs, and only for a release.
 name: Installers
 
 on:
@@ -131,29 +134,12 @@ jobs:
           fi
           echo "label=$label" >> "$GITHUB_OUTPUT"
 
-  package:
-    name: Build ${{ matrix.artifact }}
+  package-windows:
+    name: Build setup
     needs: [version, test]
     # Runs when a quick build skips test, never when a need failed.
     if: ${{ !cancelled() && !failure() }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # bundle is the app a copy of Jobdesk downloads to update itself, packed as update_suffix.
-          - os: macos-latest
-            formats: app,dmg
-            artifact: dmg
-            built: '*.dmg'
-            suffix: macos-arm64.dmg
-            bundle: Jobdesk.app
-            update_suffix: macos-arm64.app.tar.gz
-          - os: windows-latest
-            formats: nsis
-            artifact: setup
-            built: '*-setup.exe'
-            suffix: windows-x64-setup.exe
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
@@ -164,15 +150,71 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
-      # An ad-hoc signed build: Windows, a manual run, and any call that does not ask for a signed release.
-      - name: Package
-        if: ${{ !(inputs.sign && matrix.artifact == 'dmg') }}
-        run: cargo packager --release --formats ${{ matrix.formats }}
+      - run: cargo packager --release --formats nsis
+      - name: Name the installer
+        env:
+          BUILT: '*-setup.exe'
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-windows-x64-setup.exe
+        run: scripts/pack-installer.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup
+          path: dist/*
+          if-no-files-found: error
 
-      # The build runs first, with no secrets, so no build script or macro of a dependency sees them. cargo-packager then
-      # runs the same build again, which finds nothing to compile.
+  # An ad-hoc signed app: every run that does not ask for a signed release, such as a manual run.
+  package-macos:
+    name: Build dmg
+    needs: [version, test]
+    if: ${{ !cancelled() && !failure() && !inputs.sign }}
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+      - run: cargo packager --release --formats app,dmg
+      - name: Name the installer and pack the update
+        env:
+          BUILT: '*.dmg'
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.dmg
+          BUNDLE: Jobdesk.app
+          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.app.tar.gz
+        run: scripts/pack-installer.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg
+          path: dist/*
+          if-no-files-found: error
+
+  # A signed and notarized app, for a release. The environment gives this job the Apple secrets, and only when the run
+  # belongs to main. In a called workflow, the job that sets `environment` is the one that gets the environment's
+  # secrets, and the caller passes each secret by name.
+  package-macos-signed:
+    name: Build dmg (signed)
+    needs: [version, test]
+    if: ${{ !cancelled() && !failure() && inputs.sign }}
+    runs-on: macos-latest
+    environment: release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
+
+      # The build runs first, with no secrets, so no build script or macro of a dependency sees them. The step that has
+      # the secrets replaces the before-packaging-command of cargo-packager, which would build again, with `true`.
       - name: Build the app without the Apple secrets
-        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
         run: cargo build --release --locked
 
       # cargo-packager 0.11.8 does what this step relies on:
@@ -185,7 +227,6 @@ jobs:
       #   the DMG, so the DMG holds the stapled app. The DMG is signed but not notarized.
       # The API key is a file for notarytool, so it is written to a temporary folder and deleted when the step ends.
       - name: Package, sign and notarize
-        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
         # notarytool waits for Apple with no limit of its own.
         timeout-minutes: 60
         env:
@@ -195,75 +236,68 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          FORMATS: ${{ matrix.formats }}
         run: |
           missing=''
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+            if [ -z "$(printf '%s' "${!name}" | tr -d '[:space:]')" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::A release must be signed and notarized, and these secrets are not set:$missing. Set them, as the macOS signing section of CONTRIBUTING.md says."
+            echo "::error::A release must be signed and notarized, and these secrets are empty or not set:$missing. Add them as environment secrets of the release environment, as the macOS signing section of CONTRIBUTING.md says."
             exit 1
           fi
           case "$APPLE_SIGNING_IDENTITY" in
-            *[\"\\]*)
-              echo '::error::APPLE_SIGNING_IDENTITY holds a quote or a backslash.'
+            [[:space:]]* | *[[:space:]] | *[[:cntrl:]\"\\]*)
+              echo '::error::APPLE_SIGNING_IDENTITY must have no space at either end, no control character such as a newline, no quote and no backslash.'
+              exit 1
+              ;;
+          esac
+          case "$APPLE_API_KEY" in
+            *[!A-Za-z0-9]*)
+              echo '::error::APPLE_API_KEY must be the key ID, letters and digits only.'
               exit 1
               ;;
           esac
           if ! awk '
             $0 == "signing-identity = \"-\"" { print "signing-identity = \"" ENVIRON["APPLE_SIGNING_IDENTITY"] "\""; n++; next }
+            $0 == "before-packaging-command = \"cargo build --release --locked\"" { print "before-packaging-command = \"true\""; m++; next }
             { print }
-            END { exit n != 1 }
+            END { exit (n != 1 || m != 1) }
           ' Cargo.toml > "$RUNNER_TEMP/Cargo.toml.signed"; then
-            echo '::error::Cargo.toml must hold exactly one signing-identity = "-" line for the release to replace.'
+            echo '::error::Cargo.toml must hold exactly one signing-identity = "-" line and one before-packaging-command = "cargo build --release --locked" line for the release to replace.'
             exit 1
           fi
           mv "$RUNNER_TEMP/Cargo.toml.signed" Cargo.toml
-          umask 077
           keys=$(mktemp -d "$RUNNER_TEMP/apple-key.XXXXXX")
           trap 'rm -rf "$keys"' EXIT
-          printf '%s' "$APPLE_API_KEY_P8" > "$keys/AuthKey_$APPLE_API_KEY.p8"
-          export APPLE_API_KEY_PATH="$keys/AuthKey_$APPLE_API_KEY.p8"
+          key="$keys/AuthKey_$APPLE_API_KEY.p8"
+          (umask 077; printf '%s' "$APPLE_API_KEY_P8" > "$key")
+          export APPLE_API_KEY_PATH="$key"
           unset APPLE_API_KEY_P8
-          cargo packager --release --formats "$FORMATS"
+          cargo packager --release --formats app,dmg
+
       - name: Name the installer and pack the update
         env:
-          BUILT: ${{ matrix.built }}
-          NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
-          BUNDLE: ${{ matrix.bundle }}
-          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.update_suffix }}
-        run: |
-          # bash 3.2 on macOS has no mapfile; compgen exits 1 on no match.
-          files=()
-          while IFS= read -r f; do
-            if [ -n "$f" ]; then files+=("$f"); fi
-          done < <(compgen -G "target/packages/$BUILT" || true)
-          if [ "${#files[@]}" -ne 1 ]; then
-            echo "::error::Expected one $BUILT in target/packages, found ${#files[@]}."
-            exit 1
-          fi
-          mkdir -p dist
-          mv "${files[0]}" "dist/$NAME"
-          # The app holds one top folder, Jobdesk.app/, with no macOS metadata, as the app's unpacker expects.
-          if [ -n "$BUNDLE" ]; then
-            if [ ! -d "target/packages/$BUNDLE" ]; then
-              echo "::error::No $BUNDLE in target/packages."
-              exit 1
-            fi
-            COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "dist/$UPDATE_NAME" -C target/packages "$BUNDLE"
-          fi
-      # A signed release must pass on the DMG, on the app, and on the app unpacked from the update file, which is what
-      # an installed copy installs. A failure stops the job, so nothing is uploaded.
+          BUILT: '*.dmg'
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.dmg
+          BUNDLE: Jobdesk.app
+          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.app.tar.gz
+        run: scripts/pack-installer.sh
+
+      # What a user gets must pass: the app on the DMG opened as a user opens it, the app as built, and the app unpacked
+      # from the update file, which is what an installed copy installs. A failure stops the job, so nothing is uploaded.
       - name: Check the signed and notarized release
-        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
         env:
-          NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
-          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.update_suffix }}
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.dmg
+          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-macos-arm64.app.tar.gz
         run: |
+          mnt="$RUNNER_TEMP/dmg-mount"
+          mkdir "$mnt"
+          trap 'hdiutil detach "$mnt" -force -quiet || true' EXIT
           codesign --verify --strict --verbose=2 "dist/$NAME"
           details=$(codesign -dv --verbose=4 "dist/$NAME" 2>&1)
           grep -q '^Authority=Developer ID Application: ' <<<"$details"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mnt" "dist/$NAME"
+          scripts/verify-macos-app.sh "$mnt/Jobdesk.app"
           scripts/verify-macos-app.sh target/packages/Jobdesk.app
           unpacked=$(mktemp -d "$RUNNER_TEMP/unpacked.XXXXXX")
           tar -xzf "dist/$UPDATE_NAME" -C "$unpacked"
@@ -271,6 +305,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: dmg
           path: dist/*
           if-no-files-found: error

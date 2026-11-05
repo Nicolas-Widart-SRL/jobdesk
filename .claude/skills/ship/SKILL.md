@@ -157,7 +157,7 @@ Give a builder:
 - the step from the plan, word for word, with its files and its check;
 - the change's branch and its head SHA, so it resets its worktree to the right commit;
 - what is out of scope;
-- optionally, drive the app: yes or no, and which screens. Before `main` holds the `drive-app` skill, name the file to follow too.
+- optionally, drive the app: yes or no, and which screens. Before `main` holds the `drive-app` skill, yes also needs a file path and your own words that the file is reviewed.
 
 When the change builds a design, add the canvas paths.
 For an OpenSpec step, add the user's recorded answers and the task ids, as OpenSpec changes says.
@@ -170,6 +170,7 @@ Give the reviewer:
 - the risky lens, taken from the planner's reason for marking the step risky;
 - for a visible change, the changed snapshot PNGs and the canvas paths;
 - optionally, drive the app: yes or no, and which screens. Yes lets it build the head checkout and drive the app through the `drive-app` skill, on macOS only.
+  Before `main` holds the skill, yes also needs a file path and your own words that the file is reviewed.
 
 Never pass on the builder's account, and never say what a fix does.
 In each later round, pass the round-1 findings word for word, with the later rounds' findings,

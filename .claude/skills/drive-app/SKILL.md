@@ -7,6 +7,8 @@ description: How an agent builds, opens, observes and closes Jobdesk with the ag
 
 agent-desktop reads and operates an app through the accessibility tree, and prints one JSON envelope per command.
 Use it only when your brief says to drive the app, and only on the screens the brief names.
+Follow this file as `main` holds it: `git show origin/main:.claude/skills/drive-app/SKILL.md`.
+Before `main` holds it, drive the app only when your brief names a file path and the lead's own words there say that file is reviewed.
 It works on macOS only for now. Windows needs its own pass.
 
 ## Rules
@@ -58,7 +60,8 @@ It works on macOS only for now. Windows needs its own pass.
    ```
 
    Write every path out in full. The sandbox refuses a command whose name comes from a variable.
-   Check that `ps -p <pid> -o command=` shows `<checkout>/target/debug/jobdesk`. Otherwise stop, and report.
+   Check that `ps -p <pid> -o command=` shows `<checkout>/target/debug/jobdesk`. Otherwise kill nothing, remove nothing, and stop.
+   Report that a Jobdesk window with an unknown PID may still be open on the user's desktop, and that `<tmp>` stays.
 6. Run `agent-desktop list-windows --app Jobdesk`. It lists the user's window too. Keep the `id` (such as `w-28008`) of the entry whose `pid` is yours.
    Trust only the `pid`: both windows are titled `Jobdesk`, and the debug build's `app_name` reads `jobdesk`.
    No entry with your PID yet: list again after a second. None after 10 seconds: read `<tmp>/app.log`, clean up, and report.
@@ -68,9 +71,11 @@ It works on macOS only for now. Windows needs its own pass.
    Take a screenshot with `agent-desktop screenshot --window-id <id> <tmp>/<name>.png`.
 8. Clean up, every time, failures included:
    - Snapshot, then click the `button` named `Close` in your window. This closes it the usual way and saves its `app.ron` in `<tmp>/data`.
-   - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/debug/jobdesk`, `kill <pid>`, then check again. Anything else: kill nothing.
+   - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/debug/jobdesk`, `kill <pid>` once, then check again. Anything else: kill nothing.
    - Run `list-windows --app Jobdesk` again: no entry has your PID. The user's window stays.
-   - Only once your app is gone, remove the folder with one `rm -rf` and its full absolute path written out, never a variable.
+   - When your PID still runs or still has a window, kill no more and remove nothing. Stop, and report the window and `<tmp>` left behind.
+   - Only once your app is gone, remove `<tmp>`, which holds the copy, the data folder and the screenshots,
+     with one `rm -rf` and its full absolute path written out, never a variable.
    - Never kill, close or touch any other Jobdesk.
 
 ## What the tree shows

@@ -60,9 +60,14 @@ It works on macOS only for now. Windows needs its own pass.
    It exits 128 when `<checkout>` is not a git checkout: a wrong path, or a pruned worktree.
    Any exit but 0 is a stop: build nothing, launch nothing, and never retry the check from another folder.
    Nothing needs cleaning up. Tell the lead the exit code, and that the checkout lacks the `JOBDESK_DATA_DIR` override or is not a checkout.
-4. Build the checkout with `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target"`. A debug build is fine.
-   `--target-dir` puts the binary where step 6 launches it, even when `CARGO_TARGET_DIR` or a Cargo config points elsewhere.
-   Without it, the build can succeed and leave an old binary there, which may ignore `JOBDESK_DATA_DIR` and open the user's real data folder.
+4. Run `rustc -vV` once. Call the text after `host: ` in its output `<triple>` below.
+   It must be `aarch64-apple-darwin` or `x86_64-apple-darwin`. Anything else, or no `host:` line, is a stop: build nothing, launch nothing.
+   Nothing needs cleaning up. Tell the lead what `rustc -vV` printed.
+   Then build the checkout with `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target" --target "<triple>"`,
+   with `<triple>` written out. A debug build is fine.
+   Together the two flags put the binary at `"<checkout>/target/<triple>/debug/jobdesk"`, where step 6 launches it,
+   even when `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET` or a Cargo config such as `~/.cargo/config.toml` points elsewhere.
+   Without them, the build can succeed and leave an old binary at that path, which may ignore `JOBDESK_DATA_DIR` and open the user's real data folder.
    When `cargo build` exits non-zero, stop: launch nothing, and never launch a binary left from an earlier build.
    Nothing needs cleaning up. Tell the lead the build failed, with the last lines of its output.
 5. Make a fresh folder: `mktemp -d "<scratchpad>/jobdesk.XXXXXX"`, with the scratchpad's absolute path. Call the absolute path it prints `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
@@ -78,12 +83,12 @@ It works on macOS only for now. Windows needs its own pass.
 6. Launch the binary by its full path in the background, with no `cd` before it, and keep the PID it prints:
 
    ```bash
-   JOBDESK_DATA_DIR="<tmp>/data" nohup "<checkout>/target/debug/jobdesk" --workspace "<tmp>/ai-job-search" > "<tmp>/app.log" 2>&1 &
+   JOBDESK_DATA_DIR="<tmp>/data" nohup "<checkout>/target/<triple>/debug/jobdesk" --workspace "<tmp>/ai-job-search" > "<tmp>/app.log" 2>&1 &
    echo "pid $!"
    ```
 
-   Write every path out in full. The sandbox refuses a command whose name comes from a variable.
-   Check that `ps -p <pid> -o command=` shows `<checkout>/target/debug/jobdesk`. Otherwise kill nothing, remove nothing, and stop.
+   Write every path out in full, `<triple>` included. The sandbox refuses a command whose name comes from a variable.
+   Check that `ps -p <pid> -o command=` shows `<checkout>/target/<triple>/debug/jobdesk`. Otherwise kill nothing, remove nothing, and stop.
    Report that a Jobdesk window with an unknown PID may still be open on the user's desktop, and that `<tmp>` stays.
 7. Run `agent-desktop list-windows --app Jobdesk`. It lists the user's window too. Keep the `id` (such as `w-28008`) of the entry whose `pid` is yours.
    Trust only the `pid`: both windows are titled `Jobdesk`, and the debug build's `app_name` reads `jobdesk`.
@@ -94,7 +99,7 @@ It works on macOS only for now. Windows needs its own pass.
    Take a screenshot with `agent-desktop screenshot --window-id <id> "<tmp>/<name>.png"`.
 9. Clean up, every time, failures included:
    - Snapshot, then click the `button` named `Close` in your window. This closes it the usual way and saves its `app.ron` in `<tmp>/data`.
-   - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/debug/jobdesk`, `kill <pid>` once, then check again. Anything else: kill nothing.
+   - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/<triple>/debug/jobdesk`, `kill <pid>` once, then check again. Anything else: kill nothing.
    - Run `agent-desktop list-windows --app Jobdesk` again: no entry has your PID. The user's window stays.
    - When your PID still runs or still has a window, kill no more and remove nothing. Stop, and report the window and `<tmp>` left behind.
    - Only once your app is gone, remove `<tmp>`, which holds the copy, the data folder and the screenshots,

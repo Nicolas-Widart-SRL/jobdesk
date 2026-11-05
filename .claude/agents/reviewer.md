@@ -28,15 +28,18 @@ You review one step or a whole change before it merges. You never write code.
   - `git -C "<checkout>" grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs && git -C "<checkout>" grep -q -F 'var_os(DATA_DIR_VARIABLE)' -- src/shell/app.rs` first,
     with `<checkout>` the head checkout's absolute path. Any exit but 0, 128 included, is a stop: the checkout lacks the override
     or is not a checkout. Build nothing, launch nothing, never retry it from another folder, and say so;
-  - `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target"`, whose `target/` is build output and not a source edit.
+  - `rustc -vV` once, whose text after `host: ` the skill calls `<triple>`. Anything but `aarch64-apple-darwin` or `x86_64-apple-darwin`,
+    or no `host:` line, is a stop: build nothing, launch nothing, and say so;
+  - `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target" --target "<triple>"`, with `<triple>` written out,
+    whose `target/` is build output and not a source edit.
     Any non-zero exit is a stop: launch nothing, never a binary left from an earlier build, and say so;
   - `mktemp -d "<scratchpad>/jobdesk.XXXXXX"`, whose printed path the skill calls `<tmp>`, then only these inside it:
     `cp -R "<checkout>/tests/sample_workspace" "<tmp>/ai-job-search"`,
     `mv "<tmp>/ai-job-search/CLAUDE.profile.md" "<tmp>/ai-job-search/CLAUDE.md"`,
     `mkdir -p "<tmp>/ai-job-search/.claude/commands" "<tmp>/data"` and
     `touch "<tmp>/ai-job-search/.claude/commands/apply.md"`;
-  - `JOBDESK_DATA_DIR="<tmp>/data" nohup "<checkout>/target/debug/jobdesk" --workspace "<tmp>/ai-job-search" > "<tmp>/app.log" 2>&1 &` with `echo "pid $!"`,
-    `ps -p <pid> -o command=`, and `kill <pid>` of the PID you started once `ps` shows it is the debug binary;
+  - `JOBDESK_DATA_DIR="<tmp>/data" nohup "<checkout>/target/<triple>/debug/jobdesk" --workspace "<tmp>/ai-job-search" > "<tmp>/app.log" 2>&1 &` with `echo "pid $!"`,
+    `ps -p <pid> -o command=`, and `kill <pid>` of the PID you started once `ps` shows `<checkout>/target/<triple>/debug/jobdesk`;
   - `agent-desktop`, with screenshots written inside that folder, as `"<tmp>/<name>.png"`;
   - one `rm -rf "<tmp>"`, its full absolute path written out inside the quotes, never a variable,
     and only once it starts with your scratchpad's absolute path and ends in `/jobdesk.` and six characters.

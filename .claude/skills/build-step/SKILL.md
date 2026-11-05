@@ -21,7 +21,7 @@ You build one step in your own git worktree. Other builders work beside you in t
 - Never open the app on the user's desktop. The snapshot tests show the screens.
   The one exception is a brief that says to drive the app: then open it only as the `drive-app` skill says, as `main` holds it
   (`git show origin/main:.claude/skills/drive-app/SKILL.md`). Before `main` holds it, drive the app only when your brief names a file path
-  and the lead's own words there say that file is reviewed.
+  and the lead's own words there say that file is reviewed. Then that file is the skill, followed instead of the `origin/main` copy.
 - Leave your worktree in place, because the lead runs the checks in it.
   The lead removes it, and its large `target/`, after the step merges.
   Create no other worktree.

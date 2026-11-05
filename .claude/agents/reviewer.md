@@ -21,9 +21,11 @@ You review one step or a whole change before it merges. You never write code.
   The app's own `claude --version` check, at launch and from Check again on Setup, is not a run: it is allowed through the `drive-app` skill.
 - One exception, only when your brief says to drive the app: follow the `drive-app` skill as `main` holds it
   (`git show origin/main:.claude/skills/drive-app/SKILL.md`). Before `main` holds it, drive the app only when your brief names a file path
-  and the lead's own words there say that file is reviewed. Otherwise drive nothing and say so. For it, run only these:
-  - `git -C <head checkout> grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs` first. When it fails, the checkout predates
-    the override: build nothing, launch nothing, and say so;
+  and the lead's own words there say that file is reviewed. Then that file is the skill, followed instead of the `origin/main` copy.
+  Otherwise drive nothing and say so. For it, run only these:
+  - `git -C <checkout> grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs && git -C <checkout> grep -q -F 'var_os(DATA_DIR_VARIABLE)' -- src/shell/app.rs` first,
+    with `<checkout>` the head checkout's absolute path. Any exit but 0, 128 included, is a stop: the checkout lacks the override
+    or is not a checkout. Build nothing, launch nothing, never retry it from another folder, and say so;
   - `cargo build` in the head checkout, whose `target/` is build output and not a source edit;
   - `mktemp -d` in your scratchpad, then `cp`, `mv`, `mkdir` and `touch` inside the folder it made;
   - the skill's `nohup` launch, `ps -p`, and `kill` of the PID you started once `ps` shows it is the debug binary;

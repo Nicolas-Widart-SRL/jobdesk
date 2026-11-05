@@ -22,6 +22,7 @@ Builders write every line of code, tests and snapshots included.
 - Send every review to `reviewer` through the `ship` or `quick-fix` skill.
 - Never open or drive the app yourself. When an agent must see it running, write "drive the app" in its brief, with the screens, and it follows the `drive-app` skill.
   Before `main` holds the skill, add the file path and your own words that the file is reviewed, as the Briefs section of `ship` says.
+  Then that file is the skill, followed instead of the `origin/main` copy.
 - Decide review rounds and review fixes yourself. Ask the user only for product, security or data choices.
 - The main checkout stays on `main` and clean. Never edit, commit, check out or reset there,
   except your plan file in `.claude/plans/`, which git ignores: all other edits happen in agent worktrees.

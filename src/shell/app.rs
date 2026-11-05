@@ -1684,6 +1684,16 @@ fn data_folder_from(moved: Option<PathBuf>, default: impl FnOnce() -> Option<Pat
     moved.or_else(default)
 }
 
+/// Makes the data folder, as eframe did when it looked it up itself. A `moved` folder that cannot be made is an error,
+/// so the window never opens on a session whose saves all fail. The usual place is only tried, so an unwritable home
+/// still opens the app.
+fn make_data_folder(data: &Path, moved: bool) -> std::io::Result<()> {
+    match std::fs::create_dir_all(data) {
+        Err(error) if moved => Err(std::io::Error::new(error.kind(), format!("cannot make the data folder {}: {error}", data.display()))),
+        _ => Ok(()),
+    }
+}
+
 /// eframe keeps the window's state in `app.ron` in the data folder, not in a place of its own.
 fn native_options(icon: egui::IconData, data: Option<&Path>) -> eframe::NativeOptions {
     eframe::NativeOptions {
@@ -1698,9 +1708,8 @@ pub fn run() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/brand/jobdesk-icon-1024.png")).unwrap_or_default();
     let moved = moved_data_folder(std::env::var_os(DATA_DIR_VARIABLE));
     let data = data_folder_from(moved.clone(), || eframe::storage_dir("Jobdesk"));
-    // eframe made the folder when it looked it up itself.
     if let Some(data) = &data {
-        let _ = std::fs::create_dir_all(data);
+        make_data_folder(data, moved.is_some()).map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
     }
     let options = native_options(icon, data.as_deref());
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -2068,6 +2077,19 @@ mod tests {
         let (old, fresh) = aged_data(&data, Retention::Days30);
         launch(&ctx, None, &data);
         assert!(!old.exists() && fresh.exists() && fresh.starts_with(moved.path().join("runs")), "the launch prunes the run logs there");
+    }
+
+    /// A moved data folder that cannot be made stops the launch, while the usual place that cannot be made still opens.
+    #[test]
+    fn a_data_folder_that_cannot_be_made_stops_only_a_moved_launch() {
+        let scratch = tempfile::tempdir().unwrap();
+        let file = scratch.path().join("a file");
+        fs::write(&file, "").unwrap();
+        assert!(make_data_folder(&file, true).is_err(), "a moved folder that is a file stops the launch");
+        assert!(make_data_folder(&file, false).is_ok(), "the usual place that is a file is ignored");
+        let fresh = scratch.path().join("fresh/data");
+        make_data_folder(&fresh, true).unwrap();
+        assert!(fresh.is_dir(), "a moved folder that can be made is made");
     }
 
     /// Ask me before each tool reaches a desk as it opens, and the desk that is open on the frame the setting changes.

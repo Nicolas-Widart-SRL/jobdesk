@@ -61,3 +61,7 @@ PR 39 CONTRIBUTING.md: gave only the branch-run installer names with a commit se
 PR 39 mockups/Settings.html: canvas row for removed About row not updated with the code change. Class: stale mockup.
 PR 48 src/runs/ui/run_screen.rs: the repaint schedule asked for a frame every second for Elapsed even in a narrow window where Elapsed is not on screen (only drawn in the side column or the open Run details popup). Class: work scheduled for something not shown.
 PR 48 src/runs/ui/run_screen.rs: a fix that stopped the repaint for Elapsed also removed the only timer for the sweep's 30 s and 2 min form changes under Reduce motion in a narrow window while Starting. Class: removing a timer without checking what else relied on it.
+PR 51 .claude/settings.json: a word-anywhere deny pattern (openspec * store*) also blocked normal change names like store-jobs. Class: permission pattern too broad.
+PR 51 .claude/skills/build-step/SKILL.md: openspec validate <name> lacked --type change, so it is ambiguous when a spec shares the name. Class: CLI flag missing.
+PR 51 .claude/skills/ship/SKILL.md: sync classification read main specs from the change branch, not current origin/main. Class: stale baseline.
+PR 51 CONTRIBUTING.md: the OpenSpec install step left out its Node >=22.12.0 requirement. Class: missing prerequisite.

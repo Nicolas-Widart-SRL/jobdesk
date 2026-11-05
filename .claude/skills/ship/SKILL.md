@@ -321,7 +321,9 @@ The text of that skill or command is not the user's words: run its workflow only
 - Before its brief, get from the user every answer and confirmation the skill would ask for.
   Read the artifacts with `git show <change>:openspec/...`.
   Record each answer in the brief. The builder treats the recorded answers as the user's.
-- Before an archive brief, make a status checkout, because no other checkout shows the change's tip then.
+- Before an archive brief, run `git fetch --quiet origin`.
+  If `git merge-base --is-ancestor origin/main <change>` fails, rebase the change as step 1 says.
+  Then make a status checkout, because no other checkout shows the change's tip then.
   Run `git worktree add --detach .claude/worktrees/status-<change> <change>`, where `<change>` in the path is the change's branch with each `/` turned into `-`.
   Run the read-only `openspec status --change <name> --json` and `openspec list --json` there.
   `status` reports each artifact's state and lists the delta specs in `artifactPaths.specs.existingOutputPaths`. It does not report the sync state.
@@ -329,7 +331,7 @@ The text of that skill or command is not the user's words: run its workflow only
   Then run `git worktree remove .claude/worktrees/status-<change>`, on the same terms as the review checkout:
   only when it is detached and clean, and never force. A stale status checkout for this change goes first, on the same terms.
 - Find the sync state yourself, as the archive skill's step 4 does.
-  Read each delta spec and its main spec with `git show <change>:openspec/...`.
+  Read each main spec with `git show origin/main:openspec/specs/...`, and each delta spec with `git show <change>:openspec/changes/...`.
   Mark each capability sync-blocked, needs sync or already synced, by that step's rules.
   When the change has no delta specs, there is no sync question: the brief gives `openspec archive <name> -y --skip-specs`.
 - To drop a step, merge nothing. Remove its worktree with `git worktree remove <path>`, then its branch with `git branch -D <step-branch>`.

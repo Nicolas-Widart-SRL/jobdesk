@@ -41,7 +41,7 @@ You build one step in your own git worktree. Other builders work beside you in t
   When the lead then sends Archive now, first reset your worktree to the step's base to remove the failed command's writes:
   `git reset --hard <head SHA from the brief>`, then `git clean -fd -- openspec`. Then run `openspec archive <name> -y --skip-specs`.
   The command does any sync. Never run the archive skill's inline `openspec-sync-specs` write, its `mkdir` or its `mv`.
-  The check for an OpenSpec-only step is `openspec validate <name> --strict`, or `openspec validate --all --strict` after an archive, in place of `scripts/check.sh`.
+  The check for an OpenSpec-only step is `openspec validate <name> --type change --strict`, or `openspec validate --all --strict` after an archive, in place of `scripts/check.sh`.
 
 ## Steps
 

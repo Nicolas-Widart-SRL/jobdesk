@@ -125,7 +125,7 @@ TruffleHog scans the whole git history for secrets in CI, and fails on a verifie
 
 ## OpenSpec
 
-OpenSpec changes and specs live in `openspec/`. [AGENTS.md](AGENTS.md#team) says how they run through the team. Install the CLI:
+OpenSpec changes and specs live in `openspec/`. [AGENTS.md](AGENTS.md#team) says how they run through the team. OpenSpec 1.16.0 needs Node.js 22.12.0 or newer (its npm `engines` is `node >=22.12.0`). Install the CLI:
 
 ```bash
 npm install -g @fission-ai/openspec@1.16.0

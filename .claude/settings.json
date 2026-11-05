@@ -4,7 +4,7 @@
     "deny": [
       "Bash(openspec store:*)",
       "Bash(openspec * --store*)",
-      "Bash(openspec * store*)"
+      "Bash(openspec -* store*)"
     ],
     "ask": [
       "Bash(openspec init:*)",

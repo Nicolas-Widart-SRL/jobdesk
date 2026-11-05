@@ -39,10 +39,10 @@ Download the installer for your system from the [latest release](https://github.
 - **macOS** (Apple silicon): open `Jobdesk-vX.Y.Z-macos-arm64.dmg` and drag Jobdesk to Applications.
 - **Windows**: run `Jobdesk-vX.Y.Z-windows-x64-setup.exe`.
 
-The Windows installer is not signed yet, and the macOS app is ad-hoc signed but not notarized, so both systems warn on first open:
+The macOS app in a release is signed with a Developer ID and notarized by Apple, so it opens with no warning. The Windows installer is not signed yet, so SmartScreen shows a warning:
 
-- **macOS** blocks the first open. Try to open Jobdesk once, then go to System Settings, Privacy & Security, and click Open Anyway. On macOS 15 and later, right-click Open no longer bypasses this.
-- **Windows** SmartScreen shows a warning. Click More info, then Run anyway.
+- **Windows**: click More info, then Run anyway.
+- **macOS**, for a release from before signing and for a build made with the Installers workflow on GitHub: the app is ad-hoc signed, and macOS blocks the first open. Try to open Jobdesk once, then go to System Settings, Privacy & Security, and click Open Anyway. On macOS 15 and later, right-click Open no longer bypasses this.
 
 On first launch, choose your ai-job-search folder.
 

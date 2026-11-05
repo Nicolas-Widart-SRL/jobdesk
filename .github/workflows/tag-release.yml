@@ -7,6 +7,11 @@
 # The run by hand builds the current main commit, then tags and publishes the same way.
 # The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
 #
+# macOS signing: the installers call asks for a signed release with `sign: true` and passes the six Apple secrets named
+# below, and no other job gets them. installers.yml signs the app with a Developer ID Application certificate and has
+# Apple notarize it, so a release opens on macOS with no Gatekeeper warning. A missing secret fails the build, and
+# nothing is tagged. The Package and macOS signing sections of CONTRIBUTING.md list the secrets.
+#
 # Updates: installers.yml builds with no key. The sign job alone gets the update key, from the two secrets
 # JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD named in its signing step, and runs no build and only actions
 # pinned to commits. It signs the two update files under their release names, so each signature names its version.
@@ -100,6 +105,14 @@ jobs:
     with:
       ref: ${{ needs.version.outputs.sha }}
       tag: ${{ needs.version.outputs.tag }}
+      sign: true
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
   # Signs the update files. The key reaches only the Sign step, in its environment, never a command line or a log.
   # No checkout and no build, so no code from the repository or its dependencies runs beside it.

@@ -3,10 +3,15 @@
 # Run it from the Actions tab to build the installers of a branch without a release.
 # A manual run with `quick` skips clippy and tests, and labels the files `-untested`.
 # tag-release.yml has no `quick` input, so a release always tests.
-# The Windows installer is not signed. The macOS app is ad-hoc signed but not notarized. See the Install section of README.md and the Package section of CONTRIBUTING.md.
-# `dmg` also holds the ad-hoc signed app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. On Windows
-# that file is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the
-# sign job of tag-release.yml signs, and only for a release.
+# The Windows installer is not signed. See the Install section of README.md and the Package section of CONTRIBUTING.md.
+# The macOS app is signed with a Developer ID Application certificate and notarized by Apple, only when tag-release.yml
+# calls with `sign: true` and passes the six Apple secrets. A release with a secret missing fails, and never ships
+# ad-hoc signed. A manual run gets no secrets and stays ad-hoc signed and not notarized, so a branch never sees them.
+# The secrets reach only the step that runs cargo-packager on macOS. The build runs in a step before it, with no secrets.
+# `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. It is packed from the
+# signed, notarized app, and the workflow checks the unpacked copy again. On Windows that file is the setup.
+# This workflow never sees the update key, and nothing it builds is signed for updates: only the sign job of
+# tag-release.yml signs, and only for a release.
 name: Installers
 
 on:
@@ -21,6 +26,30 @@ on:
         type: string
         required: false
         default: ''
+      sign:
+        description: Sign the macOS app with a Developer ID certificate and notarize it. A missing secret then fails the build.
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      APPLE_CERTIFICATE:
+        description: The Developer ID Application certificate and its private key, as a .p12 file in base64.
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        description: The password of that .p12 file.
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        description: 'The certificate name, such as "Developer ID Application: Name (TEAMID)".'
+        required: false
+      APPLE_API_ISSUER:
+        description: The issuer ID of the App Store Connect API key.
+        required: false
+      APPLE_API_KEY:
+        description: The key ID of the App Store Connect API key.
+        required: false
+      APPLE_API_KEY_P8:
+        description: The contents of the AuthKey .p8 file of that key.
+        required: false
   workflow_dispatch:
     inputs:
       quick:
@@ -135,7 +164,69 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
-      - run: cargo packager --release --formats ${{ matrix.formats }}
+      # An ad-hoc signed build: Windows, a manual run, and any call that does not ask for a signed release.
+      - name: Package
+        if: ${{ !(inputs.sign && matrix.artifact == 'dmg') }}
+        run: cargo packager --release --formats ${{ matrix.formats }}
+
+      # The build runs first, with no secrets, so no build script or macro of a dependency sees them. cargo-packager then
+      # runs the same build again, which finds nothing to compile.
+      - name: Build the app without the Apple secrets
+        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
+        run: cargo build --release --locked
+
+      # cargo-packager 0.11.8 does what this step relies on:
+      # - It signs only with the signing-identity of Cargo.toml and ignores APPLE_SIGNING_IDENTITY, so the step puts the
+      #   identity in Cargo.toml of this checkout. The checkout is thrown away after the run.
+      # - APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD make it import the certificate into a temporary keychain of
+      #   its own, use it to sign, and delete it. It signs every binary inside out, and the app and the DMG last. Every
+      #   binary and the app get the hardened runtime and a secure timestamp.
+      # - With the three notarization variables it notarizes the app and staples the ticket to the app, before it builds
+      #   the DMG, so the DMG holds the stapled app. The DMG is signed but not notarized.
+      # The API key is a file for notarytool, so it is written to a temporary folder and deleted when the step ends.
+      - name: Package, sign and notarize
+        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
+        # notarytool waits for Apple with no limit of its own.
+        timeout-minutes: 60
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          FORMATS: ${{ matrix.formats }}
+        run: |
+          missing=''
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::A release must be signed and notarized, and these secrets are not set:$missing. Set them, as the macOS signing section of CONTRIBUTING.md says."
+            exit 1
+          fi
+          case "$APPLE_SIGNING_IDENTITY" in
+            *[\"\\]*)
+              echo '::error::APPLE_SIGNING_IDENTITY holds a quote or a backslash.'
+              exit 1
+              ;;
+          esac
+          if ! awk '
+            $0 == "signing-identity = \"-\"" { print "signing-identity = \"" ENVIRON["APPLE_SIGNING_IDENTITY"] "\""; n++; next }
+            { print }
+            END { exit n != 1 }
+          ' Cargo.toml > "$RUNNER_TEMP/Cargo.toml.signed"; then
+            echo '::error::Cargo.toml must hold exactly one signing-identity = "-" line for the release to replace.'
+            exit 1
+          fi
+          mv "$RUNNER_TEMP/Cargo.toml.signed" Cargo.toml
+          umask 077
+          keys=$(mktemp -d "$RUNNER_TEMP/apple-key.XXXXXX")
+          trap 'rm -rf "$keys"' EXIT
+          printf '%s' "$APPLE_API_KEY_P8" > "$keys/AuthKey_$APPLE_API_KEY.p8"
+          export APPLE_API_KEY_PATH="$keys/AuthKey_$APPLE_API_KEY.p8"
+          unset APPLE_API_KEY_P8
+          cargo packager --release --formats "$FORMATS"
       - name: Name the installer and pack the update
         env:
           BUILT: ${{ matrix.built }}
@@ -162,6 +253,22 @@ jobs:
             fi
             COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "dist/$UPDATE_NAME" -C target/packages "$BUNDLE"
           fi
+      # A signed release must pass on the DMG, on the app, and on the app unpacked from the update file, which is what
+      # an installed copy installs. A failure stops the job, so nothing is uploaded.
+      - name: Check the signed and notarized release
+        if: ${{ inputs.sign && matrix.artifact == 'dmg' }}
+        env:
+          NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.suffix }}
+          UPDATE_NAME: Jobdesk-${{ needs.version.outputs.label }}-${{ matrix.update_suffix }}
+        run: |
+          codesign --verify --strict --verbose=2 "dist/$NAME"
+          details=$(codesign -dv --verbose=4 "dist/$NAME" 2>&1)
+          grep -q '^Authority=Developer ID Application: ' <<<"$details"
+          scripts/verify-macos-app.sh target/packages/Jobdesk.app
+          unpacked=$(mktemp -d "$RUNNER_TEMP/unpacked.XXXXXX")
+          tar -xzf "dist/$UPDATE_NAME" -C "$unpacked"
+          scripts/verify-macos-app.sh "$unpacked/Jobdesk.app"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

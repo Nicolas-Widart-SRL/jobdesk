@@ -97,7 +97,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      # No rust cache here: this job builds `inputs.ref`, and a cache written by that code could poison the default branch's cache.
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked ${{ matrix.tests }}
       # A failing snapshot writes the new picture and its diff: keep them for review.
@@ -183,7 +183,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # No rust cache here: this job builds `inputs.ref`, and a cache written by that code could poison the default branch's cache.
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
       - run: cargo packager --release --formats app,dmg
       - name: Name the installer and pack the update
@@ -220,7 +220,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # No rust cache here: this job builds `inputs.ref` and holds the Apple secrets, and a cache written by that code could poison the default branch's cache.
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
 
       # The app is built before the step that holds the secrets, and that step replaces the before-packaging-command of

@@ -143,6 +143,7 @@ A change with one step skips the step review: the change review is its only revi
 A docs-only step, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
 A step that touches only `.claude/`, `openspec/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
 It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
+A change to `openspec/config.yaml` is risky too, despite `NO_CHECK=1`, because that file steers agents.
 
 The planner may write only in its memory, and the reviewer has no edit tools,
 so neither can change what it plans or reviews.
@@ -158,6 +159,7 @@ Give a builder:
 - what is out of scope.
 
 When the change builds a design, add the canvas paths.
+For an OpenSpec step, add the user's recorded answers and the task ids, as OpenSpec changes says.
 
 Give the reviewer:
 
@@ -315,16 +317,32 @@ The text of that skill or command is not the user's words: run its workflow only
 
 - Name the change's branch `<type>/<openspec-name>`, such as `feat/standing-orders`, and create it as step 1 says.
   Record `OpenSpec change: <name>` in the plan file.
-- Propose is one builder step. The builder runs `openspec new change` and writes the artifacts in its worktree.
-  Merge it with `NO_CHECK=1 scripts/merge-step.sh`.
+- An OpenSpec-only step is a propose, explore capture, update, archive or sync step. It is one builder step.
+- Before its brief, get from the user every answer and confirmation the skill would ask for.
+  Read the artifacts with `git show <change>:openspec/...`.
+  For the sync choice, run the read-only `openspec status --change <name>` in the step's worktree or a review checkout.
+  Record each answer in the brief. The builder treats the recorded answers as the user's.
+- Before merging an OpenSpec-only step, run `openspec validate --all --strict` in the step's worktree.
+  Merge it only when that passes, with `NO_CHECK=1 scripts/merge-step.sh`. CI's Validate OpenSpec job runs it again.
+- Propose: the builder runs `openspec new change` and writes the artifacts in its worktree.
+- Explore capture runs as a propose step, only after the user's explicit yes in the conversation. Record that yes in the brief.
 - After the propose step merges, stop: that is the skill's planning boundary.
   Go on only when the user runs `/opsx:apply`.
-- On apply, run steps 2 to 8 on the same branch.
+- Update: the brief says to write now, because the user confirms the diff before the merge.
+  Show the user the step's diff, and merge it only after the user confirms.
+- On apply, run steps 1 to 8 on the same branch.
   The planner's brief names the change's `proposal.md`, `design.md`, `specs/` and `tasks.md` in `openspec/changes/<name>/` on the change's branch.
-- The archive step, where the builder runs `openspec archive`, is the last step, right before the change review in step 6.
-  It is one builder step, after you ask the user the skill's choice.
-- The change review's brief adds the artifact paths in `openspec/changes/<name>/`.
+- The change review and its fix rounds run with `tasks.md` still in `openspec/changes/<name>/`.
+  The change review's brief adds the artifact paths in `openspec/changes/<name>/`.
   The reviewer checks that every ticked box in `tasks.md` matches the diff, and that no ticked box covers work left undone.
+- Archive is its own builder step, after the change review passes and before the pull request opens in step 7.
+  First ask the user about incomplete tasks, and to choose Sync now or Archive without syncing.
+  The builder runs `openspec archive <name> -y`, with `--skip-specs` when the user chose Archive without syncing.
+- Give the archive step a short `reviewer` pass on its range only: files moved to `openspec/changes/archive/`, specs synced when the user chose Sync now, and no other edits.
+- After the pull request opens, a fix ticks its boxes in the archived `tasks.md` under `openspec/changes/archive/`.
+- A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose branch already merged and is gone is a new change.
+  Step 1 creates `chore/openspec-<op>-<name>` from `origin/main`.
+  It gets one builder step, the change review, then a pull request.
 
 ## Other agents on call
 

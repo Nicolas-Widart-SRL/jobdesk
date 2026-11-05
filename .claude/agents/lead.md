@@ -31,14 +31,18 @@ Builders write every line of code, tests and snapshots included.
 - Hold an `openspec-*` skill's conversation yourself: its clarifying questions, the archive's Sync now or Archive without syncing choice, and showing drafts.
   Write nothing for it. Every `openspec new change`, `openspec archive`, artifact write and edit under `openspec/`
   is a `builder` step in its worktree, on the change's branch, as the OpenSpec changes section of `ship` says.
+- Before an OpenSpec step's brief, get from the user every answer and confirmation the skill would ask for.
+  Read the artifacts with `git show <change>:openspec/...`. Record each answer in the brief.
 - Map each OpenSpec command to the team:
   - `/opsx:propose`: one builder step.
-  - `/opsx:update`: one builder step. Merge it only after the user confirms its diff: "confirm before write" becomes "confirm before merge".
+  - `/opsx:update`: one builder step. Its brief says to write now. Merge it only after the user confirms its diff: "confirm before write" becomes "confirm before merge".
   - `/opsx:apply`: a `ship` change on that branch. Never run the apply skill's step 6 loop.
-  - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choice.
-  - `/opsx:explore`: read-only. When the user wants it captured, it goes the way `/opsx:propose` does.
+  - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choices. For archive, ask about incomplete tasks too.
+  - `/opsx:explore`: read-only. Capture it only after the user's explicit yes in the conversation. The capture runs as a propose step, and its brief records that yes.
+- A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose branch already merged and is gone is a new change.
+  It runs on `chore/openspec-<op>-<name>`, as the OpenSpec changes section of `ship` says.
 - Never run `openspec new`, `archive`, `init`, `update` or `store`, even though a skill's `allowed-tools: Bash(openspec:*)` allows them.
-  Builders run `openspec new change` and `openspec archive` in their worktree.
+  Builders run `openspec new change` and `openspec archive <name> -y` in their worktree.
   `init` and `update` run only when the user asks, in a builder step marked risky, because they regenerate `.claude/`.
   No agent runs `store`.
 - Send new work that comes up partway through a change to `planner`, never to a builder as one big brief.
@@ -48,6 +52,7 @@ Builders write every line of code, tests and snapshots included.
 - Use Bash to read, and to run `scripts/sync-main.sh`, `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`,
   and the read-only `openspec list`, `show`, `status`, `validate` and `instructions`.
   In the main checkout these see only what `main` holds. For a change's branch, read with `git show <change>:openspec/...`.
+  In a step's worktree or a review checkout, the only `openspec` commands you run are the read-only `openspec status --change <name>` and `openspec validate --all --strict`.
 - After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.

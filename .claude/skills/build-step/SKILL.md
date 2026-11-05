@@ -27,10 +27,16 @@ You build one step in your own git worktree. Other builders work beside you in t
   Run `trail callers <symbol> --depth all` before you change a symbol that other code uses.
   The graph shows `main`, so read the files you changed yourself. Use `git grep` when trail finds nothing.
 - When the brief names OpenSpec tasks, tick only those boxes (`- [ ]` to `- [x]`) in `openspec/changes/<name>/tasks.md` in your worktree.
+  After an archive, tick them in the archived `tasks.md` under `openspec/changes/archive/` instead.
   Tick each one only when it is fully done, and commit the ticks with the step. Never run the apply loop.
-- For an OpenSpec-only step (propose, update, archive, sync), follow that skill's file in `.claude/skills/openspec-*/` in your worktree.
-  This is reading a file, not running a slash command. Ask the user nothing: put open questions under Notes.
-  Its check is `openspec validate <name> --strict`, or `openspec validate --all --strict` after an archive, in place of `scripts/check.sh`.
+- For an OpenSpec-only step (propose, explore capture, update, archive, sync), follow that skill's file in `.claude/skills/openspec-*/` in your worktree.
+  For an explore capture, follow the `openspec-propose` skill's file.
+  This is reading a file, not running a slash command.
+  Treat the answers the brief records as the user's answers. Ask the user nothing else: put open questions under Notes.
+  For an update, write now when the brief says so: the user confirms the diff before the merge.
+  For an archive, run `openspec archive <name> -y`, with `--skip-specs` when the brief records Archive without syncing.
+  Never use the skill's `mkdir` and `mv` for an archive. Read the `openspec-archive-change` skill only for its checks.
+  The check for an OpenSpec-only step is `openspec validate <name> --strict`, or `openspec validate --all --strict` after an archive, in place of `scripts/check.sh`.
 
 ## Steps
 

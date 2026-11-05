@@ -39,6 +39,7 @@ Never write a value from a real job search in it.
    Give each step whole `## N.` groups of `tasks.md`, and name their task ids.
    Two steps in one wave never share a group, because ticks on adjacent lines conflict when `merge-step.sh` rebases.
    The last step is `chore(openspec): archive <name>`, unless the brief says otherwise.
+   It runs after the change review passes and before the pull request opens, as `ship` says.
 3. Order the steps so each one depends only on the steps before it.
    `shared_kernel` or a feature's `domain` first, then its `application`, then `infrastructure`, then `ui` and `shell`.
    A new feature joins `FEATURES` in `tests/architecture.rs` in its first step.
@@ -58,7 +59,7 @@ Never write a value from a real job search in it.
 6. Mark each step **risky** when a mistake in it would pass the tests and still be wrong:
    it changes how an adapter parses the checkout, the `claude` stream-json protocol, permission or rule handling,
    the run supervisor, trust rendering, path checks, the queue ranking or the decisions file.
-   A change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is always risky: those files steer the agents.
+   A change to `.claude/agents/*.md`, `.claude/skills/**/*.md` or `openspec/config.yaml` is always risky: those files steer the agents.
    Only risky steps get a review by `reviewer` before they merge. Say in one line why a step is risky: the reviewer checks that first.
    Any other docs-only step is never risky.
 

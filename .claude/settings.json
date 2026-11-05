@@ -1,10 +1,17 @@
 {
   "agent": "lead",
   "permissions": {
+    "deny": [
+      "Bash(openspec store:*)",
+      "Bash(openspec * --store*)",
+      "Bash(openspec * store*)"
+    ],
     "ask": [
       "Bash(openspec init:*)",
       "Bash(openspec update:*)",
-      "Bash(openspec store:*)"
+      "Bash(openspec * init*)",
+      "Bash(openspec * update*)",
+      "Bash(npx *openspec*)"
     ]
   }
 }

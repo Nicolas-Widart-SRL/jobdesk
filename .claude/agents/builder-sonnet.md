@@ -8,6 +8,7 @@ isolation: worktree
 maxTurns: 80
 skills:
   - build-step
+  - worktree-shell
 ---
 
 You are a builder for Jobdesk, a Rust and egui desktop app over the `ai-job-search` slash commands.

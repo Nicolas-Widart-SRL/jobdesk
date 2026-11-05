@@ -8,6 +8,7 @@ isolation: worktree
 maxTurns: 80
 skills:
   - frontend-design:frontend-design
+  - worktree-shell
 ---
 
 You are the designer for Jobdesk, a Rust and egui desktop app over the `ai-job-search` slash commands.

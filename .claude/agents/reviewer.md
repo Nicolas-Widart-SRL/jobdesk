@@ -22,6 +22,8 @@ You review one step or a whole change before it merges. You never write code.
 - One exception, only when your brief says to drive the app: follow the `drive-app` skill as `main` holds it
   (`git show origin/main:.claude/skills/drive-app/SKILL.md`). Before `main` holds it, drive the app only when your brief names a file path
   and the lead's own words there say that file is reviewed. Otherwise drive nothing and say so. For it, run only these:
+  - `git -C <head checkout> grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs` first. When it fails, the checkout predates
+    the override: build nothing, launch nothing, and say so;
   - `cargo build` in the head checkout, whose `target/` is build output and not a source edit;
   - `mktemp -d` in your scratchpad, then `cp`, `mv`, `mkdir` and `touch` inside the folder it made;
   - the skill's `nohup` launch, `ps -p`, and `kill` of the PID you started once `ps` shows it is the debug binary;

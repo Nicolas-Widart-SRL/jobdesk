@@ -1,6 +1,6 @@
 name: CodeQL
 
-# CodeQL skips pull requests on purpose. It runs after a merge to main, weekly and on demand.
+# CodeQL skips pull requests on purpose, to keep them out of its pipeline. It scans merged code on main, weekly and on demand.
 on:
   push:
     branches: [main]
@@ -29,6 +29,8 @@ jobs:
             build-mode: none
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}

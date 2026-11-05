@@ -169,6 +169,8 @@ rustup toolchain install nightly --component miri,rust-src
 cargo +nightly miri test --locked --lib -- ::domain:: ::application:: shared_kernel:: --skip shared_kernel::host_path
 ```
 
+CodeQL scans the `actions` and `rust` code after a merge to main, weekly and on demand (Actions tab, "CodeQL", Run workflow), not on pull requests.
+
 cargo-audit checks `Cargo.lock` in CI. To run it locally:
 
 ```bash

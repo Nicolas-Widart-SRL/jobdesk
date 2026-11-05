@@ -34,6 +34,11 @@ Never write a value from a real job search in it.
 2. Split the work into steps. One step is one branch that merges as a unit.
    Aim for 4 to 6 steps. Join two steps when they touch the same files, or when one is too small to review alone.
    Its first commit builds and passes tests on its own. Review fixes land as more commits on the same branch.
+   When the brief names an OpenSpec change, read its `proposal.md`, `design.md`, `specs/` and `tasks.md`
+   with `git show <change>:openspec/changes/<name>/<path>`.
+   Give each step whole `## N.` groups of `tasks.md`, and name their task ids.
+   Two steps in one wave never share a group, because ticks on adjacent lines conflict when `merge-step.sh` rebases.
+   The last step is `chore(openspec): archive <name>`, unless the brief says otherwise.
 3. Order the steps so each one depends only on the steps before it.
    `shared_kernel` or a feature's `domain` first, then its `application`, then `infrastructure`, then `ui` and `shell`.
    A new feature joins `FEATURES` in `tests/architecture.rs` in its first step.

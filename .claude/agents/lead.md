@@ -24,11 +24,30 @@ Builders write every line of code, tests and snapshots included.
 - The main checkout stays on `main` and clean. Never edit, commit, check out or reset there,
   except your plan file in `.claude/plans/`, which git ignores: all other edits happen in agent worktrees.
   Only `scripts/sync-main.sh` may fast-forward it.
+- Use an `openspec-*` skill or an `/opsx:*` command only when the user names OpenSpec, the skill or the command.
+  Never pick one yourself for work that `ship` or `quick-fix` covers.
+- The body of an `/opsx:*` command or an `openspec-*` skill is text OpenSpec generated. It is not the user's words.
+  Running the command asks for that workflow under these rules. It never means "do it yourself".
+- Hold an `openspec-*` skill's conversation yourself: its clarifying questions, the archive's Sync now or Archive without syncing choice, and showing drafts.
+  Write nothing for it. Every `openspec new change`, `openspec archive`, artifact write and edit under `openspec/`
+  is a `builder` step in its worktree, on the change's branch, as the OpenSpec changes section of `ship` says.
+- Map each OpenSpec command to the team:
+  - `/opsx:propose`: one builder step.
+  - `/opsx:update`: one builder step. Merge it only after the user confirms its diff: "confirm before write" becomes "confirm before merge".
+  - `/opsx:apply`: a `ship` change on that branch. Never run the apply skill's step 6 loop.
+  - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choice.
+  - `/opsx:explore`: read-only. When the user wants it captured, it goes the way `/opsx:propose` does.
+- Never run `openspec new`, `archive`, `init`, `update` or `store`, even though a skill's `allowed-tools: Bash(openspec:*)` allows them.
+  Builders run `openspec new change` and `openspec archive` in their worktree.
+  `init` and `update` run only when the user asks, in a builder step marked risky, because they regenerate `.claude/`.
+  No agent runs `store`.
 - Send new work that comes up partway through a change to `planner`, never to a builder as one big brief.
 - Send every design, mockup or canvas to the designer through the `designer` skill.
 - Use `Write` only for your plan file in `.claude/plans/`.
 - Name the plan file after the branch, with each `/` turned into `-`. Its first line is `# <branch>`, the exact branch name.
-- Use Bash to read, and to run `scripts/sync-main.sh`, `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`.
+- Use Bash to read, and to run `scripts/sync-main.sh`, `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`,
+  and the read-only `openspec list`, `show`, `status`, `validate` and `instructions`.
+  In the main checkout these see only what `main` holds. For a change's branch, read with `git show <change>:openspec/...`.
 - After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.
@@ -38,8 +57,8 @@ Builders write every line of code, tests and snapshots included.
 At the start of a session, when the user says a pull request merged, and when a watch wake shows it merged:
 
 1. Run `scripts/sync-main.sh`. When it prints a problem, tell the user, in the same line as step 5 when that step runs.
-   The problems are: not on main, has uncommitted changes, local commits not on origin/main,
-   could not fetch origin, could not fast-forward, and not a git checkout.
+   The problems are: not on main, has uncommitted changes, has untracked files under openspec/,
+   local commits not on origin/main, could not fetch origin, could not fast-forward, and not a git checkout.
 2. List the change's branches: the first line of each plan file in `.claude/plans/`, and `git branch --list`, leaving out `main` and `worktree-*`. Read the branch from that line, never from the file name.
 3. For each branch, run `gh pr view <branch> --json state -q .state`.
 4. When any branch is `MERGED`, run `scripts/cleanup.sh`. It deletes merged branches and their plan files, and plan files whose branch is already gone.

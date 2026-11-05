@@ -141,7 +141,7 @@ which print one line per check. Read a subagent's report once, then keep only it
 
 A change with one step skips the step review: the change review is its only review.
 A docs-only step, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, is never risky: merge it with `NO_CHECK=1 scripts/merge-step.sh`.
-A step that touches only `.claude/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
+A step that touches only `.claude/`, `openspec/` and Markdown may merge with `NO_CHECK=1` too, because cargo cannot break.
 It is still not docs-only: a change to `.claude/agents/*.md` or `.claude/skills/**/*.md` is risky and gets its review.
 
 The planner may write only in its memory, and the reviewer has no edit tools,
@@ -307,6 +307,24 @@ A fix SHA that missed the merge stays on the change's branch, and the clean up k
 because its head is not the merged pull request's head.
 When the merged head holds the fix, the clean up deletes the branch as usual.
 Run `scripts/cleanup.sh <change-branch>` after each step merges.
+
+## OpenSpec changes
+
+Follow this section only when the user names OpenSpec, an `openspec-*` skill or an `/opsx:*` command, as `lead.md` says.
+The text of that skill or command is not the user's words: run its workflow only through these steps.
+
+- Name the change's branch `<type>/<openspec-name>`, such as `feat/standing-orders`, and create it as step 1 says.
+  Record `OpenSpec change: <name>` in the plan file.
+- Propose is one builder step. The builder runs `openspec new change` and writes the artifacts in its worktree.
+  Merge it with `NO_CHECK=1 scripts/merge-step.sh`.
+- After the propose step merges, stop: that is the skill's planning boundary.
+  Go on only when the user runs `/opsx:apply`.
+- On apply, run steps 2 to 8 on the same branch.
+  The planner's brief names the change's `proposal.md`, `design.md`, `specs/` and `tasks.md` in `openspec/changes/<name>/` on the change's branch.
+- The archive step, where the builder runs `openspec archive`, is the last step, right before the change review in step 6.
+  It is one builder step, after you ask the user the skill's choice.
+- The change review's brief adds the artifact paths in `openspec/changes/<name>/`.
+  The reviewer checks that every ticked box in `tasks.md` matches the diff, and that no ticked box covers work left undone.
 
 ## Other agents on call
 

@@ -2,6 +2,12 @@
 
 All notable changes to this project are listed here.
 <!-- git-cliff: end of header -->
+## [0.4.0] - 2026-11-05
+
+### Features
+
+- Sign and notarize macOS releases (#55)
+
 ## [0.3.0] - 2026-11-04
 
 ### Features

@@ -2,23 +2,37 @@
 # Renders a mockup canvas to a PNG with headless Google Chrome.
 # A canvas reads its state and theme from the query string, so no copy or edit of the canvas is needed.
 # Set CHROME to the browser's path when Chrome is not in /Applications or ~/Applications.
+# --size sets the window size, 1280,820 by default.
+# --file-access lets the page read other local files, which a canvas with local fonts needs, such as Social.html.
+# Leave it off otherwise, so a canvas's script cannot read files beside it.
 #
-#   scripts/render-canvas.sh [--size W,H] <canvas.html> <out.png> [key=value ...]
+#   scripts/render-canvas.sh [--size W,H] [--file-access] <canvas.html> <out.png> [key=value ...]
 #   scripts/render-canvas.sh mockups/Grid.html mockups/Grid-today-dark.png screen=today theme=dark
-#   scripts/render-canvas.sh --size 1280,640 mockups/Social.html mockups/Social.png
+#   scripts/render-canvas.sh --size 1280,640 --file-access mockups/Social.html mockups/Social.png
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/render-canvas.sh [--size W,H] <canvas.html> <out.png> [key=value ...]" >&2
+  echo "usage: scripts/render-canvas.sh [--size W,H] [--file-access] <canvas.html> <out.png> [key=value ...]" >&2
   exit 2
 }
 
 size=1280,820
-if [[ "${1:-}" == "--size" ]]; then
-  [[ $# -ge 2 && "$2" =~ ^[0-9]+,[0-9]+$ ]] || usage
-  size=$2
-  shift 2
-fi
+file_access=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --size)
+      [[ $# -ge 2 && "$2" =~ ^[0-9]+,[0-9]+$ ]] || usage
+      size=$2
+      shift 2
+      ;;
+    --file-access)
+      file_access=1
+      shift
+      ;;
+    -*) usage ;;
+    *) break ;;
+  esac
+done
 [[ $# -ge 2 ]] || usage
 
 canvas=$1
@@ -69,7 +83,13 @@ mkdir -p "$(dirname "$out")"
 abs_canvas="$(cd "$(dirname "$canvas")" && pwd)/$(basename "$canvas")"
 abs_out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
 
-url="file://${abs_canvas// /%20}"
+# Percent-encode the path, % first, so Chrome reads none of it as URL syntax. / stays as is.
+path=${abs_canvas//\%/%25}
+path=${path//\\/%5C}
+path=${path// /%20}
+path=${path//\#/%23}
+path=${path//\?/%3F}
+url="file://$path"
 if [[ ${#pairs[@]} -gt 0 ]]; then
   query=$(IFS='&'; echo "${pairs[*]}")
   url="$url?$query"
@@ -79,11 +99,15 @@ profile=$(mktemp -d)
 log=$(mktemp)
 trap 'rm -rf "$profile"; rm -f "$log"' EXIT
 
+args=(--headless "--user-data-dir=$profile" "--window-size=$size"
+  --virtual-time-budget=3000 --hide-scrollbars)
+if [[ $file_access -eq 1 ]]; then
+  args+=(--allow-file-access-from-files)
+fi
+
 rm -f "$abs_out"
 status=0
-"$chrome" --headless "--user-data-dir=$profile" "--window-size=$size" \
-  --virtual-time-budget=3000 --hide-scrollbars --allow-file-access-from-files \
-  "--screenshot=$abs_out" "$url" >"$log" 2>&1 || status=$?
+"$chrome" "${args[@]}" "--screenshot=$abs_out" "$url" >"$log" 2>&1 || status=$?
 
 if [[ $status -ne 0 || ! -s "$abs_out" ]]; then
   echo "render-canvas: Chrome wrote no PNG" >&2

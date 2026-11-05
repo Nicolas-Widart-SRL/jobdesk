@@ -65,3 +65,5 @@ PR 51 .claude/settings.json: a word-anywhere deny pattern (openspec * store*) al
 PR 51 .claude/skills/build-step/SKILL.md: openspec validate <name> lacked --type change, so it is ambiguous when a spec shares the name. Class: CLI flag missing.
 PR 51 .claude/skills/ship/SKILL.md: sync classification read main specs from the change branch, not current origin/main. Class: stale baseline.
 PR 51 CONTRIBUTING.md: the OpenSpec install step left out its Node >=22.12.0 requirement. Class: missing prerequisite.
+PR 57 scripts/render-canvas.sh: the file URL encoded only spaces, so a checkout path holding `%`, `#` or `?` made Chrome screenshot its error page and the script still reported success. Class: path not encoded.
+PR 57 scripts/render-canvas.sh: every render passed `--allow-file-access-from-files`, so any canvas run with JavaScript could read other local files, where before only the Social preview used it for its local fonts. Class: permission pattern too broad.

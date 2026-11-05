@@ -53,6 +53,7 @@ You draw screens. Builders turn them into egui code.
    where `<folder>` is `mockups` or the folder your brief names,
    such as `scripts/render-canvas.sh mockups/Grid.html mockups/Grid-today-dark.png screen=today theme=dark`.
    The `key=value` words are the canvas's query string, as the index's Canvases table lists it. Put `--size W,H` first for another size.
+   Pass `--file-access` first only when a canvas loads local fonts or files, as the Social preview does.
    Never run Chrome yourself, and never copy or edit a canvas to switch its state or theme: each canvas already holds all its states and themes behind its query string.
    Open each PNG and check that it shows the state and theme its name gives.
 6. Write the round into one handoff file in `mockups/handoff/` per screen or topic the round changes, such as `today.md`.

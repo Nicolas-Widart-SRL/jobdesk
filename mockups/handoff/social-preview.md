@@ -4,7 +4,7 @@ The GitHub social preview and the root README's hero, at GitHub's 1280x640. The 
 
 ## Canvas
 
-[Social.png](../Social.png), drawn from `Social.html`. It has one state and one theme, and no query string. Its rules are scoped to `.so`. It loads Zilla Slab and Schibsted Grotesk from `assets/fonts`, so it renders offline. Render it with `scripts/render-canvas.sh --size 1280,640 mockups/Social.html mockups/Social.png`, which allows file access, so the local fonts load.
+[Social.png](../Social.png), drawn from `Social.html`. It has one state and one theme, and no query string. Its rules are scoped to `.so`. It loads Zilla Slab and Schibsted Grotesk from `assets/fonts`, so it renders offline. Render it with `scripts/render-canvas.sh --size 1280,640 --file-access mockups/Social.html mockups/Social.png`, where `--file-access` lets the local fonts load.
 
 Left: the app icon and name, the headline, one line saying what Jobdesk is, and four labels. Right: the Today desk at 1.25x: the deal card with its tab and stack edges, the Coming up slip behind it, and the day stamp across the card's corner.
 

@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -30,6 +30,7 @@ use crate::settings::application::{
 };
 use crate::settings::ui::{LastTask, SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::data_folder::DATA_DIR_VARIABLE;
 use crate::shell::live_snapshot::{self, Reload};
 use crate::shell::{Issue, Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
@@ -1672,15 +1673,46 @@ fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Optio
     args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
 }
 
+/// The data folder `JOBDESK_DATA_DIR` names, if it names one. Only an absolute path counts: an empty or relative one
+/// names none, so the folder never depends on where the app was started.
+fn moved_data_folder(env: Option<OsString>) -> Option<PathBuf> {
+    env.map(PathBuf::from).filter(|path| path.is_absolute())
+}
+
+/// A `moved` folder wins over eframe's usual place, so a copy that is tried out never touches the user's own data folder.
+fn data_folder_from(moved: Option<PathBuf>, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    moved.or_else(default)
+}
+
+/// Makes the data folder, as eframe did when it looked it up itself. A `moved` folder that cannot be made is an error,
+/// so the window never opens on a session whose saves all fail. The usual place is only tried, so an unwritable home
+/// still opens the app.
+fn make_data_folder(data: &Path, moved: bool) -> std::io::Result<()> {
+    match std::fs::create_dir_all(data) {
+        Err(error) if moved => Err(std::io::Error::new(error.kind(), format!("cannot make the data folder {}: {error}", data.display()))),
+        _ => Ok(()),
+    }
+}
+
+/// eframe keeps the window's state in `app.ron` in the data folder, not in a place of its own.
+fn native_options(icon: egui::IconData, data: Option<&Path>) -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk").with_icon(icon),
+        persistence_path: data.map(|data| data.join("app.ron")),
+        ..Default::default()
+    }
+}
+
 /// Opens the window, and once it has closed applies the update the user chose Restart to update for, if any.
 pub fn run() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/brand/jobdesk-icon-1024.png")).unwrap_or_default();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk").with_icon(icon),
-        ..Default::default()
-    };
+    let moved = moved_data_folder(std::env::var_os(DATA_DIR_VARIABLE));
+    let data = data_folder_from(moved.clone(), || eframe::storage_dir("Jobdesk"));
+    if let Some(data) = &data {
+        make_data_folder(data, moved.is_some()).map_err(|error| eframe::Error::AppCreation(Box::new(error)))?;
+    }
+    let options = native_options(icon, data.as_deref());
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let data = eframe::storage_dir("Jobdesk");
     let restart = RestartSlot::default();
     let (slot, folder) = (Arc::clone(&restart), data.clone());
     let result = eframe::run_native(
@@ -1695,7 +1727,8 @@ pub fn run() -> eframe::Result {
     // The window is closed and every session with it, so nothing is cut off as the update applies.
     let chosen = restart.lock().ok().and_then(|mut slot| slot.take());
     if let (Some((plan, args)), Some(data)) = (chosen, &data) {
-        updates::finish(data, &plan, &args);
+        // The new copy opens the same moved folder, or the usual one.
+        updates::finish(data, moved.as_deref(), &plan, &args);
     }
     result
 }
@@ -1993,6 +2026,70 @@ mod tests {
         let ctx = egui::Context::default();
         launch(&ctx, None, data.path());
         assert!(old.exists() && fresh.exists());
+    }
+
+    /// The usual place, as the test reads it: a folder no test writes to.
+    fn usual_place() -> Option<PathBuf> {
+        Some(PathBuf::from("usual place"))
+    }
+
+    /// `JOBDESK_DATA_DIR` set to an absolute path is the data folder, and eframe's usual place is never looked up.
+    #[test]
+    fn an_absolute_data_dir_is_the_data_folder() {
+        let moved = tempfile::tempdir().unwrap();
+        let named = moved_data_folder(Some(moved.path().as_os_str().to_owned()));
+        assert_eq!(named.as_deref(), Some(moved.path()));
+        let found = data_folder_from(named, || panic!("the usual place is not looked up"));
+        assert_eq!(found.as_deref(), Some(moved.path()));
+    }
+
+    /// Unset, empty or relative, the folder is the usual place, never one under where the app was started.
+    #[test]
+    fn an_unset_empty_or_relative_data_dir_keeps_the_usual_place() {
+        for env in [None, Some(""), Some("data"), Some("./data"), Some("../data")] {
+            let named = moved_data_folder(env.map(OsString::from));
+            assert_eq!(named, None, "{env:?}");
+            assert_eq!(data_folder_from(named, usual_place), usual_place(), "{env:?}");
+        }
+        assert_eq!(data_folder_from(None, || None), None, "no usual place on this computer");
+    }
+
+    /// eframe's `app.ron` goes in the data folder, so a moved folder takes the window's state with it.
+    #[test]
+    fn the_window_state_is_kept_in_the_data_folder() {
+        let moved = tempfile::tempdir().unwrap();
+        let options = native_options(egui::IconData::default(), Some(moved.path()));
+        assert_eq!(options.persistence_path, Some(moved.path().join("app.ron")));
+        assert_eq!(native_options(egui::IconData::default(), None).persistence_path, None);
+    }
+
+    /// A moved data folder holds the settings, and the run logs that launch prunes, while the usual place is never read.
+    #[test]
+    fn a_moved_data_folder_holds_the_settings_and_the_run_logs() {
+        let moved = tempfile::tempdir().unwrap();
+        let named = moved_data_folder(Some(moved.path().as_os_str().to_owned()));
+        let data = data_folder_from(named, || panic!("the usual place is not looked up")).unwrap();
+        let ctx = egui::Context::default();
+        let shell = launch(&ctx, None, &data);
+        assert_eq!(shell.data.as_deref(), Some(moved.path()));
+        assert!(moved.path().join("settings.json").exists(), "the first launch saves the settings there");
+
+        let (old, fresh) = aged_data(&data, Retention::Days30);
+        launch(&ctx, None, &data);
+        assert!(!old.exists() && fresh.exists() && fresh.starts_with(moved.path().join("runs")), "the launch prunes the run logs there");
+    }
+
+    /// A moved data folder that cannot be made stops the launch, while the usual place that cannot be made still opens.
+    #[test]
+    fn a_data_folder_that_cannot_be_made_stops_only_a_moved_launch() {
+        let scratch = tempfile::tempdir().unwrap();
+        let file = scratch.path().join("a file");
+        fs::write(&file, "").unwrap();
+        assert!(make_data_folder(&file, true).is_err(), "a moved folder that is a file stops the launch");
+        assert!(make_data_folder(&file, false).is_ok(), "the usual place that is a file is ignored");
+        let fresh = scratch.path().join("fresh/data");
+        make_data_folder(&fresh, true).unwrap();
+        assert!(fresh.is_dir(), "a moved folder that can be made is made");
     }
 
     /// Ask me before each tool reaches a desk as it opens, and the desk that is open on the frame the setting changes.

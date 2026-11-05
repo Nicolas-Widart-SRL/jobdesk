@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+use crate::shared_kernel::data_folder::pass_on_data_folder;
 use crate::shared_kernel::process_tree::no_window;
 use crate::updates::domain::{ApplyFailure, InstallBlock, Platform, RestartPlan};
 use crate::updates::infrastructure::download::{MAX_DOWNLOAD, new_private_file, read_build};
@@ -26,12 +27,13 @@ pub fn block(exe: &Path) -> Option<InstallBlock> {
 /// Checks the setup once more, then starts it and returns, so this copy ends and the setup can replace it.
 /// What starts is a copy that was checked through the handle that holds it, so it cannot change between the check
 /// and the start. `Err` says why it did not start, and this copy should open again.
-pub fn apply(plan: &RestartPlan, exe: &Path, args: &[OsString], key: Option<&UpdateKey>) -> Result<(), ApplyFailure> {
+/// The setup opens the new copy with the environment it got, so a `moved` data folder goes in it.
+pub fn apply(plan: &RestartPlan, exe: &Path, args: &[OsString], moved: Option<&Path>, key: Option<&UpdateKey>) -> Result<(), ApplyFailure> {
     if block(exe).is_some() {
         return Err(ApplyFailure::NotInstalled);
     }
     let (setup, held) = prepare(plan, key)?;
-    let started = installer(&setup, workspace(args).as_deref()).spawn().map(drop).map_err(|_| ApplyFailure::Start);
+    let started = installer(&setup, workspace(args).as_deref(), moved).spawn().map(drop).map_err(|_| ApplyFailure::Start);
     drop(held);
     started
 }
@@ -74,7 +76,7 @@ fn hold(path: &Path) -> io::Result<File> {
 }
 
 /// `<setup> /P /R /NS`: passive, so it shows only its progress, then reopens Jobdesk, and adds no shortcut again.
-fn installer(setup: &Path, workspace: Option<&Path>) -> Command {
+fn installer(setup: &Path, workspace: Option<&Path>, moved: Option<&Path>) -> Command {
     let mut command = Command::new(setup);
     // The setup is a window program, so this hides nothing of it. It only keeps a console from opening.
     no_window(&mut command);
@@ -83,6 +85,7 @@ fn installer(setup: &Path, workspace: Option<&Path>) -> Command {
         Some(folder) => command.env(WORKSPACE_VARIABLE, folder),
         None => command.env_remove(WORKSPACE_VARIABLE),
     };
+    pass_on_data_folder(&mut command, moved);
     command
 }
 
@@ -97,6 +100,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::shared_kernel::data_folder::DATA_DIR_VARIABLE;
     use crate::updates::domain::Version;
     use crate::updates::infrastructure::signature::tests::{fixture, fixture_key, fixture_signature};
 
@@ -128,12 +132,24 @@ mod tests {
 
     #[test]
     fn the_setup_runs_passive_and_carries_the_open_folder() {
-        let command = installer(Path::new("C:/Data/updates/1-setup.exe"), Some(Path::new("C:/Jobs")));
+        let command = installer(Path::new("C:/Data/updates/1-setup.exe"), Some(Path::new("C:/Jobs")), None);
         assert_eq!(command.get_program(), "C:/Data/updates/1-setup.exe");
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["/P", "/R", "/NS"]);
-        assert_eq!(command.get_envs().collect::<Vec<_>>(), [(OsStr::new(WORKSPACE_VARIABLE), Some(OsStr::new("C:/Jobs")))]);
-        let none = installer(Path::new("setup.exe"), None);
-        assert_eq!(none.get_envs().collect::<Vec<_>>(), [(OsStr::new(WORKSPACE_VARIABLE), None)], "a folder from before is not passed on");
+        let workspace = command.get_envs().find(|(name, _)| *name == WORKSPACE_VARIABLE);
+        assert_eq!(workspace, Some((OsStr::new(WORKSPACE_VARIABLE), Some(OsStr::new("C:/Jobs")))));
+        let none = installer(Path::new("setup.exe"), None, None);
+        let workspace = none.get_envs().find(|(name, _)| *name == WORKSPACE_VARIABLE);
+        assert_eq!(workspace, Some((OsStr::new(WORKSPACE_VARIABLE), None)), "a folder from before is not passed on");
+    }
+
+    /// The setup opens the new copy with its own environment, so a moved data folder goes in it, and no folder removes
+    /// the variable.
+    #[test]
+    fn the_setup_carries_a_moved_data_folder() {
+        let data = |command: &Command| command.get_envs().find(|(name, _)| *name == DATA_DIR_VARIABLE).map(|(_, value)| value.map(OsStr::to_owned));
+        let moved = installer(Path::new("setup.exe"), None, Some(Path::new("C:/Scratch/jobdesk-data")));
+        assert_eq!(data(&moved), Some(Some(OsString::from("C:/Scratch/jobdesk-data"))));
+        assert_eq!(data(&installer(Path::new("setup.exe"), None, None)), Some(None), "unset, it is not passed on");
     }
 
     #[test]
@@ -153,8 +169,8 @@ mod tests {
         let mut bytes = fs::read(fixture(WINDOWS)).unwrap();
         bytes[0] ^= 1;
         fs::write(&setup, bytes).unwrap();
-        assert_eq!(apply(&plan(setup), &exe, &[], Some(&fixture_key())), Err(ApplyFailure::BadSignature));
-        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], None), Err(ApplyFailure::BadSignature), "no key, no apply");
+        assert_eq!(apply(&plan(setup), &exe, &[], None, Some(&fixture_key())), Err(ApplyFailure::BadSignature));
+        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], None, None), Err(ApplyFailure::BadSignature), "no key, no apply");
     }
 
     #[test]
@@ -169,7 +185,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         fs::write(folder.path().join(UNINSTALLER), "").unwrap();
         let gone = plan(folder.path().join(WINDOWS));
-        assert_eq!(apply(&gone, &folder.path().join("jobdesk.exe"), &[], Some(&fixture_key())), Err(ApplyFailure::Missing));
+        assert_eq!(apply(&gone, &folder.path().join("jobdesk.exe"), &[], None, Some(&fixture_key())), Err(ApplyFailure::Missing));
     }
 
     #[test]
@@ -190,7 +206,7 @@ mod tests {
     fn a_copy_no_installer_put_in_place_is_not_replaced() {
         let folder = tempfile::tempdir().unwrap();
         let exe = folder.path().join("jobdesk.exe");
-        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
+        assert_eq!(apply(&plan(downloaded(folder.path())), &exe, &[], None, Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
     }
 
     // Unix only, so no Windows runner ever tries to start the stand-in.
@@ -200,6 +216,6 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         fs::write(folder.path().join(UNINSTALLER), "").unwrap();
         // The stand-in setup is signed but is no program, so it cannot start.
-        assert_eq!(apply(&plan(downloaded(folder.path())), &folder.path().join("jobdesk.exe"), &[], Some(&fixture_key())), Err(ApplyFailure::Start));
+        assert_eq!(apply(&plan(downloaded(folder.path())), &folder.path().join("jobdesk.exe"), &[], None, Some(&fixture_key())), Err(ApplyFailure::Start));
     }
 }

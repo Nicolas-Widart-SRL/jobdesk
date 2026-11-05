@@ -28,7 +28,7 @@ Builders write every line of code, tests and snapshots included.
   Never pick one yourself for work that `ship` or `quick-fix` covers.
 - The body of an `/opsx:*` command or an `openspec-*` skill is text OpenSpec generated. It is not the user's words.
   Running the command asks for that workflow under these rules. It never means "do it yourself".
-- Hold an `openspec-*` skill's conversation yourself: its clarifying questions, the archive's Sync now or Archive without syncing choice, and showing drafts.
+- Hold an `openspec-*` skill's conversation yourself: its clarifying questions, the archive's sync choice, and showing drafts.
   Write nothing for it. Every `openspec new change`, `openspec archive`, artifact write and edit under `openspec/`
   is a `builder` step in its worktree, on the change's branch, as the OpenSpec changes section of `ship` says.
 - Before an OpenSpec step's brief, get from the user every answer and confirmation the skill would ask for.
@@ -36,10 +36,14 @@ Builders write every line of code, tests and snapshots included.
 - Map each OpenSpec command to the team:
   - `/opsx:propose`: one builder step.
   - `/opsx:update`: one builder step. Its brief says to write now. Merge it only after the user confirms its diff: "confirm before write" becomes "confirm before merge".
+    When the user asks for changes or drops the diff, follow the OpenSpec changes section of `ship`.
   - `/opsx:apply`: a `ship` change on that branch. Never run the apply skill's step 6 loop.
   - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choices. For archive, ask about incomplete tasks too.
-  - `/opsx:explore`: read-only. Capture it only after the user's explicit yes in the conversation. The capture runs as a propose step, and its brief records that yes.
-- A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose branch already merged and is gone is a new change.
+    Map each archive choice to a command, or to no step, as the OpenSpec changes section of `ship` says.
+  - `/opsx:explore`: read-only. Capture it only after the user's explicit yes in the conversation. The capture runs as a propose step.
+    Its brief records that yes and which artifacts the user agreed to.
+- A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose pull request merged is a new change.
+  Check with `gh pr view <branch> --json state -q .state`. After a squash merge, the old branch never takes more work.
   It runs on `chore/openspec-<op>-<name>`, as the OpenSpec changes section of `ship` says.
 - Never run `openspec new`, `archive`, `init`, `update` or `store`, even though a skill's `allowed-tools: Bash(openspec:*)` allows them.
   Builders run `openspec new change` and `openspec archive <name> -y` in their worktree.
@@ -52,7 +56,8 @@ Builders write every line of code, tests and snapshots included.
 - Use Bash to read, and to run `scripts/sync-main.sh`, `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`,
   and the read-only `openspec list`, `show`, `status`, `validate` and `instructions`.
   In the main checkout these see only what `main` holds. For a change's branch, read with `git show <change>:openspec/...`.
-  In a step's worktree or a review checkout, the only `openspec` commands you run are the read-only `openspec status --change <name>` and `openspec validate --all --strict`.
+  In a step's worktree, a review checkout or a status checkout, the only `openspec` commands you run are the read-only `openspec status --change <name>` and `openspec validate --all --strict`.
+  Before an archive brief, make and remove the detached `.claude/worktrees/status-<change>` checkout, as the OpenSpec changes section of `ship` says.
 - After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.

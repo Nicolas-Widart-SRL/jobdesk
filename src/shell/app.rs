@@ -30,6 +30,7 @@ use crate::settings::application::{
 };
 use crate::settings::ui::{LastTask, SettingsRequest, SettingsScreen, SettingsView};
 use crate::shared_kernel::LoadError;
+use crate::shared_kernel::data_folder::DATA_DIR_VARIABLE;
 use crate::shell::live_snapshot::{self, Reload};
 use crate::shell::{Issue, Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
@@ -1672,15 +1673,15 @@ fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Optio
     args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
 }
 
-/// `JOBDESK_DATA_DIR` wins over eframe's usual place, so a copy that is tried out never touches the user's own data folder.
-fn data_folder() -> Option<PathBuf> {
-    data_folder_from(std::env::var_os("JOBDESK_DATA_DIR"), || eframe::storage_dir("Jobdesk"))
+/// The data folder `JOBDESK_DATA_DIR` names, if it names one. Only an absolute path counts: an empty or relative one
+/// names none, so the folder never depends on where the app was started.
+fn moved_data_folder(env: Option<OsString>) -> Option<PathBuf> {
+    env.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
-/// Only an absolute path counts. An empty or relative one falls back to `default`, so the folder never depends on where
-/// the app was started.
-fn data_folder_from(env: Option<OsString>, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
-    env.map(PathBuf::from).filter(|path| path.is_absolute()).or_else(default)
+/// A `moved` folder wins over eframe's usual place, so a copy that is tried out never touches the user's own data folder.
+fn data_folder_from(moved: Option<PathBuf>, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    moved.or_else(default)
 }
 
 /// eframe keeps the window's state in `app.ron` in the data folder, not in a place of its own.
@@ -1695,7 +1696,8 @@ fn native_options(icon: egui::IconData, data: Option<&Path>) -> eframe::NativeOp
 /// Opens the window, and once it has closed applies the update the user chose Restart to update for, if any.
 pub fn run() -> eframe::Result {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/brand/jobdesk-icon-1024.png")).unwrap_or_default();
-    let data = data_folder();
+    let moved = moved_data_folder(std::env::var_os(DATA_DIR_VARIABLE));
+    let data = data_folder_from(moved.clone(), || eframe::storage_dir("Jobdesk"));
     // eframe made the folder when it looked it up itself.
     if let Some(data) = &data {
         let _ = std::fs::create_dir_all(data);
@@ -1716,7 +1718,8 @@ pub fn run() -> eframe::Result {
     // The window is closed and every session with it, so nothing is cut off as the update applies.
     let chosen = restart.lock().ok().and_then(|mut slot| slot.take());
     if let (Some((plan, args)), Some(data)) = (chosen, &data) {
-        updates::finish(data, &plan, &args);
+        // The new copy opens the same moved folder, or the usual one.
+        updates::finish(data, moved.as_deref(), &plan, &args);
     }
     result
 }
@@ -2025,7 +2028,9 @@ mod tests {
     #[test]
     fn an_absolute_data_dir_is_the_data_folder() {
         let moved = tempfile::tempdir().unwrap();
-        let found = data_folder_from(Some(moved.path().as_os_str().to_owned()), || panic!("the usual place is not looked up"));
+        let named = moved_data_folder(Some(moved.path().as_os_str().to_owned()));
+        assert_eq!(named.as_deref(), Some(moved.path()));
+        let found = data_folder_from(named, || panic!("the usual place is not looked up"));
         assert_eq!(found.as_deref(), Some(moved.path()));
     }
 
@@ -2033,7 +2038,9 @@ mod tests {
     #[test]
     fn an_unset_empty_or_relative_data_dir_keeps_the_usual_place() {
         for env in [None, Some(""), Some("data"), Some("./data"), Some("../data")] {
-            assert_eq!(data_folder_from(env.map(OsString::from), usual_place), usual_place(), "{env:?}");
+            let named = moved_data_folder(env.map(OsString::from));
+            assert_eq!(named, None, "{env:?}");
+            assert_eq!(data_folder_from(named, usual_place), usual_place(), "{env:?}");
         }
         assert_eq!(data_folder_from(None, || None), None, "no usual place on this computer");
     }
@@ -2051,7 +2058,8 @@ mod tests {
     #[test]
     fn a_moved_data_folder_holds_the_settings_and_the_run_logs() {
         let moved = tempfile::tempdir().unwrap();
-        let data = data_folder_from(Some(moved.path().as_os_str().to_owned()), || panic!("the usual place is not looked up")).unwrap();
+        let named = moved_data_folder(Some(moved.path().as_os_str().to_owned()));
+        let data = data_folder_from(named, || panic!("the usual place is not looked up")).unwrap();
         let ctx = egui::Context::default();
         let shell = launch(&ctx, None, &data);
         assert_eq!(shell.data.as_deref(), Some(moved.path()));

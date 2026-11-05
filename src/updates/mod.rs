@@ -67,18 +67,19 @@ pub fn last_apply_failure(data: &Path) -> Option<ApplyFailed> {
 /// new copy. On Windows it starts the setup, which closes this copy and opens the new one, and returns at once.
 /// When it cannot apply, it notes why in `updates/` of `data` for the next launch and opens this copy again.
 /// A program that is no longer where it ran from is never started: the note is all that is left.
-pub fn finish(data: &Path, plan: &RestartPlan, args: &[OsString]) {
+/// `moved` is `data` when `JOBDESK_DATA_DIR` chose it: the copy that opens next gets the same folder, whichever way it opens.
+pub fn finish(data: &Path, moved: Option<&Path>, plan: &RestartPlan, args: &[OsString]) {
     let note = |failure| cleanup::record_apply_failure(&downloads(data), ApplyFailed { version: plan.version, failure });
     let Ok(exe) = std::env::current_exe() else { return note(ApplyFailure::Start) };
     let key = UpdateKey::embedded();
     let applied = match Platform::current() {
         #[cfg(target_os = "macos")]
         Some(Platform::MacArm) => infrastructure::install_macos::apply(plan, &exe, key.as_ref()),
-        Some(Platform::WindowsX64) => install_windows::apply(plan, &exe, args, key.as_ref()),
+        Some(Platform::WindowsX64) => install_windows::apply(plan, &exe, args, moved, key.as_ref()),
         _ => Err(ApplyFailure::NotInstalled),
     };
     let setup_reopens = Platform::current() == Some(Platform::WindowsX64);
-    after_apply(applied, setup_reopens, &note, &|| exe.is_file(), &mut || reopen(&exe, args));
+    after_apply(applied, setup_reopens, &note, &|| exe.is_file(), &mut || reopen(&exe, args, moved));
 }
 
 /// What follows an apply that ended as `applied`: the note for the next launch, and the copy to open again.
@@ -109,11 +110,12 @@ fn after_apply(
     }
 }
 
-/// Starts the program at `exe` again with `args`.
+/// Starts the program at `exe` again with `args`, on the `moved` data folder if there is one.
 #[cfg(not(target_os = "macos"))]
-fn reopen(exe: &Path, args: &[OsString]) -> std::io::Result<()> {
+fn reopen(exe: &Path, args: &[OsString], moved: Option<&Path>) -> std::io::Result<()> {
     let mut program = std::process::Command::new(exe);
     crate::shared_kernel::process_tree::no_window(&mut program);
+    crate::shared_kernel::data_folder::pass_on_data_folder(&mut program, moved);
     program.args(args).spawn().map(drop)
 }
 

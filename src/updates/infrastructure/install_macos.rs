@@ -10,6 +10,7 @@ use std::process::{self, Command};
 use flate2::read::GzDecoder;
 use tar::{Archive, EntryType};
 
+use crate::shared_kernel::data_folder::{DATA_DIR_VARIABLE, pass_on_data_folder};
 use crate::shared_kernel::process_tree::no_window;
 use crate::updates::domain::{ApplyFailure, InstallBlock, Platform, RestartPlan};
 use crate::updates::infrastructure::download::read_build;
@@ -77,18 +78,33 @@ fn runs(pid: u32) -> bool {
     answer == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Opens whatever copy is at the bundle of `exe` now, as a new instance, with `args`. A program outside a bundle is
-/// started directly.
-pub fn reopen(exe: &Path, args: &[OsString]) -> io::Result<()> {
+/// Opens whatever copy is at the bundle of `exe` now, as a new instance, with `args`, on the `moved` data folder if
+/// there is one. A program outside a bundle is started directly.
+pub fn reopen(exe: &Path, args: &[OsString], moved: Option<&Path>) -> io::Result<()> {
     let Some(bundle) = bundle_of(exe) else {
         let mut program = Command::new(exe);
         no_window(&mut program);
+        pass_on_data_folder(&mut program, moved);
         return program.args(args).spawn().map(drop);
     };
+    let status = opener(&bundle, args, moved).status()?;
+    if status.success() { Ok(()) } else { Err(io::Error::other("open failed")) }
+}
+
+/// `open -n <bundle> --args <args>`. A `moved` data folder goes in `--env` too, so the new copy gets it whether or not
+/// Launch Services passes on what `open` inherits.
+fn opener(bundle: &Path, args: &[OsString], moved: Option<&Path>) -> Command {
     let mut open = Command::new("/usr/bin/open");
     no_window(&mut open);
-    let status = open.arg("-n").arg(&bundle).arg("--args").args(args).status()?;
-    if status.success() { Ok(()) } else { Err(io::Error::other("open failed")) }
+    pass_on_data_folder(&mut open, moved);
+    open.arg("-n");
+    if let Some(folder) = moved {
+        let mut variable = OsString::from(format!("{DATA_DIR_VARIABLE}="));
+        variable.push(folder);
+        open.arg("--env").arg(variable);
+    }
+    open.arg(bundle).arg("--args").args(args);
+    open
 }
 
 fn replace(archive: &[u8], bundle: &Path, program: &OsStr) -> io::Result<()> {
@@ -342,6 +358,23 @@ mod tests {
     fn a_program_outside_a_bundle_is_not_replaced() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(apply(&plan(fixture(MAC)), &root.path().join("jobdesk"), Some(&fixture_key())), Err(ApplyFailure::NotInstalled));
+    }
+
+    /// `open` names a moved data folder in `--env`, so the new copy gets it whatever Launch Services passes on. With no
+    /// folder, `--env` is left out and the variable is removed.
+    #[test]
+    fn the_new_copy_opens_on_a_moved_data_folder() {
+        let args = [OsString::from("--workspace"), OsString::from("/jobs/ai-job-search")];
+        let bundle = Path::new("/Applications/Jobdesk.app");
+        let moved = opener(bundle, &args, Some(Path::new("/scratch/jobdesk-data")));
+        assert_eq!(moved.get_program(), "/usr/bin/open");
+        let expected = ["-n", "--env", "JOBDESK_DATA_DIR=/scratch/jobdesk-data", "/Applications/Jobdesk.app", "--args", "--workspace", "/jobs/ai-job-search"];
+        assert_eq!(moved.get_args().collect::<Vec<_>>(), expected);
+        assert_eq!(moved.get_envs().collect::<Vec<_>>(), [(OsStr::new(DATA_DIR_VARIABLE), Some(OsStr::new("/scratch/jobdesk-data")))]);
+
+        let usual = opener(bundle, &args, None);
+        assert_eq!(usual.get_args().collect::<Vec<_>>(), ["-n", "/Applications/Jobdesk.app", "--args", "--workspace", "/jobs/ai-job-search"]);
+        assert_eq!(usual.get_envs().collect::<Vec<_>>(), [(OsStr::new(DATA_DIR_VARIABLE), None)], "a value this copy ignored is not passed on");
     }
 
     #[test]

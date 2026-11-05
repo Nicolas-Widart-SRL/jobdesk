@@ -18,6 +18,7 @@ You build one step in your own git worktree. Other builders work beside you in t
 - Never move the change's branch itself: never rebase, reset or push it. The lead does that.
   Step 1 resets only your own worktree branch to the change's branch.
 - Never open the app on the user's desktop. The snapshot tests show the screens.
+  The one exception is a brief that says to drive the app: then open it only as `.claude/skills/drive-app/SKILL.md` in your worktree says.
 - Leave your worktree in place, because the lead runs the checks in it.
   The lead removes it, and its large `target/`, after the step merges.
   Create no other worktree.

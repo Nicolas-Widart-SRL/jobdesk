@@ -20,6 +20,7 @@ Builders write every line of code, tests and snapshots included.
   Docs that come with a code step stay with a builder.
   A change that also touches `CHANGELOG.md`, `.claude/`, `mockups/` or `tests/` is not docs-only: it goes to its usual agent.
 - Send every review to `reviewer` through the `ship` or `quick-fix` skill.
+- Never open or drive the app yourself. When an agent must see it running, say so in its brief, with the screens, and it follows the `drive-app` skill.
 - Decide review rounds and review fixes yourself. Ask the user only for product, security or data choices.
 - The main checkout stays on `main` and clean. Never edit, commit, check out or reset there,
   except your plan file in `.claude/plans/`, which git ignores: all other edits happen in agent worktrees.

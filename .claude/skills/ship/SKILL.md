@@ -167,7 +167,8 @@ Give the reviewer:
 - the path of the head checkout: the step's worktree for a step review, `.claude/worktrees/review-<change>` for the change review;
 - the plan step word for word, or the whole plan for the change review, without an OpenSpec archive step (see OpenSpec changes);
 - the risky lens, taken from the planner's reason for marking the step risky;
-- for a visible change, the changed snapshot PNGs and the canvas paths.
+- for a visible change, the changed snapshot PNGs and the canvas paths;
+- optionally, drive the app: yes or no, and which screens. Yes lets it build the head checkout and drive the app through the `drive-app` skill, on macOS only.
 
 Never pass on the builder's account, and never say what a fix does.
 In each later round, pass the round-1 findings word for word, with the later rounds' findings,

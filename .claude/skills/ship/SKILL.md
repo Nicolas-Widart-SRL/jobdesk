@@ -156,7 +156,8 @@ Give a builder:
 
 - the step from the plan, word for word, with its files and its check;
 - the change's branch and its head SHA, so it resets its worktree to the right commit;
-- what is out of scope.
+- what is out of scope;
+- optionally, drive the app: yes or no, and which screens. Before `main` holds the `drive-app` skill, name the file to follow too.
 
 When the change builds a design, add the canvas paths.
 For an OpenSpec step, add the user's recorded answers and the task ids, as OpenSpec changes says.

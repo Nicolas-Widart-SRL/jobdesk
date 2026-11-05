@@ -13,13 +13,18 @@ It works on macOS only for now. Windows needs its own pass.
 
 - Run only a build from the checkout your brief names. Never open `/Applications/Jobdesk.app` and never `open -a Jobdesk`.
 - Use only a copy of `tests/sample_workspace` and a fresh `JOBDESK_DATA_DIR`. The data stays fictional.
-- The user's own Jobdesk is probably open, with the same window title. Work only in your window:
+  The path must be absolute: the app ignores an empty or relative one and opens the user's real data folder.
+- The user's own Jobdesk is probably open, with the same window title. Yours opens in front of it and takes the focus,
+  so say in your report that a second Jobdesk window was open on the user's desktop while you worked. Work only in your window:
   pass `--window-id <id>` to every `snapshot`, `screenshot`, `press` and `focus-window`, and act only on refs from those snapshots.
   Never use `--app Jobdesk` alone, never run `close-app`, and never act on another window or app.
 - Never pass `--headed` unless your brief allows it. Never switch to `--headed` to recover from a headless failure.
-- Observe and navigate only. Start no run, and do nothing that starts `claude`: a run costs money, writes files, and the `claude` sign-in is not isolated.
+- Observe and navigate only. Start no run: a run costs money, writes files, and the `claude` sign-in is not isolated.
+  The `claude --version` check at launch, and Check again on Setup, are not runs and are allowed.
 - Click a card's action, such as Later or Mark as sent…, only when your brief says so.
-- Stop at the launcher. New task, a card's Y action and the buttons that end in `…` open it: read it, then leave by clicking a tab. Never click Run.
+- Stop at the launcher. New task, a card's Y action, the buttons that end in `…`, and the buttons named after a command, such as `/reset`, open it.
+  Take one snapshot, then leave at once by clicking a tab. Never leave your window on the launcher.
+  While it is open, press no key and type nothing: Cmd+Enter starts the run before any field sees it. Never click Run.
 - Never click Restart to update, Download, Test connection, End session or Force stop.
 - Never open Settings › Providers: showing it reads the user's real keychain entry. Settings opens on General.
 - Never click Open job ad, Open PDF, Show in Finder, Change folder, Choose folder… or a link: they leave your window.
@@ -35,7 +40,7 @@ It works on macOS only for now. Windows needs its own pass.
 2. Read `agent-desktop skills get desktop` and `agent-desktop skills get platform` once. They match the installed version.
    Read `agent-desktop <command> --help` for flags.
 3. Run `cargo build` in the checkout. A debug build is fine.
-4. Make a fresh folder: `mktemp -d <scratchpad>/jobdesk.XXXXXX`. Call it `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
+4. Make a fresh folder: `mktemp -d <scratchpad>/jobdesk.XXXXXX`, with the scratchpad's absolute path. Call the absolute path it prints `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
 
    ```bash
    cp -R <checkout>/tests/sample_workspace <tmp>/ai-job-search
@@ -44,16 +49,16 @@ It works on macOS only for now. Windows needs its own pass.
    touch <tmp>/ai-job-search/.claude/commands/apply.md
    ```
 
-   The app refuses a folder with no `CLAUDE.md`, so `tests/sample_workspace` itself never opens.
-5. Launch in the background, from the checkout, and keep the PID it prints:
+   The app opens only a folder that holds `.claude/commands/apply.md`, so `tests/sample_workspace` itself never opens. Profile reads `CLAUDE.md`.
+5. Launch the binary by its full path in the background, with no `cd` before it, and keep the PID it prints:
 
    ```bash
-   cd <checkout> && JOBDESK_DATA_DIR=<tmp>/data nohup ./target/debug/jobdesk --workspace <tmp>/ai-job-search > <tmp>/app.log 2>&1 &
+   JOBDESK_DATA_DIR=<tmp>/data nohup <checkout>/target/debug/jobdesk --workspace <tmp>/ai-job-search > <tmp>/app.log 2>&1 &
    echo "pid $!"
    ```
 
    Write every path out in full. The sandbox refuses a command whose name comes from a variable.
-   The new window opens in front and takes the focus.
+   Check that `ps -p <pid> -o command=` shows `<checkout>/target/debug/jobdesk`. Otherwise stop, and report.
 6. Run `agent-desktop list-windows --app Jobdesk`. It lists the user's window too. Keep the `id` (such as `w-28008`) of the entry whose `pid` is yours.
    Trust only the `pid`: both windows are titled `Jobdesk`, and the debug build's `app_name` reads `jobdesk`.
    No entry with your PID yet: list again after a second. None after 10 seconds: read `<tmp>/app.log`, clean up, and report.
@@ -63,9 +68,10 @@ It works on macOS only for now. Windows needs its own pass.
    Take a screenshot with `agent-desktop screenshot --window-id <id> <tmp>/<name>.png`.
 8. Clean up, every time, failures included:
    - Snapshot, then click the `button` named `Close` in your window. This closes it the usual way and saves its `app.ron` in `<tmp>/data`.
-   - Check `ps -p <pid>`. When it still runs, `kill <pid>`.
+   - Run `ps -p <pid> -o command=`. Only when it shows `<checkout>/target/debug/jobdesk`, `kill <pid>`, then check again. Anything else: kill nothing.
    - Run `list-windows --app Jobdesk` again: no entry has your PID. The user's window stays.
-   - Remove `<tmp>` with `rm -rf`. Never kill, close or touch any other Jobdesk.
+   - Only once your app is gone, remove the folder with one `rm -rf` and its full absolute path written out, never a variable.
+   - Never kill, close or touch any other Jobdesk.
 
 ## What the tree shows
 
@@ -86,6 +92,6 @@ It works on macOS only for now. Windows needs its own pass.
 - A covered window runs no frame, so a click on it seems to do nothing. The click waits, and lands once the window shows again.
   Never repeat it: every repeat lands too. Raise your own window once with `focus-window --window-id <id>`, then snapshot.
   It may answer `ACTION_FAILED` and still raise the window. It takes the focus from the user's app, so never raise another window.
-- Headless `press` is refused with `STALE_REF`, even in front. Use no keys: leave the launcher by a tab, and Settings by Back to app.
+- Headless `press` is refused with `STALE_REF`, even in front. Leave the launcher by a tab, and Settings by Back to app.
 - The Settings rail has no refs, so headless navigation reaches only General.
 - Headless clicks worked on tabs, rows, New task, Back to app and Close. Navigation needs no `--headed`.

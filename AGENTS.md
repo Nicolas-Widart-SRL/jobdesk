@@ -54,7 +54,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - A small, low-risk change goes through the `quick-fix` skill. Everything else goes through the `ship` skill.
 - The main checkout stays on `main` and clean. Every edit happens in an agent worktree, except the lead's plan files in `.claude/plans/`.
 - `reviewer` reviews each risky step and, in `ship`, the whole change before the pull request. CodeRabbit reviews the pull request, and the lead answers it through `ship`.
-- An agent that must see or operate the running app follows the `drive-app` skill in `.claude/skills/drive-app/SKILL.md` (agent-desktop, macOS only), and only when its brief says so.
+- An agent that must see or operate the running app follows the `drive-app` skill (`.claude/skills/drive-app/SKILL.md`, as `main` holds it; agent-desktop, macOS only), and only when its brief says so.
 - OpenSpec (`openspec/`, `/opsx:*`) runs through the same flow: a propose, update, archive or sync is one builder step in a worktree, `/opsx:apply` is a `ship` change,
   and the lead runs only read-only `openspec` subcommands. See `.claude/agents/lead.md`.
 

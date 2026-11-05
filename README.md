@@ -48,10 +48,12 @@ On first launch, choose your ai-job-search folder.
 
 From the first release with updates on, Jobdesk tells you in the status bar when a new version is out. Download fetches it and checks its signature, and Restart to update installs it and opens Jobdesk again on the same folder. A copy from before that release does not update itself: install the new version by hand once.
 
-On macOS, moving from a release from before signing to the first signed release changes two things:
+On macOS, if your copy predates signing, note these points when you move to a signed release:
 
 - The signed release opens without the "cannot verify the developer" warning, so you no longer need Open Anyway.
 - If you saved an API key, macOS may ask once to allow access to it in the keychain, because the app's signature changed. Choose Always Allow. Later releases keep the same signing identity, so the choice holds.
+
+If Restart to update cannot put the signed release in place, download its installer and install it yourself.
 
 ## Privacy and trust
 

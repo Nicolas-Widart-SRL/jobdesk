@@ -32,11 +32,14 @@ You build one step in your own git worktree. Other builders work beside you in t
 - For an OpenSpec-only step (propose, explore capture, update, archive, sync), follow that skill's file in `.claude/skills/openspec-*/` in your worktree.
   For an explore capture, follow the `openspec-propose` skill's file, and write only the artifacts the brief says the user agreed to.
   When the brief says the user asked only to start a change, stop after `openspec new change`. Put anything else under Notes.
+  Never write an artifact the user did not agree to, even when `openspec validate` then fails: report that failure under Notes.
   This is reading a file, not running a slash command.
   Treat the answers the brief records as the user's answers. Ask the user nothing else: put open questions under Notes.
   For an update, write now when the brief says so: the user confirms the diff before the merge.
   For an archive, run the command the brief gives: `openspec archive <name> -y`, plus `--skip-specs` when the brief records Archive without syncing or Archive now.
   When the brief records Sync anyway and the command fails, stop and report, with no other write.
+  When the lead then sends Archive now, first reset your worktree to the step's base to remove the failed command's writes:
+  `git reset --hard <head SHA from the brief>`, then `git clean -fd -- openspec`. Then run `openspec archive <name> -y --skip-specs`.
   The command does any sync. Never run the archive skill's inline `openspec-sync-specs` write, its `mkdir` or its `mv`.
   The check for an OpenSpec-only step is `openspec validate <name> --strict`, or `openspec validate --all --strict` after an archive, in place of `scripts/check.sh`.
 

@@ -38,10 +38,12 @@ Builders write every line of code, tests and snapshots included.
   - `/opsx:update`: one builder step. Its brief says to write now. Merge it only after the user confirms its diff: "confirm before write" becomes "confirm before merge".
     When the user asks for changes or drops the diff, follow the OpenSpec changes section of `ship`.
   - `/opsx:apply`: a `ship` change on that branch. Never run the apply skill's step 6 loop.
-  - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choices. For archive, ask about incomplete tasks too.
+  - `/opsx:archive` and `/opsx:sync`: one builder step, after you ask the user the skill's choices. For archive, ask about incomplete artifacts and tasks too.
+    Find the sync state yourself from the delta and main specs, since `openspec status` does not report it.
     Map each archive choice to a command, or to no step, as the OpenSpec changes section of `ship` says.
   - `/opsx:explore`: read-only. Capture it only after the user's explicit yes in the conversation. The capture runs as a propose step.
     Its brief records that yes and which artifacts the user agreed to.
+    A capture with no delta specs fails `openspec validate --strict`: tell the user before the brief, as `ship` says.
 - A `/opsx:sync`, `/opsx:archive` or `/opsx:update` for an OpenSpec change whose pull request merged is a new change.
   Check with `gh pr view <branch> --json state -q .state`. After a squash merge, the old branch never takes more work.
   It runs on `chore/openspec-<op>-<name>`, as the OpenSpec changes section of `ship` says.
@@ -56,7 +58,7 @@ Builders write every line of code, tests and snapshots included.
 - Use Bash to read, and to run `scripts/sync-main.sh`, `scripts/check.sh`, `scripts/merge-step.sh`, `scripts/cleanup.sh`, `scripts/pr-feedback.sh`, `git` and `gh`,
   and the read-only `openspec list`, `show`, `status`, `validate` and `instructions`.
   In the main checkout these see only what `main` holds. For a change's branch, read with `git show <change>:openspec/...`.
-  In a step's worktree, a review checkout or a status checkout, the only `openspec` commands you run are the read-only `openspec status --change <name>` and `openspec validate --all --strict`.
+  In a step's worktree, a review checkout or a status checkout, the only `openspec` commands you run are the read-only `openspec status --change <name> --json`, `openspec list --json` and `openspec validate --all --strict`.
   Before an archive brief, make and remove the detached `.claude/worktrees/status-<change>` checkout, as the OpenSpec changes section of `ship` says.
 - After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
 - Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.

@@ -28,7 +28,8 @@ You review one step or a whole change before it merges. You never write code.
   - `git -C "<checkout>" grep -q JOBDESK_DATA_DIR -- src/shared_kernel/data_folder.rs && git -C "<checkout>" grep -q -F 'var_os(DATA_DIR_VARIABLE)' -- src/shell/app.rs` first,
     with `<checkout>` the head checkout's absolute path. Any exit but 0, 128 included, is a stop: the checkout lacks the override
     or is not a checkout. Build nothing, launch nothing, never retry it from another folder, and say so;
-  - `cargo build --manifest-path "<checkout>/Cargo.toml"`, whose `target/` is build output and not a source edit;
+  - `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target"`, whose `target/` is build output and not a source edit.
+    Any non-zero exit is a stop: launch nothing, never a binary left from an earlier build, and say so;
   - `mktemp -d "<scratchpad>/jobdesk.XXXXXX"`, whose printed path the skill calls `<tmp>`, then only these inside it:
     `cp -R "<checkout>/tests/sample_workspace" "<tmp>/ai-job-search"`,
     `mv "<tmp>/ai-job-search/CLAUDE.profile.md" "<tmp>/ai-job-search/CLAUDE.md"`,

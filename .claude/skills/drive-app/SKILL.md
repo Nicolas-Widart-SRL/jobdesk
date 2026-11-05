@@ -60,7 +60,11 @@ It works on macOS only for now. Windows needs its own pass.
    It exits 128 when `<checkout>` is not a git checkout: a wrong path, or a pruned worktree.
    Any exit but 0 is a stop: build nothing, launch nothing, and never retry the check from another folder.
    Nothing needs cleaning up. Tell the lead the exit code, and that the checkout lacks the `JOBDESK_DATA_DIR` override or is not a checkout.
-4. Build the checkout with `cargo build --manifest-path "<checkout>/Cargo.toml"`. A debug build is fine.
+4. Build the checkout with `cargo build --manifest-path "<checkout>/Cargo.toml" --target-dir "<checkout>/target"`. A debug build is fine.
+   `--target-dir` puts the binary where step 6 launches it, even when `CARGO_TARGET_DIR` or a Cargo config points elsewhere.
+   Without it, the build can succeed and leave an old binary there, which may ignore `JOBDESK_DATA_DIR` and open the user's real data folder.
+   When `cargo build` exits non-zero, stop: launch nothing, and never launch a binary left from an earlier build.
+   Nothing needs cleaning up. Tell the lead the build failed, with the last lines of its output.
 5. Make a fresh folder: `mktemp -d "<scratchpad>/jobdesk.XXXXXX"`, with the scratchpad's absolute path. Call the absolute path it prints `<tmp>` below. Then prepare the copy, as `tests/screens.rs` does:
 
    ```bash

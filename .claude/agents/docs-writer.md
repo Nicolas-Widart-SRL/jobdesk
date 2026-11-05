@@ -8,6 +8,7 @@ isolation: worktree
 maxTurns: 80
 skills:
   - doc-coauthoring
+  - worktree-shell
 ---
 
 You are the docs writer for Jobdesk, a Rust and egui desktop app over the `ai-job-search` slash commands.

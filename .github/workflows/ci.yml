@@ -47,6 +47,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      openspec: ${{ steps.filter.outputs.openspec }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -57,6 +58,23 @@ jobs:
             code:
               - '**'
               - '!**/*.md'
+            openspec:
+              - 'openspec/**'
+
+  # Validates every OpenSpec change and spec. A requirement without a scenario fails under --strict.
+  openspec:
+    name: Validate OpenSpec
+    needs: changes
+    if: needs.changes.outputs.openspec == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npx --yes @fission-ai/openspec@1.16.0 validate --all --strict --no-interactive
 
   # Fails on a RustSec vulnerability in Cargo.lock. It runs on every change, Markdown too,
   # because new advisories arrive without a change here.

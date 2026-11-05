@@ -130,7 +130,7 @@ jobs:
             echo '---'
             echo
             echo '- [ ] Review the CHANGELOG.md section. Edit it on this branch if needed: the GitHub release notes are read from CHANGELOG.md when the PR merges.'
-            echo "- [ ] Merge with Squash and merge (a merge commit works too, a rebase merge is not supported). The push to main builds the installers on the merge commit, then tags \`$TAG\` and publishes the GitHub release (tag-release.yml)."
+            echo "- [ ] Merge with Squash and merge (a merge commit works too, a rebase merge is not supported). Keep the squash subject \`chore(release): $TAG\`: if it is edited, tag-release.yml skips the merge, and you run it by hand with the tag. The push to main builds the installers on the merge commit, then tags \`$TAG\` and publishes the GitHub release (tag-release.yml)."
           } > "$body"
 
           gh pr create --base main --head "release/$TAG" --title "chore(release): $TAG" --body-file "$body"

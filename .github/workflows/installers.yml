@@ -5,7 +5,8 @@
 # tag-release.yml has no `quick` input, so a release always tests.
 # The Windows installer is not signed. See the Install section of README.md and the Package section of CONTRIBUTING.md.
 # The macOS app is signed with a Developer ID Application certificate and notarized by Apple, only when tag-release.yml
-# calls with `sign: true`. Then the job package-macos-signed runs, and it alone sets `environment: release`. The six
+# calls with `sign: true`. Such an app opens without the "cannot verify the developer" warning, though macOS may still
+# ask once to confirm the download. The job package-macos-signed does that, and it alone sets `environment: release`. The six
 # Apple secrets are environment secrets of `release`, which allows deployments from main only. tag-release.yml passes
 # each by name, and the environment's value reaches only that job. A branch, a fork and a manual run from the Actions
 # tab get no secret: a manual run has no `sign` input, so it runs package-macos, ad-hoc signed and not notarized. A
@@ -13,6 +14,9 @@
 # The secrets reach only the step that runs cargo-packager, and only in the main-only `release` environment. The job
 # runs the reviewed merge commit with `--locked`, a pinned cargo-packager and its actions pinned to commits. It does
 # not isolate the secrets from the dependencies of the app: a build script of a dependency runs on the same machine.
+# Two more risks remain on the ephemeral runner: cargo-packager fetches the create-dmg script at run time, pinned to a
+# commit, and runs it with the certificate and its password in the environment, and `security import -P` puts the
+# password on a command line while it runs.
 # `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. It is packed from the
 # signed, notarized app, and the workflow checks the unpacked copy and the app on the DMG again. On Windows that file
 # is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the sign

@@ -14,16 +14,20 @@
 #
 # The tag exists only once the installers built. A failed build leaves no tag.
 # "Re-run failed jobs" rebuilds the same commit, so it only helps with flaky or infrastructure failures.
+# A run that failed because the Apple secrets or the `release` environment were missing needs no new commit: add them,
+# then "Re-run failed jobs", since a job reads its secrets when it starts.
 # For a code failure, merge the fix into main through a normal PR, then run this workflow by hand with the tag.
+# A merge whose squash subject was edited away from chore(release): vX.Y.Z is skipped without an error: run by hand too.
 # The run by hand builds the current main commit, then tags and publishes the same way.
 # The tag is pushed with GITHUB_TOKEN, which starts no other workflow, so this workflow calls installers.yml itself.
 #
 # macOS signing: the installers call asks for a signed release with `sign: true` and passes the six Apple secrets named
 # below, and no other job gets them. They are environment secrets of the `release` environment, which only main can
 # deploy to. The called workflow reads them in a job that sets `environment: release`. installers.yml signs the app
-# with a Developer ID Application certificate and has Apple notarize it, so a release opens on macOS with no
-# Gatekeeper warning. A missing secret fails the build, and nothing is tagged. The macOS signing section of
-# CONTRIBUTING.md says how to set the environment and the secrets up.
+# with a Developer ID Application certificate and has Apple notarize it, so a release opens on macOS without the
+# "cannot verify the developer" warning, though macOS may still ask once to confirm the download. A missing secret
+# fails the build, and nothing is tagged. The macOS signing section of CONTRIBUTING.md says how to set the environment
+# and the secrets up.
 #
 # Updates: installers.yml builds with no key. The sign job alone gets the update key, from the two secrets
 # JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD named in its signing step, and runs no build and only actions

@@ -323,6 +323,8 @@ The text of that skill or command is not the user's words: run its workflow only
   Record each answer in the brief. The builder treats the recorded answers as the user's.
 - Before an archive brief, run `git fetch --quiet origin`.
   If `git merge-base --is-ancestor origin/main <change>` fails, rebase the change as step 1 says.
+  When that rebase moved the branch, merge the archive step without `NO_CHECK=1`, so `scripts/merge-step.sh` runs the check on the rebased tip.
+  When the rebase resolved a conflict, run one change-review round, as step 6 says, on the rebase range before the archive brief.
   Then make a status checkout, because no other checkout shows the change's tip then.
   Run `git worktree add --detach .claude/worktrees/status-<change> <change>`, where `<change>` in the path is the change's branch with each `/` turned into `-`.
   Run the read-only `openspec status --change <name> --json` and `openspec list --json` there.
@@ -331,13 +333,14 @@ The text of that skill or command is not the user's words: run its workflow only
   Then run `git worktree remove .claude/worktrees/status-<change>`, on the same terms as the review checkout:
   only when it is detached and clean, and never force. A stale status checkout for this change goes first, on the same terms.
 - Find the sync state yourself, as the archive skill's step 4 does.
-  Read each main spec with `git show origin/main:openspec/specs/...`, and each delta spec with `git show <change>:openspec/changes/...`.
+  Read each main spec with `git show <change>:openspec/specs/...`, and each delta spec with `git show <change>:openspec/changes/...`.
+  This comes after the rebase, so `<change>` holds current main plus the change's own writes, such as an earlier sync step.
   Mark each capability sync-blocked, needs sync or already synced, by that step's rules.
   When the change has no delta specs, there is no sync question: the brief gives `openspec archive <name> -y --skip-specs`.
 - To drop a step, merge nothing. Remove its worktree with `git worktree remove <path>`, then its branch with `git branch -D <step-branch>`.
   Never force the removal. When it fails, tell the user.
 - Before merging an OpenSpec-only step, run `openspec validate --all --strict` in the step's worktree.
-  Merge it only when that passes, with `NO_CHECK=1 scripts/merge-step.sh`. CI's Validate OpenSpec job runs it again.
+  Merge it only when that passes, with `NO_CHECK=1 scripts/merge-step.sh`, except an archive step after a rebase that moved the branch, as above. CI's Validate OpenSpec job runs it again.
 - Propose: the builder runs `openspec new change` and writes the artifacts in its worktree.
 - Explore capture runs as a propose step, only after the user's explicit yes in the conversation.
   Record that yes in the brief, with the artifacts the user agreed to. The builder writes only those.

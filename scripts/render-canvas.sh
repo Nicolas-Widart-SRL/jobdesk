@@ -39,10 +39,18 @@ canvas=$1
 out=$2
 shift 2
 
+# Chrome's URL parser drops tabs and line breaks, so it would open another file and screenshot its error page.
+control_path() {
+  echo "render-canvas: canvas path holds a control character" >&2
+  exit 2
+}
+[[ "$canvas" != *[[:cntrl:]]* ]] || control_path
 if [[ "$canvas" != *.html || ! -f "$canvas" ]]; then
   echo "render-canvas: no canvas at $canvas" >&2
   exit 2
 fi
+abs_canvas="$(cd "$(dirname "$canvas")" && pwd)/$(basename "$canvas")"
+[[ "$abs_canvas" != *[[:cntrl:]]* ]] || control_path
 if [[ "$out" != *.png ]]; then
   echo "render-canvas: output must end in .png: $out" >&2
   exit 2
@@ -80,7 +88,6 @@ else
 fi
 
 mkdir -p "$(dirname "$out")"
-abs_canvas="$(cd "$(dirname "$canvas")" && pwd)/$(basename "$canvas")"
 abs_out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
 
 # Percent-encode the path, % first, so Chrome reads none of it as URL syntax. / stays as is.

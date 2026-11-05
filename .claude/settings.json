@@ -1,3 +1,10 @@
 {
-  "agent": "lead"
+  "agent": "lead",
+  "permissions": {
+    "ask": [
+      "Bash(openspec init:*)",
+      "Bash(openspec update:*)",
+      "Bash(openspec store:*)"
+    ]
+  }
 }

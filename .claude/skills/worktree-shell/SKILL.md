@@ -10,6 +10,7 @@ The worktree guard refuses any command it cannot verify stays inside your worktr
 A refused call is a wasted turn.
 
 - Run one plain command per Bash call. No `;`, `&&`, `||`, `for`/`while` loops, heredocs, `$(...)`, backticks, `<(...)` or shell variables.
+- Start each command with a bare program name or a repo script, such as `cargo` or `scripts/check.sh`. A quoted or backslash-escaped program path is refused even alone. Render canvases with `scripts/render-canvas.sh`.
 - Shell variables means `$NAME` expansion.
 - An env prefix is fine, such as `UPDATE_SNAPSHOTS=1 cargo test --test screens --test ui_kit_gallery`.
 - One pipe into a filter is fine, such as `| tail -n 40` or `| grep ...`.

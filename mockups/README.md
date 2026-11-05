@@ -4,7 +4,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 ## Building a canvas
 
-`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html`, `Settings.html` and `Update.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`, `.ud`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it as `.claude/agents/designer.md` step 5 says, at 1280x820.
+`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html`, `Settings.html` and `Update.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`, `.ud`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it with `scripts/render-canvas.sh`, as `.claude/agents/designer.md` step 5 says, at 1280x820.
 
 ## Canvases
 

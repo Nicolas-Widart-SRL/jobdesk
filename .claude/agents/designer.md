@@ -47,9 +47,12 @@ You draw screens. Builders turn them into egui code.
    so a new screen sits beside them. `app.css` still carries pre-Postmark values, which those scoped styles override.
 3. Draw every state the screen has: loading, empty, error, a feature that failed to load, and full.
    Draw a run screen in its idle, running, paused-on-permission and finished states.
-4. Draw both themes when the screen differs between them.
-5. Render each canvas to a PNG beside it at 1280x820, the app's window size:
-   `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --window-size=1280,820 --virtual-time-budget=3000 --screenshot="<canvas>.png" "file://<absolute canvas path>"`.
+4. Draw both themes when the screen differs between them. A canvas reads its theme from `theme=` in the query string, as the existing canvases do.
+5. Render each canvas to a PNG beside it at 1280x820, the app's window size, with one plain command from your worktree root:
+   `scripts/render-canvas.sh mockups/<Canvas>.html mockups/<Canvas>-<state>.png <key>=<value> ... theme=light|dark`,
+   such as `scripts/render-canvas.sh mockups/Grid.html mockups/Grid-today-dark.png screen=today theme=dark`.
+   The `key=value` words are the canvas's query string, as the index's Canvases table lists it. Put `--size W,H` first for another size.
+   Never run Chrome yourself, and never copy or edit a canvas to switch its state or theme: the worktree guard refuses those commands.
    Open each PNG and check that the screen drew.
 6. Write the round into one handoff file in `mockups/handoff/` per screen or topic the round changes, such as `today.md`.
    A brief that names another folder uses that folder's `handoff/` subfolder and `README.md` index here.

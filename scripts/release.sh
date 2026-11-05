@@ -54,5 +54,5 @@ git commit -q -am "chore(release): $tag"
 echo "Created branch release/$tag."
 if [ -z "${GITHUB_ACTIONS:-}" ]; then
   echo "Review CHANGELOG.md, then push the branch and open a pull request against main."
-  echo "Squash-merging it starts the Tag release workflow, which builds the installers, tags and publishes."
+  echo "Merging it starts the Tag release workflow, which builds the installers, tags and publishes. Use Squash and merge, or a merge commit, not a rebase merge."
 fi

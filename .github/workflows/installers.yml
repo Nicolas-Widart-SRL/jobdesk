@@ -10,7 +10,9 @@
 # each by name, and the environment's value reaches only that job. A branch, a fork and a manual run from the Actions
 # tab get no secret: a manual run has no `sign` input, so it runs package-macos, ad-hoc signed and not notarized. A
 # release with a secret missing fails, and never ships ad-hoc signed.
-# The secrets reach only the step that runs cargo-packager. The build runs in a step before it, with no secrets.
+# The secrets reach only the step that runs cargo-packager, and only in the main-only `release` environment. The job
+# runs the reviewed merge commit with `--locked`, a pinned cargo-packager and its actions pinned to commits. It does
+# not isolate the secrets from the dependencies of the app: a build script of a dependency runs on the same machine.
 # `dmg` also holds the app as a .tar.gz, the file a copy of Jobdesk downloads to update itself. It is packed from the
 # signed, notarized app, and the workflow checks the unpacked copy and the app on the DMG again. On Windows that file
 # is the setup. This workflow never sees the update key, and nothing it builds is signed for updates: only the sign
@@ -205,16 +207,22 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      # Pinned to commits, because this job holds the Apple secrets.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo install cargo-packager --locked --version "$CARGO_PACKAGER_VERSION"
 
-      # The build runs first, with no secrets, so no build script or macro of a dependency sees them. The step that has
-      # the secrets replaces the before-packaging-command of cargo-packager, which would build again, with `true`.
-      - name: Build the app without the Apple secrets
+      # The app is built before the step that holds the secrets, and that step replaces the before-packaging-command of
+      # cargo-packager, which would build again, with `true`. The two steps share one machine, so this is not a wall
+      # between the build scripts of the dependencies and the secrets. What holds is `--locked`, the pinned cargo-packager,
+      # the pinned actions, and that the secrets exist only in a run on main, from the reviewed merge commit.
+      - name: Build the app
         run: cargo build --release --locked
 
       # cargo-packager 0.11.8 does what this step relies on:
@@ -268,7 +276,11 @@ jobs:
           fi
           mv "$RUNNER_TEMP/Cargo.toml.signed" Cargo.toml
           keys=$(mktemp -d "$RUNNER_TEMP/apple-key.XXXXXX")
-          trap 'rm -rf "$keys"' EXIT
+          # A step that times out gets SIGTERM, which skips an EXIT trap in some shells, so trap it too.
+          cleanup() { rm -rf "$keys"; }
+          trap cleanup EXIT
+          trap 'cleanup; exit 143' TERM
+          trap 'cleanup; exit 130' INT
           key="$keys/AuthKey_$APPLE_API_KEY.p8"
           (umask 077; printf '%s' "$APPLE_API_KEY_P8" > "$key")
           export APPLE_API_KEY_PATH="$key"
@@ -303,7 +315,7 @@ jobs:
           tar -xzf "dist/$UPDATE_NAME" -C "$unpacked"
           scripts/verify-macos-app.sh "$unpacked/Jobdesk.app"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dmg
           path: dist/*

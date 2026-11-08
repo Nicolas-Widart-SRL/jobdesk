@@ -273,11 +273,14 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Bring your own Anthropic API key, stored only in your system keychain. <a href="#key">How</a></span></p>
         </div>
         <div class="ctas">
-          <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
-          <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
-          <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a>
+          <div class="dl">
+            <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
+            <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
+          </div>
+          <p class="fine">Both buttons open the latest release on GitHub. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a></p>
+          <p class="fine">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI with its own sign-in or your Anthropic API key, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
         </div>
-        
+
     </div>
     <figure class="wrap stage deepzone">
       <div class="window">
@@ -427,15 +430,16 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <h3>macOS</h3>
         <span class="file">Jobdesk-vX.Y.Z-macos-arm64.dmg</span>
         <p>For Apple silicon. Open it and drag Jobdesk to Applications. Signed with a Developer ID and notarized by Apple.</p>
-        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
       </div>
       <div class="plat">
         <h3>Windows</h3>
         <span class="file">Jobdesk-vX.Y.Z-windows-x64-setup.exe</span>
         <p>Run the installer. It is not signed yet, so SmartScreen warns: click More info, then Run anyway.</p>
-        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
       </div>
     </div>
+    <p class="need">Both buttons open the latest release on GitHub.</p>
     <p class="need">You need the <b>Claude Code</b> CLI, an <b>Anthropic API key</b> or Claude Code’s sign-in, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout.</p>
     <ul class="more">
       <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></li>

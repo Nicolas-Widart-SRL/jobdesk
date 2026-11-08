@@ -31,7 +31,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 
 You need:
 
-- the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed and signed in;
+- the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed and running on an Anthropic Console API key you save in Settings › Providers or on its own sign-in;
 - an [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) checkout.
 
 Download the installer for your system from the [latest release](https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest):

@@ -102,15 +102,10 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
 /* Hero: the words over sheet, then the window across the edge of the deep field. */
 .hero { position: relative; padding-top: 72px; }
-.hero::after { content: ""; position: absolute; inset: 610px 0 0 0; z-index: 0;
-  background-color: var(--deep);
-  background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
-  background-size: 20px 20px; background-position: -1px -1px; }
 .hero > * { position: relative; z-index: 1; }
-.intro { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px 56px; align-items: end; }
+.intro { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px 56px; align-items: start; }
 .intro h1 { grid-column: 1 / -1; }
 .intro .lede { max-width: 36em; }
-.intro .ctas { margin-top: 0; justify-content: flex-end; align-self: start; padding-top: 4px; }
 .hero h1 { font: 700 clamp(38px, 5.4vw, 78px)/1.02 var(--sans); letter-spacing: -0.035em; }
 .hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); }
 .hero .lede b { color: var(--text); font-weight: 600; }
@@ -118,11 +113,23 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .keyline { margin-top: 18px; display: flex; align-items: center; gap: 10px; font-size: 15.5px; color: var(--muted); }
 .keyline svg { flex: none; width: 18px; height: 18px; }
 .keyline a { color: var(--text); font-weight: 600; text-underline-offset: 3px; }
-.ctas { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; align-items: center; }
-.ctas .link { margin-left: 8px; font-size: 15.5px; }
+/* The two downloads stay one group: stacked to the column's width beside the line, side by side under it, stacked again on a phone.
+   Under them, where they lead and what Jobdesk needs. */
+.ctas { display: grid; gap: 14px; }
+.dl { display: grid; gap: 10px; }
+.fine { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+.fine a { color: var(--text); }
+.fine .link { white-space: nowrap; }
 .stage { position: relative; margin-top: 56px; padding-bottom: 96px; }
+/* The deep field starts 168px down the window, wherever the words above leave it, and runs the full width of the page. */
+.stage::before { content: ""; position: absolute; z-index: -1; top: 168px; bottom: 0; left: 50%; width: 100vw; margin-left: -50vw;
+  background-color: var(--deep);
+  background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px; }
 .window { position: relative; border-radius: 8px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--deep-line); overflow: hidden; }
-.float { position: absolute; right: -44px; top: 34%; width: 34%; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
+/* The launcher hangs 44px past the window where the margin has room. Narrower, it moves in just far enough that it and its
+   shadow stay inside the page, beside a 17px scrollbar too. */
+.float { position: absolute; right: max(-44px, calc((100% - 100vw) / 2 + 24px)); top: 34%; width: 34%; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
 .stage figcaption { margin-top: 26px; color: var(--deep-muted); font-size: 14.5px; }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -176,7 +183,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
 /* Trust: a spec sheet. */
 .spec { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 56px; margin-top: 56px; }
-.spec div { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; padding: 20px 0; border-top: 1px solid var(--line); }
+.spec div { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; align-content: start; padding: 20px 0; border-top: 1px solid var(--line); }
 .spec dt { font-weight: 650; }
 .spec dd { color: var(--muted); }
 .pull { margin-top: 56px; padding: 30px 32px; border-radius: 4px; background: var(--panel); display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
@@ -194,15 +201,16 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .byok .shot { border-radius: 6px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--raised); overflow: hidden; }
 .byok figcaption { margin-top: 18px; color: var(--muted); font-size: 14.5px; }
 
-/* Download. */
+/* Download: each panel keeps its button on its last line, so the two buttons line up. */
 .get { padding: 128px 0 112px; }
 .plats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 48px; }
-.plat { display: grid; gap: 12px; align-content: start; padding: 30px 30px 28px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.plat { display: grid; grid-template-rows: auto auto 1fr auto; gap: 12px; padding: 30px 30px 28px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
 .plat h3 { font: 700 26px/1.1 var(--sans); letter-spacing: -0.02em; }
 .plat .file { font: 700 14.5px/1.4 var(--typed); overflow-wrap: anywhere; }
 .plat p { color: var(--muted); font-size: 16px; }
 .plat .btn { justify-self: start; margin-top: 6px; }
 .need { margin-top: 28px; color: var(--muted); }
+.need + .need { margin-top: 6px; }
 .need b { color: var(--text); font-weight: 600; }
 .more { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 14px; list-style: none; }
 
@@ -212,20 +220,33 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .foot .brand img { width: 24px; height: 24px; }
 .foot a { color: var(--text); }
 
+/* Two columns of the spec sheet leave each fact little room under 1200, so each fact sits under its name there. */
+@media (max-width: 1200px) {
+  .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
 @media (max-width: 1000px) {
   .top nav { display: none; }
   .intro, .sec-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .intro .ctas { justify-content: flex-start; }
+  .dl { display: flex; flex-wrap: wrap; }
   .cells { grid-template-columns: minmax(0, 1fr); }
   .c7, .c5, .c12, .stack { grid-column: auto; }
   .cell.full { grid-template-columns: minmax(0, 1fr); }
   .cell.full .crop { margin: 0 0 0 28px; }
-  .steps { grid-template-columns: minmax(0, 1fr); gap: 48px; }
-  .steps::before { left: 22px; right: auto; top: 22px; bottom: 22px; width: 2px; height: auto; transform-origin: 50% 0; }
-  .js .steps.wait::before { transform: scaleY(0); }
-  .steps.drawn::before { transform: scaleY(1); }
-  .step { padding-left: 0; }
+  /* The checks are a narrow crop: at full width they would show larger than the app does, so they keep to the lower right. */
+  .c5 .crop { align-self: flex-end; width: min(100% - 28px, 440px); margin-left: 0; }
+  /* One column: each number keeps a column of its own, and a short line runs down that column to the next number, clear of the text. */
+  .steps { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .steps::before { display: none; }
+  .step { display: grid; grid-template-columns: 46px minmax(0, 1fr); column-gap: 22px; align-items: start; }
+  .step .n { grid-row: 1 / span 3; }
+  .step > :not(.n) { grid-column: 2; }
+  .step h3 { margin-top: 9px; }
+  .step:not(:last-child)::after { content: ""; position: absolute; left: 22px; top: 58px; bottom: -28px; width: 2px; background: var(--deep-line); transform-origin: 50% 0; }
+  .js .steps.wait .step::after { transform: scaleY(0); }
+  .steps.drawn .step::after { transition: transform .55s cubic-bezier(.4, 0, .2, 1); transform: scaleY(1); }
+  .steps.drawn .step:nth-child(2)::after { transition-delay: .55s; }
   .spec { grid-template-columns: minmax(0, 1fr); }
+  .spec div { grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; }
   .byok { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .plats { grid-template-columns: minmax(0, 1fr); }
 }
@@ -233,10 +254,9 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   body { font-size: 16px; }
   .top .wrap { height: 60px; }
   .hero { padding-top: 40px; }
-  .hero::after { inset: auto 0 0 0; height: 300px; }
-  .ctas .btn { flex: 1 1 100%; }
+  .stage::before { top: auto; height: 300px; }
+  .dl { display: grid; }
   .hero h1 br { display: none; }
-  .ctas .link { margin: 4px 0 0; }
   .stage { margin-top: 40px; padding-bottom: 56px; }
   .float { position: relative; right: auto; top: auto; width: 78%; margin: -28% 0 0 auto; }
   .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
@@ -244,10 +264,12 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   .how { margin-top: 88px; padding: 80px 0; }
   .cell .txt, .stack .cell .txt { padding: 22px 20px 18px; }
   .cell .crop, .cell.full .crop { margin-left: 20px; }
+  .plat { padding: 24px 20px 22px; }
+  .plat .btn { justify-self: stretch; padding-block: 12px; white-space: normal; text-align: center; line-height: 1.25; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .js .steps.wait::before { transform: none; }
+  .js .steps.wait::before, .js .steps.wait .step::after { transform: none; }
 }
 </style>
 </head>
@@ -279,9 +301,12 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Bring your own Anthropic API key, stored only in your system keychain. <a href="#key">How</a></span></p>
         </div>
         <div class="ctas">
-          <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
-          <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
-          <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a>
+          <div class="dl">
+            <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
+            <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
+          </div>
+          <p class="fine">Both buttons open the latest release on GitHub. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a></p>
+          <p class="fine">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI with its own sign-in or your Anthropic API key, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
         </div>
 
     </div>
@@ -433,15 +458,16 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <h3>macOS</h3>
         <span class="file">Jobdesk-vX.Y.Z-macos-arm64.dmg</span>
         <p>For Apple silicon. Open it and drag Jobdesk to Applications. Signed with a Developer ID and notarized by Apple.</p>
-        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
       </div>
       <div class="plat">
         <h3>Windows</h3>
         <span class="file">Jobdesk-vX.Y.Z-windows-x64-setup.exe</span>
         <p>Run the installer. It is not signed yet, so SmartScreen warns: click More info, then Run anyway.</p>
-        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
       </div>
     </div>
+    <p class="need">Both buttons open the latest release on GitHub.</p>
     <p class="need">You need the <b>Claude Code</b> CLI, an <b>Anthropic API key</b> or Claude Code’s sign-in, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout.</p>
     <ul class="more">
       <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></li>

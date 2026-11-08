@@ -10,7 +10,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
   <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-12263f?style=for-the-badge" alt="Download for macOS"></a>
   <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest"><img src="https://img.shields.io/badge/Download_for_Windows-12263f?style=for-the-badge" alt="Download for Windows"></a>
   <br>
-  <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
+  <a href="https://nicolas-widart-srl.github.io/jobdesk/">Website</a> · <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
 </p>
 
 ## What it does

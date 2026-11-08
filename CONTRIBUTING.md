@@ -187,6 +187,15 @@ ignore = ["RUSTSEC-…"]  # why it does not apply
 
 TruffleHog scans the whole git history for secrets in CI, and fails on a verified, unverified or unknown (check failed) one. To run it locally: `trufflehog git file://. --results=verified,unknown,unverified --fail --no-update`.
 
+## Landing page
+
+`site/` holds the landing page at [nicolas-widart-srl.github.io/jobdesk](https://nicolas-widart-srl.github.io/jobdesk/). It has no build step. The Pages workflow (`.github/workflows/pages.yml`) publishes the folder as is on each push to `main` that touches `site/`, and you can also run it from the Actions tab.
+
+- The page repeats facts from `README.md`, `docs/guide.md` and `docs/architecture/trust.md`. When you change a fact the page states, change `site/index.html` too.
+- Its images are crops of `tests/snapshots/`. When a screen it shows changes, cut its crops again.
+- The Windows "not signed yet" lines, in the download panel and the Signing row, change once the installer is signed.
+- The design source is `mockups/landing/Landing.html`, with its notes in `mockups/handoff/landing.md`.
+
 ## OpenSpec
 
 OpenSpec changes and specs live in `openspec/`. [AGENTS.md](AGENTS.md#team) says how they run through the team. OpenSpec 1.16.0 needs Node.js 22.12.0 or newer (its npm `engines` is `node >=22.12.0`). Install the CLI:

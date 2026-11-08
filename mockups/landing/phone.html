@@ -15,15 +15,14 @@
 <body>
 <script>
   var q = new URLSearchParams(location.search);
-  var page = q.get("page") === "B" ? "B" : "A";
   var h = Math.max(200, Math.min(20000, parseInt(q.get("h") || "844", 10) || 844));
   var pass = new URLSearchParams();
   ["theme", "motion"].forEach(function (k) { if (q.get(k)) pass.set(k, q.get(k)); });
   var frame = document.createElement("iframe");
-  frame.title = "Option " + page + " at 390 wide";
+  frame.title = "The landing page at 390 wide";
   frame.style.height = h + "px";
   frame.style.marginTop = Math.max(0, Math.min(400, parseInt(q.get("top") || "0", 10) || 0)) + "px";
-  frame.src = "./" + page + ".html?" + pass.toString();
+  frame.src = "./Landing.html?" + pass.toString();
   document.body.appendChild(frame);
 </script>
 </body>

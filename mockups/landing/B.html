@@ -92,7 +92,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
 /* Hero: the words over sheet, then the window across the edge of the deep field. */
 .hero { position: relative; padding-top: 72px; }
-.hero::after { content: ""; position: absolute; inset: 560px 0 0 0; z-index: 0;
+.hero::after { content: ""; position: absolute; inset: 610px 0 0 0; z-index: 0;
   background-color: var(--deep);
   background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
   background-size: 20px 20px; background-position: -1px -1px; }
@@ -100,10 +100,14 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .intro { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px 56px; align-items: end; }
 .intro h1 { grid-column: 1 / -1; }
 .intro .lede { max-width: 36em; }
-.intro .ctas { margin-top: 0; justify-content: flex-end; }
+.intro .ctas { margin-top: 0; justify-content: flex-end; align-self: start; padding-top: 4px; }
 .hero h1 { font: 700 clamp(38px, 5.4vw, 78px)/1.02 var(--sans); letter-spacing: -0.035em; }
 .hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); }
 .hero .lede b { color: var(--text); font-weight: 600; }
+.credit { color: var(--text); font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.keyline { margin-top: 18px; display: flex; align-items: center; gap: 10px; font-size: 15.5px; color: var(--muted); }
+.keyline svg { flex: none; width: 18px; height: 18px; }
+.keyline a { color: var(--text); font-weight: 600; text-underline-offset: 3px; }
 .ctas { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; align-items: center; }
 .ctas .link { margin-left: 8px; font-size: 15.5px; }
 .stage { position: relative; margin-top: 56px; padding-bottom: 96px; }
@@ -171,6 +175,17 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .pull p { font: 700 clamp(22px, 2.2vw, 28px)/1.25 var(--sans); letter-spacing: -0.015em; flex: 1 1 420px; }
 .pull span { color: var(--muted); flex: 1 1 320px; }
 
+/* Your own key: what happens to the key, beside the Providers screen. */
+.byok { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: start; margin-top: 56px; }
+.byok ol { list-style: none; }
+.byok li { padding: 18px 0; border-top: 1px solid var(--line); }
+.byok li:first-child { border-top: 0; padding-top: 0; }
+.byok li b { display: block; font-weight: 650; font-size: 17.5px; }
+.byok li span { display: block; margin-top: 3px; color: var(--muted); }
+.byok li code { font-size: 15px; color: var(--text); }
+.byok .shot { border-radius: 6px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--raised); overflow: hidden; }
+.byok figcaption { margin-top: 18px; color: var(--muted); font-size: 14.5px; }
+
 /* Download. */
 .get { padding: 128px 0 112px; }
 .plats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 48px; }
@@ -181,6 +196,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .plat .btn { justify-self: start; margin-top: 6px; }
 .need { margin-top: 28px; color: var(--muted); }
 .need b { color: var(--text); font-weight: 600; }
+.more { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 14px; list-style: none; }
 
 .foot { border-top: 1px solid var(--line); padding: 28px 0 40px; font-size: 14.5px; color: var(--muted); }
 .foot .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; }
@@ -202,6 +218,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   .steps.drawn::before { transform: scaleY(1); }
   .step { padding-left: 0; }
   .spec { grid-template-columns: minmax(0, 1fr); }
+  .byok { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .plats { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
@@ -238,7 +255,9 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <nav aria-label="Main">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
+      <a href="#key">Your API key</a>
       <a href="#trust">Trust</a>
+      <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">Guide</a>
       <a href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source</a>
     </nav>
     <a class="btn pri" href="#download">Download</a>
@@ -249,12 +268,16 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="hero" id="top" aria-labelledby="hero-title">
     <div class="wrap intro">
       <h1 id="hero-title">The desktop app for your<br> ai‑job‑search commands.</h1>
-        <p class="lede">Jobdesk deals your decisions one card at a time, keeps every job and application in view, and runs any slash command through <b>your own Claude Code CLI</b>. Nothing runs until you start it.</p>
+        <div>
+        <p class="lede">Jobdesk puts the <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> slash commands on a desk. It deals your decisions one card at a time and runs any command through your own Claude Code. Nothing runs until you start it.</p>
+        <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Bring your own Anthropic API key, stored only in your system keychain. <a href="#key">How</a></span></p>
+        </div>
         <div class="ctas">
           <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
           <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
           <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a>
         </div>
+        
     </div>
     <figure class="wrap stage deepzone">
       <div class="window">
@@ -275,8 +298,8 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
   <section class="wrap sec" id="features" aria-labelledby="features-title">
     <div class="sec-head">
-      <h2 id="features-title">Every screen reads your files.</h2>
-      <p>Today, Jobs, Applications, Insights and Profile update live as commands change your checkout. When a file fails to load, Jobdesk names it and says what still works.</p>
+      <h2 id="features-title">A desk for ai‑job‑search.</h2>
+      <p><a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> is a set of Claude Code slash commands that find postings, score them and draft your applications. Jobdesk is a desktop GUI over them: each screen shows what the commands keep in your checkout, and follows along live as they run.</p>
     </div>
     <div class="cells">
       <article class="cell c7">
@@ -324,8 +347,8 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="how deepzone" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <div class="sec-head">
-        <h2 id="how-title">Your tools, your files. Jobdesk is the desk.</h2>
-        <p>Jobdesk sits on top of what you already have: an ai‑job‑search checkout and the Claude Code CLI, installed and signed in.</p>
+        <h2 id="how-title">Your commands, your Claude Code, your key.</h2>
+        <p>Jobdesk sits on top of what you already have: an ai‑job‑search checkout, the Claude Code CLI, and your own Anthropic API key or Claude Code’s sign-in.</p>
       </div>
       <ol class="steps wait" id="steps">
         <li class="step">
@@ -338,7 +361,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <li class="step">
           <span class="n" aria-hidden="true">2</span>
           <h3>Your Claude Code runs it</h3>
-          <p>Through your local claude CLI, in your job search folder, with its own sign-in. One run works at a time.</p>
+          <p>Through your local claude CLI, in your job search folder, on your own API key or Claude Code’s sign-in. One run works at a time.</p>
           <div class="slab"><span class="lab">Claude will run</span><code>/apply https://kestrel.example/jobs/2</code></div>
         </li>
         <li class="step">
@@ -351,6 +374,31 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     </div>
   </section>
 
+  <section class="wrap sec" id="key" aria-labelledby="key-title">
+    <div class="sec-head">
+      <h2 id="key-title">Bring your own Anthropic API key.</h2>
+      <p>Paste a key from your Anthropic Console in Settings › Providers. Tasks then run on that key and bill its Console account. Jobdesk keeps it on your computer and hands it only to Claude Code.</p>
+    </div>
+    <div class="byok">
+      <ol>
+        <li><b>Stored only in your keychain</b><span>In the macOS Keychain, or the Credential Manager on Windows. Never in a file. Jobdesk reads it from there and holds it in memory until you quit or remove it.</span></li>
+        <li><b>Passed only to Claude Code</b><span>Each task gets the key in its <code>claude</code> process’s environment. Never on a command line or in a log, and never on screen in full.</span></li>
+        <li><b>Shown only in part</b><span>A saved key reads <code>sk-ant-</code>, dots and its last four characters. Only the key you are typing shows in full, while you press Show.</span></li>
+        <li><b>Tested before it is used</b><span>Test connection asks one fixed question, with no tools, in an empty temporary folder, capped at $0.01. Tasks switch to the key only once the test passes.</span></li>
+        <li><b>Yours to remove</b><span>Remove deletes it from the keychain and puts tasks back on Claude Code’s sign-in.</span></li>
+      </ol>
+      <figure>
+        <div class="shot">
+          <div class="crop" style="--x: 986; --y: 288; --w: 848; --h: 436">
+            <img class="th-l" src="../../tests/snapshots/settings_key_saved_light.png" alt="Settings › Providers with an API key in use: the key shows only as sk-ant-, dots and its last four characters, kept in the macOS Keychain, with its last test passed." loading="lazy">
+            <img class="th-d" src="../../tests/snapshots/settings_key_saved_dark.png" alt="Settings › Providers in the dark theme, with an API key in use and shown only in part." loading="lazy">
+          </div>
+        </div>
+        <figcaption>Settings › Providers, with a fictional key in use.</figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section class="wrap sec" id="trust" aria-labelledby="trust-title">
     <div class="sec-head">
       <h2 id="trust-title">You stay in charge of every run.</h2>
@@ -359,7 +407,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <dl class="spec">
       <div><dt>Starting a run</dt><dd>Nothing runs until you start it. Card actions only open the launcher.</dd></div>
       <div><dt>One at a time</dt><dd>Only one run works at a time, because two commands could overwrite each other's files.</dd></div>
-      <div><dt>Sign-in</dt><dd>Tasks use Claude Code's own sign-in. Jobdesk keeps no password. An optional Anthropic Console API key stays in the system keychain.</dd></div>
+      <div><dt>Sign-in</dt><dd>Tasks use your API key or Claude Code’s own sign-in. Jobdesk keeps no password and offers no login of its own.</dd></div>
       <div><dt>Tool permissions</dt><dd>Allowed by default and listed in the activity, so you see each one. Settings › Permissions turns prompts on.</dd></div>
       <div><dt>What it writes</dt><dd>Slash commands write your checkout. Jobdesk itself writes only the Profile block you save.</dd></div>
       <div><dt>Your data</dt><dd>Run logs and your decisions stay in the app's data folder, readable only by your user.</dd></div>
@@ -388,7 +436,12 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
       </div>
     </div>
-    <p class="need">You need the <b>Claude Code</b> CLI, installed and signed in, and an <b>ai‑job‑search</b> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></p>
+    <p class="need">You need the <b>Claude Code</b> CLI, an <b>Anthropic API key</b> or Claude Code’s sign-in, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout.</p>
+    <ul class="more">
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></li>
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">User guide</a></li>
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md">Changelog</a></li>
+    </ul>
   </section>
 </main>
 
@@ -397,8 +450,10 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <span class="brand"><img src="../../assets/brand/jobdesk-icon-small.svg" alt=""> Jobdesk</span>
     <a href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source on GitHub</a>
     <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">User guide</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md">Changelog</a>
     <span>MIT License</span>
-    <span>Built in Rust. Not made or endorsed by Anthropic.</span>
+    <span>A desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a>, built in Rust. Not made or endorsed by Anthropic.</span>
   </div>
 </footer>
 </div>

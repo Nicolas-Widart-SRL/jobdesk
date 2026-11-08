@@ -61,6 +61,8 @@ All facts come from `README.md` and `docs/guide.md`, and the key's from `trust.m
 - **Links**: downloads go to `https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest`, source to `https://github.com/Nicolas-Widart-SRL/jobdesk`, the guide to `.../blob/main/docs/guide.md` and the changelog to `.../blob/main/CHANGELOG.md`.
 - **Installers** keep `vX.Y.Z`, as the README does. macOS says Apple silicon, signed with a Developer ID and notarized by Apple. Windows says the installer is not signed yet, and to click More info, then Run anyway.
 - "ai‑job‑search" uses non-breaking hyphens in running text, so it never breaks across lines.
+- **Tool permissions** row: "Allowed without asking by default, and listed in the activity once they run, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on." It states the risk as `README.md`'s Privacy and trust does, and never says you see each one before it runs.
+- The command chips in How it works sit under "Some of the commands", because ai‑job‑search has more than the seven shown.
 - "Your own Claude Code" wording only, no Anthropic or Claude logo. The footer says "Not made or endorsed by Anthropic.", as the README does.
 
 ## Rules
@@ -74,7 +76,7 @@ All facts come from `README.md` and `docs/guide.md`, and the key's from `trust.m
 - **Motion**: the window and launcher on load, and the step line once. `prefers-reduced-motion` stops both, and the page shows each part at rest.
 - **Accessibility**: one `h1`, `h2` per section, `h3` inside, in order. A skip link. Every snapshot has alt text that says what it shows.
 - **Phone**: at 390 wide every grid becomes one column, the menu keeps only the brand and Download, buttons go full width, and the launcher overlaps the window's lower right. No horizontal scroll at 390 or 1440 (measured: the page's scroll width equals the window's).
-- **Hard rules, stated as they are**: card actions never start a run, Y opens the launcher and the user presses Run there, one run at a time, Jobdesk offers no login of its own, and tool permissions are allowed by default and listed, with prompts in Settings › Permissions.
+- **Hard rules, stated as they are**: card actions never start a run, Y opens the launcher and the user presses Run there, one run at a time, Jobdesk offers no login of its own, and tool permissions are allowed without asking by default and listed once they run, with prompts in Settings › Permissions.
 
 ## Decided
 

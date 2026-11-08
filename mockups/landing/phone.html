@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone frame</title>
+<style>
+  /* Headless Chrome will not make a window narrower than 500px, so a 390px render shows the page in a 390px frame.
+     Render at --size 500,H, then crop the PNG to its middle 390 (sips -c H 390 crops around the centre). Not part of the site. */
+  html, body { margin: 0; background: #ffffff; }
+  iframe { display: block; border: 0; width: 390px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<script>
+  var q = new URLSearchParams(location.search);
+  var page = q.get("page") === "B" ? "B" : "A";
+  var h = Math.max(200, Math.min(20000, parseInt(q.get("h") || "844", 10) || 844));
+  var pass = new URLSearchParams();
+  ["theme", "motion"].forEach(function (k) { if (q.get(k)) pass.set(k, q.get(k)); });
+  var frame = document.createElement("iframe");
+  frame.title = "Option " + page + " at 390 wide";
+  frame.style.height = h + "px";
+  frame.src = "./" + page + ".html?" + pass.toString();
+  document.body.appendChild(frame);
+</script>
+</body>
+</html>

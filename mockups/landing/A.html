@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobdesk</title>
+<meta name="description" content="Jobdesk is a native macOS and Windows app over the ai-job-search slash commands. Your job search, one decision at a time. Nothing runs until you start it.">
+<link rel="icon" href="../../assets/brand/jobdesk-icon-small.svg" type="image/svg+xml">
+<script>
+  /* ?theme=dark or ?theme=light overrides the system theme. ?motion=off shows every moving part at rest, for renders. "js" turns the deck demo on; without it the page reads as plain text. */
+  (function () {
+    var root = document.documentElement;
+    var theme = new URLSearchParams(location.search).get("theme");
+    if (theme === "dark" || theme === "light") root.setAttribute("data-theme", theme);
+    root.classList.add("js");
+    if (new URLSearchParams(location.search).get("motion") === "off") root.classList.add("still");
+  })();
+</script>
+<style>
+/* Option A, "The Desk". Landing page canvas for a static GitHub Pages site.
+   Colours are the tokens in src/ui_kit/palette.rs, named as there. Type is the app's own bundled files. */
+@font-face { font-family: "Zilla Slab"; font-weight: 600; font-display: swap; src: url("../../assets/fonts/ZillaSlab-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Schibsted Grotesk"; font-weight: 400 900; font-display: swap; src: url("../../assets/fonts/SchibstedGrotesk-Variable.ttf") format("truetype"); }
+@font-face { font-family: "Courier Prime"; font-weight: 700; font-display: swap; src: url("../../assets/fonts/CourierPrime-Bold.ttf") format("truetype"); }
+
+:root {
+  /* LIGHT */
+  --sheet: #eff3f8; --panel: #dfe7f0; --raised: #d0dce9; --line: #aebfd1; --field: #fafcfe; --off: #c2d0df;
+  --text: #12263f; --muted: #35495f; --primary: #12263f; --on-primary: #eff3f8; --drafted: #435863; --active: #1657a8;
+  --turn: #b0246a; --on-turn: #ffffff; --grid: #d4dee9; --mark: #f4c2db; --card: #ffffff;
+  --slab: "Zilla Slab", Rockwell, Georgia, serif; --sans: "Schibsted Grotesk", system-ui, sans-serif; --typed: "Courier Prime", "Courier New", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b; --off: #33506f;
+    --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --drafted: #afc2cb; --active: #8cc2f7;
+    --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --mark: #5c3057; --card: #1a2f49;
+    color-scheme: dark;
+  }
+  :root:not([data-theme="light"]) .th-l { display: none; }
+  :root:not([data-theme="light"]) .th-d { display: block; }
+}
+:root[data-theme="dark"] {
+  --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b; --off: #33506f;
+  --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --drafted: #afc2cb; --active: #8cc2f7;
+  --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --mark: #5c3057; --card: #1a2f49;
+  color-scheme: dark;
+}
+:root[data-theme="dark"] .th-l { display: none; }
+:root[data-theme="dark"] .th-d { display: block; }
+.th-d { display: none; }
+
+/* The desk: grid lines every 20px over sheet, painted once and held still while the page scrolls, as in the app. */
+html { background: var(--sheet); }
+body {
+  margin: 0; color: var(--text); font: 400 17px/1.55 var(--sans);
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px; background-attachment: fixed;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; }
+h1, h2, h3, p, dl, dd, figure, ul { margin: 0; padding: 0; }
+img { display: block; max-width: 100%; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--active); outline-offset: 1px; border-radius: 3px; }
+.page { overflow-x: clip; }
+.wrap { width: min(1200px, 100% - 32px); margin-inline: auto; }
+.skip { position: absolute; left: 16px; top: -60px; padding: 8px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 3px; z-index: 10; }
+.skip:focus { top: 12px; }
+
+/* Buttons: primary is solid primary, plain is paper. Same shapes as the app's, scaled up for a page. */
+.btn { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border: 1px solid var(--line); border-radius: 3px;
+  background: var(--card); color: var(--text); font: 600 17px/1 var(--sans); text-decoration: none; white-space: nowrap; }
+.btn.pri { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.btn:hover { background: var(--raised); }
+.btn.pri:hover { background: var(--primary); box-shadow: 4px 4px 0 var(--line); }
+.btn small { font-weight: 500; font-size: 14px; opacity: .85; }
+
+/* Menu: one row on the grid. */
+.top { display: flex; align-items: center; gap: 24px; height: 76px; }
+.brand { display: inline-flex; align-items: center; gap: 12px; font: 600 26px/1 var(--slab); text-decoration: none; }
+.brand img { width: 36px; height: 36px; }
+.top nav { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.top nav a.plain { padding: 10px 12px; font-weight: 500; color: var(--muted); text-decoration: none; background: var(--sheet); border-radius: 3px; }
+.top nav a.plain:hover { color: var(--text); background: var(--raised); }
+.top .btn { min-height: 40px; padding: 0 16px; font-size: 15px; }
+
+/* Hero: the headline, then the card dealt onto the desk. */
+.hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 28px; }
+.hero h1 { font: 600 clamp(44px, 6.6vw, 96px)/0.98 var(--slab); letter-spacing: -0.02em; }
+.hero .lede { margin-top: 22px; max-width: 36em; font-size: clamp(18px, 1.6vw, 22px); line-height: 1.45; color: var(--muted); }
+.hero .lede b { color: var(--text); font-weight: 600; }
+.ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 30px; }
+.hero .also { margin-top: 12px; font-size: 14px; color: var(--muted); }
+
+/* The desk pieces are drawn at the app's size and scaled as one piece, so they keep the app's proportions. */
+.desk { --s: 1.26; position: relative; width: calc(740px * var(--s)); height: calc(320px * var(--s)); margin-top: 30px; }
+.desk-in { position: absolute; left: 0; top: 0; width: 700px; height: 320px; transform: scale(var(--s)); transform-origin: 0 0; text-align: left; }
+
+/* Coming up, the slip tucked behind the card. */
+.slip { position: absolute; left: 486px; top: 34px; width: 252px; border-radius: 4px; background: var(--panel); transform: rotate(1.6deg); box-shadow: 4px 4px 0 var(--raised); }
+.slip .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.slip .sh span { margin-left: auto; font: 400 13px/1.3 var(--sans); color: var(--muted); }
+.slip ul { list-style: none; padding: 4px 14px 8px; }
+.slip li { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 34px; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.3; }
+.slip li:first-child { border-top: 0; }
+.slip li .d { font-size: 13px; color: var(--muted); }
+.slip li .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.now { display: inline-block; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; line-height: 20px; }
+
+/* The deal: the card with its tab and the stack edges of what comes next. */
+.deal { position: absolute; left: 0; top: 40px; width: 460px; transform: rotate(-1.2deg); transform-origin: 0 100%; }
+.tabrow { display: flex; align-items: flex-end; }
+.ktab { display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 14px; border-radius: 6px 6px 0 0; background: var(--card);
+  box-shadow: inset 1px 1px 0 var(--line), inset -1px 0 0 var(--line); font-size: 14px; font-weight: 600; color: var(--drafted); line-height: 1; }
+.ktab .when { font-weight: 500; color: var(--muted); }
+.pos { margin-left: auto; padding: 0 2px 6px; font-size: 13px; color: var(--muted); line-height: 1; }
+.card { border-radius: 0 4px 4px 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.cbody { display: flex; flex-direction: column; gap: 12px; padding: 18px 22px; line-height: 1.35; }
+.cbody .co { font-size: 14px; color: var(--muted); }
+.cbody .ttl { margin: 1px 0 2px; font: 600 28px/1.12 var(--slab); }
+.cbody .take { font-size: 15px; }
+.cfoot { display: flex; align-items: center; gap: 6px; padding: 12px 22px; border-top: 1px solid var(--line); line-height: 1.3; }
+.cbtn { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font: 500 14px/1 var(--sans); white-space: nowrap; }
+.cbtn.pri { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+kbd, .kb { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border: 1px solid currentColor; border-radius: 2px; font: 600 11.5px/1 var(--sans); }
+.cfoot .why { margin-left: auto; text-align: right; font-size: 12.5px; color: var(--muted); }
+.edges i { display: block; height: 5px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 3px 3px; background: var(--raised); }
+
+/* The day stamp: two rings and a tick for each thing in the day, filled as you decide. Opaque, as in the app. */
+.stamp { position: absolute; width: 100px; height: 100px; }
+.stamp .bg { fill: var(--sheet); }
+.stamp .ring { fill: none; stroke: var(--text); }
+.stamp .tk { stroke: var(--off); stroke-width: 4.5; transition: stroke .3s; }
+.stamp .tk.on { stroke: var(--text); }
+.stamp .sm { font: 400 11.9px var(--sans); fill: var(--muted); }
+.stamp .big { font: 600 24.8px var(--slab); fill: var(--text); }
+.hero .stamp { left: 400px; top: 2px; transform: rotate(-12deg); }
+
+/* One orchestrated moment: the card is dealt, then the stamp is struck. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero .deal { animation: deal .9s cubic-bezier(.2, .8, .25, 1) .15s both; }
+  .hero .slip { animation: tuck .9s cubic-bezier(.2, .8, .25, 1) both; }
+  .hero .stamp { animation: strike .42s cubic-bezier(.3, 1.4, .5, 1) .95s both; }
+}
+@keyframes deal { from { opacity: 0; transform: translate(140px, 90px) rotate(5deg); } to { opacity: 1; transform: rotate(-1.2deg); } }
+@keyframes tuck { from { opacity: 0; transform: translate(40px, 20px) rotate(4deg); } to { opacity: 1; transform: rotate(1.6deg); } }
+@keyframes strike { 0% { opacity: 0; transform: scale(1.7) rotate(-26deg); } 70% { opacity: 1; transform: scale(.97) rotate(-12deg); } 100% { opacity: 1; transform: scale(1) rotate(-12deg); } }
+
+/* Section heads: big slab type does the work, no labels above it. */
+section.band { padding: 140px 0 0; }
+.head { max-width: 900px; }
+.head h2 { font: 600 clamp(36px, 5vw, 68px)/1.02 var(--slab); letter-spacing: -0.015em; }
+.head p { margin-top: 20px; font-size: clamp(17px, 1.4vw, 20px); color: var(--muted); max-width: 36em; }
+.head p b { color: var(--text); font-weight: 600; }
+
+/* The deck: the four keys beside a working card. */
+.deck { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: start; margin-top: 64px; }
+.keys { display: grid; gap: 4px; }
+.key { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 18px; align-items: center; width: 100%; padding: 14px 16px; border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: inherit; font: inherit; text-align: left; }
+.js .key { cursor: pointer; }
+.js .key:hover { background: var(--panel); }
+.key .cap { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border: 1.5px solid var(--text); border-radius: 6px; background: var(--card);
+  box-shadow: 0 4px 0 var(--line); font: 600 26px/1 var(--slab); }
+.key.pressed .cap { transform: translateY(3px); box-shadow: 0 1px 0 var(--line); }
+.key b { display: block; font: 600 22px/1.2 var(--slab); }
+.key span.say { display: block; margin-top: 2px; font-size: 16px; color: var(--muted); line-height: 1.4; }
+.keys-note { margin-top: 18px; padding-left: 16px; font-size: 15px; color: var(--muted); }
+.nojs-only { display: block; }
+.js .nojs-only { display: none; }
+.js-only { display: none; }
+.js .js-only { display: block; }
+
+.table { position: relative; padding: 34px 0 0 0; zoom: 1.2; }
+.table .stamp { left: 470px; top: -6px; transform: rotate(-12deg); z-index: 3; }
+.table .tabrow { padding-right: 96px; }
+.table .deal { position: relative; left: auto; top: auto; width: 100%; max-width: 560px; transform: rotate(-0.8deg); }
+.table .deal.leave-n { transition: transform .32s ease-in, opacity .32s ease-in; transform: translate(-60px, 40px) rotate(-6deg); opacity: 0; }
+.table .deal.leave-l { transition: transform .32s ease-in, opacity .32s ease-in; transform: translate(80px, -10px) rotate(4deg); opacity: 0; }
+.table .deal.leave-y { transition: transform .32s ease-in, opacity .32s ease-in; transform: translate(0, -30px) rotate(-1deg); opacity: 0; }
+.table .deal.enter { animation: deal-in .34s cubic-bezier(.2, .8, .25, 1) both; }
+@keyframes deal-in { from { opacity: 0; transform: translateY(24px) rotate(1deg); } to { opacity: 1; transform: rotate(-0.8deg); } }
+.clear { display: none; max-width: 560px; padding: 40px 32px; border-radius: 4px; background: var(--panel); text-align: center; }
+.clear p { font: 600 28px/1.2 var(--slab); }
+.clear span { display: block; margin-top: 8px; color: var(--muted); }
+.table.done .deal { display: none; }
+.table.done .clear { display: block; }
+
+/* The launcher a Y opens: drawn as the app's launcher side, with Run inert. */
+.launch { display: none; max-width: 560px; margin-top: 18px; border-radius: 4px; background: var(--panel); box-shadow: 5px 5px 0 var(--line); }
+.launch.shown { display: block; }
+@media (prefers-reduced-motion: no-preference) { .launch.shown { animation: lift .3s ease-out both; } }
+@keyframes lift { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.launch .lh { padding: 12px 18px; border-bottom: 1px solid var(--line); font: 600 19px/1.2 var(--slab); }
+.launch .lb { display: grid; gap: 8px; padding: 14px 18px 16px; font-size: 14px; }
+.launch .lb .lab { color: var(--muted); }
+.launch code { display: block; padding: 9px 11px; border-radius: 3px; background: var(--field); font: 700 14px/1.3 var(--typed); overflow-wrap: anywhere; }
+.launch .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+.launch .row .cbtn { opacity: .5; }
+.launch .row span { color: var(--muted); font-size: 13.5px; }
+
+.log { max-width: 560px; margin-top: 18px; border-radius: 4px; background: var(--panel); }
+.log .lh { display: flex; align-items: baseline; padding: 10px 16px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.log .lh span { margin-left: auto; font: 400 13px var(--sans); color: var(--muted); }
+.log ol { list-style: none; margin: 0; padding: 4px 16px 10px; min-height: 40px; }
+.log li { padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.log li:first-child { border-top: 0; }
+.log li .who { font-weight: 600; }
+.log .empty { padding: 8px 0; font-size: 14px; color: var(--muted); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Screens: real snapshots of the app on fictional data, as paper on the desk with the app's solid offset shadow. */
+.screens { display: grid; gap: 120px; margin-top: 72px; }
+.screen { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 48px; align-items: center; }
+.screen:nth-child(even) { grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); }
+.screen:nth-child(even) figcaption { order: 2; }
+.screen h3 { font: 600 clamp(28px, 3vw, 40px)/1.1 var(--slab); }
+.screen p { margin-top: 14px; font-size: 17px; color: var(--muted); max-width: 30em; }
+.shot { position: relative; overflow: hidden; aspect-ratio: 1896 / 1206; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--raised); background: var(--sheet); }
+.shot img { width: 101.266%; max-width: none; margin: -0.633% 0 0 -0.633%; }
+
+/* The promise. */
+.promise { margin-top: 150px; padding: 120px 0 130px; background: var(--card); border-block: 1px solid var(--line); }
+.promise .wrap { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 64px; align-items: center; }
+.promise h2 { font: 600 clamp(44px, 5.8vw, 84px)/0.98 var(--slab); letter-spacing: -0.02em; }
+.facts { display: grid; gap: 22px; margin-top: 40px; max-width: 40em; }
+.facts dt { font-weight: 650; font-size: 18px; }
+.facts dd { margin-top: 2px; color: var(--muted); }
+.launcher-crop { border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--raised); overflow: hidden; background: var(--sheet); aspect-ratio: 640 / 530; position: relative; }
+.launcher-crop img { position: absolute; max-width: none; width: 300%; left: -193.75%; top: -47.2%; }
+
+/* Download. */
+.get { padding: 140px 0 120px; text-align: center; }
+.get h2 { font: 600 clamp(40px, 5.4vw, 76px)/1 var(--slab); letter-spacing: -0.015em; }
+.get .need { margin: 22px auto 0; max-width: 38em; font-size: 18px; color: var(--muted); }
+.get .need b { color: var(--text); font-weight: 600; }
+.plats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; max-width: 880px; margin: 48px auto 0; text-align: left; }
+.plat { display: flex; flex-direction: column; gap: 10px; padding: 26px 26px 24px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--raised); }
+.plat h3 { font: 600 28px/1.1 var(--slab); }
+.plat p { color: var(--muted); font-size: 15.5px; }
+.plat p code { font: 700 14px var(--typed); color: var(--text); overflow-wrap: anywhere; }
+.plat .btn { align-self: flex-start; margin-top: 8px; }
+.foot { padding: 28px 0 40px; border-top: 1px solid var(--line); background: var(--sheet); font-size: 14.5px; color: var(--muted); }
+.foot .wrap { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; }
+.foot a { color: var(--text); }
+.foot .brand { font-size: 20px; color: var(--text); }
+.foot .brand img { width: 26px; height: 26px; }
+
+/* Phone. */
+@media (max-width: 900px) {
+  .deck, .screen, .screen:nth-child(even), .promise .wrap { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .screen:nth-child(even) figcaption { order: 0; }
+  .plats { grid-template-columns: minmax(0, 1fr); }
+  section.band { padding-top: 96px; }
+  .screens { gap: 72px; }
+}
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .top { height: 64px; }
+  .top nav a.plain { display: none; }
+  .brand { font-size: 22px; }
+  .hero h1 { text-wrap: balance; }
+  .hero h1 br { display: none; }
+  .brand img { width: 30px; height: 30px; }
+  .hero { padding-top: 24px; min-height: 0; }
+  .ctas .btn { flex: 1 1 100%; justify-content: center; }
+  .desk { --s: 0.74; width: calc(480px * var(--s)); height: calc(300px * var(--s)); margin-top: 36px; }
+  .hero .pos { display: none; }
+  .hero .slip { display: none; }
+  .hero .deal { left: 0; top: 40px; }
+  .hero .stamp { left: 380px; top: 4px; }
+  .table { padding: 30px 0 0; zoom: 1; }
+  .table .stamp { width: 76px; height: 76px; left: auto; right: -4px; top: -4px; }
+  .table .tabrow { padding-right: 70px; }
+  .table .pos { display: none; }
+  .cfoot { flex-wrap: wrap; }
+  .cfoot .why { margin-left: 0; text-align: left; flex-basis: 100%; }
+  .key { grid-template-columns: 52px minmax(0, 1fr); padding: 10px 8px; }
+  .key .cap { width: 48px; height: 48px; font-size: 22px; }
+  .promise { padding: 80px 0; margin-top: 96px; }
+  .get { padding: 96px 0 80px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+.still *, .still *::before, .still *::after { animation: none !important; transition: none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="wrap top">
+  <a class="brand" href="#top" aria-label="Jobdesk, top of page"><img src="../../assets/brand/jobdesk-icon-small.svg" alt=""> Jobdesk</a>
+  <nav aria-label="Main">
+    <a class="plain" href="#deck">How it works</a>
+    <a class="plain" href="#screens">Screens</a>
+    <a class="plain" href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source</a>
+    <a class="btn pri" href="#download">Download</a>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="wrap hero" id="top" aria-labelledby="hero-title">
+    <h1 id="hero-title">Your job search,<br> one decision at a time.</h1>
+    <p class="lede">A macOS and Windows app for the <b>ai‑job‑search</b> commands. It runs them through your own Claude Code, and nothing runs until you start it.</p>
+    <div class="ctas">
+      <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
+      <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
+    </div>
+
+    <div class="desk" role="img" aria-label="The Today screen's card for a fictional job: Ready to send, Lead Java Engineer at Harbor Bank, deadline in 3 days, with Mark as sent and Later. The day stamp reads Saturday 31 October. Behind it, Coming up lists the next deadlines.">
+      <div class="desk-in" aria-hidden="true">
+        <section class="slip">
+          <div class="sh">Coming up <span>2 weeks</span></div>
+          <ul>
+            <li><span class="d">Tue 3</span><span class="t">Harbor Bank deadline</span><span class="now">Now</span></li>
+            <li><span class="d">Wed 4</span><span class="t">Tessel Group technical interview</span><span></span></li>
+            <li><span class="d">Thu 5</span><span class="t">Meridian Rail Systems closes</span><span></span></li>
+            <li><span class="d">Fri 6</span><span class="t">Ardent Software offer reply</span><span></span></li>
+          </ul>
+        </section>
+        <div class="deal">
+          <div class="tabrow"><div class="ktab">Ready to send<span class="when">Deadline in 3 days</span></div><span class="pos">1 of 10</span></div>
+          <div class="card">
+            <div class="cbody">
+              <div><div class="co">Harbor Bank</div><div class="ttl">Lead Java Engineer</div><div class="co">CV and Cover letter compiled</div></div>
+              <p class="take">Send it from your own mail or the portal, then mark it sent.</p>
+            </div>
+            <div class="cfoot"><span class="cbtn pri">Mark as sent… <span class="kb">Y</span></span><span class="cbtn">Later <span class="kb">L</span></span>
+              <span class="why">The app never<br>sends for you.</span></div>
+          </div>
+          <div class="edges"><i style="margin-inline: 5px"></i><i style="margin-inline: 10px"></i><i style="margin-inline: 15px"></i><i style="margin-inline: 20px"></i></div>
+        </div>
+        <svg class="stamp" viewBox="0 0 80 80">
+          <circle class="bg" cx="40" cy="40" r="38.5"></circle>
+          <g>
+            <line class="tk on" x1="49.1" y1="11.9" x2="51.1" y2="5.8"></line>
+            <line class="tk on" x1="63.9" y1="22.7" x2="69.1" y2="18.8"></line>
+            <line class="tk" x1="69.5" y1="40.0" x2="76.0" y2="40.0"></line>
+            <line class="tk" x1="63.9" y1="57.3" x2="69.1" y2="61.2"></line>
+            <line class="tk" x1="49.1" y1="68.1" x2="51.1" y2="74.2"></line>
+            <line class="tk" x1="30.9" y1="68.1" x2="28.9" y2="74.2"></line>
+            <line class="tk" x1="16.1" y1="57.3" x2="10.9" y2="61.2"></line>
+            <line class="tk" x1="10.5" y1="40.0" x2="4.0" y2="40.0"></line>
+            <line class="tk" x1="16.1" y1="22.7" x2="10.9" y2="18.8"></line>
+            <line class="tk" x1="30.9" y1="11.9" x2="28.9" y2="5.8"></line>
+          </g>
+          <circle class="ring" cx="40" cy="40" r="38.5"></circle>
+          <circle class="ring" cx="40" cy="40" r="27"></circle>
+          <text class="sm" x="40" y="28" text-anchor="middle">Sat</text>
+          <text class="big" x="40" y="48.5" text-anchor="middle">31</text>
+          <text class="sm" x="40" y="61" text-anchor="middle">Oct</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap band" id="deck" aria-labelledby="deck-title">
+    <div class="head">
+      <h2 id="deck-title">Four keys. One card on top.</h2>
+      <p>Today deals what needs you as a stack of cards: paused runs first, then deadlines, then the rest. The day stamp counts what you decided. <b>No key starts a run.</b> Y opens the suggested task in the launcher, and you start it there.</p>
+    </div>
+
+    <div class="deck">
+      <div>
+        <div class="keys" role="group" aria-label="Card keys">
+          <button class="key" type="button" data-key="y" aria-describedby="say-y"><span class="cap">Y</span><span><b>Yes, open the task</b><span class="say" id="say-y">Opens the suggested command in the launcher. Nothing runs until you press Run.</span></span></button>
+          <button class="key" type="button" data-key="l" aria-describedby="say-l"><span class="cap">L</span><span><b>Later</b><span class="say" id="say-l">Sets the card aside until tomorrow, never past its own date.</span></span></button>
+          <button class="key" type="button" data-key="n" aria-describedby="say-n"><span class="cap">N</span><span><b>No, skip it</b><span class="say" id="say-n">Skips the card, with an optional reason from your own list.</span></span></button>
+          <button class="key" type="button" data-key="u" aria-describedby="say-u"><span class="cap">U</span><span><b>Undo</b><span class="say" id="say-u">Brings back your last decision.</span></span></button>
+        </div>
+        <p class="keys-note js-only">Try it: click a key, or focus the cards and type it. This page starts nothing.</p>
+      </div>
+
+      <div class="table" id="table" tabindex="0" aria-label="Example cards, fictional data. Press Y, L, N or U.">
+        <svg class="stamp" viewBox="0 0 80 80" aria-hidden="true">
+          <circle class="bg" cx="40" cy="40" r="38.5"></circle>
+          <g>
+            <line class="tk" x1="40" y1="10.5" x2="40" y2="4"></line>
+            <line class="tk" x1="65.55" y1="54.75" x2="71.18" y2="58"></line>
+            <line class="tk" x1="14.45" y1="54.75" x2="8.82" y2="58"></line>
+          </g>
+          <circle class="ring" cx="40" cy="40" r="38.5"></circle>
+          <circle class="ring" cx="40" cy="40" r="27"></circle>
+          <text class="sm" x="40" y="28" text-anchor="middle">Sat</text>
+          <text class="big" x="40" y="48.5" text-anchor="middle">31</text>
+          <text class="sm" x="40" y="61" text-anchor="middle">Oct</text>
+        </svg>
+        <div class="deal" id="deal">
+          <div class="tabrow"><div class="ktab"><span id="c-kind">New match</span><span class="when" id="c-when">Closes in 5 days</span></div><span class="pos" id="c-pos">1 of 3</span></div>
+          <div class="card">
+            <div class="cbody">
+              <div><div class="co" id="c-co">Meridian Rail Systems</div><div class="ttl" id="c-title">Tech Lead Java, Real-Time Traffic</div><div class="co" id="c-sub">Brussels, hybrid. Found on LinkedIn.</div></div>
+              <p class="take" id="c-take">Strong fit, 84 of 100. All six checks pass.</p>
+            </div>
+            <div class="cfoot"><span class="cbtn pri"><span id="c-y">Draft application…</span> <span class="kb">Y</span></span><span class="cbtn">Later <span class="kb">L</span></span><span class="cbtn">Skip <span class="kb">N</span></span>
+              <span class="why" id="c-note">Opens the drafting task. Nothing starts until you press Run.</span></div>
+          </div>
+          <div class="edges"><i style="margin-inline: 5px"></i><i style="margin-inline: 10px"></i></div>
+        </div>
+        <div class="clear"><p>Nothing left to decide.</p><span>Press U to bring back the last card.</span></div>
+
+        <div class="launch" id="launch" aria-hidden="true">
+          <div class="lh">New task</div>
+          <div class="lb">
+            <span class="lab">Claude will run</span>
+            <code id="l-cmd">/apply https://meridian.example/jobs/4</code>
+            <div class="row"><span class="cbtn pri" aria-disabled="true">Run</span><span>The launcher opened. You press Run when you are ready. Here, on this page, nothing runs.</span></div>
+          </div>
+        </div>
+
+        <div class="log js-only">
+          <div class="lh">Done today <span id="log-count">0 of 3</span></div>
+          <ol id="log"><li class="empty">Each decision lands here. U undoes the last one.</li></ol>
+        </div>
+        <p class="sr" aria-live="polite" id="said"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap band" id="screens" aria-labelledby="screens-title">
+    <div class="head">
+      <h2 id="screens-title">Your files, laid out on one desk.</h2>
+      <p>Jobs, Applications and Insights update live as commands change your files. These are the app's own screens, on fictional data.</p>
+    </div>
+    <div class="screens">
+      <figure class="screen">
+        <figcaption><h3>Jobs</h3><p>Each posting is scored and checked against your terms: contract, day rate, where, commute, language and a safety check. Each check says OK, Unclear or Fails, and why.</p></figcaption>
+        <div class="shot">
+          <img class="th-l" src="../../tests/snapshots/jobs_light.png" alt="The Jobs screen: a shortlist of four fictional jobs scored from 71 to 84, with the top job's six checks all OK beside it." loading="lazy">
+          <img class="th-d" src="../../tests/snapshots/jobs_dark.png" alt="The Jobs screen in the dark theme: a shortlist of fictional jobs with their scores and checks." loading="lazy">
+        </div>
+      </figure>
+      <figure class="screen">
+        <figcaption><h3>Applications</h3><p>Every application in lanes, from Not sent yet to Closed. A pink edge marks the ones that wait for you in Today. Open one for its dossier: PDFs, keyword coverage, prep packs and follow-ups.</p></figcaption>
+        <div class="shot">
+          <img class="th-l" src="../../tests/snapshots/tracker_light.png" alt="The Applications screen: five lanes of fictional applications, from Not sent yet to Closed." loading="lazy">
+          <img class="th-d" src="../../tests/snapshots/tracker_dark.png" alt="The Applications screen in the dark theme: lanes of fictional applications." loading="lazy">
+        </div>
+      </figure>
+      <figure class="screen">
+        <figcaption><h3>Tasks</h3><p>A run reads like a report. A band says where it is and whose turn it is, and Claude's questions wait for your answer above the reply box. Cost and elapsed time count as it works.</p></figcaption>
+        <div class="shot">
+          <img class="th-l" src="../../tests/snapshots/run_turn_light.png" alt="The Tasks screen during an /apply run: the band says it is your turn, and Claude asks whether to draft the CV and cover letter." loading="lazy">
+          <img class="th-d" src="../../tests/snapshots/run_turn_dark.png" alt="The Tasks screen in the dark theme during an /apply run, waiting for your answer." loading="lazy">
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="promise" aria-labelledby="promise-title">
+    <div class="wrap">
+      <div>
+        <h2 id="promise-title">Nothing runs until you start it.</h2>
+        <dl class="facts">
+          <div><dt>Every task starts in the launcher.</dt><dd>Card actions only open it. You see the command line Claude will run, then press Run.</dd></div>
+          <div><dt>One run at a time.</dt><dd>Two commands could overwrite each other's files, so a second one waits.</dd></div>
+          <div><dt>Your own Claude Code signs in.</dt><dd>Jobdesk keeps no password. An optional API key stays in the system keychain.</dd></div>
+          <div><dt>You choose how much it asks.</dt><dd>Tool permissions are allowed by default and listed in the activity. Settings › Permissions turns prompts on.</dd></div>
+        </dl>
+      </div>
+      <div class="launcher-crop">
+        <img class="th-l" src="../../tests/snapshots/launcher_light.png" alt="The launcher's side panel for /scrape: a model, a spend limit of 2.00 US dollars, the line Claude will run, and the Run button." loading="lazy">
+        <img class="th-d" src="../../tests/snapshots/launcher_dark.png" alt="The launcher's side panel in the dark theme, with the Run button." loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap get" id="download" aria-labelledby="get-title">
+    <h2 id="get-title">Put your job search on a desk.</h2>
+    <p class="need">You need the <b>Claude Code</b> CLI, installed and signed in, and an <b>ai‑job‑search</b> checkout. On first launch, choose that folder.</p>
+    <div class="plats">
+      <div class="plat">
+        <h3>macOS</h3>
+        <p>For Apple silicon. Open <code>Jobdesk-vX.Y.Z-macos-arm64.dmg</code> and drag Jobdesk to Applications. Signed with a Developer ID and notarized by Apple.</p>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS</a>
+      </div>
+      <div class="plat">
+        <h3>Windows</h3>
+        <p>Run <code>Jobdesk-vX.Y.Z-windows-x64-setup.exe</code>. The installer is not signed yet, so SmartScreen warns: click More info, then Run anyway.</p>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span class="brand"><img src="../../assets/brand/jobdesk-icon-small.svg" alt=""> Jobdesk</span>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source on GitHub</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
+    <span>MIT License</span>
+    <span>Built in Rust. Not made or endorsed by Anthropic.</span>
+  </div>
+</footer>
+</div>
+
+<script>
+/* The deck demo. It changes only this page: it starts nothing, sends nothing and stores nothing. */
+(function () {
+  var cards = [
+    { kind: "New match", when: "Closes in 5 days", co: "Meridian Rail Systems", title: "Tech Lead Java, Real-Time Traffic", sub: "Brussels, hybrid. Found on LinkedIn.",
+      take: "Strong fit, 84 of 100. All six checks pass.", y: "Draft application…", opens: "draft application",
+      note: "Opens the drafting task. Nothing starts until you press Run.", cmd: "/apply https://meridian.example/jobs/4" },
+    { kind: "Ready to send", when: "Deadline in 3 days", co: "Harbor Bank", title: "Lead Java Engineer", sub: "CV and Cover letter compiled",
+      take: "Send it from your own mail or the portal, then mark it sent.", y: "Mark as sent…", opens: "mark as sent",
+      note: "Opens the task that records it as sent. The app never sends for you.", cmd: "/outcome harbor bank" },
+    { kind: "Follow up", when: "Quiet 15 days", co: "Granite Cloud", title: "Platform Lead", sub: "0 of 2 follow-ups sent",
+      take: "No draft yet. The command writes one, then logs it when you send it.", y: "Draft a follow-up…", opens: "draft a follow-up",
+      note: "The app never sends for you.", cmd: "/outcome followup granite cloud" }
+  ];
+  var at = 0, done = [], busy = false;
+  var $ = function (id) { return document.getElementById(id); };
+  var table = $("table"), deal = $("deal"), launch = $("launch"), log = $("log"), said = $("said");
+  var ticks = table.querySelectorAll(".tk");
+  var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.classList.contains("still");
+
+  function paint() {
+    var c = cards[at];
+    table.classList.toggle("done", !c);
+    if (c) {
+      $("c-kind").textContent = c.kind; $("c-when").textContent = c.when; $("c-pos").textContent = (at + 1) + " of " + cards.length;
+      $("c-co").textContent = c.co; $("c-title").textContent = c.title; $("c-sub").textContent = c.sub;
+      $("c-take").textContent = c.take; $("c-y").textContent = c.y; $("c-note").textContent = c.note;
+    }
+    ticks.forEach(function (t, i) { t.classList.toggle("on", i < done.length); });
+    $("log-count").textContent = done.length + " of " + cards.length;
+    log.innerHTML = "";
+    if (!done.length) { var e = document.createElement("li"); e.className = "empty"; e.textContent = "Each decision lands here. U undoes the last one."; log.appendChild(e); }
+    done.slice().reverse().forEach(function (d) {
+      var li = document.createElement("li"), who = document.createElement("span");
+      who.className = "who"; who.textContent = d.card.co + ". ";
+      li.appendChild(who); li.appendChild(document.createTextNode(d.text)); log.appendChild(li);
+    });
+  }
+
+  function move(cls, then) {
+    if (still) { then(); return; }
+    busy = true; deal.classList.add(cls);
+    setTimeout(function () {
+      deal.classList.remove(cls); then(); deal.classList.remove("enter"); void deal.offsetWidth; deal.classList.add("enter"); busy = false;
+    }, 320);
+  }
+
+  function press(key) {
+    if (busy) return;
+    var btn = document.querySelector('.key[data-key="' + key + '"]');
+    if (btn) { btn.classList.add("pressed"); setTimeout(function () { btn.classList.remove("pressed"); }, 140); }
+    var c = cards[at];
+    if (key === "u") {
+      if (!done.length) { said.textContent = "Nothing to undo."; return; }
+      var last = done.pop(); at = cards.indexOf(last.card); launch.classList.remove("shown");
+      paint(); said.textContent = "Undone. " + last.card.co + " is back on top."; return;
+    }
+    if (!c) { said.textContent = "Nothing left to decide. Press U to undo."; return; }
+    var text, cls;
+    if (key === "y") {
+      text = "Task opened: " + c.opens + "."; cls = "leave-y";
+      $("l-cmd").textContent = c.cmd; launch.classList.remove("shown"); void launch.offsetWidth; launch.classList.add("shown");
+      said.textContent = "The launcher opened with " + c.cmd + ". Nothing runs until you press Run.";
+    } else if (key === "l") {
+      text = "Set aside until tomorrow."; cls = "leave-l"; launch.classList.remove("shown"); said.textContent = c.co + " set aside until tomorrow.";
+    } else {
+      text = "Skipped."; cls = "leave-n"; launch.classList.remove("shown"); said.textContent = c.co + " skipped.";
+    }
+    move(cls, function () { done.push({ card: c, text: text }); at += 1; paint(); });
+  }
+
+  document.querySelectorAll(".key").forEach(function (b) { b.addEventListener("click", function () { press(b.getAttribute("data-key")); }); });
+  table.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k === "y" || k === "l" || k === "n" || k === "u") { e.preventDefault(); press(k); }
+  });
+  paint();
+})();
+</script>
+</body>
+</html>

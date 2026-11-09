@@ -195,7 +195,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 /* Sections. */
 .sec { padding: 128px 0 0; }
 .sec-head { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 56px; align-items: end; }
-.sec-head h2 { font: 700 clamp(32px, 3.6vw, 50px)/1.06 var(--sans); letter-spacing: -0.03em; }
+.sec-head h2, .byok h2 { font: 700 clamp(32px, 3.6vw, 50px)/1.06 var(--sans); letter-spacing: -0.03em; }
 .sec-head p { color: var(--muted); font-size: 18px; max-width: 34em; }
 
 /* Features: a 12-column grid of cells of different sizes, each a real screen cropped where it says the most. */
@@ -243,14 +243,23 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .pull p { font: 700 clamp(22px, 2.2vw, 28px)/1.25 var(--sans); letter-spacing: -0.015em; flex: 1 1 420px; }
 .pull span { color: var(--muted); flex: 1 1 320px; }
 
-/* Your own key: what happens to the key, beside the Providers screen. */
-.byok { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: start; margin-top: 56px; }
-.byok ol { list-style: none; }
-.byok li { padding: 18px 0; border-top: 1px solid var(--line); }
-.byok li:first-child { border-top: 0; padding-top: 0; }
-.byok li b { display: block; font-weight: 650; font-size: 17.5px; }
-.byok li span { display: block; margin-top: 3px; color: var(--muted); }
-.byok li code { font-size: 15px; color: var(--text); }
+/* Your own key: the heading and what it does on the left, the Providers screen on the right.
+   The five facts fold into a disclosure, so the section reads in one glance and the facts stay one click away. */
+.byok { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: center; }
+.byok .say { margin-top: 20px; color: var(--muted); font-size: 18px; max-width: 30em; }
+.byok .say b { color: var(--text); font-weight: 600; }
+.byok details { margin-top: 26px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.byok summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding: 12px 2px; cursor: pointer; font-weight: 650; list-style: none; }
+.byok summary::-webkit-details-marker { display: none; }
+.byok summary::after { content: ""; flex: none; width: 9px; height: 9px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-3px) rotate(45deg); }
+.byok details[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+.byok ol { list-style: none; padding-bottom: 8px; }
+.byok li { padding: 14px 0; border-top: 1px solid var(--line); }
+.byok li b { display: block; font-weight: 650; }
+.byok li span { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.byok li code { font-size: 14.5px; color: var(--text); }
+.byok .more-key { padding: 4px 0 18px; color: var(--muted); font-size: 15px; }
+.byok .more-key a { color: var(--text); }
 .byok .shot { border-radius: 6px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--raised); overflow: hidden; }
 .byok figcaption { margin-top: 18px; color: var(--muted); font-size: 14.5px; }
 
@@ -310,7 +319,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   .steps.drawn .step:nth-child(2)::after { transition-delay: .55s; }
   .spec { grid-template-columns: minmax(0, 1fr); }
   .spec div { grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; }
-  .byok { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .byok { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   .plats { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
@@ -458,7 +467,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <article class="cell"><div class="txt"><h3>Profile</h3><p>What Claude reads about you, topic by topic. Edit a block in place, and preview your CV PDFs with how fresh each is.</p></div></article>
       </div>
       <article class="cell c12 full">
-        <div class="txt"><h3>What your tasks cost</h3><p>Usage statistics count spend, tokens and cache hits from Jobdesk's own run logs on your computer. Set a monthly cap in Settings.</p></div>
+        <div class="txt"><h3>What your tasks cost</h3><p>Usage statistics show tokens, cache hits and each task’s cost, from Jobdesk’s own run logs on your computer. The cost is Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p></div>
         <div class="crop"><!-- settings_usage_*.png, 527,196 1300x276 -->
           <img class="th-l" src="img/usage-light.webp" width="1300" height="276" alt="Usage statistics for a fictional October: spent, tokens, cache hits and tasks, and the cost per application sent." loading="lazy">
           <img class="th-d" src="img/usage-dark.webp" width="1300" height="276" alt="Usage statistics in the dark theme." loading="lazy">
@@ -470,7 +479,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="how deepzone" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <div class="sec-head">
-        <h2 id="how-title">Your commands, your Claude Code, your key.</h2>
+        <h2 id="how-title">Your commands, your Claude Code CLI, your key.</h2>
         <p>Jobdesk sits on top of what you already have: an ai‑job‑search checkout, the Claude Code CLI, and your own Anthropic API key or Claude Code’s sign-in.</p>
       </div>
       <ol class="steps wait" id="steps">
@@ -498,18 +507,22 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   </section>
 
   <section class="wrap sec" id="key" aria-labelledby="key-title">
-    <div class="sec-head">
-      <h2 id="key-title">Bring your own Anthropic API key.</h2>
-      <p>Paste a key from your Anthropic Console in Settings › Providers. Tasks then run on that key and bill its Console account. Jobdesk keeps it on your computer and hands it only to Claude Code.</p>
-    </div>
     <div class="byok">
-      <ol>
-        <li><b>Stored only in your keychain</b><span>In the macOS Keychain, or the Credential Manager on Windows. Never in a file. Jobdesk reads it from there and holds it in memory until you quit or remove it.</span></li>
-        <li><b>Passed only to Claude Code</b><span>Each task gets the key in its <code>claude</code> process’s environment. Never on a command line or in a log, and never on screen in full.</span></li>
-        <li><b>Shown only in part</b><span>A saved key reads <code>sk-ant-</code>, dots and its last four characters. Only the key you are typing shows in full, while you press Show.</span></li>
-        <li><b>Tested before it is used</b><span>Test connection asks one fixed question, with no tools, in an empty temporary folder, capped at $0.01. Tasks switch to the key only once the test passes.</span></li>
-        <li><b>Yours to remove</b><span>Remove deletes it from the keychain and puts tasks back on Claude Code’s sign-in.</span></li>
-      </ol>
+      <div>
+        <h2 id="key-title">Bring your own Anthropic API key.</h2>
+        <p class="say">Paste a key from your Claude Console in Settings › Providers. Tasks then run on that key and bill its Console account. <b>Jobdesk keeps it in your system keychain and hands it only to Claude Code.</b></p>
+        <details>
+          <summary>What Jobdesk does with your key</summary>
+          <ol>
+            <li><b>Stored only in your keychain</b><span>In the macOS Keychain, or the Credential Manager on Windows. Never in a file. Jobdesk reads it from there and holds it in memory until you quit or remove it.</span></li>
+            <li><b>Passed only to Claude Code</b><span>Each task gets the key in its <code>claude</code> process’s environment. Never on a command line or in a log, and never on screen in full.</span></li>
+            <li><b>Shown only in part</b><span>A saved key reads <code>sk-ant-</code>, dots and its last four characters. Only the key you are typing shows in full, while you press Show.</span></li>
+            <li><b>Tested before it is used</b><span>Test connection asks one fixed question, with no tools, in an empty temporary folder, capped at $0.01. Tasks switch to the key only once the test passes.</span></li>
+            <li><b>Yours to remove</b><span>Remove deletes it from the keychain and puts tasks back on Claude Code’s sign-in.</span></li>
+          </ol>
+          <p class="more-key">The full account, with what the key is still exposed to: <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/architecture/trust.md#the-api-key">The API key, in Trust</a></p>
+        </details>
+      </div>
       <figure>
         <div class="shot">
           <div class="crop"><!-- settings_key_saved_*.png, 986,288 848x436 -->

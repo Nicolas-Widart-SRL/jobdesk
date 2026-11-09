@@ -192,7 +192,8 @@ TruffleHog scans the whole git history for secrets in CI, and fails on a verifie
 `site/` holds the landing page at [nicolas-widart-srl.github.io/jobdesk](https://nicolas-widart-srl.github.io/jobdesk/). It has no build step. The Pages workflow (`.github/workflows/pages.yml`) publishes the folder as is on each push to `main` that touches `site/`, and you can also run it from the Actions tab.
 
 - The page repeats facts from `README.md`, `docs/guide.md` and `docs/architecture/trust.md`. When you change a fact the page states, change `site/index.html` too.
-- Its images are crops of `tests/snapshots/`. When a screen it shows changes, cut its crops again.
+- The hero's card and launcher are drawn in HTML from the app's own strings: the `/apply` command line from `apply_line` in `src/intray/application/compose.rs`, and `/apply`'s field, budget and labels from `src/runs/domain/catalog.rs` and `src/runs/ui/launcher.rs`. When those change, redraw the hero. `mockups/handoff/landing.md` lists what the drawing takes from each file.
+- Its other images are crops of `tests/snapshots/`, saved as lossless WebP in `site/img/`, light and dark. Each crop's box sits in the HTML comment beside its `.crop` element in `site/index.html`: the snapshot, then x, y and width x height in the snapshot's pixels, and any scaling. When a screen it shows changes, cut its crops again to those boxes and keep `width` and `height` on each `img` in step.
 - The Windows "not signed yet" lines, in the download panel and the Signing row, change once the installer is signed.
 - The design source is `mockups/landing/Landing.html`, with its notes in `mockups/handoff/landing.md`.
 

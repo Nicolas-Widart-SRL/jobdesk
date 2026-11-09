@@ -18,7 +18,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|about-checking\|about-failed\|about-update\|about-ready-waits\|search\|nav&theme=light\|dark` | 29 `Settings-*.png` | [settings](handoff/settings.md), [update](handoff/update.md) |
 | `Update.html` | `?state=available\|notes\|notes-ready\|downloading\|ready\|ready-busy\|failed\|bad-signature&theme=light\|dark` | 10 `Update-*.png` | [update](handoff/update.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
-| `landing/Landing.html` | `?theme=light\|dark&motion=off`; phone through `landing/phone.html?theme=light&motion=off&h=1760&top=80` | 5 `landing/Landing-*.png`: `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900, `-phone` at 390x1760 and `-full` at 1440x5808 | [landing](handoff/landing.md) |
+| `landing/Landing.html` | `?theme=light\|dark&motion=off`; phone through `landing/phone.html?theme=light&motion=off&h=1760&top=80` | 5 `landing/Landing-*.png`: `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900, `-phone` at 390x1760 and `-full` at 1440x5848 | [landing](handoff/landing.md) |
 
 ## Handoff files
 

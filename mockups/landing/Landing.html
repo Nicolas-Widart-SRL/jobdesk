@@ -180,8 +180,8 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   .tc { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
   .desk .lx-wrap { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
 }
-@keyframes rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
-@keyframes slide { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { transform: translateY(28px); } to { transform: none; } }
+@keyframes slide { from { transform: translateX(40px); } to { transform: none; } }
 
 /* Sections. */
 .sec { padding: 128px 0 0; }
@@ -393,6 +393,9 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
                   <li><i>Contract</i><em>OK</em><span>Freelance, 12 months</span></li>
                   <li><i>Day rate</i><em>OK</em><span>EUR 780, floor 700</span></li>
                   <li><i>Where</i><em>OK</em><span>Brussels, hybrid</span></li>
+                  <li><i>Commute</i><em>OK</em><span>Brussels, up to 1h15</span></li>
+                  <li><i>Language</i><em>OK</em><span>No conflict</span></li>
+                  <li><i>Safety check</i><em>OK</em><span>Nothing hidden in the ad</span></li>
                 </ul>
               </div>
               <div class="tc-acts"><span class="tc-b pri">Draft application… <kbd>Y</kbd></span><span class="tc-b">Skip <kbd>N</kbd></span><span class="tc-b">Later <kbd>L</kbd></span></div>
@@ -463,7 +466,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <article class="cell"><div class="txt"><h3>Profile</h3><p>What Claude reads about you, topic by topic. Edit a block in place, and preview your CV PDFs with how fresh each is.</p></div></article>
       </div>
       <article class="cell c12 full">
-        <div class="txt"><h3>What your tasks cost</h3><p>Usage statistics show tokens, cache hits and each task’s cost, from Jobdesk’s own run logs on your computer. The cost is Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p></div>
+        <div class="txt"><h3>What your tasks cost</h3><p>Usage statistics show spend, tokens and cache hits, from Jobdesk’s own run logs on your computer. The cost is Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p></div>
         <div class="crop" style="--x: 527; --y: 196; --w: 1300; --h: 276">
           <img class="th-l" src="../../tests/snapshots/settings_usage_light.png" alt="Usage statistics for a fictional October: spent, tokens, cache hits and tasks, and the cost per application sent." loading="lazy">
           <img class="th-d" src="../../tests/snapshots/settings_usage_dark.png" alt="Usage statistics in the dark theme." loading="lazy">

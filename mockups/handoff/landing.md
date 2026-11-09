@@ -25,7 +25,7 @@ Render with `scripts/render-canvas.sh --file-access`, so the bundled fonts and t
 - `Landing-hero.png` and `Landing-hero-dark.png`: `--size 1440,900`, `theme=light` or `theme=dark`, `motion=off`.
 - `Landing-hero-1024.png`: `--size 1024,900`, light.
 - `Landing-phone.png`, 390x1760, light, tall enough to show the whole hero and the top of the launcher: render `mockups/landing/phone.html` at `--size 500,1920` with `h=1760 top=80`, then `sips -c 1760 390`. Headless Chrome makes no window under 500px wide, so `phone.html` frames the page at 390 and passes `theme`, `motion` and `measure` through. It is a drawing aid, not part of the site.
-- `Landing-full.png`: the whole page at `--size 1440,5808`, the page's own height in a window that tall (`?measure=1` reads it; the hero grows to 860px when the window is taller than 928px, so measure at the full height). Measure again when the page changes length.
+- `Landing-full.png`: the whole page at `--size 1440,5848`, the page's own height in a window that tall (`?measure=1` reads it; the hero grows to 860px when the window is taller than 928px, so measure at the full height). Measure again when the page changes length.
 
 Checked at 1440, 1280, 1024, 768, 560 and 390, light and dark: the page's scroll width equals the window's.
 

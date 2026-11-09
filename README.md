@@ -10,7 +10,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
   <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-12263f?style=for-the-badge" alt="Download for macOS"></a>
   <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest"><img src="https://img.shields.io/badge/Download_for_Windows-12263f?style=for-the-badge" alt="Download for Windows"></a>
   <br>
-  <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
+  <a href="https://nicolas-widart-srl.github.io/jobdesk/">Website</a> · <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
 </p>
 
 ## What it does
@@ -31,7 +31,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 
 You need:
 
-- the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed and signed in;
+- the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed, and either signed in on its own or given an Anthropic Console API key that you save in Settings › Providers and Jobdesk passes to it;
 - an [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) checkout.
 
 Download the installer for your system from the [latest release](https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest):

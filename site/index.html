@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobdesk</title>
+<meta name="description" content="Jobdesk is a native macOS and Windows app for the ai-job-search slash commands. It runs them through your own Claude Code CLI, and nothing runs until you start it.">
+<link rel="canonical" href="https://nicolas-widart-srl.github.io/jobdesk/">
+<link rel="icon" href="jobdesk-icon-small.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://nicolas-widart-srl.github.io/jobdesk/">
+<meta property="og:title" content="Jobdesk">
+<meta property="og:description" content="Jobdesk puts the ai-job-search slash commands on a desk. It deals your decisions one card at a time and runs any command through your own Claude Code. Nothing runs until you start it.">
+<meta property="og:image" content="https://nicolas-widart-srl.github.io/jobdesk/jobdesk-social.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Jobdesk, the desktop app for your ai-job-search commands.">
+<meta name="twitter:card" content="summary_large_image">
+<script>
+  /* ?theme=dark or ?theme=light overrides the system theme. */
+  (function () {
+    var root = document.documentElement, theme = new URLSearchParams(location.search).get("theme");
+    if (theme === "dark" || theme === "light") root.setAttribute("data-theme", theme);
+    root.classList.add("js");
+  })();
+</script>
+<style>
+/* The Jobdesk landing page, served as is by GitHub Pages. The approved design is mockups/landing/Landing.html.
+   Colours are the tokens in src/ui_kit/palette.rs, named as there. The deep field is the dark palette's desk:
+   dark sheet and dark grid under the light theme, dark field under the dark theme. Type is the app's own bundled files. */
+@font-face { font-family: "Zilla Slab"; font-weight: 600; font-display: swap; src: url("fonts/ZillaSlab-SemiBold.ttf") format("truetype"); }
+@font-face { font-family: "Schibsted Grotesk"; font-weight: 400 900; font-display: swap; src: url("fonts/SchibstedGrotesk-Variable.ttf") format("truetype"); }
+@font-face { font-family: "Courier Prime"; font-weight: 700; font-display: swap; src: url("fonts/CourierPrime-Bold.ttf") format("truetype"); }
+
+:root {
+  /* LIGHT */
+  --sheet: #eff3f8; --panel: #dfe7f0; --raised: #d0dce9; --line: #aebfd1; --field: #fafcfe;
+  --text: #12263f; --muted: #35495f; --primary: #12263f; --on-primary: #eff3f8; --active: #1657a8;
+  --turn: #b0246a; --on-turn: #ffffff; --grid: #d4dee9; --card: #ffffff; --hired: #17643a;
+  /* The deep field: DARK sheet, grid, line, text, muted and turn. */
+  --deep: #13243a; --deep-grid: #1e3554; --deep-line: #33506f; --deep-text: #e6edf5; --deep-muted: #b3c4d6; --deep-panel: #1a2f49; --deep-turn: #f48cc0;
+  --slab: "Zilla Slab", Rockwell, Georgia, serif; --sans: "Schibsted Grotesk", system-ui, sans-serif; --typed: "Courier Prime", "Courier New", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b;
+    --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --active: #8cc2f7;
+    --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49; --hired: #7bdda3;
+    --deep: #0d1a2b; --deep-grid: #13243a; --deep-line: #33506f; --deep-panel: #13243a;
+    color-scheme: dark;
+  }
+  :root:not([data-theme="light"]) .th-l { display: none; }
+  :root:not([data-theme="light"]) .th-d { display: block; }
+}
+:root[data-theme="dark"] {
+  --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b;
+  --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --active: #8cc2f7;
+  --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49; --hired: #7bdda3;
+  --deep: #0d1a2b; --deep-grid: #13243a; --deep-line: #33506f; --deep-panel: #13243a;
+  color-scheme: dark;
+}
+:root[data-theme="dark"] .th-l { display: none; }
+:root[data-theme="dark"] .th-d { display: block; }
+.th-d { display: none; }
+
+html { background: var(--sheet); scroll-padding-top: 80px; }
+body { margin: 0; color: var(--text); background: var(--sheet); font: 400 17px/1.55 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+* { box-sizing: border-box; }
+h1, h2, h3, p, dl, dd, figure, ol, ul { margin: 0; padding: 0; }
+img { display: block; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--active); outline-offset: 2px; border-radius: 3px; }
+.deepzone :focus-visible { outline-color: #8cc2f7; }
+/* .page clips the deep field's bleed past the page's edges and stays no scroll container, so the menu still sticks.
+   Safari before 16 has no clip, so there the hero, which holds the only bleed, hides it instead. */
+.page { overflow-x: clip; }
+@supports not (overflow-x: clip) { .hero { overflow: hidden; } }
+.wrap { width: min(1200px, 100% - 32px); margin-inline: auto; }
+.skip { position: absolute; left: 16px; top: -60px; padding: 8px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 3px; z-index: 30; }
+.skip:focus { top: 12px; }
+code, .cmd { font-family: var(--typed); font-weight: 700; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 0 20px; border: 1px solid var(--line); border-radius: 3px;
+  background: var(--card); color: var(--text); font: 600 16px/1 var(--sans); text-decoration: none; white-space: nowrap; }
+.btn:hover { background: var(--raised); }
+.btn.pri { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.btn.pri:hover { box-shadow: 4px 4px 0 var(--line); }
+.link { font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+/* A crop of a committed snapshot (1920 x 1230, the app at 1.5x on fictional data), cut to the box in the comment beside it:
+   x, y, then width x height in the snapshot's pixels. width and height on each img hold its space before it loads. */
+.crop { position: relative; overflow: hidden; background: var(--sheet); }
+.crop img { width: 100%; height: auto; }
+
+/* Menu: sticky, on sheet, with a hairline under it. */
+.top { position: sticky; top: 0; z-index: 20; background: var(--sheet); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 28px; height: 68px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font: 600 24px/1 var(--slab); text-decoration: none; }
+.brand img { width: 30px; height: 30px; }
+.top nav { display: flex; gap: 4px; }
+.top nav a { padding: 8px 12px; border-radius: 3px; color: var(--muted); font-weight: 500; font-size: 15.5px; text-decoration: none; }
+.top nav a:hover { color: var(--text); background: var(--raised); }
+.top .btn { margin-left: auto; min-height: 38px; padding: 0 16px; font-size: 15px; }
+
+/* The hero's parts: the line, the credit, the key line, the downloads and the fine print. */
+.hero { position: relative; }
+.hero h1 { font: 700 clamp(38px, 4.6vw, 66px)/1.02 var(--sans); letter-spacing: -0.035em; text-wrap: balance; max-width: 9.5em; }
+.hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); max-width: 36em; }
+.hero .lede b { color: var(--text); font-weight: 600; }
+.hero .about { margin-top: 14px; font-size: 16px; color: var(--muted); max-width: 40em; }
+.credit { color: var(--text); font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.keyline { display: flex; align-items: flex-start; gap: 12px; font-size: 15.5px; line-height: 1.5; color: var(--text); }
+.keyline svg { flex: none; width: 20px; height: 20px; margin-top: 2px; }
+.keyline a { font-weight: 600; text-underline-offset: 3px; white-space: nowrap; }
+.dl { display: flex; flex-wrap: wrap; gap: 10px; }
+.fine { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+.fine a { color: var(--text); }
+.fine .link { white-space: nowrap; }
+
+/* The launcher's form panel, drawn from the app's tokens at the app's own size (src/runs/ui/launcher.rs):
+   the command in Courier Prime over a hairline, its summary, its field, Model and Spend at most, Claude will run, Run. */
+.lx { background: var(--panel); color: var(--text); font: 400 15.5px/1.35 var(--sans); text-align: left; }
+.lx-head { padding: 9px 14px; border-bottom: 1px solid var(--line); font: 700 23px/1.2 var(--typed); }
+.lx-body { display: grid; gap: 8px; padding: 12px 14px 14px; }
+.lx .mut { color: var(--muted); }
+.lx-lab { display: block; color: var(--muted); font-size: 14.5px; margin-bottom: 4px; }
+.lx-in { display: block; min-height: 34px; padding: 6px 10px; border-radius: 3px; background: var(--field); box-shadow: inset 0 0 0 1px var(--line); overflow-wrap: anywhere; }
+.lx-in.area { min-height: 64px; }
+.lx-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.lx-sel { display: flex; justify-content: space-between; align-items: center; }
+.lx-sel::after { content: ""; border: 5px solid transparent; border-top: 6px solid var(--text); border-bottom: 0; }
+.lx-code { display: block; padding: 9px 11px; border-radius: 3px; background: var(--field); font: 700 14.5px/1.4 var(--typed); overflow-wrap: anywhere; }
+.lx-run { justify-self: start; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; margin-top: 2px; border-radius: 3px; background: var(--primary); color: var(--on-primary); font-weight: 500; }
+.lx-run kbd { font: inherit; opacity: .92; }
+
+/* The hero: the journey. Words on the left; on the right the deep field as a desk, with the card and the launcher
+   drawn at the app's own size, so they stay sharp and reflow at any width. */
+.hero .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 64px; min-height: min(calc(100vh - 68px), 860px); }
+.hero .words { align-self: center; padding: 64px 0; display: grid; gap: 0; }
+.hero .lede { margin-top: 24px; }
+.hero .go { display: grid; gap: 12px; margin-top: 32px; }
+.hero .keyline { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.hero .fine.req { margin-top: 12px; }
+.desk { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; padding: 40px 0 40px 48px; color: var(--deep-text); }
+.desk::before { content: ""; position: absolute; z-index: -1; inset: 0 -50vw 0 0;
+  background-color: var(--deep);
+  background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px; }
+.desk > * { position: relative; }
+.pair { position: relative; display: grid; }
+/* Under the card: the Y key and a dashed line that leads to the launcher, which overlaps the card's stack a little. */
+.hop { display: grid; grid-template-columns: minmax(0, 1fr) min(440px, 78%); align-items: start; gap: 0 14px; margin-top: -14px; }
+.desk .lx-wrap { margin-right: -24px; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
+.yhop { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding-top: 34px; color: var(--deep-muted); font-size: 14.5px; line-height: 1.3; }
+.yhop::after { content: ""; grid-row: 1; grid-column: 2; border-top: 2px dashed var(--deep-line); }
+.yhop .t { grid-column: 1 / -1; }
+.yhop .k { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1.5px solid var(--deep-text); border-radius: 3px; color: var(--deep-text); font: 600 14px/1 var(--sans); }
+.desk figcaption { margin-top: 24px; color: var(--deep-muted); font-size: 14.5px; max-width: 34em; }
+
+/* The Today card, drawn from the app's tokens (src/intray): its tab, then the card with its head, the fit line,
+   the checks and the pinned actions. Titles take Zilla Slab as the app does. */
+.tc { container-type: inline-size; color: var(--text); }
+.tc-tab { display: inline-flex; gap: 10px; padding: 6px 14px; background: var(--card); border: 1px solid var(--line); border-bottom: 0; border-radius: 4px 4px 0 0; font-size: 14.5px; position: relative; top: 1px; }
+.tc-tab b { color: var(--active); font-weight: 600; }
+.tc-tab span { color: var(--muted); }
+.tc-card { background: var(--card); border: 1px solid var(--line); border-radius: 0 4px 4px 4px; box-shadow: 0 4px 0 -1px var(--card), 0 4px 0 0 var(--line), 0 8px 0 -1px var(--card), 0 8px 0 0 var(--line); }
+.tc-in { padding: 18px 20px 16px; }
+.tc-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; align-items: start; }
+.tc-score { display: grid; justify-items: center; gap: 2px; }
+.tc-score b { display: flex; align-items: center; justify-content: center; width: 54px; height: 50px; border: 1.5px solid var(--hired); box-shadow: inset 0 0 0 2px var(--card), inset 0 0 0 3px var(--hired); color: var(--hired); font: 500 28px/1 var(--sans); }
+.tc-score span { font-size: 12.5px; color: var(--muted); }
+.tc-co { font-size: 14.5px; color: var(--muted); }
+.tc-title { font: 600 24px/1.15 var(--slab); margin-top: 2px; }
+.tc-meta { font-size: 14.5px; color: var(--muted); margin-top: 3px; }
+.tc-fit { margin-top: 14px; font-size: 15.5px; }
+.tc-fit b { font-weight: 650; }
+.tc-checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; margin-top: 12px; list-style: none; }
+.tc-checks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 6px; align-content: start; padding: 7px 0 6px; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.3; }
+.tc-checks i { font-style: normal; color: var(--muted); font-size: 13px; }
+.tc-checks em { grid-row: 1 / span 2; grid-column: 2; align-self: start; font-style: normal; padding: 1px 5px; border: 1.5px solid var(--hired); color: var(--hired); font-weight: 600; font-size: 13px; }
+.tc-checks span { text-wrap: balance; }
+.tc-acts { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 20px 14px; border-top: 1px solid var(--line); }
+.tc-b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 3px; border: 1px solid var(--line); font-size: 15px; }
+.tc-b.pri { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.tc-b kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font: 500 12px/1 var(--sans); }
+@container (max-width: 560px) {
+  .tc-checks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 470px) {
+  .tc-checks { grid-template-columns: minmax(0, 1fr); }
+  .tc-title { font-size: 21px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tc { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
+  .desk .lx-wrap { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
+}
+@keyframes rise { from { transform: translateY(28px); } to { transform: none; } }
+@keyframes slide { from { transform: translateX(40px); } to { transform: none; } }
+
+/* Sections. */
+.sec { padding: 128px 0 0; }
+.sec-head { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: 56px; align-items: end; }
+.sec-head h2, .byok h2 { font: 700 clamp(32px, 3.6vw, 50px)/1.06 var(--sans); letter-spacing: -0.03em; }
+.sec-head p { color: var(--muted); font-size: 18px; max-width: 34em; }
+
+/* Features: a 12-column grid of cells of different sizes, each a real screen cropped where it says the most. */
+.cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; margin-top: 56px; }
+.cell { display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.cell .txt { padding: 26px 28px 22px; }
+.cell h3 { font: 700 21px/1.2 var(--sans); letter-spacing: -0.01em; }
+.cell p { margin-top: 6px; color: var(--muted); font-size: 16px; max-width: 34em; }
+.cell .crop { margin: auto 0 0 28px; border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-radius: 4px 0 0 0; }
+.cell.full .crop { margin: auto 28px 0; border-right: 1px solid var(--line); border-radius: 4px 4px 0 0; }
+.c7 { grid-column: span 7; } .c5 { grid-column: span 5; } .c12 { grid-column: span 12; }
+.cell.full { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); align-items: end; }
+.cell.full .txt { align-self: start; padding-bottom: 28px; }
+.cell.full .crop { margin: 28px 0 0 0; border-right: 0; border-radius: 4px 0 0 0; }
+.stack { display: grid; gap: 16px; grid-column: span 5; }
+.stack .cell .txt { padding: 24px 28px; }
+
+/* How it works: a real sequence, so it is numbered. On the deep field. */
+.how { margin-top: 128px; padding: 112px 0 120px; color: var(--deep-text);
+  background-color: var(--deep);
+  background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px; }
+.how .sec-head p { color: var(--deep-muted); }
+.steps { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 64px; list-style: none; counter-reset: step; }
+.steps::before { content: ""; position: absolute; left: 22px; right: 22px; top: 22px; height: 2px; background: var(--deep-line); transform-origin: 0 50%; }
+.js .steps.wait::before { transform: scaleX(0); }
+.steps.drawn::before { transition: transform 1.1s cubic-bezier(.4, 0, .2, 1); transform: scaleX(1); }
+.step { position: relative; counter-increment: step; }
+.step .n { display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: var(--deep); border: 2px solid var(--deep-text); font: 700 18px/1 var(--sans); }
+.step h3 { margin-top: 24px; font: 700 23px/1.2 var(--sans); letter-spacing: -0.01em; }
+.step p { margin-top: 8px; color: var(--deep-muted); font-size: 16.5px; max-width: 26em; }
+.slab { margin-top: 22px; padding: 16px 18px; border-radius: 4px; background: var(--deep-panel); box-shadow: inset 0 0 0 1px var(--deep-line); font-size: 14.5px; }
+.slab .lab { display: block; color: var(--deep-muted); margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; }
+.chips li { padding: 3px 8px; border-radius: 2px; background: var(--deep); box-shadow: inset 0 0 0 1px var(--deep-line); font: 700 14px/1.4 var(--typed); }
+.slab code { display: block; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.files { list-style: none; display: grid; gap: 4px; font: 700 14px/1.4 var(--typed); }
+
+/* Trust: a spec sheet. */
+.spec { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 56px; margin-top: 56px; }
+.spec div { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; align-content: start; padding: 20px 0; border-top: 1px solid var(--line); }
+.spec dt { font-weight: 650; }
+.spec dd { color: var(--muted); }
+.pull { margin-top: 56px; padding: 30px 32px; border-radius: 4px; background: var(--panel); display: flex; gap: 24px; align-items: center; flex-wrap: wrap; }
+.pull p { font: 700 clamp(22px, 2.2vw, 28px)/1.25 var(--sans); letter-spacing: -0.015em; flex: 1 1 420px; }
+.pull span { color: var(--muted); flex: 1 1 320px; }
+
+/* Your own key: the heading and what it does on the left, the Providers screen on the right.
+   The five facts fold into a disclosure, so the section reads in one glance and the facts stay one click away. */
+.byok { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: center; }
+.byok .say { margin-top: 20px; color: var(--muted); font-size: 18px; max-width: 30em; }
+.byok .say b { color: var(--text); font-weight: 600; }
+.byok details { margin-top: 26px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.byok summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding: 12px 2px; cursor: pointer; font-weight: 650; list-style: none; }
+.byok summary::-webkit-details-marker { display: none; }
+.byok summary::after { content: ""; flex: none; width: 9px; height: 9px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-3px) rotate(45deg); }
+.byok details[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+.byok ol { list-style: none; padding-bottom: 8px; }
+.byok li { padding: 14px 0; border-top: 1px solid var(--line); }
+.byok li b { display: block; font-weight: 650; }
+.byok li span { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.byok li code { font-size: 14.5px; color: var(--text); }
+.byok .more-key { padding: 4px 0 18px; color: var(--muted); font-size: 15px; }
+.byok .more-key a { color: var(--text); }
+.byok .shot { border-radius: 6px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--raised); overflow: hidden; }
+.byok figcaption { margin-top: 18px; color: var(--muted); font-size: 14.5px; }
+
+/* Download: each panel keeps its button on its last line, so the two buttons line up. */
+.get { padding: 128px 0 112px; }
+.plats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 48px; }
+.plat { display: grid; grid-template-rows: auto auto 1fr auto; gap: 12px; padding: 30px 30px 28px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.plat h3 { font: 700 26px/1.1 var(--sans); letter-spacing: -0.02em; }
+.plat .file { font: 700 14.5px/1.4 var(--typed); overflow-wrap: anywhere; }
+.plat p { color: var(--muted); font-size: 16px; }
+.plat .btn { justify-self: start; margin-top: 6px; }
+.need { margin-top: 28px; color: var(--muted); }
+.need + .need { margin-top: 6px; }
+.need b { color: var(--text); font-weight: 600; }
+.more { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 14px; list-style: none; }
+
+.foot { border-top: 1px solid var(--line); padding: 28px 0 40px; font-size: 14.5px; color: var(--muted); }
+.foot .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; }
+.foot .brand { font-size: 19px; color: var(--text); }
+.foot .brand img { width: 24px; height: 24px; }
+.foot a { color: var(--text); }
+
+/* Two columns of the spec sheet leave each fact little room under 1200, so each fact sits under its name there. */
+@media (max-width: 1200px) {
+  .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
+/* Under 1200 the desk keeps its two columns but the launcher tucks in, so it never leaves the page. */
+@media (max-width: 1200px) {
+  .desk { padding-left: 32px; }
+  .desk .lx-wrap { margin-right: 0; }
+}
+@media (max-width: 1000px) {
+  .top nav { display: none; }
+  .sec-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .hero .split { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .hero .words { padding: 56px 0 48px; }
+  .desk { padding: 48px 0 56px; }
+  .desk::before { inset: 0 -50vw; }
+  .pair { max-width: 620px; }
+  .desk .lx-wrap { margin-right: 0; }
+  .cells { grid-template-columns: minmax(0, 1fr); }
+  .c7, .c5, .c12, .stack { grid-column: auto; }
+  .cell.full { grid-template-columns: minmax(0, 1fr); }
+  .cell.full .crop { margin: 0 0 0 28px; }
+  /* The checks are a narrow crop: at full width they would show larger than the app does, so they keep to the lower right. */
+  .c5 .crop { align-self: flex-end; width: min(100% - 28px, 440px); margin-left: 0; }
+  /* One column: each number keeps a column of its own, and a short line runs down that column to the next number, clear of the text. */
+  .steps { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .steps::before { display: none; }
+  .step { display: grid; grid-template-columns: 46px minmax(0, 1fr); column-gap: 22px; align-items: start; }
+  .step .n { grid-row: 1 / span 3; }
+  .step > :not(.n) { grid-column: 2; }
+  .step h3 { margin-top: 9px; }
+  .step:not(:last-child)::after { content: ""; position: absolute; left: 22px; top: 58px; bottom: -28px; width: 2px; background: var(--deep-line); transform-origin: 50% 0; }
+  .js .steps.wait .step::after { transform: scaleY(0); }
+  .steps.drawn .step::after { transition: transform .55s cubic-bezier(.4, 0, .2, 1); transform: scaleY(1); }
+  .steps.drawn .step:nth-child(2)::after { transition-delay: .55s; }
+  .spec { grid-template-columns: minmax(0, 1fr); }
+  .spec div { grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 20px; }
+  .byok { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .plats { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .top .wrap { height: 60px; }
+  .hero .lede { font-size: 18px; }
+  .dl { display: grid; }
+  .dl .btn { white-space: normal; text-align: center; line-height: 1.25; padding-block: 12px; }
+  .hero .words { padding: 40px 0 40px; }
+  .desk { padding: 40px 0 48px; }
+  .hop { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 0; }
+  .yhop { padding-top: 16px; }
+  .yhop .t { grid-column: 2; grid-row: 1; }
+  .yhop::after { display: none; }
+  .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .sec { padding-top: 88px; }
+  .how { margin-top: 88px; padding: 80px 0; }
+  .cell .txt, .stack .cell .txt { padding: 22px 20px 18px; }
+  .cell .crop, .cell.full .crop { margin-left: 20px; }
+  .plat { padding: 24px 20px 22px; }
+  .plat .btn { justify-self: stretch; padding-block: 12px; white-space: normal; text-align: center; line-height: 1.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .js .steps.wait::before, .js .steps.wait .step::after { transform: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Jobdesk, top of page"><img src="jobdesk-icon-small.svg" alt="" width="30" height="30"> Jobdesk</a>
+    <nav aria-label="Main">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#key">Your API key</a>
+      <a href="#trust">Trust</a>
+      <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">Guide</a>
+      <a href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source</a>
+    </nav>
+    <a class="btn pri" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top" aria-labelledby="hero-title">
+    <div class="wrap split">
+      <div class="words">
+        <h1 id="hero-title">Pick the job. See the command. Press Run.</h1>
+        <p class="lede">Your job search comes to you one decision at a time. <b>Y on a new match opens the launcher with the line Claude will run, and Claude drafts your application only once you press Run.</b></p>
+        <p class="about">Jobdesk is the desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> users: a GUI over its slash commands, run through your own Claude Code.</p>
+        <div class="go">
+          <div class="dl">
+            <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
+            <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
+          </div>
+          <p class="fine">Both buttons open the latest release on GitHub. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a></p>
+        </div>
+        <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Run tasks on your own Anthropic API key, kept only in your system keychain, or on Claude Code’s own sign-in. <a href="#key">How the key is kept</a></span></p>
+        <p class="fine req">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
+      </div>
+      <figure class="desk deepzone">
+        <div class="pair">
+          <div class="tc" role="img" aria-label="A Today card on fictional data: a new match, Tech Lead Java, Real-Time Traffic at Meridian Rail Systems, scored 84 of 100 with its checks OK, and Draft application… on Y.">
+            <div class="tc-tab"><b>New match</b><span>Closes in 5 days</span></div>
+            <div class="tc-card">
+              <div class="tc-in">
+                <div class="tc-head">
+                  <div class="tc-score"><b>84</b><span>Job ad only</span></div>
+                  <div><div class="tc-co">Meridian Rail Systems</div><div class="tc-title">Tech Lead Java, Real-Time Traffic</div><div class="tc-meta">Brussels, hybrid.</div></div>
+                </div>
+                <p class="tc-fit"><b>Strong fit, 84 of 100.</b> All six checks pass.</p>
+                <ul class="tc-checks">
+                  <li><i>Contract</i><em>OK</em><span>Freelance mission, 12 months</span></li>
+                  <li><i>Day rate</i><em>OK</em><span>EUR 780, your floor 700</span></li>
+                  <li><i>Where</i><em>OK</em><span>Brussels, hybrid</span></li>
+                  <li><i>Commute</i><em>OK</em><span>Brussels, up to 1h15</span></li>
+                  <li><i>Language</i><em>OK</em><span>No conflict</span></li>
+                  <li><i>Safety check</i><em>OK</em><span>Nothing hidden in the ad</span></li>
+                </ul>
+              </div>
+              <div class="tc-acts"><span class="tc-b pri">Draft application… <kbd>Y</kbd></span><span class="tc-b">Skip <kbd>N</kbd></span><span class="tc-b">Later <kbd>L</kbd></span></div>
+            </div>
+          </div>
+          <div class="hop">
+          <p class="yhop" aria-hidden="true"><span class="k">Y</span><span class="t">opens the launcher</span></p>
+          <div class="lx-wrap">
+            <div class="lx" role="img" aria-label="The launcher that Draft application… opens: /apply with the posting's address filled in, and the line Claude will run, /apply https://meridian.example/jobs/1, above the Run button.">
+              <div class="lx-head">/apply</div>
+              <div class="lx-body">
+                <span class="mut">Evaluate a posting, then draft and review documents</span>
+                <div><span class="lx-lab">Posting URL or pasted text</span><span class="lx-in area">https://meridian.example/jobs/1</span></div>
+                <div class="lx-two">
+                  <div><span class="lx-lab">Model</span><span class="lx-in lx-sel">Claude default</span></div>
+                  <div><span class="lx-lab">Spend at most, USD</span><span class="lx-in">5.00</span></div>
+                </div>
+                <div><span class="lx-lab">Claude will run</span><span class="lx-code">/apply https://meridian.example/jobs/1</span></div>
+                <span class="lx-run">Run <kbd>Cmd Enter</kbd></span>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+        <figcaption>A new match on Today, and the launcher its Y opens. Drawn from the app’s own parts, on fictional data.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="wrap sec" id="features" aria-labelledby="features-title">
+    <div class="sec-head">
+      <h2 id="features-title">A desk for ai‑job‑search.</h2>
+      <p><a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> is a set of Claude Code slash commands that find postings, score them and draft your applications. Jobdesk is a desktop GUI over them: each screen shows what the commands keep in your checkout, and follows along live as they run.</p>
+    </div>
+    <div class="cells">
+      <article class="cell c7">
+        <div class="txt"><h3>Jobs, scored against your terms</h3><p>Each posting gets a score and a check for each line you will not cross: contract, day rate, where, commute and language.</p></div>
+        <div class="crop"><!-- jobs_*.png, 60,372 1300x470 -->
+          <img class="th-l" src="img/jobs-light.webp" width="1300" height="470" alt="The Jobs shortlist: four fictional jobs with scores, places, day rates and closing dates." loading="lazy">
+          <img class="th-d" src="img/jobs-dark.webp" width="1300" height="470" alt="The Jobs shortlist in the dark theme." loading="lazy">
+        </div>
+      </article>
+      <article class="cell c5">
+        <div class="txt"><h3>Every check, spelled out</h3><p>OK, Unclear or Fails, with the reason beside it.</p></div>
+        <div class="crop"><!-- jobs_*.png, 1368,375 500x385 -->
+          <img class="th-l" src="img/checks-light.webp" width="500" height="385" alt="A job's detail: score 84 of 100, all six checks pass, the first four shown." loading="lazy">
+          <img class="th-d" src="img/checks-dark.webp" width="500" height="385" alt="A job's detail in the dark theme, with the first four of its six checks." loading="lazy">
+        </div>
+      </article>
+      <article class="cell c12 full">
+        <div class="txt"><h3>Tasks that tell you whose turn it is</h3><p>Start any slash command and follow it as a report. When Claude asks, its question waits above the reply box, with one-click replies at known stop points.</p></div>
+        <div class="crop"><!-- run_turn_*.png, 60,218 1810x300, scaled to 1600 wide -->
+          <img class="th-l" src="img/turn-light.webp" width="1600" height="266" alt="An /apply run: the band says it is your turn, and Claude asks whether to draft the CV and cover letter, with Go ahead with the draft and Stop here." loading="lazy">
+          <img class="th-d" src="img/turn-dark.webp" width="1600" height="266" alt="An /apply run in the dark theme, waiting for your answer." loading="lazy">
+        </div>
+      </article>
+      <article class="cell c7">
+        <div class="txt"><h3>Applications, lane by lane</h3><p>From Not sent yet to Closed. A pink edge marks what waits for you in Today.</p></div>
+        <div class="crop"><!-- tracker_*.png, 60,392 1080x470 -->
+          <img class="th-l" src="img/tracker-light.webp" width="1080" height="470" alt="Applications in lanes: Not sent yet, Applied and Interview, with fictional companies." loading="lazy">
+          <img class="th-d" src="img/tracker-dark.webp" width="1080" height="470" alt="Applications in lanes, in the dark theme." loading="lazy">
+        </div>
+      </article>
+      <div class="stack">
+        <article class="cell"><div class="txt"><h3>Application dossiers</h3><p>The PDFs, verification, keyword coverage, evaluation, prep packs and follow-ups of each application, in one place.</p></div></article>
+        <article class="cell"><div class="txt"><h3>Profile</h3><p>What Claude reads about you, topic by topic. Edit a block in place, and preview your CV PDFs with how fresh each is.</p></div></article>
+      </div>
+      <article class="cell c12 full">
+        <div class="txt"><h3>What your tasks cost</h3><p>Usage statistics show spend, tokens and cache hits, from Jobdesk’s own run logs on your computer. The cost is Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p></div>
+        <div class="crop"><!-- settings_usage_*.png, 527,196 1300x276 -->
+          <img class="th-l" src="img/usage-light.webp" width="1300" height="276" alt="Usage statistics for a fictional October: spent, tokens, cache hits and tasks, and the cost per application sent." loading="lazy">
+          <img class="th-d" src="img/usage-dark.webp" width="1300" height="276" alt="Usage statistics in the dark theme." loading="lazy">
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="how deepzone" id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="how-title">Your commands, your Claude Code CLI, your key.</h2>
+        <p>Jobdesk sits on top of what you already have: an ai‑job‑search checkout, the Claude Code CLI, and your own Anthropic API key or Claude Code’s sign-in.</p>
+      </div>
+      <ol class="steps wait" id="steps">
+        <li class="step">
+          <span class="n" aria-hidden="true">1</span>
+          <h3>You pick a command</h3>
+          <p>From New task, or from a card's Y. You see the line Claude will run, and you press Run.</p>
+          <div class="slab"><span class="lab">Some of the commands</span>
+            <ul class="chips"><li>/scrape</li><li>/rank</li><li>/apply</li><li>/interview</li><li>/outcome</li><li>/upskill</li><li>/setup</li></ul></div>
+        </li>
+        <li class="step">
+          <span class="n" aria-hidden="true">2</span>
+          <h3>Your Claude Code runs it</h3>
+          <p>Through your local claude CLI, in your job search folder, on your own API key or Claude Code’s sign-in. One run works at a time.</p>
+          <div class="slab"><span class="lab">Claude will run</span><code>/apply https://kestrel.example/jobs/2</code></div>
+        </li>
+        <li class="step">
+          <span class="n" aria-hidden="true">3</span>
+          <h3>Your files change, the screens follow</h3>
+          <p>The command writes your checkout. Today, Jobs, Applications and Insights update as it does.</p>
+          <div class="slab"><span class="lab">Written by /apply</span><ul class="files"><li>cv</li><li>cover_letters</li><li>tracker</li></ul></div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="wrap sec" id="key" aria-labelledby="key-title">
+    <div class="byok">
+      <div>
+        <h2 id="key-title">Bring your own Anthropic API key.</h2>
+        <p class="say">Paste a key from your Claude Console in Settings › Providers. Tasks then run on that key and bill its Console account. <b>Jobdesk keeps it in your system keychain and hands it only to Claude Code.</b></p>
+        <details>
+          <summary>What Jobdesk does with your key</summary>
+          <ol>
+            <li><b>Stored only in your keychain</b><span>In the macOS Keychain, or the Credential Manager on Windows. Never in a file. Jobdesk reads it from there and holds it in memory until you quit or remove it.</span></li>
+            <li><b>Passed only to Claude Code</b><span>Each task gets the key in its <code>claude</code> process’s environment. Never on a command line or in a log, and never on screen in full.</span></li>
+            <li><b>Shown only in part</b><span>A saved key reads <code>sk-ant-</code>, dots and its last four characters. Only the key you are typing shows in full, while you press Show.</span></li>
+            <li><b>Tested before it is used</b><span>Test connection asks one fixed question, with no tools, in an empty temporary folder, capped at $0.01. Tasks switch to the key only once the test passes.</span></li>
+            <li><b>Yours to remove</b><span>Remove deletes it from the keychain and puts tasks back on Claude Code’s sign-in.</span></li>
+          </ol>
+          <p class="more-key">The full account, with what the key is still exposed to: <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/architecture/trust.md#the-api-key">The API key, in Trust</a></p>
+        </details>
+      </div>
+      <figure>
+        <div class="shot">
+          <div class="crop"><!-- settings_key_saved_*.png, 986,288 848x436 -->
+            <img class="th-l" src="img/key-light.webp" width="848" height="436" alt="Settings › Providers with an API key in use: the key shows only as sk-ant-, dots and its last four characters, kept in the macOS Keychain, with its last test passed." loading="lazy">
+            <img class="th-d" src="img/key-dark.webp" width="848" height="436" alt="Settings › Providers in the dark theme, with an API key in use and shown only in part." loading="lazy">
+          </div>
+        </div>
+        <figcaption>Settings › Providers, with a fictional key in use.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="wrap sec" id="trust" aria-labelledby="trust-title">
+    <div class="sec-head">
+      <h2 id="trust-title">You stay in charge of every run.</h2>
+      <p>A job search holds a lot about you. Here is exactly what Jobdesk does with it.</p>
+    </div>
+    <dl class="spec">
+      <div><dt>Starting a run</dt><dd>Nothing runs until you start it. Card actions only open the launcher.</dd></div>
+      <div><dt>One at a time</dt><dd>Only one run works at a time, because two commands could overwrite each other's files.</dd></div>
+      <div><dt>Sign-in</dt><dd>Tasks use your API key or Claude Code’s own sign-in. Jobdesk keeps no password and offers no login of its own.</dd></div>
+      <div><dt>Tool permissions</dt><dd>Allowed without asking by default, and listed in the activity once they run, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on.</dd></div>
+      <div><dt>What it writes</dt><dd>Slash commands write your checkout. Jobdesk itself writes only the Profile block you save.</dd></div>
+      <div><dt>Your data</dt><dd>Run logs and your decisions stay in the app's data folder, readable only by your user.</dd></div>
+      <div><dt>Updates</dt><dd>Jobdesk asks GitHub for its latest release, sending only its version. Turn this off in Settings › About.</dd></div>
+      <div><dt>Signing</dt><dd>macOS releases are signed with a Developer ID and notarized by Apple. The Windows installer is not signed yet.</dd></div>
+    </dl>
+    <div class="pull"><p>The app never sends an application for you.</p><span>Send it from your own mail or the portal, then mark it sent. Jobdesk opens the task that records it.</span></div>
+  </section>
+
+  <section class="wrap get" id="download" aria-labelledby="get-title">
+    <div class="sec-head">
+      <h2 id="get-title">Download Jobdesk.</h2>
+      <p>Free and open source under the MIT License. On first launch, choose your ai‑job‑search folder.</p>
+    </div>
+    <div class="plats">
+      <div class="plat">
+        <h3>macOS</h3>
+        <span class="file">Jobdesk-vX.Y.Z-macos-arm64.dmg</span>
+        <p>For Apple silicon. Open it and drag Jobdesk to Applications. Signed with a Developer ID and notarized by Apple.</p>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
+      </div>
+      <div class="plat">
+        <h3>Windows</h3>
+        <span class="file">Jobdesk-vX.Y.Z-windows-x64-setup.exe</span>
+        <p>Run the installer. It is not signed yet, so SmartScreen warns: click More info, then Run anyway.</p>
+        <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
+      </div>
+    </div>
+    <p class="need">Both buttons open the latest release on GitHub.</p>
+    <p class="need">You need the <b>Claude Code</b> CLI, an <b>Anthropic API key</b> or Claude Code’s sign-in, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout.</p>
+    <ul class="more">
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></li>
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">User guide</a></li>
+      <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md">Changelog</a></li>
+    </ul>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span class="brand"><img src="jobdesk-icon-small.svg" alt="" width="24" height="24"> Jobdesk</span>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk">Source on GitHub</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">User guide</a>
+    <a href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/CHANGELOG.md">Changelog</a>
+    <span>MIT License</span>
+    <span>A desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a>, built in Rust. Not made or endorsed by Anthropic.</span>
+  </div>
+</footer>
+</div>
+
+<script>
+/* The line between the steps draws once, when the steps come into view. Without JS, or with reduced motion, it is simply there. */
+(function () {
+  var steps = document.getElementById("steps");
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) { steps.classList.remove("wait"); return; }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { if (e.isIntersecting) { steps.classList.add("drawn"); steps.classList.remove("wait"); io.disconnect(); } });
+  }, { threshold: 0, rootMargin: "0px 0px -25% 0px" });
+  io.observe(steps);
+})();
+</script>
+</body>
+</html>

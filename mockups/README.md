@@ -18,7 +18,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|about-checking\|about-failed\|about-update\|about-ready-waits\|search\|nav&theme=light\|dark` | 29 `Settings-*.png` | [settings](handoff/settings.md), [update](handoff/update.md) |
 | `Update.html` | `?state=available\|notes\|notes-ready\|downloading\|ready\|ready-busy\|failed\|bad-signature&theme=light\|dark` | 10 `Update-*.png` | [update](handoff/update.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
-| `landing/Landing.html` | `?hero=a\|b&theme=light\|dark&motion=off`, `&details=open` opens the key's details; phone through `landing/phone.html?hero=a\|b&theme=light&motion=off&h=1760&top=80` | 9 `landing/Landing-*.png`: for each of `A` and `B`, `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900 and `-phone` at 390x1760; `-full` (hero A) at 1440 wide | [landing](handoff/landing.md) |
+| `landing/Landing.html` | `?theme=light\|dark&motion=off`; phone through `landing/phone.html?theme=light&motion=off&h=1760&top=80` | 5 `landing/Landing-*.png`: `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900, `-phone` at 390x1760 and `-full` at 1440x5808 | [landing](handoff/landing.md) |
 
 ## Handoff files
 
@@ -30,6 +30,6 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.
 - **Updates**: the update group in the status bar, the release notes popover and how the notes render, Restart while a Claude session is open, and Settings › About's Updates section → see [handoff/update.md](handoff/update.md). Open it when you change how Jobdesk updates itself or the right side of the status bar.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
-- **Landing page**: the GitHub Pages landing page: round 2's two hero options (A and B, open for the user), the shorter API key section, the copy fixes, every place the key appears, the rules, and what a `site/` build needs → see [handoff/landing.md](handoff/landing.md). Open it when you change or build the landing page.
+- **Landing page**: the GitHub Pages landing page: round 2's approved hero B (the journey drawn from the app's parts), the shorter API key section, the copy fixes, every place the key appears, the rules, and what a `site/` build needs → see [handoff/landing.md](handoff/landing.md). Open it when you change or build the landing page.
 
 A new round writes or updates one handoff file per screen or topic it changes, its canvas's row in the Canvases table, and its line under Handoff files (`.claude/agents/designer.md` step 6).

@@ -8,19 +8,16 @@
 <link rel="icon" href="../../assets/brand/jobdesk-icon-small.svg" type="image/svg+xml">
 <script>
   /* Render switches, for the canvas only:
-     ?theme=dark|light overrides the system theme. ?motion=off shows every moving part at rest.
-     ?hero=a|b picks the hero option (a by default). ?details=open opens the API key's details. */
+     ?theme=dark|light overrides the system theme. ?motion=off shows every moving part at rest. */
   (function () {
     var root = document.documentElement, q = new URLSearchParams(location.search), theme = q.get("theme");
     if (theme === "dark" || theme === "light") root.setAttribute("data-theme", theme);
-    root.setAttribute("data-hero", q.get("hero") === "b" ? "b" : "a");
     if (q.get("motion") === "off") root.classList.add("still");
-    if (q.get("details") === "open") root.classList.add("open-details");
     root.classList.add("js");
   })();
 </script>
 <style>
-/* Landing page canvas for the static GitHub Pages site in site/. Round 2: two hero options, A and B; the rest is shared.
+/* Landing page canvas for the static GitHub Pages site in site/. Round 2, as approved: hero B, the journey drawn on the deep field.
    Colours are the tokens in src/ui_kit/palette.rs, named as there. The deep field is the dark palette's desk:
    dark sheet and dark grid under the light theme, dark field under the dark theme. Type is the app's own bundled files. */
 @font-face { font-family: "Zilla Slab"; font-weight: 600; font-display: swap; src: url("../../assets/fonts/ZillaSlab-SemiBold.ttf") format("truetype"); }
@@ -59,9 +56,6 @@
 :root[data-theme="dark"] .th-d { display: block; }
 .th-d { display: none; }
 
-/* Only one hero option shows. The site keeps the chosen one and drops the switch. */
-[data-hero="a"] .hero-b, [data-hero="b"] .hero-a { display: none; }
-
 html { background: var(--sheet); scroll-padding-top: 80px; }
 body { margin: 0; color: var(--text); background: var(--sheet); font: 400 17px/1.55 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
@@ -97,9 +91,9 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .top nav a:hover { color: var(--text); background: var(--raised); }
 .top .btn { margin-left: auto; min-height: 38px; padding: 0 16px; font-size: 15px; }
 
-/* Shared hero parts: the line, the credit, the key line, the downloads and the fine print. */
+/* The hero's parts: the line, the credit, the key line, the downloads and the fine print. */
 .hero { position: relative; }
-.hero h1 { font: 700 clamp(38px, 5.4vw, 78px)/1.02 var(--sans); letter-spacing: -0.035em; text-wrap: balance; }
+.hero h1 { font: 700 clamp(38px, 4.6vw, 66px)/1.02 var(--sans); letter-spacing: -0.035em; text-wrap: balance; max-width: 9.5em; }
 .hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); max-width: 36em; }
 .hero .lede b { color: var(--text); font-weight: 600; }
 .hero .about { margin-top: 14px; font-size: 16px; color: var(--muted); max-width: 40em; }
@@ -128,40 +122,14 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .lx-run { justify-self: start; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; margin-top: 2px; border-radius: 3px; background: var(--primary); color: var(--on-primary); font-weight: 500; }
 .lx-run kbd { font: inherit; opacity: .92; }
 
-/* Option A: the benefit as the line, with the two downloads stacked in a right rail that ends on the line's baseline.
-   Under them the lede, and in the rail the key line and what Jobdesk needs. Then the real Today window on the deep field,
-   with the launcher its Y opens hanging over its right edge. */
-.hero-a { padding-top: 64px; }
-.hero-a .intro { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); grid-template-areas: "title go" "say side"; gap: 30px 56px; align-items: end; }
-.hero-a h1 { grid-area: title; font-size: clamp(38px, 5.2vw, 74px); }
-.hero-a .say { grid-area: say; align-self: start; }
-.hero-a .go { grid-area: go; display: grid; gap: 10px; padding-bottom: 6px; }
-.hero-a .go .dl { display: grid; }
-.hero-a .side { grid-area: side; align-self: start; display: grid; gap: 14px; padding-top: 18px; border-top: 1px solid var(--line); }
-.stage { position: relative; isolation: isolate; margin-top: 52px; padding-bottom: 96px; }
-/* The deep field starts 168px down the window and runs the full width of the page. */
-.stage::before { content: ""; position: absolute; z-index: -1; top: 168px; bottom: 0; left: 50%; width: 100vw; margin-left: -50vw;
-  background-color: var(--deep);
-  background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
-  background-size: 20px 20px; background-position: -1px -1px; }
-.hero-a .stage > * { position: relative; }
-.window { position: relative; border-radius: 8px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--deep-line); overflow: hidden; background: var(--card); }
-.window .crop { --x: 12; --y: 12; --w: 1896; --h: 1206; }
-.window .crop.part { display: none; }
-/* The launcher hangs 44px past the window where the margin has room. Narrower, it moves in just far enough that it and its
-   shadow stay inside the page, beside a 17px scrollbar too. */
-.float { position: absolute; right: max(-44px, calc((100% - 100vw) / 2 + 24px)); top: 30%; width: 34%; min-width: 300px; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
-.stage figcaption { margin-top: 26px; color: var(--deep-muted); font-size: 14.5px; max-width: 46em; }
-
-/* Option B: the journey. Words on the left; on the right the deep field as a desk, with the card and the launcher
+/* The hero: the journey. Words on the left; on the right the deep field as a desk, with the card and the launcher
    drawn at the app's own size, so they stay sharp and reflow at any width. */
-.hero-b .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 64px; min-height: min(calc(100vh - 68px), 860px); }
-.hero-b .words { align-self: center; padding: 64px 0; display: grid; gap: 0; }
-.hero-b h1 { font-size: clamp(38px, 4.6vw, 66px); max-width: 9.5em; }
-.hero-b .lede { margin-top: 24px; }
-.hero-b .go { display: grid; gap: 12px; margin-top: 32px; }
-.hero-b .keyline { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
-.hero-b .fine.req { margin-top: 12px; }
+.hero .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 64px; min-height: min(calc(100vh - 68px), 860px); }
+.hero .words { align-self: center; padding: 64px 0; display: grid; gap: 0; }
+.hero .lede { margin-top: 24px; }
+.hero .go { display: grid; gap: 12px; margin-top: 32px; }
+.hero .keyline { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.hero .fine.req { margin-top: 12px; }
 .desk { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; padding: 40px 0 40px 48px; color: var(--deep-text); }
 .desk::before { content: ""; position: absolute; z-index: -1; inset: 0 -50vw 0 0;
   background-color: var(--deep);
@@ -209,8 +177,8 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .window, .tc { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
-  .float, .desk .lx-wrap { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
+  .tc { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
+  .desk .lx-wrap { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
 }
 @keyframes rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
 @keyframes slide { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
@@ -308,23 +276,16 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 @media (max-width: 1200px) {
   .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
-/* B: under 1200 the desk keeps its two columns but the launcher tucks in, so it never leaves the page. */
+/* Under 1200 the desk keeps its two columns but the launcher tucks in, so it never leaves the page. */
 @media (max-width: 1200px) {
   .desk { padding-left: 32px; }
   .desk .lx-wrap { margin-right: 0; }
 }
-@media (max-width: 1100px) {
-  .hero-a .intro { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); grid-template-areas: "title title" "say side" "go go"; align-items: start; }
-  .hero-a .go { padding-bottom: 0; }
-  .hero-a .go .dl { display: flex; }
-}
 @media (max-width: 1000px) {
   .top nav { display: none; }
   .sec-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .hero-a .intro { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "say" "go" "side"; gap: 24px; }
-  .hero-a .side { max-width: 40em; }
-  .hero-b .split { grid-template-columns: minmax(0, 1fr); min-height: 0; }
-  .hero-b .words { padding: 56px 0 48px; }
+  .hero .split { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .hero .words { padding: 56px 0 48px; }
   .desk { padding: 48px 0 56px; }
   .desk::before { inset: 0 -50vw; }
   .pair { max-width: 620px; }
@@ -354,20 +315,10 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 @media (max-width: 640px) {
   body { font-size: 16px; }
   .top .wrap { height: 60px; }
-  .hero-a { padding-top: 40px; }
   .hero .lede { font-size: 18px; }
-  .dl, .hero-a .go .dl { display: grid; }
+  .dl { display: grid; }
   .dl .btn { white-space: normal; text-align: center; line-height: 1.25; padding-block: 12px; }
-  /* A on a phone: not the whole window scaled down, but the card itself, closer: its head, then its actions,
-     the empty middle of the card cut out. The deep field starts halfway down the card's head, whatever the width. */
-  .window .crop.whole { display: none; }
-  .window .crop.part { display: block; }
-  .window .crop.head { --x: 62; --y: 306; --w: 700; --h: 262; }
-  .window .crop.acts { --x: 62; --y: 956; --w: 700; --h: 98; }
-  .stage { margin-top: 40px; padding-bottom: 56px; }
-  .stage::before { top: calc((100vw - 32px) * 131 / 700); }
-  .float { position: relative; right: auto; top: auto; width: 88%; min-width: 0; margin: -12px 0 0 auto; }
-  .hero-b .words { padding: 40px 0 40px; }
+  .hero .words { padding: 40px 0 40px; }
   .desk { padding: 40px 0 48px; }
   .hop { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 0; }
   .yhop { padding-top: 16px; }
@@ -411,66 +362,10 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 <main id="main">
 <div id="top">
 
-  <!-- Option A: "One decision at a time". -->
-  <section class="hero hero-a" aria-labelledby="hero-title-a">
-    <div class="wrap intro">
-      <h1 id="hero-title-a">Your job search, one decision at a time.</h1>
-      <div class="say">
-        <p class="lede">Today deals what needs you as cards: a new match to draft, an application to send, an offer to answer. <b>Press Y and the launcher shows the line Claude will run. Nothing runs until you press Run.</b></p>
-        <p class="about">Jobdesk is the desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> users: a GUI over its slash commands, run through your own Claude Code.</p>
-      </div>
-      <div class="go">
-        <div class="dl">
-          <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
-          <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
-        </div>
-        <p class="fine">Both buttons open the latest release on GitHub. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a></p>
-      </div>
-      <div class="side">
-        <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Run tasks on your own Anthropic API key, kept only in your system keychain, or on Claude Code’s own sign-in. <a href="#key">How the key is kept</a></span></p>
-        <p class="fine">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
-      </div>
-    </div>
-    <figure class="wrap stage deepzone">
-      <div class="window">
-        <div class="crop whole">
-          <img class="th-l" src="../../tests/snapshots/intray_light.png" alt="Jobdesk's Today screen on fictional data: ten things need you, and one card, a Lead Java Engineer application at Harbor Bank that is ready to send, with Mark as sent… on Y.">
-          <img class="th-d" src="../../tests/snapshots/intray_dark.png" alt="Jobdesk's Today screen in the dark theme on fictional data: a Harbor Bank application ready to send, with Mark as sent… on Y.">
-        </div>
-        <div class="crop part head" aria-hidden="true">
-          <img class="th-l" src="../../tests/snapshots/intray_light.png" alt="">
-          <img class="th-d" src="../../tests/snapshots/intray_dark.png" alt="">
-        </div>
-        <div class="crop part acts" aria-hidden="true">
-          <img class="th-l" src="../../tests/snapshots/intray_light.png" alt="">
-          <img class="th-d" src="../../tests/snapshots/intray_dark.png" alt="">
-        </div>
-      </div>
-      <div class="float">
-        <div class="lx" role="img" aria-label="The launcher that Mark as sent… opens: /outcome, with harbor bank filled in, and the line Claude will run, /outcome harbor bank, above the Run button.">
-          <div class="lx-head">/outcome</div>
-          <div class="lx-body">
-            <span class="mut">Record progress, follow up, or sweep stale rows</span>
-            <div><span class="lx-lab">Company, followup [N], or stale [N]</span><span class="lx-in">harbor bank</span></div>
-            <div class="lx-two">
-              <div><span class="lx-lab">Model</span><span class="lx-in lx-sel">Claude default</span></div>
-              <div><span class="lx-lab">Spend at most, USD</span><span class="lx-in">2.00</span></div>
-            </div>
-            <div><span class="lx-lab">Claude will run</span><span class="lx-code">/outcome harbor bank</span></div>
-            <span class="mut">Runs in your job search folder.</span>
-            <span class="lx-run">Run <kbd>Cmd Enter</kbd></span>
-          </div>
-        </div>
-      </div>
-      <figcaption>An application ready to send on Today, and the launcher its Y opens, with the line Claude will run to record it as sent. The app never sends for you. Screens from the app, on fictional data.</figcaption>
-    </figure>
-  </section>
-
-  <!-- Option B: "Pick the job. See the command. Press Run." -->
-  <section class="hero hero-b" aria-labelledby="hero-title-b">
+  <section class="hero" aria-labelledby="hero-title">
     <div class="wrap split">
       <div class="words">
-        <h1 id="hero-title-b">Pick the job. See the command. Press Run.</h1>
+        <h1 id="hero-title">Pick the job. See the command. Press Run.</h1>
         <p class="lede">Your job search comes to you one decision at a time. <b>Y on a new match opens the launcher with the line Claude will run, and Claude drafts your application only once you press Run.</b></p>
         <p class="about">Jobdesk is the desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> users: a GUI over its slash commands, run through your own Claude Code.</p>
         <div class="go">
@@ -612,7 +507,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       <div>
         <h2 id="key-title">Bring your own Anthropic API key.</h2>
         <p class="say">Paste a key from your Claude Console in Settings › Providers. Tasks then run on that key and bill its Console account. <b>Jobdesk keeps it in your system keychain and hands it only to Claude Code.</b></p>
-        <details id="key-details">
+        <details>
           <summary>What Jobdesk does with your key</summary>
           <ol>
             <li><b>Stored only in your keychain</b><span>In the macOS Keychain, or the Credential Manager on Windows. Never in a file. Jobdesk reads it from there and holds it in memory until you quit or remove it.</span></li>
@@ -700,7 +595,6 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 /* The line between the steps draws once, when the steps come into view. Without JS, or with reduced motion, it is simply there. */
 (function () {
   var root = document.documentElement, steps = document.getElementById("steps");
-  if (root.classList.contains("open-details")) document.getElementById("key-details").open = true;
   var still = root.classList.contains("still") || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (still || !("IntersectionObserver" in window)) { steps.classList.remove("wait"); return; }
   var io = new IntersectionObserver(function (entries) {

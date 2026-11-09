@@ -36,7 +36,7 @@
   /* LIGHT */
   --sheet: #eff3f8; --panel: #dfe7f0; --raised: #d0dce9; --line: #aebfd1; --field: #fafcfe;
   --text: #12263f; --muted: #35495f; --primary: #12263f; --on-primary: #eff3f8; --active: #1657a8;
-  --turn: #b0246a; --on-turn: #ffffff; --grid: #d4dee9; --card: #ffffff;
+  --turn: #b0246a; --on-turn: #ffffff; --grid: #d4dee9; --card: #ffffff; --hired: #17643a;
   /* The deep field: DARK sheet, grid, line, text, muted and turn. */
   --deep: #13243a; --deep-grid: #1e3554; --deep-line: #33506f; --deep-text: #e6edf5; --deep-muted: #b3c4d6; --deep-panel: #1a2f49; --deep-turn: #f48cc0;
   --slab: "Zilla Slab", Rockwell, Georgia, serif; --sans: "Schibsted Grotesk", system-ui, sans-serif; --typed: "Courier Prime", "Courier New", monospace;
@@ -46,7 +46,7 @@
   :root:not([data-theme="light"]) {
     --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b;
     --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --active: #8cc2f7;
-    --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49;
+    --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49; --hired: #7bdda3;
     --deep: #0d1a2b; --deep-grid: #13243a; --deep-line: #33506f; --deep-panel: #13243a;
     color-scheme: dark;
   }
@@ -56,7 +56,7 @@
 :root[data-theme="dark"] {
   --sheet: #13243a; --panel: #1a2f49; --raised: #233b59; --line: #33506f; --field: #0d1a2b;
   --text: #e6edf5; --muted: #b3c4d6; --primary: #e6edf5; --on-primary: #0d1a2b; --active: #8cc2f7;
-  --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49;
+  --turn: #f48cc0; --on-turn: #0d1a2b; --grid: #1e3554; --card: #1a2f49; --hired: #7bdda3;
   --deep: #0d1a2b; --deep-grid: #13243a; --deep-line: #33506f; --deep-panel: #13243a;
   color-scheme: dark;
 }
@@ -100,41 +100,94 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .top nav a:hover { color: var(--text); background: var(--raised); }
 .top .btn { margin-left: auto; min-height: 38px; padding: 0 16px; font-size: 15px; }
 
-/* Hero: the words over sheet, then the window across the edge of the deep field. */
-.hero { position: relative; padding-top: 72px; }
-.hero > * { position: relative; z-index: 1; }
-.intro { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px 56px; align-items: start; }
-.intro h1 { grid-column: 1 / -1; }
-.intro .lede { max-width: 36em; }
-.hero h1 { font: 700 clamp(38px, 5.4vw, 78px)/1.02 var(--sans); letter-spacing: -0.035em; }
-.hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); }
+/* The hero's parts: the line, the credit, the key line, the downloads and the fine print. */
+.hero { position: relative; }
+.hero h1 { font: 700 clamp(38px, 4.6vw, 66px)/1.02 var(--sans); letter-spacing: -0.035em; text-wrap: balance; max-width: 9.5em; }
+.hero .lede { font-size: 19px; line-height: 1.5; color: var(--muted); max-width: 36em; }
 .hero .lede b { color: var(--text); font-weight: 600; }
+.hero .about { margin-top: 14px; font-size: 16px; color: var(--muted); max-width: 40em; }
 .credit { color: var(--text); font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.keyline { margin-top: 18px; display: flex; align-items: center; gap: 10px; font-size: 15.5px; color: var(--muted); }
-.keyline svg { flex: none; width: 18px; height: 18px; }
-.keyline a { color: var(--text); font-weight: 600; text-underline-offset: 3px; }
-/* The two downloads stay one group: stacked to the column's width beside the line, side by side under it, stacked again on a phone.
-   Under them, where they lead and what Jobdesk needs. */
-.ctas { display: grid; gap: 14px; }
-.dl { display: grid; gap: 10px; }
+.keyline { display: flex; align-items: flex-start; gap: 12px; font-size: 15.5px; line-height: 1.5; color: var(--text); }
+.keyline svg { flex: none; width: 20px; height: 20px; margin-top: 2px; }
+.keyline a { font-weight: 600; text-underline-offset: 3px; white-space: nowrap; }
+.dl { display: flex; flex-wrap: wrap; gap: 10px; }
 .fine { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
 .fine a { color: var(--text); }
 .fine .link { white-space: nowrap; }
-.stage { position: relative; margin-top: 56px; padding-bottom: 96px; }
-/* The deep field starts 168px down the window, wherever the words above leave it, and runs the full width of the page. */
-.stage::before { content: ""; position: absolute; z-index: -1; top: 168px; bottom: 0; left: 50%; width: 100vw; margin-left: -50vw;
+
+/* The launcher's form panel, drawn from the app's tokens at the app's own size (src/runs/ui/launcher.rs):
+   the command in Courier Prime over a hairline, its summary, its field, Model and Spend at most, Claude will run, Run. */
+.lx { background: var(--panel); color: var(--text); font: 400 15.5px/1.35 var(--sans); text-align: left; }
+.lx-head { padding: 9px 14px; border-bottom: 1px solid var(--line); font: 700 23px/1.2 var(--typed); }
+.lx-body { display: grid; gap: 8px; padding: 12px 14px 14px; }
+.lx .mut { color: var(--muted); }
+.lx-lab { display: block; color: var(--muted); font-size: 14.5px; margin-bottom: 4px; }
+.lx-in { display: block; min-height: 34px; padding: 6px 10px; border-radius: 3px; background: var(--field); box-shadow: inset 0 0 0 1px var(--line); overflow-wrap: anywhere; }
+.lx-in.area { min-height: 64px; }
+.lx-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.lx-sel { display: flex; justify-content: space-between; align-items: center; }
+.lx-sel::after { content: ""; border: 5px solid transparent; border-top: 6px solid var(--text); border-bottom: 0; }
+.lx-code { display: block; padding: 9px 11px; border-radius: 3px; background: var(--field); font: 700 14.5px/1.4 var(--typed); overflow-wrap: anywhere; }
+.lx-run { justify-self: start; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; margin-top: 2px; border-radius: 3px; background: var(--primary); color: var(--on-primary); font-weight: 500; }
+.lx-run kbd { font: inherit; opacity: .92; }
+
+/* The hero: the journey. Words on the left; on the right the deep field as a desk, with the card and the launcher
+   drawn at the app's own size, so they stay sharp and reflow at any width. */
+.hero .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 64px; min-height: min(calc(100vh - 68px), 860px); }
+.hero .words { align-self: center; padding: 64px 0; display: grid; gap: 0; }
+.hero .lede { margin-top: 24px; }
+.hero .go { display: grid; gap: 12px; margin-top: 32px; }
+.hero .keyline { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.hero .fine.req { margin-top: 12px; }
+.desk { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: center; padding: 40px 0 40px 48px; color: var(--deep-text); }
+.desk::before { content: ""; position: absolute; z-index: -1; inset: 0 -50vw 0 0;
   background-color: var(--deep);
   background-image: linear-gradient(var(--deep-grid) 1px, transparent 1px), linear-gradient(90deg, var(--deep-grid) 1px, transparent 1px);
   background-size: 20px 20px; background-position: -1px -1px; }
-.window { position: relative; border-radius: 8px; border: 1px solid var(--line); box-shadow: 10px 10px 0 var(--deep-line); overflow: hidden; }
-/* The launcher hangs 44px past the window where the margin has room. Narrower, it moves in just far enough that it and its
-   shadow stay inside the page, beside a 17px scrollbar too. */
-.float { position: absolute; right: max(-44px, calc((100% - 100vw) / 2 + 24px)); top: 34%; width: 34%; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
-.stage figcaption { margin-top: 26px; color: var(--deep-muted); font-size: 14.5px; }
+.desk > * { position: relative; }
+.pair { position: relative; display: grid; }
+/* Under the card: the Y key and a dashed line that leads to the launcher, which overlaps the card's stack a little. */
+.hop { display: grid; grid-template-columns: minmax(0, 1fr) min(440px, 78%); align-items: start; gap: 0 14px; margin-top: -14px; }
+.desk .lx-wrap { margin-right: -24px; border-radius: 6px; border: 1px solid var(--line); box-shadow: 8px 8px 0 var(--deep-line); overflow: hidden; }
+.yhop { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding-top: 34px; color: var(--deep-muted); font-size: 14.5px; line-height: 1.3; }
+.yhop::after { content: ""; grid-row: 1; grid-column: 2; border-top: 2px dashed var(--deep-line); }
+.yhop .t { grid-column: 1 / -1; }
+.yhop .k { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1.5px solid var(--deep-text); border-radius: 3px; color: var(--deep-text); font: 600 14px/1 var(--sans); }
+.desk figcaption { margin-top: 24px; color: var(--deep-muted); font-size: 14.5px; max-width: 34em; }
+
+/* The Today card, drawn from the app's tokens (src/intray): its tab, then the card with its head, the fit line,
+   the checks and the pinned actions. Titles take Zilla Slab as the app does. */
+.tc { container-type: inline-size; color: var(--text); }
+.tc-tab { display: inline-flex; gap: 10px; padding: 6px 14px; background: var(--card); border: 1px solid var(--line); border-bottom: 0; border-radius: 4px 4px 0 0; font-size: 14.5px; position: relative; top: 1px; }
+.tc-tab b { color: var(--active); font-weight: 600; }
+.tc-tab span { color: var(--muted); }
+.tc-card { background: var(--card); border: 1px solid var(--line); border-radius: 0 4px 4px 4px; box-shadow: 0 4px 0 -1px var(--card), 0 4px 0 0 var(--line), 0 8px 0 -1px var(--card), 0 8px 0 0 var(--line); }
+.tc-in { padding: 18px 20px 16px; }
+.tc-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; align-items: start; }
+.tc-score { display: grid; justify-items: center; gap: 2px; }
+.tc-score b { display: flex; align-items: center; justify-content: center; width: 54px; height: 50px; border: 1.5px solid var(--hired); box-shadow: inset 0 0 0 2px var(--card), inset 0 0 0 3px var(--hired); color: var(--hired); font: 500 28px/1 var(--sans); }
+.tc-score span { font-size: 12.5px; color: var(--muted); }
+.tc-co { font-size: 14.5px; color: var(--muted); }
+.tc-title { font: 600 24px/1.15 var(--slab); margin-top: 2px; }
+.tc-meta { font-size: 14.5px; color: var(--muted); margin-top: 3px; }
+.tc-fit { margin-top: 14px; font-size: 15.5px; }
+.tc-fit b { font-weight: 650; }
+.tc-checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; margin-top: 12px; list-style: none; }
+.tc-checks li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 6px; padding: 7px 0 6px; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.3; }
+.tc-checks i { font-style: normal; color: var(--muted); font-size: 13px; }
+.tc-checks em { grid-row: 1 / span 2; grid-column: 2; align-self: start; font-style: normal; padding: 1px 5px; border: 1.5px solid var(--hired); color: var(--hired); font-weight: 600; font-size: 13px; }
+.tc-acts { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 20px 14px; border-top: 1px solid var(--line); }
+.tc-b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 3px; border: 1px solid var(--line); font-size: 15px; }
+.tc-b.pri { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.tc-b kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font: 500 12px/1 var(--sans); }
+@container (max-width: 470px) {
+  .tc-checks { grid-template-columns: minmax(0, 1fr); }
+  .tc-title { font-size: 21px; }
+}
 
 @media (prefers-reduced-motion: no-preference) {
-  .window { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
-  .float { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
+  .tc { animation: rise .7s cubic-bezier(.2, .8, .25, 1) .1s both; }
+  .desk .lx-wrap { animation: slide .6s cubic-bezier(.2, .8, .25, 1) .65s both; }
 }
 @keyframes rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
 @keyframes slide { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
@@ -224,10 +277,20 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 @media (max-width: 1200px) {
   .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
+/* Under 1200 the desk keeps its two columns but the launcher tucks in, so it never leaves the page. */
+@media (max-width: 1200px) {
+  .desk { padding-left: 32px; }
+  .desk .lx-wrap { margin-right: 0; }
+}
 @media (max-width: 1000px) {
   .top nav { display: none; }
-  .intro, .sec-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .dl { display: flex; flex-wrap: wrap; }
+  .sec-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .hero .split { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .hero .words { padding: 56px 0 48px; }
+  .desk { padding: 48px 0 56px; }
+  .desk::before { inset: 0 -50vw; }
+  .pair { max-width: 620px; }
+  .desk .lx-wrap { margin-right: 0; }
   .cells { grid-template-columns: minmax(0, 1fr); }
   .c7, .c5, .c12, .stack { grid-column: auto; }
   .cell.full { grid-template-columns: minmax(0, 1fr); }
@@ -253,12 +316,15 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 @media (max-width: 640px) {
   body { font-size: 16px; }
   .top .wrap { height: 60px; }
-  .hero { padding-top: 40px; }
-  .stage::before { top: auto; height: 300px; }
+  .hero .lede { font-size: 18px; }
   .dl { display: grid; }
-  .hero h1 br { display: none; }
-  .stage { margin-top: 40px; padding-bottom: 56px; }
-  .float { position: relative; right: auto; top: auto; width: 78%; margin: -28% 0 0 auto; }
+  .dl .btn { white-space: normal; text-align: center; line-height: 1.25; padding-block: 12px; }
+  .hero .words { padding: 40px 0 40px; }
+  .desk { padding: 40px 0 48px; }
+  .hop { grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 0; }
+  .yhop { padding-top: 16px; }
+  .yhop .t { grid-column: 2; grid-row: 1; }
+  .yhop::after { display: none; }
   .spec div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .sec { padding-top: 88px; }
   .how { margin-top: 88px; padding: 80px 0; }
@@ -294,37 +360,63 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
 <main id="main">
   <section class="hero" id="top" aria-labelledby="hero-title">
-    <div class="wrap intro">
-      <h1 id="hero-title">The desktop app for your<br> ai‑job‑search commands.</h1>
-        <div>
-        <p class="lede">Jobdesk puts the <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> slash commands on a desk. It deals your decisions one card at a time and runs any command through your own Claude Code. Nothing runs until you start it.</p>
-        <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Bring your own Anthropic API key, stored only in your system keychain. <a href="#key">How</a></span></p>
-        </div>
-        <div class="ctas">
+    <div class="wrap split">
+      <div class="words">
+        <h1 id="hero-title">Pick the job. See the command. Press Run.</h1>
+        <p class="lede">Your job search comes to you one decision at a time. <b>Y on a new match opens the launcher with the line Claude will run, and Claude drafts your application only once you press Run.</b></p>
+        <p class="about">Jobdesk is the desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> users: a GUI over its slash commands, run through your own Claude Code.</p>
+        <div class="go">
           <div class="dl">
             <a class="btn pri" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for macOS (Apple silicon)</a>
             <a class="btn" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest">Download for Windows (x64)</a>
           </div>
           <p class="fine">Both buttons open the latest release on GitHub. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a></p>
-          <p class="fine">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI, running on your Anthropic API key or its own sign-in, and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
         </div>
-
+        <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Run tasks on your own Anthropic API key, kept only in your system keychain, or on Claude Code’s own sign-in. <a href="#key">How the key is kept</a></span></p>
+        <p class="fine req">Needs an Apple silicon Mac or 64-bit Windows, the Claude Code CLI and an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout. <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk#install">Setup steps</a></p>
+      </div>
+      <figure class="desk deepzone">
+        <div class="pair">
+          <div class="tc" role="img" aria-label="A Today card on fictional data: a new match, Tech Lead Java, Real-Time Traffic at Meridian Rail Systems, scored 84 of 100 with its checks OK, and Draft application… on Y.">
+            <div class="tc-tab"><b>New match</b><span>Closes in 5 days</span></div>
+            <div class="tc-card">
+              <div class="tc-in">
+                <div class="tc-head">
+                  <div class="tc-score"><b>84</b><span>Job ad only</span></div>
+                  <div><div class="tc-co">Meridian Rail Systems</div><div class="tc-title">Tech Lead Java, Real-Time Traffic</div><div class="tc-meta">Brussels, hybrid.</div></div>
+                </div>
+                <p class="tc-fit"><b>Strong fit, 84 of 100.</b> All six checks pass.</p>
+                <ul class="tc-checks">
+                  <li><i>Contract</i><em>OK</em><span>Freelance, 12 months</span></li>
+                  <li><i>Day rate</i><em>OK</em><span>EUR 780, floor 700</span></li>
+                  <li><i>Where</i><em>OK</em><span>Brussels, hybrid</span></li>
+                </ul>
+              </div>
+              <div class="tc-acts"><span class="tc-b pri">Draft application… <kbd>Y</kbd></span><span class="tc-b">Skip <kbd>N</kbd></span><span class="tc-b">Later <kbd>L</kbd></span></div>
+            </div>
+          </div>
+          <div class="hop">
+          <p class="yhop" aria-hidden="true"><span class="k">Y</span><span class="t">opens the launcher</span></p>
+          <div class="lx-wrap">
+            <div class="lx" role="img" aria-label="The launcher that Draft application… opens: /apply with the posting's address filled in, and the line Claude will run, /apply https://meridian.example/jobs/1, above the Run button.">
+              <div class="lx-head">/apply</div>
+              <div class="lx-body">
+                <span class="mut">Evaluate a posting, then draft and review documents</span>
+                <div><span class="lx-lab">Posting URL or pasted text</span><span class="lx-in area">https://meridian.example/jobs/1</span></div>
+                <div class="lx-two">
+                  <div><span class="lx-lab">Model</span><span class="lx-in lx-sel">Claude default</span></div>
+                  <div><span class="lx-lab">Spend at most, USD</span><span class="lx-in">5.00</span></div>
+                </div>
+                <div><span class="lx-lab">Claude will run</span><span class="lx-code">/apply https://meridian.example/jobs/1</span></div>
+                <span class="lx-run">Run <kbd>Cmd Enter</kbd></span>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+        <figcaption>A new match on Today, and the launcher its Y opens. Drawn from the app’s own parts, on fictional data.</figcaption>
+      </figure>
     </div>
-    <figure class="wrap stage deepzone">
-      <div class="window">
-        <div class="crop"><!-- intray_*.png, 12,12 1896x1206 -->
-          <img class="th-l" src="img/today-light.webp" width="1896" height="1206" fetchpriority="high" alt="Jobdesk's Today screen on fictional data: ten things need you, one card for a Lead Java Engineer application at Harbor Bank that is ready to send, with Done today and Coming up beside it.">
-          <img class="th-d" src="img/today-dark.webp" width="1896" height="1206" alt="Jobdesk's Today screen in the dark theme on fictional data, with one decision card, Done today and Coming up.">
-        </div>
-      </div>
-      <div class="float">
-        <div class="crop"><!-- launcher_*.png, 1258,266 606x504 -->
-          <img class="th-l" src="img/launcher-light.webp" width="606" height="504" alt="The launcher for /scrape: the line Claude will run, then the Run button.">
-          <img class="th-d" src="img/launcher-dark.webp" width="606" height="504" alt="The launcher for /scrape in the dark theme, with the Run button.">
-        </div>
-      </div>
-      <figcaption>Today, and the launcher a card's Y opens. Screens from the app, on fictional data.</figcaption>
-    </figure>
   </section>
 
   <section class="wrap sec" id="features" aria-labelledby="features-title">

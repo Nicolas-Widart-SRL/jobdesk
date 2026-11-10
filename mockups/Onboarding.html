@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First-run onboarding</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* First-run onboarding, round 1. Choose with
+   ?option=a|b
+   &state=welcome|place|download|offline|checking|installing|toolfail|cv|reading|ask-choice|ask-text|stopped|recap
+   &theme=light|dark
+   A, Story rail: the full window, a chapter rail on the left and the open chapter on paper at the right.
+   B, Compact card: a small window with one card per step, step dots and a setup stamp. It grows to the full app at recap.
+   Both draw welcome in the small window. Render small states at 720x560, full-window states at 1280x820.
+   Grid.html's scoped styles, copied and scoped to .ob, so app.css and the other canvases are unchanged. Fictional data. */
+body { margin: 0; }
+.ob {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.ob[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.ob .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.ob .btn { background: var(--card); }
+.ob .btn.pri { background: var(--pri); }
+/* Disabled, as the kit paints it: the opaque rest fill, ink and border at DISABLED_OPACITY. */
+.ob .btn.off { color: color-mix(in srgb, var(--text) 50%, transparent); border-color: color-mix(in srgb, var(--line) 50%, transparent); cursor: default; }
+.ob .btn.pri.off { background: color-mix(in srgb, var(--pri) 50%, var(--card)); border-color: transparent; color: var(--on-pri); }
+.ob .note13 { font-size: 13px; }
+.ob .lnk { color: var(--active); text-decoration: underline; text-underline-offset: 2px; }
+.ob b, .ob strong { font-weight: 600; }
+.ob .slab { font-family: var(--slab); font-weight: 600; }
+
+/* The window's top: the brand, and no menu until the app opens. */
+.ob .menu { flex: none; display: flex; align-items: center; gap: 16px; padding: 14px 28px 4px; min-height: 42px; }
+.ob .menu .brand { margin-right: 0; }
+.ob .menu .brand svg path:last-child { stroke: var(--sheet); }
+.ob .menu .what { color: var(--muted); font-size: 13px; }
+.ob .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.ob .statusbar .r { margin-left: auto; }
+.ob .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Knots, as built (knot): Done and Failed in a hairline, the others filled. */
+.ob .kn { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 2px; font-size: 12.5px; font-weight: 600; }
+.ob .kn.done { background: var(--sheet); color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.ob .kn.work, .ob .kn.next { background: var(--pri); color: var(--on-pri); }
+.ob .kn.wait { background: var(--turn); color: var(--on-turn); }
+.ob .kn.fail { background: var(--sheet); color: var(--closed); box-shadow: inset 0 0 0 1px var(--closed); }
+.ob .kn.ahead { background: var(--panel); color: var(--muted); }
+
+/* Paper, slips, the alert and the note. */
+.ob .paper { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ob .slip { border-radius: 4px; background: var(--panel); }
+.ob .alertbox { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-radius: 4px; background: var(--panel); box-shadow: inset 3px 0 0 var(--closed); }
+.ob .alertbox b { color: var(--closed); }
+.ob .notebox { display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border-radius: 4px; background: var(--panel); }
+
+/* A list of lines on paper: a knot, the words and a line under them, a tag at the right. */
+.ob .lines { display: flex; flex-direction: column; }
+.ob .ln { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 1px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); }
+.ob .ln:first-child { border-top: 0; }
+.ob .ln .kn { grid-row: span 2; align-self: start; margin-top: 1px; }
+.ob .ln .w { min-width: 0; }
+.ob .ln .s { grid-column: 2; color: var(--muted); font-size: 13px; }
+.ob .ln .end { grid-row: 1 / span 2; grid-column: 3; display: flex; align-items: center; gap: 8px; }
+.ob .ln.dim .w { color: var(--muted); }
+.ob .ln .barline { grid-column: 2 / span 2; display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.ob .bar { flex: 1 1 auto; display: block; height: 8px; background: var(--off); }
+.ob .bar i { display: block; height: 100%; background: var(--text); }
+/* live_sweep, as on the run band, along the bottom of the line Claude works on. A still frame. */
+.ob .ln.live { position: relative; }
+.ob .ln.live::after { content: ""; position: absolute; left: 30%; width: 30%; bottom: -1px; height: 2px; background: var(--active); }
+.ob .tag { background: var(--card); }
+
+/* NEW, choice_card: a pickable card with a radio, a title, an optional tag and a sentence. Picked takes the pick look. */
+.ob .choice { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px 12px; padding: 12px 14px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ob .choice.on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--text); }
+.ob .choice .rd { grid-row: span 2; margin-top: 2px; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--text); background: var(--field); display: flex; align-items: center; justify-content: center; }
+.ob .choice.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+.ob .choice .t { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.ob .choice .d { color: var(--muted); font-size: 13.5px; }
+
+/* The folder row: the place in Courier, the parent in faint and the name in text (path_label). */
+.ob .place { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+.ob .fold { flex: none; width: 34px; height: 28px; color: var(--text); }
+
+/* NEW, drop_zone: paper with a dashed line edge (SWEEP_DASH), a mini page, the words and Choose a file…. */
+.ob .drop { display: flex; align-items: center; gap: 20px; padding: 20px 22px; border-radius: 4px; background-color: var(--card);
+  background-image: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(0deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(0deg, var(--line) 0 6px, transparent 6px 10px);
+  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%; background-position: 0 0, 0 100%, 0 0, 100% 0; background-repeat: no-repeat; }
+.ob .drop .words { display: flex; flex-direction: column; gap: 4px; }
+.ob .drop .words .slab { font-size: 19px; }
+/* The mini page, as in CV documents. */
+.ob .mpage { flex: none; width: 66px; height: 92px; padding: 8px 7px; display: flex; flex-direction: column; gap: 4px; background: var(--page); border: 1px solid var(--line); border-radius: 1px; }
+.ob .mpage i { display: block; height: 3px; background: var(--page-line); }
+.ob .mpage i.h { height: 6px; width: 60%; background: var(--page-head); margin-bottom: 3px; }
+.ob .mpage i.s { width: 70%; }
+.ob .mpage.sm { width: 26px; height: 34px; padding: 4px 3px; gap: 2px; }
+.ob .mpage.sm i { height: 2px; }
+.ob .mpage.sm i.h { height: 3px; margin-bottom: 1px; }
+
+/* The question card: prompt_box_tone in stamp ink, as the question bar in Tasks. */
+.ob .ask { display: flex; flex-direction: column; gap: 12px; margin-right: 5px; padding: 14px 16px 16px; border: 1px solid var(--turn); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--turn); }
+.ob .ask .who { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.ob .ask .who .tagt { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.ob .ask .who .lnk { margin-left: auto; }
+.ob .ask .q { font: 600 22px/1.25 var(--slab); }
+.ob .ask .opts { display: flex; flex-direction: column; gap: 6px; }
+.ob .ask .opt { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 1px 10px; padding: 8px 10px; border-radius: 3px; }
+.ob .ask .opt.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); }
+.ob .ask .opt .rd { grid-row: span 2; margin-top: 2px; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--text); background: var(--field); display: flex; align-items: center; justify-content: center; }
+.ob .ask .opt.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+.ob .ask .opt .d { color: var(--muted); font-size: 13px; }
+.ob .fld { height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
+.ob .fld.area { height: 72px; align-items: flex-start; padding-top: 7px; color: var(--text); }
+.ob .fld.area .caret { display: inline-block; width: 1px; height: 17px; margin-left: 1px; vertical-align: -3px; background: var(--text); }
+.ob .figs { display: flex; gap: 14px; color: var(--muted); font-size: 13px; }
+
+/* The foot of the open step: the primary first, then plain, then one muted line at the right, as the deal footer. */
+.ob .foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 22px 14px; border-top: 1px solid var(--line); }
+.ob .foot .why { margin-left: auto; text-align: right; font-size: 13px; color: var(--muted); line-height: 1.4; max-width: 46%; }
+
+/* ---------- Option A, Story rail ---------- */
+.ob .sr { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 28px; padding: 14px 32px 18px; }
+.ob .rail { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.ob .rail .rh { padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+/* NEW, chapter_row: a knot, the chapter in Type::SECTION and one line under it. The open chapter takes the pick look. */
+.ob .chap { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 1px 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.ob .chap:first-of-type { border-top: 0; }
+.ob .chap .kn { grid-row: span 2; margin-top: 1px; }
+.ob .chap .n { font: 600 17px/1.3 var(--slab); }
+.ob .chap .m { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob .chap .m.mono { font-size: 12.5px; }
+.ob .chap.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); }
+.ob .chap.ahead .n { color: var(--muted); }
+.ob .rail .facts { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.ob .stage { display: flex; flex-direction: column; min-height: 0; }
+.ob .stage .body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 22px 26px 18px; overflow: hidden; }
+.ob .stage .eyebrow { font-size: 13px; color: var(--muted); }
+.ob .stage h1 { margin: 2px 0 0; font: 600 32px/1.15 var(--slab); }
+.ob .stage .lead { margin-top: 6px; font-size: 15px; color: var(--muted); max-width: 620px; }
+.ob .stage .measure { max-width: 640px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- Option B, Compact card ---------- */
+.ob .cw { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 4px 24px 18px; }
+/* NEW, step_dots: one STATUS_DOT square per step with its name under it, joined by a hairline. Done in text, the open
+   one ringed in text, the rest unlit in off. */
+.ob .sds { flex: none; display: flex; align-items: flex-start; }
+.ob .sd { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; width: 86px; font-size: 12.5px; color: var(--muted); }
+.ob .sd i { position: relative; z-index: 1; display: block; width: 8px; height: 8px; margin-top: 4px; background: var(--off); }
+.ob .sd.done i { background: var(--text); }
+.ob .sd.on i { background: var(--text); outline: 1px solid var(--text); outline-offset: 2px; }
+.ob .sd.on { color: var(--text); font-weight: 600; }
+.ob .sd::before { content: ""; position: absolute; top: 7px; left: -43px; width: 86px; height: 1px; background: var(--line); }
+.ob .sd.done::before, .ob .sd.on::before { background: var(--text); }
+.ob .sd:first-child::before { display: none; }
+.ob .sd span { padding: 0 4px; background: var(--sheet); }
+.ob .ccard { width: 100%; max-width: 640px; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--line); }
+.ob .ccard .body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 18px 22px 14px; overflow: hidden; }
+.ob .ccard .hd { display: flex; align-items: center; gap: 16px; }
+.ob .ccard h1 { margin: 0; font: 600 26px/1.15 var(--slab); }
+.ob .ccard .lead { margin-top: 4px; font-size: 14px; color: var(--muted); }
+.ob .ccard .foot { padding: 10px 18px 12px; }
+.ob .ccard .ln { padding: 7px 12px; }
+.ob .ccard .ask { padding: 12px 14px 14px; gap: 10px; }
+.ob .ccard .ask .q { font-size: 19px; }
+.ob .ccard .ask .opt { padding: 6px 10px; }
+.ob .ccard .drop { padding: 16px 18px; }
+.ob .stampsm { flex: none; width: 64px; height: 64px; }
+
+/* ---------- First open, both options ---------- */
+.ob .hello { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 6px 32px 18px; }
+.ob .hello h1 { margin: 0; font: 600 34px/1.1 var(--slab); }
+.ob .hello .lead { margin-top: 6px; font-size: 15px; color: var(--muted); }
+.ob .hello .choices { display: flex; flex-direction: column; gap: 8px; }
+.ob .hello .chapline { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+.ob .hello .chapline .kn { min-width: 18px; height: 18px; font-size: 11.5px; }
+.ob .hello .chapline .sep { width: 10px; height: 1px; background: var(--line); }
+.ob .hello .go { display: flex; align-items: center; gap: 12px; margin-top: auto; }
+.ob .hello .go .why { margin-left: auto; font-size: 13px; color: var(--muted); text-align: right; }
+
+/* ---------- B recap: the full app around the card, as today's first-run card ---------- */
+.ob .tabs { display: flex; gap: 6px; }
+.ob .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.ob .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.ob .tabs a.on { color: var(--text); font-weight: 600; }
+.ob .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.ob .tabs a.off { opacity: .55; }
+.ob .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.ob .newtask .keys { color: var(--muted); }
+.ob .welcome { flex: 1 1 auto; display: flex; justify-content: center; align-items: flex-start; padding: 36px 32px 0; }
+.ob .wcard { width: 620px; display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--line); }
+.ob .wcard .body { display: flex; flex-direction: column; gap: 12px; padding: 22px 26px 16px; }
+.ob .wcard h1 { margin: 0; font: 600 34px/1.1 var(--slab); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const OPTION = (P.get('option') || 'a').toLowerCase();
+const STATE = (P.get('state') || 'welcome').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+// A plain folder, drawn from the brand mark's folder without the J.
+const FOLDER = '<svg class="fold" viewBox="186 216 652 600" aria-hidden="true"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="none" stroke="currentColor" stroke-width="40"></path></svg>';
+const kb = (k) => `<span class="kb">${k}</span>`;
+const kn = (t, s) => `<span class="kn ${s}">${t}</span>`;
+const tag = (t, tone) => `<span class="tag c-${tone}">${t}</span>`;
+const page = (sm) => `<span class="mpage${sm ? ' sm' : ''}" aria-hidden="true"><i class="h"></i><i></i><i class="s"></i><i></i><i></i><i class="s"></i>${sm ? '' : '<i></i><i class="s"></i><i></i>'}</span>`;
+const path = (dir, name) => `<span class="mono"><span class="faint">${dir}</span>${name}</span>`;
+const PLACE = path('Documents/', 'Job search');
+
+// The day stamp's rings (day_stamp), reused as the setup stamp: one tick per step, lit as each is done, the step inside.
+function stamp(ticks, lit, top, mid, bot, spoken) {
+  const t = [];
+  for (let i = 0; i < ticks; i++) {
+    const a = -Math.PI / 2 + (i + 0.5) * (2 * Math.PI / ticks);
+    const c = (r) => [40 + r * Math.cos(a), 40 + r * Math.sin(a)].map((v) => v.toFixed(1));
+    const [x1, y1] = c(29.5), [x2, y2] = c(36);
+    t.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${i < lit ? 'var(--text)' : 'var(--off)'}" stroke-width="4.5"/>`);
+  }
+  const edge = lit ? 'var(--text)' : 'var(--line)';
+  return `<svg class="stampsm" viewBox="0 0 80 80" role="img" aria-label="${spoken}">
+    <circle cx="40" cy="40" r="38.5" fill="var(--sheet)"/>${t.join('')}
+    <circle cx="40" cy="40" r="38.5" fill="none" stroke="${edge}"/><circle cx="40" cy="40" r="27" fill="none" stroke="${edge}"/>
+    <text x="40" y="28" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">${top}</text>
+    <text x="40" y="48.5" text-anchor="middle" font-size="24.8" font-weight="600" font-family="Zilla Slab, serif" fill="var(--text)">${mid}</text>
+    <text x="40" y="61" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">${bot}</text></svg>`;
+}
+
+const CHAPTERS = [
+  ['Folder', 'Where your job search lives'],
+  ['Computer', 'Three free helpers'],
+  ['Profile', 'Built from your CV'],
+  ['Done', 'Open Jobdesk'],
+];
+const DONE_LINE = [PLACE, 'Python, Bun and LaTeX ready', '9 of 11 topics filled', 'Ready'];
+
+// ---------- What each state says. One set of words, laid out by option A or B. ----------
+function toolRows(st) {
+  const rows = [
+    ['1', 'Keeps your tracker', 'Python', st.py],
+    ['2', 'Searches job sites', 'Bun', st.bun],
+    ['3', 'Makes your CV and cover letter PDFs', 'LaTeX', st.tex],
+  ];
+  return `<div class="paper lines">${rows.map(([n, what, name, s]) => {
+    const look = {
+      checking: ['work', tag('Checking…', 'plain')], wait: ['ahead', '<span class="muted note13">Next</span>'],
+      found: ['done', tag('Already here', 'hired')], installed: ['done', tag('Installed', 'hired')],
+      installing: ['work', tag('Installing…', 'active')], failed: ['fail', tag('Could not install', 'closed')],
+    }[s.k];
+    const bar = s.k === 'installing' ? `<div class="barline"><span class="bar"><i style="width: ${s.pct}%"></i></span><span class="muted note13" style="white-space: nowrap">${s.note}</span></div>` : '';
+    const sub = s.k === 'failed' ? `<span class="s" style="color: var(--closed)">${name}. ${s.note}</span>` : `<span class="s">${name}${s.k === 'installing' ? ', a large download' : ''}</span>`;
+    return `<div class="ln${s.k === 'wait' ? ' dim' : ''}">${kn(n, look[0])}<b class="w">${what}</b>${sub}<span class="end">${look[1]}</span>${bar}</div>`;
+  }).join('')}</div>`;
+}
+
+function setupLines(items) {
+  return `<div class="paper lines">${items.map(([n, s, words, sub, end, live]) =>
+    `<div class="ln${s === 'ahead' ? ' dim' : ''}${live ? ' live' : ''}">${kn(n, s)}<span class="w"${s !== 'ahead' ? ' style="font-weight: 600"' : ''}>${words}</span><span class="s">${sub || ''}</span><span class="end">${end || ''}</span></div>`).join('')}</div>`;
+}
+
+const S = {
+  place: () => ({
+    ch: 1, title: 'Where should your job search live?',
+    lead: 'Jobdesk makes one folder for it. Your CV, the jobs it finds and your applications all go there.',
+    body: `<div class="paper place">${FOLDER}<div class="grow"><div>${PLACE}</div><div class="muted note13">In your Documents folder, with your other files.</div></div><button class="btn" type="button">Change…</button></div>
+      <p class="muted">Next, Jobdesk downloads ai-job-search into it: the free job search toolkit that Jobdesk runs on.</p>`,
+    pri: 'Save here', sec: 'Back', why: 'Your files stay on this computer. Claude reads them only while a task runs.',
+  }),
+  download: () => ({
+    ch: 1, title: 'Getting your folder ready', lead: 'This takes under a minute.',
+    body: setupLines([
+      ['1', 'done', 'Folder made', PLACE, tag('Done', 'hired')],
+      ['2', 'work', 'Downloading ai-job-search', 'The latest version, 1.7.5', '<span class="bar" style="width: 140px"><i style="width: 58%"></i></span>'],
+      ['3', 'ahead', 'Unpacking it into your folder'],
+    ]) + `<p class="muted note13">From the ai-job-search page on GitHub. Jobdesk checks the download before it unpacks anything.</p>`,
+    pri: 'Continue', priOff: true, sec: 'Cancel', why: 'Continue opens when the folder is ready.',
+  }),
+  offline: () => ({
+    ch: 1, title: 'Getting your folder ready', lead: 'The download did not finish.',
+    body: `<div class="alertbox"><b>Jobdesk could not reach the internet.</b><span>Check that this computer is online, then try again. Your folder is still empty, so nothing is half done.</span></div>` + setupLines([
+      ['1', 'done', 'Folder made', PLACE, tag('Done', 'hired')],
+      ['2', 'fail', 'Downloading ai-job-search', 'Stopped: no connection', tag('Stopped', 'closed')],
+      ['3', 'ahead', 'Unpacking it into your folder'],
+    ]),
+    pri: 'Try again', sec: 'Back', why: 'Still stuck? <a class="lnk" href="#">Get help</a>',
+  }),
+  checking: () => ({
+    ch: 2, title: 'Get this computer ready',
+    lead: 'Your job search needs three free helpers. Jobdesk checks which ones this computer has, then installs the rest for you.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'checking' }, tex: { k: 'wait' } }),
+    pri: 'Install what is missing', priOff: true, sec: 'Back', why: 'Checking takes a few seconds.',
+  }),
+  installing: () => ({
+    ch: 2, title: 'Get this computer ready', lead: 'Installing what was missing. You can leave this window open and come back.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'installed' }, tex: { k: 'installing', pct: 34, note: 'About 8 minutes left' } }) +
+      `<div class="notebox"><span class="sq" style="flex: none; margin: 6px 0 0; background: var(--text)"></span><div><b>Your Mac will ask for your password in a moment.</b><div class="muted">LaTeX installs for everyone on this computer, so macOS asks first. Type it in the Mac's own window. Jobdesk never sees it.</div></div></div>`,
+    pri: 'Continue', priOff: true, sec: 'Cancel', why: 'Continue opens when all three are ready.',
+  }),
+  toolfail: () => ({
+    ch: 2, title: 'Get this computer ready', lead: 'Two helpers are ready. One could not be installed.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'installed' }, tex: { k: 'failed', note: 'The download stopped before it finished.' } }) +
+      `<p class="muted">Without LaTeX, Jobdesk can still find and score jobs, but it cannot make your CV and cover letter PDFs.</p>`,
+    pri: 'Try again', sec: 'Continue without PDFs', why: 'Not sure what to do? <a class="lnk" href="#">Get help</a>',
+  }),
+  cv: () => ({
+    ch: 3, title: 'Tell Jobdesk about you',
+    lead: 'Add your CV. Claude reads it, writes your profile, and asks about anything the CV does not say.',
+    body: `<div class="drop">${page()}<div class="words"><span class="slab">Drop your CV here</span><span class="muted">A PDF or Word file.</span><span style="margin-top: 6px"><button class="btn" type="button">Choose a file…</button></span></div></div>
+      <p class="muted note13"><b style="color: var(--text)">This uses your Claude plan.</b> Setting up usually takes 10 to 15 minutes and about $2 of usage. Jobdesk stops it at $5.</p>`,
+    pri: 'Read my CV', priOff: true, sec: 'Back', why: 'Add your CV first.',
+  }),
+  reading: () => ({
+    ch: 3, title: 'Claude is building your profile', lead: 'It will ask you a few questions along the way. You can leave this window open.',
+    body: `<div class="paper place" style="padding: 8px 14px">${page(true)}<div class="grow">${path('', 'Sample_Candidate_CV.pdf')}</div>${tag('Added', 'plain')}</div>` + setupLines([
+      ['1', 'done', 'Reading your CV', '', tag('Done', 'hired')],
+      ['2', 'work', 'Writing your profile', 'Last update 3s ago', '', true],
+      ['3', 'ahead', 'Choosing job sites for your country'],
+      ['4', 'ahead', 'Setting your job search terms'],
+    ]) + `<div class="figs"><span>About $0.62 so far</span><span>4:12</span></div>`,
+    pri: null, sec: 'Stop setup', why: 'Questions from Claude show up right here.',
+  }),
+  'ask-choice': () => ({
+    ch: 3, title: 'Claude has a question', lead: 'Writing your profile. 2 questions answered so far.',
+    body: `<div class="ask" role="group" aria-label="Your turn. Claude asks: Which language should your CVs be in?">
+        <span class="who"><span class="tagt">Claude asks</span>Pick one, or write your own answer.</span>
+        <span class="q">Which language should your CVs be in?</span>
+        <div class="opts">
+          <div class="opt on"><span class="rd"></span><b>English</b><span class="d">Accepted in most countries. Cover letters still follow each job ad's language.</span></div>
+          <div class="opt"><span class="rd"></span><b>German</b><span class="d">Matches most job ads where you live.</span></div>
+        </div>
+        <span class="fld">Or write your own answer</span></div>`,
+    pri: 'Send answer', sec: 'Decline', why: 'About $0.84 so far',
+  }),
+  'ask-text': () => ({
+    ch: 3, title: 'Claude has a question', lead: 'Setting your job search terms. 4 questions answered so far.',
+    body: `<div class="ask" role="group" aria-label="Your turn. Claude asks: Which job titles should Jobdesk search for?">
+        <span class="who"><span class="tagt">Claude asks</span>Answer in your own words.<a class="lnk" href="#">Show all Claude wrote</a></span>
+        <span class="q">Which job titles should Jobdesk search for? Three to eight is a good number.</span>
+        <div class="fld area">Product designer, UX designer, Service designer<span class="caret"></span></div></div>`,
+    pri: 'Send ' + kb('↵'), sec: null, why: 'About $1.31 so far',
+  }),
+  stopped: () => ({
+    ch: 3, title: 'Setup stopped partway', lead: 'Nothing is lost. Claude picks up where it stopped.',
+    body: `<div class="alertbox"><b>Claude stopped while writing your profile.</b><span>The connection to Claude dropped.</span></div>` + setupLines([
+      ['1', 'done', 'Reading your CV', '', tag('Done', 'hired')],
+      ['2', 'done', 'Answering Claude\'s questions', '4 answered, all saved', tag('Done', 'hired')],
+      ['3', 'fail', 'Writing your profile', 'Stopped partway', tag('Stopped', 'closed')],
+      ['4', 'ahead', 'Choosing job sites for your country'],
+    ]) + `<div class="figs"><span>$1.12 used so far</span></div>`,
+    pri: 'Pick up where it stopped', sec: 'Finish later', why: 'Keeps stopping? <a class="lnk" href="#">Get help</a>',
+  }),
+  recap: () => ({
+    ch: 4, title: 'Your job search is ready', lead: 'Here is what Jobdesk set up. You can change any of it later.',
+    body: `<div class="paper lines">
+        <div class="ln">${kn('1', 'done')}<b class="w">Folder saved</b><span class="s">${PLACE}</span><span class="end"><a class="lnk note13" href="#">Show in Finder</a></span></div>
+        <div class="ln">${kn('2', 'done')}<b class="w">This computer is ready</b><span class="s">Python, Bun and LaTeX are installed.</span><span class="end"></span></div>
+        <div class="ln">${kn('3', 'done')}<b class="w">Profile written: 9 of 11 topics</b><span class="s">Finish the other 2 in Profile when you like.</span><span class="end"><span class="tally fat" role="img" aria-label="9 of 11 filled">${'<i></i>'.repeat(9)}${'<i class="off"></i>'.repeat(2)}</span></span></div>
+        <div class="ln">${kn('4', 'done')}<b class="w">Job sites chosen</b><span class="s">LinkedIn and Freehire, for Germany.</span><span class="end"></span></div>
+      </div>
+      <div class="figs"><span>Setup used $1.86 of your Claude plan and took 14 minutes.</span></div>`,
+    pri: 'Open Jobdesk', sec: null, why: 'Today suggests your first search.',
+  }),
+};
+
+function foot(s) {
+  const pri = s.pri ? `<button class="btn pri${s.priOff ? ' off' : ''}" type="button">${s.pri}</button>` : '';
+  const sec = s.sec ? `<button class="btn" type="button">${s.sec}</button>` : '';
+  return `<div class="foot">${pri}${sec}<span class="why">${s.why || ''}</span></div>`;
+}
+
+function statusbar(text) {
+  return `<footer class="statusbar"><span><span class="sq" style="background: var(--hired)"></span>${text}</span><span class="r">Settings <span class="keys">Cmd ,</span></span></footer>`;
+}
+
+function topbar(what) {
+  return `<header class="menu"><div class="brand">${MARK}Jobdesk</div>${what ? `<span class="what">${what}</span>` : ''}</header>`;
+}
+
+// ---------- First open, in the small window, for both options. ----------
+function welcome() {
+  const chapline = OPTION === 'a' ? `<span class="chapline">${CHAPTERS.map(([n], i) => `${i ? '<span class="sep"></span>' : ''}${kn(i + 1, 'ahead')}${n}`).join('')}</span>` : '';
+  const scratch = `<div class="choice on"><span class="rd"></span><span class="t">Set up from scratch ${tag('Recommended', 'plain')}</span>
+      <span class="d">Jobdesk makes your job search folder, gets this computer ready and builds your profile from your CV. About 15 minutes.${chapline}</span></div>`;
+  const have = `<div class="choice"><span class="rd"></span><span class="t">I already have an ai-job-search folder</span><span class="d">Choose it, and Jobdesk opens it as it is.</span></div>`;
+  const words = '<h1>Welcome to Jobdesk</h1><p class="lead">Your job search as a short list of decisions. Claude does the legwork, and nothing runs until you say so.</p>';
+  const head = OPTION === 'b'
+    ? `<div class="row" style="gap: 18px; align-items: center">${stamp(12, 0, 'Tue', '10', 'Nov', 'Tuesday 10 November')}<div>${words}</div></div>`
+    : `<div>${words}</div>`;
+  return `<div class="app ob" data-theme="${THEME}">${topbar('')}
+    <main class="main"><div class="hello">${head}
+      <div class="choices">${scratch}${have}</div>
+      <div class="go"><button class="btn pri" type="button">Start setup</button><span class="why">Each step says what it does before it does it.</span></div>
+    </div></main>${statusbar('Claude Code is signed in. Jobdesk uses it for every task.')}</div>`;
+}
+
+// ---------- Option A: the story rail, in the full window. ----------
+function optionA(s) {
+  const failed = ['offline', 'toolfail', 'stopped'].includes(STATE);
+  const chapters = CHAPTERS.map(([n, m], i) => {
+    const at = i + 1;
+    let st = 'ahead';
+    if (at < s.ch || STATE === 'recap') st = 'done';
+    else if (at === s.ch) st = STATE.startsWith('ask') ? 'wait' : failed ? 'fail' : 'next';
+    const line = st === 'done' ? DONE_LINE[i] : m;
+    return `<div class="chap${at === s.ch ? ' on' : ''}${st === 'ahead' ? ' ahead' : ''}">${kn(at, st)}<span class="n">${n}</span><span class="m${st === 'done' && i === 0 ? ' mono' : ''}">${line}</span></div>`;
+  }).join('');
+  const facts = STATE === 'recap' ? 'Setup used $1.86 of your Claude plan.' : s.ch === 3 ? 'The Profile chapter uses your Claude plan.' : 'Setup takes about 15 minutes.';
+  return `<div class="app ob" data-theme="${THEME}">${topbar('Setting up')}
+    <main class="main"><div class="sr">
+      <aside class="rail"><section class="slip"><div class="rh">Your setup</div>${chapters}</section>
+        <section class="slip"><div class="facts"><span><span class="sq" style="background: var(--hired)"></span>Claude Code is signed in.</span><span>${facts}</span></div></section></aside>
+      <section class="stage paper">
+        <div class="body"><div><div class="eyebrow">${s.ch} of 4 · ${CHAPTERS[s.ch - 1][0]}</div><h1>${s.title}</h1><p class="lead">${s.lead}</p></div>
+          <div class="measure">${s.body}</div></div>
+        ${foot(s)}
+      </section></div></main>${statusbar('Claude is ready')}</div>`;
+}
+
+// ---------- Option B: one card per step in the small window, the full app at the recap. ----------
+function optionB(s) {
+  if (STATE === 'recap') return recapB(s);
+  const dots = CHAPTERS.map(([n], i) => `<div class="sd${i + 1 < s.ch ? ' done' : i + 1 === s.ch ? ' on' : ''}"><i></i><span>${n}</span></div>`).join('');
+  return `<div class="app ob" data-theme="${THEME}">${topbar('')}
+    <main class="main"><div class="cw"><nav class="sds" aria-label="Step ${s.ch} of 4, ${CHAPTERS[s.ch - 1][0]}">${dots}</nav>
+      <section class="ccard"><div class="body">
+        <div class="hd">${stamp(4, s.ch - 1, 'Step', s.ch, 'of 4', `Step ${s.ch} of 4`)}<div><h1>${s.title}</h1><p class="lead">${s.lead}</p></div></div>
+        ${s.body}</div>${foot(s)}</section>
+    </div></main></div>`;
+}
+
+function recapB(s) {
+  const tabs = ['Today', 'Jobs', 'Applications', 'Insights', 'Tasks', 'Profile']
+    .map((t) => `<a class="${t === 'Today' ? 'on' : 'off'}" href="#"><span class="lbl">${t}</span></a>`).join('');
+  return `<div class="app ob" data-theme="${THEME}">
+    <header class="menu" style="gap: 28px"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav><span class="newtask" style="opacity: .55">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main"><div class="welcome"><section class="wcard"><div class="body">
+      <div class="row" style="gap: 18px">${stamp(4, 4, 'Tue', '10', 'Nov', 'Set up on Tuesday 10 November. 4 of 4 steps done.')}<div><h1>${s.title}</h1><p class="lead muted" style="font-size: 15px; margin-top: 4px">${s.lead}</p></div></div>
+      ${s.body}</div>${foot(s)}</section></div></main>${statusbar('Claude is ready')}</div>`;
+}
+
+const root = document.getElementById('root');
+if (STATE === 'welcome' || !S[STATE]) root.innerHTML = welcome();
+else root.innerHTML = (OPTION === 'b' ? optionB : optionA)(S[STATE]());
+</script>
+</body>
+</html>

@@ -14,6 +14,9 @@ pub struct Community {
     failure: Option<CommunityFailure>,
     /// No read starts before this time: GitHub's rate limit, or a minute after it refused with 403 or 429.
     wait_until: Option<DateTime<Utc>>,
+    /// Opening the list reads it again no sooner than this, a minute after any failed read, so showing Browse again and
+    /// again cannot spend GitHub's limit on a read that keeps failing. Try again is not held by it.
+    open_after: Option<DateTime<Utc>>,
 }
 
 /// What the community list shows.
@@ -74,14 +77,15 @@ pub struct CommunityPortalView {
 impl Community {
     /// `saved` is the list saved last, read at launch without the network.
     pub fn new(source: Box<dyn CommunitySource>, saved: Option<CommunityList>) -> Self {
-        Self { source, list: saved, reading: false, failure: None, wait_until: None }
+        Self { source, list: saved, reading: false, failure: None, wait_until: None, open_after: None }
     }
 
     /// Reads the list again when the user opens it and there is none, or it is over an hour old. Returns whether a read
-    /// started. None starts while one is under way or GitHub asks Jobdesk to wait.
+    /// started. None starts while one is under way, GitHub asks Jobdesk to wait, or within a minute of a failed read.
     pub fn open(&mut self, now: DateTime<Utc>) -> bool {
         let stale = self.list.as_ref().is_none_or(|list| list.saved_at > now || now - list.saved_at >= STALE_AFTER);
-        stale && self.refresh(now)
+        let failed_lately = self.open_after.is_some_and(|after| now < after);
+        stale && !failed_lately && self.refresh(now)
     }
 
     /// Reads the list again, unless a read is under way or GitHub asks Jobdesk to wait. Returns whether a read started.
@@ -107,9 +111,11 @@ impl Community {
                     self.list = Some(list);
                     self.failure = None;
                     self.wait_until = None;
+                    self.open_after = None;
                 }
                 Err(failure) => {
                     self.failure = Some(failure);
+                    self.open_after = Some(now + REFUSAL_WAIT);
                     self.wait_until = match failure {
                         CommunityFailure::Limited { until } => Some(until),
                         CommunityFailure::Refused(403 | 429) => Some(now + REFUSAL_WAIT),
@@ -378,6 +384,25 @@ mod tests {
         down.open(now());
         down.poll(now());
         assert!(down.refresh(now()), "another refusal waits for nothing");
+    }
+
+    /// A failed read is not tried again each time Browse shows: for a minute, opening the list reads nothing, while Try
+    /// again still reads at once.
+    #[test]
+    fn a_failed_read_waits_a_minute_before_opening_reads_again() {
+        for failure in [CommunityFailure::Unreachable, CommunityFailure::TimedOut, CommunityFailure::BadAnswer, CommunityFailure::Refused(503)] {
+            let mut community = community(None, vec![Err(failure), Err(failure), Ok(list(now()))]);
+            assert!(community.open(now()));
+            community.poll(now());
+            assert_eq!(community.view(&[], None, "").wait_until, None, "Try again does not wait");
+            assert!(!community.open(now() + TimeDelta::seconds(59)), "{failure:?}: no read within the minute");
+            assert!(community.refresh(now() + TimeDelta::seconds(10)), "Try again reads at once");
+            community.poll(now() + TimeDelta::seconds(10));
+            assert!(!community.open(now() + TimeDelta::seconds(69)), "the minute counts from the last failure");
+            assert!(community.open(now() + TimeDelta::seconds(70)));
+            community.poll(now() + TimeDelta::seconds(70));
+            assert_eq!(community.view(&[], None, "").state, CommunityState::Ready);
+        }
     }
 
     #[test]

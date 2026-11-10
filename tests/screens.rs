@@ -7542,18 +7542,36 @@ fn view_code_opens_the_address_built_from_the_folder() {
     assert_eq!(*opened.borrow(), ["https://github.com/ai-job-search-dev/community-portals/tree/main/portals/be/samplefreelance-search"]);
 }
 
-/// Browse asks for the list once each time it comes on show, never on every frame: a read that failed stays failed until
-/// Try again, and opening Browse again reads once more.
+/// Browse asks for an old list once each time it comes on show, never on every frame. Here GitHub answers with a list
+/// already over an hour old, so each showing finds it old.
 #[test]
 fn browse_reads_the_list_once_each_time_it_shows() {
-    let mut harness = tray_harness(browse_shell("portals_browse_once", None, vec![Err(CommunityFailure::Unreachable)]));
+    let mut harness = tray_harness(browse_shell("portals_browse_once", None, vec![Ok(community_list(minutes_ago(61)))]));
     open_segment(&mut harness, "Browse community");
     harness.run_steps(5);
-    assert!(is_shown(&harness, NO_LIST), "one read, which failed, and no other since");
+    assert!(is_shown(&harness, "Sample Remote Board"), "one read, and no other since");
     assert!(!is_shown(&harness, READING_LIST));
     open_segment(&mut harness, "Your portals  6");
     open_segment(&mut harness, "Browse community");
     assert!(is_shown(&harness, READING_LIST), "shown again, it reads again");
+}
+
+/// After a failed read, showing Browse again reads nothing for a minute, so a read that keeps failing cannot spend
+/// GitHub's limit. Try again still reads at once.
+#[test]
+fn a_failed_read_is_not_tried_again_by_showing_browse() {
+    let answers = vec![Err(CommunityFailure::Unreachable), Ok(community_list(browse_utc()))];
+    let mut harness = tray_harness(browse_shell("portals_browse_failed_once", None, answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, NO_LIST));
+    for _ in 0..3 {
+        open_segment(&mut harness, "Your portals  6");
+        open_segment(&mut harness, "Browse community");
+        assert!(is_shown(&harness, NO_LIST), "no read when Browse shows again");
+    }
+    harness.get_all_by_label("Try again").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"), "Try again reads at once");
 }
 
 /// GitHub's rate limit keeps the saved list, and Try again waits until its reset.

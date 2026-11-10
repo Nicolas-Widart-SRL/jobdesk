@@ -124,7 +124,7 @@ The story keeps a notice's last 8 lines, because a stderr tail ends on its error
 
 Browse community on the Portals screen reads the list of community portals from GitHub. It is not a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics.
 
-- It reads when Browse comes on show and the saved list is missing or over an hour old, and when the user presses Refresh or Try again. Never on every frame, and never while GitHub asks Jobdesk to wait.
+- It reads when Browse comes on show and the saved list is missing or over an hour old, and when the user presses Refresh or Try again. Never on every frame, and never while GitHub asks Jobdesk to wait. After a failed read, Browse coming on show again reads nothing for a minute, so a read that keeps failing cannot spend GitHub's limit. Try again still reads at once.
 - The REST API names the latest commit of `ai-job-search-dev/community-portals` and its file list: 2 requests a read, of the 60 an hour GitHub allows without sign-in. Each `SKILL.md` and `CODEOWNERS` comes from `raw.githubusercontent.com` at that commit, and an unchanged file is not fetched again.
 - Requests go over https with the shared `github_config`, follow no redirect, send no cookie and no credential, and stop at fixed sizes and times. A failure shows in Jobdesk's own words. No text from the server reaches the screen.
 - GitHub's rate limit keeps the saved list on screen and holds Refresh until its reset time. A 403 or 429 that names no time holds it for a minute.

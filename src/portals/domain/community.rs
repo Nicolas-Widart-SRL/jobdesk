@@ -129,6 +129,9 @@ pub struct Ownership {
     pub unmaintained_since: Option<NaiveDate>,
 }
 
+/// The most owners a line keeps.
+const MAX_OWNERS: usize = 10;
+
 /// The lines of a `CODEOWNERS` file Jobdesk reads: `*` for every folder, or a plain path, each with its owners.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Codeowners {
@@ -144,7 +147,7 @@ struct Rule {
 
 /// Reads a `CODEOWNERS` file. A line holds a pattern, then owners, then perhaps a `#` comment. Only `*`, `**` and paths
 /// without any other wildcard are read, because that is all the community list uses: other lines are left out. Owners
-/// that are not GitHub handles, such as e-mail addresses, are dropped.
+/// that are not GitHub handles, such as e-mail addresses, are dropped, and a line keeps at most 10.
 pub fn parse_codeowners(text: &str) -> Codeowners {
     Codeowners { rules: text.lines().filter_map(rule).collect() }
 }
@@ -164,16 +167,16 @@ fn rule(line: &str) -> Option<Rule> {
             Some(path.to_owned())
         }
     };
-    let owners = words.filter(|word| is_handle(word)).map(str::to_owned).collect();
+    let owners = words.filter(|word| is_handle(word)).take(MAX_OWNERS).map(str::to_owned).collect();
     Some(Rule { path, ownership: Ownership { owners, unmaintained_since: unmaintained_since(comment) } })
 }
 
-/// `@user`, with 1 to 39 letters, digits or `-`, or `@org/team`.
+/// `@user`, with 1 to 39 letters, digits or `-`, or `@org/team`, with a team name of at most 100 characters.
 fn is_handle(word: &str) -> bool {
     let Some(handle) = word.strip_prefix('@') else { return false };
     let (user, team) = handle.split_once('/').map_or((handle, None), |(user, team)| (user, Some(team)));
     let user_ok = (1..=39).contains(&user.len()) && user.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-    let team_ok = team.is_none_or(|team| !team.is_empty() && team.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-')));
+    let team_ok = team.is_none_or(|team| (1..=100).contains(&team.len()) && team.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-')));
     user_ok && team_ok
 }
 
@@ -349,6 +352,15 @@ portals/be/northfield-search @lena-vos # no longer looked after
             assert_eq!(unmaintained_since(comment), None, "{comment}");
         }
         assert_eq!(unmaintained_since(" UNMAINTAINED Since 2024-12 "), NaiveDate::from_ymd_opt(2024, 12, 1));
+    }
+
+    #[test]
+    fn a_line_keeps_ten_owners_and_a_team_name_of_a_hundred_characters() {
+        let many: Vec<String> = (0..12).map(|n| format!("@owner-{n}")).collect();
+        let owners = parse_codeowners(&format!("* {}", many.join(" ")));
+        assert_eq!(owners.ownership(&dk(), &folder("x")).owners, many[..10]);
+        assert!(is_handle(&format!("@org/{}", "t".repeat(100))));
+        assert!(!is_handle(&format!("@org/{}", "t".repeat(101))));
     }
 
     #[test]

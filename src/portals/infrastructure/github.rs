@@ -210,7 +210,8 @@ pub struct GithubCommunity {
 }
 
 impl GithubCommunity {
-    /// `cache` is `None` with no data folder: each read then fetches every file and saves nothing.
+    /// `cache` is `None` with no data folder: a read then saves nothing, so the first read of a session fetches every
+    /// file. Later reads still reuse the unchanged files of the list `fetch` is given.
     pub fn new(api: Arc<dyn Api>, cache: Option<CommunityCache>, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (sender, answers) = mpsc::channel();
         Self { api, cache: cache.map(Arc::new), repaint, sender, answers }

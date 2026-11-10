@@ -9,7 +9,7 @@ pub struct WorkspaceView {
     pub topics: TopicCounts,
     /// How many portals are on, and the jobs they found, for Setup's one-line summary.
     pub portals: PortalSummary,
-    /// `.agents/skills` could not be read, so `portals` is not known to be empty and Setup hides it.
+    /// `.agents/skills`, or a `SKILL.md` in it, could not be read, so `portals` is not known and Setup hides it.
     pub portals_unread: bool,
     pub templates: TemplateState,
     pub sync: SyncState,

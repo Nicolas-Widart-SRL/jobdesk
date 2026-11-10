@@ -9,7 +9,7 @@ use crate::shared_kernel::LoadError;
 pub struct PortalsView {
     /// Sorted by name, in any case.
     pub portals: Vec<PortalView>,
-    /// False when `.agents/skills` could not be read, so `portals` is not known to be empty.
+    /// False when `.agents/skills`, or a `SKILL.md` in it, could not be read, so `portals` is not known to be whole.
     pub installed_read: bool,
     pub plan: SearchPlan,
     /// False when the search file could not be read, so `plan` is not known to be empty.

@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder and its helpers, and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -115,6 +115,41 @@ This trades away the prompt as a check against injected posting text. Postings r
 Notices other than allowances, such as why a run failed or stopped or which action was denied, show inline in the story. They render as plain text with hidden characters removed, one row per non-blank line.
 
 The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover.
+
+## First-run setup
+
+On macOS, the `onboarding` feature makes the job search folder, fills it with the `ai-job-search` release, and installs the helpers its commands call. None of it is a run: it starts no `claude`, writes no run log and is not counted in Usage statistics. Every download goes through `HttpsTransport`, under the rules of [Addresses and the network](#addresses-and-the-network).
+
+### The folder
+
+- Setup uses only a folder that is missing or empty. A folder that holds anything else is refused, and setup suggests a new `Job search` folder inside it. A folder that is already an `ai-job-search` folder is refused too: the welcome's other choice opens it as it is. A folder that holds only Finder's `.DS_Store`, and on macOS its `.localized`, counts as empty, and setup deletes those two files.
+- Setup looks at the folder again when Save here is pressed, and the rename that puts the release in place never replaces a folder that holds anything else. So a folder that filled meanwhile is never written over.
+- The release zip must match the SHA-256 of [the ai-job-search pin](#the-ai-job-search-pin) before anything is unpacked. A zip that does not match, or that is larger than a release should be, is thrown away, and the folder stays empty.
+- The whole archive is checked before anything is written. One entry that could lead outside the folder, a link or any other special file, an encrypted entry, two names one disk would take for the same name, or a top `.jobdesk` entry, spelled in any letter case or Unicode composition, refuses the whole archive.
+- Files are written into a hidden `.<name>.jobdesk-<pid>` staging folder beside the chosen one, which then takes its place in one rename and keeps the permissions the empty folder had. Unpacked files keep their read and run bits, drop their set-id bits and group and other write, and stay readable and writable by the user.
+- Setup writes the zip that matched and a record of its version and SHA-256 into the folder's `.jobdesk/`, as `source.zip` and `source.json`. What that record proves is in [the ai-job-search pin](#the-ai-job-search-pin).
+
+### The helpers
+
+- The helpers are Python, Bun and LaTeX. A copy already on the computer counts only when it works for `ai-job-search`: Python 3.10 or newer runs, Bun runs, and `lualatex` and `xelatex` run and the `kpsewhich` beside each finds every pinned TeX Live package. To learn this, setup runs the copies the `PATH` finds. A check that cannot tell, such as one that takes too long, counts as missing.
+- A missing helper installs only after the user chooses Install what is missing. `onboarding/domain/helpers.rs` pins each of its files by version, SHA-256 and size, at an address built from a fixed host and the version: GitHub's release downloads for Python, Bun and TinyTeX, and the TeX Live historic archive for the packages. Every file of a helper must match before any of it is unpacked.
+- A helper archive is refused whole for a path with `..` or a root, a path through a link, a link that leaves its folder, a hard link, a device, an entry written twice, or more than 20,000 entries or 512 MiB.
+- The helpers install for this user only, in `~/.jobdesk`, the one folder of the home folder that Jobdesk owns: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. Nothing needs an administrator password.
+- Setup never writes, replaces or removes anything elsewhere in the home folder, such as `~/.bun` or `~/Library/TinyTeX`, and never changes another copy of a helper. In `~/.jobdesk` it touches only the helpers' places and their staging folders. How it puts an install in place, and replaces an earlier install of its own that does not work, is in [ARCHITECTURE](../../ARCHITECTURE.md).
+- The helpers' folders come first on the `PATH` of every task, Test connection, the tool check and Runtime status, before every other copy, as [runs](runs.md#the-path) says. So once setup installs a helper, tasks use its copy, not one the user had.
+
+### The progress record
+
+- Setup keeps `onboarding.json` in the data folder, readable only by the user. It holds the chosen folder, the steps done, the `ai-job-search` version unpacked, the day of the last change, and whether the user chose Continue without PDFs. A record larger than 64 KiB, or one Jobdesk did not write, reads as no record.
+- Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
+- The record is removed when the Computer step ends.
+- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. It removes links and never follows them.
+
+### Accepted residuals
+
+1. The helper pins are built into Jobdesk, so whoever ships a Jobdesk build decides which Python, Bun and TeX Live files it installs.
+2. To check a copy the user already has, setup runs it. A program placed on the `PATH` runs with the user's rights, as it would in their terminal.
+3. Once installed, Jobdesk's helpers shadow the user's own copies for every task, newer ones included.
 
 ## Updates
 

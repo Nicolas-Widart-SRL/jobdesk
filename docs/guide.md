@@ -4,6 +4,41 @@ How each screen of Jobdesk behaves. To install the app, see the [README](../READ
 
 Jobdesk is a native macOS and Windows view over an [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) checkout, built with Rust and egui.
 
+## First run
+
+On a Mac, the first time Jobdesk opens with no job search folder, it sets one up for you in a small window. You need only Claude Code, installed and signed in. On Windows, Jobdesk shows its welcome and you choose your ai-job-search folder, as [Today](#today) says.
+
+The welcome offers two ways:
+
+- Set up from scratch, the recommended one: Jobdesk makes your job search folder and gets this computer ready.
+- I already have an ai-job-search folder: choose it, and Jobdesk opens it as it is. A folder that is not one is refused.
+
+A copy of Jobdesk that cannot check a download offers only the second way.
+
+### Your folder
+
+Jobdesk suggests a new `Job search` folder in your Documents folder, and Change… picks another. Jobdesk sets up only in a new or empty folder, so nothing of yours is overwritten. If the folder you pick holds files, Jobdesk suggests a new `Job search` folder inside it: choose Use this new folder. If it already holds ai-job-search, go back and choose I already have an ai-job-search folder.
+
+Save here makes the folder and downloads ai-job-search, the free job search toolkit Jobdesk runs on. Jobdesk compares the download with its own record of that version before it unpacks anything. If they do not match, or the download stops, nothing is saved and your folder stays empty: choose Try again, or Get help, which opens this section. Cancel stops the download.
+
+Your folder keeps a hidden `.jobdesk` folder with a copy of the download and its version. Leave it in place: Jobdesk needs it to update your folder later.
+
+### This computer
+
+ai-job-search needs three free helpers: Python keeps your tracker, Bun searches job sites, and LaTeX makes your CV and cover letter PDFs. Jobdesk first checks which ones this computer already has. A copy you have counts only when it works with ai-job-search: Python 3.10 or newer, or a LaTeX with every package the CV and cover letter templates use.
+
+Install what is missing installs the rest. Each line shows its download size and about how long it takes. LaTeX is the slow one, about 100 MB and 1 to 4 minutes, so you can step away. Each file is compared with Jobdesk's own record of it before it is installed. Cancel stops the install and leaves that helper missing.
+
+The helpers install only for you, in a hidden `.jobdesk` folder in your home folder: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. No administrator password is needed. Jobdesk changes nothing else on this computer, and leaves any other copy of Python, Bun or LaTeX you have as it is. Your tasks use Jobdesk's copies first.
+
+If a helper cannot install, its line says why, and Try again installs it again. When only LaTeX fails, Continue without PDFs goes on without it: Jobdesk still finds and scores jobs and writes your profile, but cannot make PDFs of your CV and cover letters. Python and Bun cannot be left out.
+
+When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window. Profile then shows what is left to fill in about you.
+
+### Quitting midway
+
+Quit any time. Once your folder is made, the next open shows Welcome back, with the steps already done, and Continue setup picks up where you stopped. A download or an install that was cut short starts again, and a helper that finished stays. Jobdesk keeps this progress in its data folder, and forgets it once the computer step is done.
+
 ## Today
 
 Today is the home screen: one queue of decisions, one card at a time, with paused runs first, then deadlines, then the rest. The day stamp counts what you decided today, and Coming up lists the next two weeks' deadlines, with a button to bring back what you set aside. Settings › Today queue changes the range to 7, 14 or 30 days, and the same range decides which deadlines come before the rest.
@@ -12,7 +47,7 @@ Y opens the suggested task, L sets the card aside (Coming up shows how many, and
 
 The card's actions stay pinned under it, and Show the command reveals the command line a task would run. Y opens the slash command in the launcher, and nothing runs until you start it. Permission, question, guard and Your turn cards have no Y action. Skip reasons stay in the app's data folder, and a past skip keeps its reason after you take that reason off the list.
 
-When nothing is left to decide, Today offers Find new jobs…, and Score 1 new job… or Score N new jobs… while new jobs wait to be scored. Both only open the launcher. Today shows a loading view while your files first load, and a welcome with three steps until you choose a folder. Its second step points to Profile, which shows each topic, what is filled in and what is missing.
+When nothing is left to decide, Today offers Find new jobs…, and Score 1 new job… or Score N new jobs… while new jobs wait to be scored. Both only open the launcher. Today shows a loading view while your files first load. On a Mac, [first run](#first-run) sets up your folder. On Windows, Today shows a welcome with three steps until you choose a folder. Its second step points to Profile, which shows each topic, what is filled in and what is missing.
 
 ## Jobs, Applications and Insights
 
@@ -115,6 +150,6 @@ The first three add "Install 0.2.0 from the release page." and offer Open the re
 
 ## Privacy and trust
 
-Slash commands write your checkout. Jobdesk changes it only when you save a Profile edit, and then it writes only that block of its profile file, never while a task runs, and only when the block on disk is as you opened it or you chose Save mine over it. That check happens a moment before the write, so if another program, such as an editor, a sync tool or Claude in a terminal, writes the same file at the moment you save, Jobdesk can overwrite that change without warning. A file named like `<profile file>.jobdesk-save-…` beside a profile file is a copy left by a save that was interrupted, for example by a power loss: it holds that profile's text, a later save removes it once it is an hour old, and you can delete it yourself. Because Jobdesk allows the commands' tool requests without asking unless you turn prompts on in Settings › Permissions, a posting written to trick Claude could get a command run before you see it. The workspace checks postings with `posting_guard` before scoring them. Jobdesk uses the sign-in of your installed Claude CLI and keeps no password or token of its own, with one exception: an API key you save in Settings › Providers stays in the system keychain, and in Jobdesk's own memory from its first read until you remove it or quit, and reaches only the Claude Code process of each task, in its environment, never a file, a log or the screen. While a task runs on the key, other programs running as your user can read it from that process, as they can read Claude Code's own sign-in. Run logs, which include the text of your runs, and your tray decisions are kept in the app's data folder and are readable only by your user. Run logs stay there forever unless you choose a shorter time in Settings › Data and privacy. Unless you switch it off in Settings › About, Jobdesk asks GitHub for the latest release when it opens and about every 6 hours. The request carries Jobdesk's version and nothing about your job search. A download goes to the `updates` folder beside the run logs, and is deleted when it fails its signature check and when Jobdesk next opens.
+Slash commands write your checkout. Apart from [first run](#first-run), which fills only a new or empty folder, Jobdesk changes it only when you save a Profile edit, and then it writes only that block of its profile file, never while a task runs, and only when the block on disk is as you opened it or you chose Save mine over it. That check happens a moment before the write, so if another program, such as an editor, a sync tool or Claude in a terminal, writes the same file at the moment you save, Jobdesk can overwrite that change without warning. A file named like `<profile file>.jobdesk-save-…` beside a profile file is a copy left by a save that was interrupted, for example by a power loss: it holds that profile's text, a later save removes it once it is an hour old, and you can delete it yourself. Because Jobdesk allows the commands' tool requests without asking unless you turn prompts on in Settings › Permissions, a posting written to trick Claude could get a command run before you see it. The workspace checks postings with `posting_guard` before scoring them. Jobdesk uses the sign-in of your installed Claude CLI and keeps no password or token of its own, with one exception: an API key you save in Settings › Providers stays in the system keychain, and in Jobdesk's own memory from its first read until you remove it or quit, and reaches only the Claude Code process of each task, in its environment, never a file, a log or the screen. While a task runs on the key, other programs running as your user can read it from that process, as they can read Claude Code's own sign-in. Run logs, which include the text of your runs, and your tray decisions are kept in the app's data folder and are readable only by your user. Run logs stay there forever unless you choose a shorter time in Settings › Data and privacy. Unless you switch it off in Settings › About, Jobdesk asks GitHub for the latest release when it opens and about every 6 hours. The request carries Jobdesk's version and nothing about your job search. A download goes to the `updates` folder beside the run logs, and is deleted when it fails its signature check and when Jobdesk next opens. First run downloads ai-job-search and the helpers only after you ask, from GitHub and, for LaTeX's packages, the TeX Live archive, and checks each file against Jobdesk's own record of it before it uses it.
 
 See [Trust](architecture/trust.md#rendering-untrusted-text) for how Jobdesk renders postings, notes and reports, and [Updates](architecture/trust.md#updates) for how it checks a download.

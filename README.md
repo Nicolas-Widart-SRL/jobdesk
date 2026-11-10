@@ -29,7 +29,9 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 
 ## Install
 
-You need:
+On macOS, a fresh setup needs only the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed and signed in. On first launch, Jobdesk makes your job search folder, downloads ai-job-search into it, and installs whichever of Python, Bun and LaTeX this Mac lacks, for your user only, in `~/.jobdesk`. See [First run](docs/guide.md#first-run).
+
+On Windows, or to open an ai-job-search folder you already have, you need:
 
 - the [Claude Code](https://code.claude.com/docs/en/overview) CLI, installed, and either signed in on its own or given an Anthropic Console API key that you save in Settings › Providers and Jobdesk passes to it;
 - an [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) checkout.
@@ -44,7 +46,7 @@ The macOS app in a release is signed with a Developer ID and notarized by Apple,
 - **Windows**: click More info, then Run anyway.
 - **macOS**, for a release from before signing and for a build made with the Installers workflow on GitHub: the app is ad-hoc signed, and macOS blocks the first open. Try to open Jobdesk once, then go to System Settings, Privacy & Security, and click Open Anyway. On macOS 15 and later, right-click Open no longer bypasses this.
 
-On first launch, choose your ai-job-search folder.
+On first launch, macOS offers to set up from scratch or to open your ai-job-search folder. Windows asks you to choose your ai-job-search folder.
 
 From the first release with updates on, Jobdesk tells you in the status bar when a new version is out. Download fetches it and checks its signature, and Restart to update installs it and opens Jobdesk again on the same folder. A copy from before that release does not update itself: install the new version by hand once.
 
@@ -57,7 +59,7 @@ If Restart to update cannot put the signed release in place, download its instal
 
 ## Privacy and trust
 
-Slash commands write your checkout, and Jobdesk writes only the profile block you save. By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain. Jobdesk asks GitHub for its latest release when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About.
+Slash commands write your checkout. Apart from first-run setup, which fills only a new or empty folder, Jobdesk writes only the profile block you save. Setup checks each file it downloads against Jobdesk's own record of it before it uses it. By default Jobdesk allows the commands' tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain. Jobdesk asks GitHub for its latest release when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About.
 
 ## Authentication
 

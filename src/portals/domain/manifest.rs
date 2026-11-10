@@ -65,11 +65,21 @@ fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
     (None, text)
 }
 
-/// A top-level `enabled:` line, its comment dropped, turns the portal off when it reads `false` in any case.
+/// The last top-level `enabled` key, as YAML takes it, turns the portal off when its value reads `false` in any case.
+/// Space may stand before the colon, and a `#` after a space or a tab opens a comment.
 fn enabled(frontmatter: &str) -> bool {
-    let Some(value) = frontmatter.lines().find_map(|line| line.strip_prefix("enabled:")) else { return true };
-    let value = value.find(" #").map_or(value, |at| &value[..at]);
-    !value.trim().trim_matches(['"', '\'']).eq_ignore_ascii_case("false")
+    let Some(value) = frontmatter.lines().filter_map(enabled_value).last() else { return true };
+    !value.trim_matches(['"', '\'']).eq_ignore_ascii_case("false")
+}
+
+/// The value of a top-level `enabled` line, its comment dropped.
+fn enabled_value(line: &str) -> Option<&str> {
+    let (key, value) = line.split_once(':')?;
+    if key.trim_end() != "enabled" {
+        return None;
+    }
+    let comment = value.char_indices().find(|&(at, c)| c == '#' && (at == 0 || value[..at].ends_with([' ', '\t'])));
+    Some(comment.map_or(value, |(at, _)| &value[..at]).trim())
 }
 
 /// The first `# ` heading outside a code block.
@@ -276,6 +286,20 @@ mod tests {
             assert!(!parse_manifest(&format!("---\nname: off\n{off}\n---\n"), "off-search").enabled, "{off}");
         }
         assert!(parse_manifest("---\nenabled: true # not false\n---\n", "on-search").enabled);
+    }
+
+    /// `/scrape` reads the frontmatter as YAML: a tab may open a comment, space may stand before the colon, and the
+    /// last of two keys wins.
+    #[test]
+    fn enabled_reads_as_yaml_does() {
+        let reads = |front: &str| parse_manifest(&format!("---\nname: n\n{front}\n---\n"), "n-search").enabled;
+        assert!(!reads("enabled: false\t# off for now"));
+        assert!(!reads("enabled : false"));
+        assert!(!reads("enabled:\tfalse"));
+        assert!(!reads("enabled: true\nenabled: false"));
+        assert!(reads("enabled: false\nenabled: true"));
+        assert!(reads("enabled: #false"), "a comment alone is no value");
+        assert!(reads("enabledx: false"));
     }
 
     #[test]

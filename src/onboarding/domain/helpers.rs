@@ -1,7 +1,7 @@
 //! The helpers ai-job-search's commands call: Python for the tracker tools, Bun for the job site searches, and LaTeX for
-//! the CV and cover letter PDFs. First-run setup installs a missing one in the home folder, from files pinned here by
-//! version, SHA-256 and size. Every address is built from a fixed host and the pinned version, never from anything a
-//! server sent.
+//! the CV and cover letter PDFs. First-run setup installs a missing one in Jobdesk's own folder of the home folder, from
+//! files pinned here by version, SHA-256 and size. Every address is built from a fixed host and the pinned version,
+//! never from anything a server sent.
 
 use crate::onboarding::domain::Failure;
 
@@ -19,6 +19,11 @@ const BUN: &str = "1.4.4";
 /// The TinyTeX release, the last one built from TeX Live 2025, so the packages below match it.
 const TINYTEX: &str = "2026.03";
 const TEX_LIVE: &str = "2025";
+
+/// The folder in the home folder that holds every helper setup installs. Jobdesk owns it, and setup writes, replaces
+/// and removes nothing in the home folder outside it. In it, setup touches only the helpers' places and their staging
+/// folders.
+pub const OWN_FOLDER: &str = ".jobdesk";
 
 /// A helper, in the order setup checks and installs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,7 +60,7 @@ impl Arch {
 pub enum Layout {
     /// A `.tar.gz` whose one top folder becomes the helper's folder.
     Tree { top: &'static str },
-    /// A `.zip` that holds the helper's one program at `entry`.
+    /// A `.zip` that holds the helper's one program at `entry`, which goes in the helper's `bin` folder by its own name.
     Program { entry: &'static str },
     /// A TeX Live package, a `.tar.xz` whose files go under TinyTeX's `texmf-dist`, but for its `tlpkg` record.
     TexPackage,
@@ -76,33 +81,36 @@ pub struct Artifact {
 }
 
 /// A TeX Live 2025 package the CV and cover letter templates need that TinyTeX-1 lacks, dependencies included:
-/// name, revision, SHA-256 and size.
-type TexPin = (&'static str, &'static str, &'static str, u64);
+/// name, the file a document loads it by, revision, SHA-256 and size.
+type TexPin = (&'static str, &'static str, &'static str, &'static str, u64);
 
 /// `moderncv` and what it needs for the CV, `textpos`, `titlesec`, `xltxtra`, `cite` and `fancyhdr` for the cover
 /// letter, and the rest of the list ai-job-search's own setup guide names for a minimal TeX.
 const TEX_PACKAGES: [TexPin; 20] = [
-    ("academicons", "77677", "9cbaab0f350adf7b0a621bd71b332aa40c0437e0c4e036b014c8ac6bffc02dde", 260_392),
-    ("arydshln", "77677", "3a89219c00fd9a3777afc4e44e85dd4922d3362b4382dc00acdc645aab762584", 9_336),
-    ("cite", "77677", "9c0ab1c3c8dbd07ea09ae8a4d200f5443366330b55df8ea1ada707494a6b5df0", 20_112),
-    ("colortbl", "77677", "3fd7aef7f6daf98b465db0f76af927d9c784658a4ec3a7cc74c26ad6c341617e", 3_748),
-    ("fancyhdr", "78116", "9dab3331ad37957d02875715bec27aed5fc19d3778a73600f630ec28169b950a", 8_412),
-    ("fontawesome5", "77677", "1af05661507967ed1eb952187fa1bcd59f1d7e23d9aa8e4362bfde27570c1143", 866_332),
-    ("fontawesome6", "77677", "3955b84440434fd6c460870a7d811f06e9f0a5f04a9cfbc968194dcc3608a951", 1_880_124),
-    ("fp", "77677", "382b3166fcc643ca93881a133ad7b3208d4d120b487e02427ecda156777cf601", 19_240),
-    ("import", "77677", "b40cf8e120d18f8955b6cfdcb16225b504e84a5f4a235ac645abc2953160ed03", 2_720),
-    ("metalogo", "77677", "1fbcbaf80f992a8afe0385dc283d49d073bd91c52972b06dc15b1373a3413a51", 2_224),
-    ("microtype", "78231", "57b380b27006b34c5cc8fe20a0ceb0e3da848f397c5607b40f2c270055197ebe", 59_200),
-    ("moderncv", "77552", "f897a29679d0412d1e0a137bce4257241182211390e03afe1944da2b40f04a0c", 39_544),
-    ("multirow", "77677", "c1afe8c9d424ae96d31f73b80a8a9c229a76dae90e2a159d944ddd48008c6662", 2_844),
-    ("needspace", "77677", "49858007eddb001bd1741b01660019fa03da5f75ef8346f9547f450127ca12be", 956),
-    ("pgf", "78116", "845efd98fcf700c803a2ed68f9c6779080ed4d00a1d74c53877e8480447e7e74", 718_196),
-    ("realscripts", "77677", "d00173260719dad26a84fcb6981018f4be6a5d566b0107062110e657c9afd440", 1_892),
-    ("setspace", "77677", "53bffec9151d0c223fdfec937f0b03b0432388a1bc4a3a704fa1e60ccd0e3eb3", 7_372),
-    ("textpos", "77677", "0948cc29ff8bcea56667362073c96c8ae381c4d719ede44690885fbb24439e36", 4_240),
-    ("titlesec", "77677", "5af4e3f6c2f677a65de1b81c9c3707d0117de56d4d596fbcb4734f6ceb3908ac", 19_920),
-    ("xltxtra", "77677", "218c816c48c9925b6e3965ed8a3b4410c5ece99537f20739c0d49f47ce0e39ad", 2_532),
+    ("academicons", "academicons.sty", "77677", "9cbaab0f350adf7b0a621bd71b332aa40c0437e0c4e036b014c8ac6bffc02dde", 260_392),
+    ("arydshln", "arydshln.sty", "77677", "3a89219c00fd9a3777afc4e44e85dd4922d3362b4382dc00acdc645aab762584", 9_336),
+    ("cite", "cite.sty", "77677", "9c0ab1c3c8dbd07ea09ae8a4d200f5443366330b55df8ea1ada707494a6b5df0", 20_112),
+    ("colortbl", "colortbl.sty", "77677", "3fd7aef7f6daf98b465db0f76af927d9c784658a4ec3a7cc74c26ad6c341617e", 3_748),
+    ("fancyhdr", "fancyhdr.sty", "78116", "9dab3331ad37957d02875715bec27aed5fc19d3778a73600f630ec28169b950a", 8_412),
+    ("fontawesome5", "fontawesome5.sty", "77677", "1af05661507967ed1eb952187fa1bcd59f1d7e23d9aa8e4362bfde27570c1143", 866_332),
+    ("fontawesome6", "fontawesome6.sty", "77677", "3955b84440434fd6c460870a7d811f06e9f0a5f04a9cfbc968194dcc3608a951", 1_880_124),
+    ("fp", "fp.sty", "77677", "382b3166fcc643ca93881a133ad7b3208d4d120b487e02427ecda156777cf601", 19_240),
+    ("import", "import.sty", "77677", "b40cf8e120d18f8955b6cfdcb16225b504e84a5f4a235ac645abc2953160ed03", 2_720),
+    ("metalogo", "metalogo.sty", "77677", "1fbcbaf80f992a8afe0385dc283d49d073bd91c52972b06dc15b1373a3413a51", 2_224),
+    ("microtype", "microtype.sty", "78231", "57b380b27006b34c5cc8fe20a0ceb0e3da848f397c5607b40f2c270055197ebe", 59_200),
+    ("moderncv", "moderncv.cls", "77552", "f897a29679d0412d1e0a137bce4257241182211390e03afe1944da2b40f04a0c", 39_544),
+    ("multirow", "multirow.sty", "77677", "c1afe8c9d424ae96d31f73b80a8a9c229a76dae90e2a159d944ddd48008c6662", 2_844),
+    ("needspace", "needspace.sty", "77677", "49858007eddb001bd1741b01660019fa03da5f75ef8346f9547f450127ca12be", 956),
+    ("pgf", "pgf.sty", "78116", "845efd98fcf700c803a2ed68f9c6779080ed4d00a1d74c53877e8480447e7e74", 718_196),
+    ("realscripts", "realscripts.sty", "77677", "d00173260719dad26a84fcb6981018f4be6a5d566b0107062110e657c9afd440", 1_892),
+    ("setspace", "setspace.sty", "77677", "53bffec9151d0c223fdfec937f0b03b0432388a1bc4a3a704fa1e60ccd0e3eb3", 7_372),
+    ("textpos", "textpos.sty", "77677", "0948cc29ff8bcea56667362073c96c8ae381c4d719ede44690885fbb24439e36", 4_240),
+    ("titlesec", "titlesec.sty", "77677", "5af4e3f6c2f677a65de1b81c9c3707d0117de56d4d596fbcb4734f6ceb3908ac", 19_920),
+    ("xltxtra", "xltxtra.sty", "77677", "218c816c48c9925b6e3965ed8a3b4410c5ece99537f20739c0d49f47ce0e39ad", 2_532),
 ];
+
+/// The program beside a TeX engine that tells whether that TeX finds a file.
+const TEX_FILE_FINDER: &str = "kpsewhich";
 
 impl Helper {
     /// The programs that must run for the helper to count as here.
@@ -120,21 +128,26 @@ impl Helper {
         self != Self::Python || python_new_enough(line)
     }
 
-    /// Where the helper goes, under the home folder: a folder for Python and TinyTeX, Bun's one program for Bun.
-    /// `HELPER_BINS` in the shared kernel lists the folders of their programs.
-    pub const fn place(self) -> &'static [&'static str] {
+    /// The files the helper must find for ai-job-search's commands to work, with the program, beside each of its
+    /// programs, that looks them up: for LaTeX, `kpsewhich` and the file each pinned TeX Live package is loaded by, so a
+    /// smaller TeX, such as BasicTeX, does not count as here. `None` for a helper that needs no file.
+    pub fn needed_files(self) -> Option<(&'static str, Vec<&'static str>)> {
+        (self == Self::Latex).then(|| (TEX_FILE_FINDER, TEX_PACKAGES.iter().map(|&(_, file, ..)| file).collect()))
+    }
+
+    /// The helper's folder in `OWN_FOLDER`.
+    pub const fn place(self) -> &'static str {
         match self {
-            Self::Python => &[".jobdesk", "python"],
-            Self::Bun => &[".bun", "bin", "bun"],
-            Self::Latex => &["Library", "TinyTeX"],
+            Self::Python => "python",
+            Self::Bun => "bun",
+            Self::Latex => "TinyTeX",
         }
     }
 
-    /// The folder of the helper's programs, under its place's folder: for Bun, the place's own folder.
+    /// The folder of the helper's programs, under its place. `HELPER_BINS` in the shared kernel lists the same folders.
     pub const fn bin(self) -> &'static [&'static str] {
         match self {
-            Self::Python => &["bin"],
-            Self::Bun => &[],
+            Self::Python | Self::Bun => &["bin"],
             Self::Latex => &["bin", "universal-darwin"],
         }
     }
@@ -204,7 +217,7 @@ fn tinytex() -> Artifact {
     Artifact { name: "tinytex", version: TINYTEX, file, url, sha256, size: 92_059_502, layout: Layout::Tree { top: "TinyTeX" } }
 }
 
-fn tex_package(&(name, revision, sha256, size): &TexPin) -> Artifact {
+fn tex_package(&(name, _, revision, sha256, size): &TexPin) -> Artifact {
     let file = format!("{name}.tar.xz");
     let url = format!("{TEX_HISTORIC}/{TEX_LIVE}/tlnet-final/archive/{file}");
     Artifact { name, version: revision, file, url, sha256, size, layout: Layout::TexPackage }
@@ -241,17 +254,20 @@ pub enum Outcome {
     CouldNotInstall(Failure),
 }
 
-/// Finds whether a helper's programs run.
+/// Finds whether a helper works for ai-job-search.
 pub trait HelperProbe: Send + Sync {
-    /// Whether every program of `helper` runs, and Python is new enough. It never runs a stub that would open a dialog.
+    /// Whether every program of `helper` runs, Python is new enough, and the TeX of each LaTeX program finds every
+    /// file the templates need. A check that cannot tell, such as one that takes too long, counts as not here. It never
+    /// runs a stub that would open a dialog.
     fn is_here(&self, helper: Helper) -> bool;
 }
 
-/// Installs a helper in the home folder.
+/// Installs a helper in `OWN_FOLDER` of the home folder.
 pub trait HelperInstaller: Send + Sync {
     /// Downloads every file of `helper`, checks each against its pin, unpacks them beside the helper's place and puts
-    /// them there in one step. It blocks, and stops soon after `cancelled` turns true. Whatever ends it short leaves
-    /// nothing in the home folder.
+    /// them there in one step. Setup installs only a helper that is not here, so an earlier install still in the place
+    /// does not work, and goes first. It blocks, and stops soon after `cancelled` turns true. Whatever ends it short
+    /// leaves nothing new in the home folder.
     fn install(&self, helper: Helper, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure>;
     /// Removes the half installs and downloads a Jobdesk that no longer runs left. Links are removed, never followed.
     fn clear_leftovers(&self);
@@ -298,13 +314,23 @@ mod tests {
     }
 
     #[test]
-    fn the_program_folders_are_the_ones_the_path_lists() {
+    fn latex_needs_a_file_of_each_pinned_package() {
+        let (finder, files) = Helper::Latex.needed_files().unwrap();
+        assert_eq!(finder, "kpsewhich");
+        assert_eq!(files.len(), TEX_PACKAGES.len());
+        assert!(files.contains(&"moderncv.cls") && files.contains(&"fontawesome5.sty"));
+        for (&(name, file, ..), needed) in TEX_PACKAGES.iter().zip(&files) {
+            assert_eq!(*needed, file);
+            assert!(file.starts_with(name) && (file.ends_with(".sty") || file.ends_with(".cls")), "{file}");
+        }
+        assert_eq!(Helper::Python.needed_files(), None);
+        assert_eq!(Helper::Bun.needed_files(), None);
+    }
+
+    #[test]
+    fn every_helper_goes_in_jobdesks_own_folder_whose_program_folders_the_path_lists() {
         for (helper, bins) in HELPERS.into_iter().zip(HELPER_BINS) {
-            let mut folder: Vec<&str> = helper.place().to_vec();
-            if helper.bin().is_empty() {
-                folder.pop();
-            }
-            folder.extend(helper.bin());
+            let folder: Vec<&str> = [OWN_FOLDER, helper.place()].into_iter().chain(helper.bin().iter().copied()).collect();
             assert_eq!(folder, bins, "{helper:?}");
         }
     }

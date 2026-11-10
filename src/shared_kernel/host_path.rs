@@ -10,17 +10,19 @@ const MARKER: &str = "__JOBDESK_PATH__";
 /// What a program's file name may end in on Windows, in the order Jobdesk tries them.
 const WINDOWS_EXTENSIONS: [&str; 3] = ["exe", "cmd", "bat"];
 
-/// The folders, under the home folder, that hold the programs of the helpers first-run setup installs on macOS: a
-/// standalone Python, Bun and TinyTeX, in that order.
-pub const HELPER_BINS: [&[&str]; 3] = [&[".jobdesk", "python", "bin"], &[".bun", "bin"], &["Library", "TinyTeX", "bin", "universal-darwin"]];
+/// The folders, under the home folder, that hold the programs of the helpers first-run setup installs on macOS, all in
+/// Jobdesk's own `~/.jobdesk`: a standalone Python, Bun and TinyTeX, in that order.
+pub const HELPER_BINS: [&[&str]; 3] = [&[".jobdesk", "python", "bin"], &[".jobdesk", "bun", "bin"], &[".jobdesk", "TinyTeX", "bin", "universal-darwin"]];
 
 /// On macOS these programs in `/usr/bin` only hand over to the real one in Xcode or its Command Line Tools. With
 /// neither installed, running one opens a dialog that offers to install them.
 const DEVELOPER_STUBS: [&str; 2] = ["python3", "git"];
 
 /// An app opened from the Finder has none of the PATH set in shell profiles, so `claude`, `bun` and `lualatex` would
-/// all look missing. Ask the login shell. The helper folders come first, so runs, the tool check and Runtime status
-/// find the helpers first-run setup installed. They are listed even before an install, because the lookup runs once.
+/// all look missing. Ask the login shell. The helper folders come first, ahead of every other copy, newer ones and the
+/// shell's own included, because setup installs a helper only when no copy works with ai-job-search, and then only
+/// its pinned one is known to. Runs, the tool check and Runtime status all find it. They are listed even before an
+/// install, because the lookup runs once.
 pub fn resolved_path() -> &'static str {
     static RESOLVED: OnceLock<String> = OnceLock::new();
     RESOLVED.get_or_init(|| {
@@ -101,7 +103,12 @@ pub fn find_executable(path: &str, name: &str) -> Option<PathBuf> {
     let usual = usual_folders(env::var_os("HOME").as_deref(), env::var_os("USERPROFILE").as_deref(), env::var_os("APPDATA").as_deref(), windows);
     let extensions: &[&str] = if windows { &WINDOWS_EXTENSIONS } else { &[] };
     let dead = |candidate: &Path| cfg!(target_os = "macos") && is_dead_stub(candidate, Path::new("/usr/bin"), &developer_dirs);
-    env::split_paths(path).chain(usual).flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file() && !dead(candidate))
+    first_found(env::split_paths(path).chain(usual), name, extensions, &dead)
+}
+
+/// The first file `name` could be in `folders`, in order, that is not `dead`.
+fn first_found(folders: impl Iterator<Item = PathBuf>, name: &str, extensions: &[&str], dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    folders.flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file() && !dead(candidate))
 }
 
 /// Whether `candidate` is one of the developer stubs in `usr_bin` with no program behind it in any of the folders
@@ -179,12 +186,8 @@ mod tests {
 
     #[test]
     fn helper_folders_are_listed_on_macos_only_and_in_order() {
-        let home = Path::new("/Users/ada");
-        let expected = [
-            home.join(".jobdesk").join("python").join("bin"),
-            home.join(".bun").join("bin"),
-            home.join("Library").join("TinyTeX").join("bin").join("universal-darwin"),
-        ];
+        let own = Path::new("/Users/ada").join(".jobdesk");
+        let expected = [own.join("python").join("bin"), own.join("bun").join("bin"), own.join("TinyTeX").join("bin").join("universal-darwin")];
         assert_eq!(texts(&helper_bins(os("/Users/ada"), true)), texts(&expected), "listed whether or not they exist");
         assert!(helper_bins(os("/Users/ada"), false).is_empty());
         assert!(helper_bins(os(""), true).is_empty(), "an empty HOME is no folder");
@@ -193,14 +196,14 @@ mod tests {
 
     #[test]
     fn the_helper_folders_come_before_the_login_shell_and_the_inherited_path() {
-        let helpers = [PathBuf::from("/h/python/bin"), PathBuf::from("/h/.bun/bin")];
+        let helpers = [PathBuf::from("/h/python/bin"), PathBuf::from("/h/bun/bin")];
         assert_eq!(
             joined(&helpers, Some("/opt/homebrew/bin:/usr/bin".into()), "/usr/bin:/bin", ':'),
-            "/h/python/bin:/h/.bun/bin:/opt/homebrew/bin:/usr/bin:/usr/bin:/bin"
+            "/h/python/bin:/h/bun/bin:/opt/homebrew/bin:/usr/bin:/usr/bin:/bin"
         );
-        assert_eq!(joined(&helpers, None, "/usr/bin", ':'), "/h/python/bin:/h/.bun/bin:/usr/bin");
+        assert_eq!(joined(&helpers, None, "/usr/bin", ':'), "/h/python/bin:/h/bun/bin:/usr/bin");
         assert_eq!(joined(&[], Some(String::new()), "/usr/bin", ':'), "/usr/bin", "an empty login path adds nothing");
-        assert_eq!(joined(&helpers, Some("/a".into()), "", ':'), "/h/python/bin:/h/.bun/bin:/a", "no empty part, which would be the current folder");
+        assert_eq!(joined(&helpers, Some("/a".into()), "", ':'), "/h/python/bin:/h/bun/bin:/a", "no empty part, which would be the current folder");
         let odd = [PathBuf::from("/h/a:b/bin"), PathBuf::from("/h/ok")];
         assert_eq!(joined(&odd, None, "/usr/bin", ':'), "/h/ok:/usr/bin", "a folder holding the separator is left out");
     }
@@ -228,6 +231,25 @@ mod tests {
         fs::create_dir_all(&app).unwrap();
         fs::write(app.join("git"), "").unwrap();
         assert!(!is_dead_stub(&usr_bin.join("git"), &usr_bin, &|| vec![xcode.clone()]), "a folder named as the Xcode app");
+    }
+
+    #[test]
+    fn the_search_goes_on_past_a_dead_stub() {
+        let root = tempfile::tempdir().unwrap();
+        let usr_bin = root.path().join("usr").join("bin");
+        let later = root.path().join("opt").join("bin");
+        let tools = root.path().join("CommandLineTools");
+        for folder in [&usr_bin, &later] {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("python3"), "").unwrap();
+        }
+        let folders = || [usr_bin.clone(), later.clone()].into_iter();
+        let dead = |candidate: &Path| is_dead_stub(candidate, &usr_bin, &|| vec![tools.clone()]);
+        assert_eq!(first_found(folders(), "python3", &[], &dead), Some(later.join("python3")), "the stub would open a dialog");
+        assert_eq!(first_found([usr_bin.clone()].into_iter(), "python3", &[], &dead), None, "a dead stub alone is no program");
+        fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
+        fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
+        assert_eq!(first_found(folders(), "python3", &[], &dead), Some(usr_bin.join("python3")), "a backed stub is found first");
     }
 
     #[test]

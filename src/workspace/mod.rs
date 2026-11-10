@@ -29,3 +29,9 @@ pub fn environment_checks(repaint: Arc<dyn Fn() + Send + Sync>) -> EnvironmentCh
 pub fn tool_version(name: &str) -> Option<String> {
     TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe(tool))
 }
+
+/// All `program` prints when run with `args` from the folder where the tool check finds `tool`, so both belong to one
+/// install. `None` when either is missing, or it fails or takes too long.
+pub fn output_beside(tool: &str, program: &str, args: &[&str]) -> Option<String> {
+    ProcessProber.beside(tool, program, args)
+}

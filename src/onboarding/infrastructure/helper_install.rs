@@ -1,6 +1,7 @@
-//! Installs a helper in the home folder on macOS. Every file of it downloads into this Jobdesk's own folder of
-//! `onboarding/`, and is compared with its pinned SHA-256 and size. Only once all of them match is anything unpacked,
-//! into a hidden staging folder beside the helper's place, which then takes that place in one rename.
+//! Installs a helper in Jobdesk's own folder of the home folder, `~/.jobdesk`, on macOS. Every file of it downloads into
+//! this Jobdesk's own folder of `onboarding/`, and is compared with its pinned SHA-256 and size. Only once all of them
+//! match is anything unpacked, into a hidden staging folder beside the helper's place, which then takes that place in
+//! one rename. Nothing in the home folder outside `~/.jobdesk` is written, replaced or removed.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
@@ -12,7 +13,7 @@ use flate2::read::GzDecoder;
 use tar::{Archive, EntryType};
 use zip::{CompressionMethod, ZipArchive};
 
-use crate::onboarding::domain::{Arch, Artifact, Failure, HELPERS, Helper, HelperInstaller, InstallPhase, Layout, SourceFetcher};
+use crate::onboarding::domain::{Arch, Artifact, Failure, HELPERS, Helper, HelperInstaller, InstallPhase, Layout, OWN_FOLDER, SourceFetcher};
 use crate::onboarding::infrastructure::fetcher::HttpsFetcher;
 use crate::onboarding::infrastructure::unpacker::{clear_stagings, file_mode, make_folders, remove, rename_into, sha256_hex, staging_of};
 use crate::shared_kernel::own_folder::claim;
@@ -28,7 +29,7 @@ const LS_R_MAGIC: &str = "% ls-R -- filename database for kpathsea; do not chang
 /// The pinned files of a helper.
 type Pins = Box<dyn Fn(Helper) -> Vec<Artifact> + Send + Sync>;
 
-/// Installs a helper's pinned files in `home`, downloading them over the one https client.
+/// Installs a helper's pinned files in `~/.jobdesk` under `home`, downloading them over the one https client.
 pub struct HomeInstaller {
     fetcher: HttpsFetcher,
     /// `<data>/onboarding`, whose `<pid>` folders say which Jobdesk still runs.
@@ -43,9 +44,14 @@ impl HomeInstaller {
         Self { fetcher, dir, home, pins: Box::new(move |helper| helper.artifacts(arch)) }
     }
 
-    /// The helper's place in the home folder: a folder, or for Bun its program.
+    /// `~/.jobdesk`, the one folder of the home folder setup writes in.
+    fn own(&self) -> PathBuf {
+        self.home.join(OWN_FOLDER)
+    }
+
+    /// The helper's folder in `~/.jobdesk`.
     fn place(&self, helper: Helper) -> PathBuf {
-        helper.place().iter().fold(self.home.clone(), |path, part| path.join(part))
+        self.own().join(helper.place())
     }
 
     /// Downloads every file, then checks each against its pin. Gives their bytes, in order. The part files are gone
@@ -89,14 +95,19 @@ impl HelperInstaller for HomeInstaller {
             return Err(Failure::Cancelled);
         }
         phase(InstallPhase::Unpacking);
-        let place = self.place(helper);
-        fs::create_dir_all(place.parent().ok_or(Failure::Disk)?).map_err(|_| Failure::Disk)?;
+        let (own, place) = (self.own(), self.place(helper));
         let staging = staging_of(&place, &claim(&self.dir).map_err(|_| Failure::Disk)?)?;
+        let made = make_own(&own)?;
         remove(&staging);
-        let placed = unpack_all(&artifacts, &files, &staging, cancelled)
-            .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { rename_into(&staging, &place) });
+        let bin: PathBuf = helper.bin().iter().collect();
+        let placed = unpack_all(&artifacts, &files, &staging, &bin, cancelled)
+            .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { replace(&own, &staging, &place) });
         if placed.is_err() {
             remove(&staging);
+            if made {
+                // Only while it is still empty, so another Jobdesk's install there stays.
+                let _ = fs::remove_dir(&own);
+            }
         }
         placed
     }
@@ -107,6 +118,28 @@ impl HelperInstaller for HomeInstaller {
             clear_stagings(&self.place(helper), &self.dir);
         }
     }
+}
+
+/// Makes `own` when it is missing, and says whether it did, so an install that ends short can remove it again.
+fn make_own(own: &Path) -> Result<bool, Failure> {
+    match fs::create_dir(own) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) => Err(Failure::Disk),
+    }
+}
+
+/// Puts `staging` in `place`, in `own`. Setup installs only a helper that is not here, so a place still taken holds an
+/// earlier install of Jobdesk's own that does not work. It goes first, a link itself and never what it points to, but
+/// only while `own` is a real folder, not a link to one elsewhere.
+fn replace(own: &Path, staging: &Path, place: &Path) -> Result<(), Failure> {
+    if fs::symlink_metadata(place).is_ok() {
+        if !fs::symlink_metadata(own).is_ok_and(|meta| meta.is_dir()) {
+            return Err(Failure::NotEmpty);
+        }
+        remove(place);
+    }
+    rename_into(staging, place)
 }
 
 /// The bytes of the part file, when they are the pinned file: its size, then its SHA-256.
@@ -120,8 +153,8 @@ fn checked(artifact: &Artifact, part: &Path) -> Result<Vec<u8>, Failure> {
 }
 
 /// Unpacks every checked file into `staging`, in order, then lists TinyTeX's files again for TeX when packages were
-/// added to it.
-fn unpack_all(artifacts: &[Artifact], files: &[Vec<u8>], staging: &Path, cancelled: &dyn Fn() -> bool) -> Result<(), Failure> {
+/// added to it. `bin` is the helper's folder of programs, below `staging`.
+fn unpack_all(artifacts: &[Artifact], files: &[Vec<u8>], staging: &Path, bin: &Path, cancelled: &dyn Fn() -> bool) -> Result<(), Failure> {
     for (artifact, bytes) in artifacts.iter().zip(files) {
         match artifact.layout {
             Layout::Tree { top } => {
@@ -133,7 +166,7 @@ fn unpack_all(artifacts: &[Artifact], files: &[Vec<u8>], staging: &Path, cancell
                     Err(_) => Err(Failure::BadArchive),
                 })?;
             }
-            Layout::Program { entry } => unpack_program(bytes, entry, staging)?,
+            Layout::Program { entry } => unpack_program(bytes, entry, staging, bin)?,
             Layout::TexPackage => {
                 let tar = xz_decompressed(bytes)?;
                 let mut archive = Archive::new(tar.as_slice());
@@ -247,14 +280,19 @@ fn stays_inside(link: &Path, target: &Path) -> bool {
     named > 0 && climbs <= depth
 }
 
-/// Writes the one program `entry` of a zip to `to`, with its run bits.
-fn unpack_program(bytes: &[u8], entry: &str, to: &Path) -> Result<(), Failure> {
+/// Writes the one program `entry` of a zip into the `bin` folder below `staging`, by its own name and with its run
+/// bits.
+fn unpack_program(bytes: &[u8], entry: &str, staging: &Path, bin: &Path) -> Result<(), Failure> {
+    let name = Path::new(entry).file_name().ok_or(Failure::BadArchive)?;
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|_| Failure::BadArchive)?;
     let mut file = archive.by_name(entry).map_err(|_| Failure::BadArchive)?;
     let regular = file.unix_mode().is_none_or(|mode| mode & 0o170_000 == 0o100_000);
     if file.is_dir() || !regular || file.encrypted() || !matches!(file.compression(), CompressionMethod::Stored | CompressionMethod::Deflated) {
         return Err(Failure::BadArchive);
     }
+    fs::create_dir(staging).map_err(|_| Failure::Disk)?;
+    make_folders(staging, bin)?;
+    let to = staging.join(bin).join(name);
     let mut out = OpenOptions::new().write(true).create_new(true).mode(file_mode(file.unix_mode())).open(to).map_err(|_| Failure::Disk)?;
     let mut buffer = vec![0; 64 * 1024];
     let mut written = 0;
@@ -374,6 +412,11 @@ mod tests {
             self.root.path().join("home")
         }
 
+        /// `~/.jobdesk`.
+        fn own(&self) -> PathBuf {
+            self.home().join(".jobdesk")
+        }
+
         fn dir(&self) -> PathBuf {
             self.root.path().join("data").join("onboarding")
         }
@@ -382,13 +425,15 @@ mod tests {
             self.installer.install(helper, &|| false, &mut |_| {})
         }
 
-        /// Every file and link left under the home folder and in the downloads folder, but the download folder's lock.
+        /// Every file and link left under the home folder and in the downloads folder, but the download folder's lock,
+        /// in order.
         fn left(&self) -> Vec<String> {
             let mut found = Vec::new();
             for top in [self.home(), self.dir()] {
                 walk(&top, &mut found);
             }
             found.retain(|path| !path.ends_with("/.lock"));
+            found.sort();
             found.into_iter().map(|path| path.replacen(&self.root.path().to_string_lossy().into_owned(), "", 1)).collect()
         }
     }
@@ -406,7 +451,7 @@ mod tests {
     /// An installer over a temporary home, whose helpers' files are `pins`, each served as it says.
     fn fixture(pins: Vec<Files>) -> Fixture {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("home").join("Library")).unwrap();
+        fs::create_dir_all(root.path().join("home")).unwrap();
         let served = pins.iter().flat_map(|(_, files)| files.iter().map(|(artifact, serve)| (artifact.url.clone(), serve.clone()))).collect();
         let table: HashMap<Helper, Vec<Artifact>> =
             pins.into_iter().map(|(helper, files)| (helper, files.into_iter().map(|(artifact, _)| artifact).collect())).collect();
@@ -508,6 +553,12 @@ mod tests {
         (Helper::Python, vec![served("python", python_tree(), Layout::Tree { top: "python" })])
     }
 
+    /// A Python whose archive holds a path that climbs out, so it fails while it unpacks.
+    fn bad_python() -> Files {
+        let entries = [Entry::Dir("python/"), Entry::File("python/../escape", "x", 0o644)];
+        (Helper::Python, vec![served("python", gz(&tar(&entries)), Layout::Tree { top: "python" })])
+    }
+
     /// A TinyTeX and two packages, the second pinned as `moderncv` and served `package`.
     fn latex(package: Serve) -> Files {
         let moderncv = tex_package("moderncv");
@@ -523,10 +574,10 @@ mod tests {
         let fixture = fixture(vec![python()]);
         let mut heard = Vec::new();
         assert_eq!(fixture.installer.install(Helper::Python, &|| false, &mut |phase| heard.push(phase)), Ok(()));
-        let bin = fixture.home().join(".jobdesk").join("python").join("bin");
+        let bin = fixture.own().join("python").join("bin");
         assert_eq!(fs::read_link(bin.join("python3")).unwrap(), Path::new("python3.14"));
         assert_eq!(fs::metadata(bin.join("python3.14")).unwrap().permissions().mode() & 0o7777, 0o755, "no set-id bit");
-        let library = fixture.home().join(".jobdesk/python/lib/python3.14/os.py");
+        let library = fixture.own().join("python/lib/python3.14/os.py");
         assert_eq!(fs::metadata(library).unwrap().permissions().mode() & 0o777, 0o644, "no group write");
         assert_eq!(heard.last(), Some(&InstallPhase::Unpacking));
         assert!(heard.contains(&InstallPhase::Checking));
@@ -548,13 +599,14 @@ mod tests {
         let fixture = self::fixture(vec![(Helper::Python, vec![(pin, Ok(changed))])]);
         assert_eq!(fixture.install(Helper::Python), Err(Failure::Mismatch));
         assert!(fixture.left().is_empty(), "{:?}", fixture.left());
+        assert!(!fixture.own().exists());
     }
 
     #[test]
     fn latex_is_tinytex_with_its_packages_and_a_new_file_database() {
         let fixture = fixture(vec![latex(Ok(tex_package("moderncv")))]);
         assert_eq!(fixture.install(Helper::Latex), Ok(()));
-        let tinytex = fixture.home().join("Library").join("TinyTeX");
+        let tinytex = fixture.own().join("TinyTeX");
         let bin = tinytex.join("bin").join("universal-darwin");
         assert_eq!(fs::read_to_string(bin.join("mktexlsr")).unwrap(), "#!/bin/sh\n", "a link may climb, inside TinyTeX");
         assert!(tinytex.join("texmf-dist/tex/latex/moderncv/moderncv.cls").is_file());
@@ -579,28 +631,71 @@ mod tests {
     }
 
     #[test]
-    fn bun_is_one_program_that_replaces_one_that_does_not_run() {
+    fn bun_is_one_program_in_its_own_folder_and_the_users_bun_is_left_alone() {
         let entry = "bun-darwin-aarch64/bun";
         let zip = zip(&[("bun-darwin-aarch64/", b"", 0o755), (entry, b"bun", 0o755)]);
         let fixture = fixture(vec![(Helper::Bun, vec![served("bun", zip, Layout::Program { entry })])]);
-        let bun = fixture.home().join(".bun").join("bin").join("bun");
-        fs::create_dir_all(bun.parent().unwrap()).unwrap();
-        fs::write(&bun, "broken").unwrap();
+        let theirs = fixture.home().join(".bun").join("bin").join("bun");
+        fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+        fs::write(&theirs, "theirs, too slow to answer").unwrap();
         assert_eq!(fixture.install(Helper::Bun), Ok(()));
-        assert_eq!(fs::read_to_string(&bun).unwrap(), "bun");
-        assert_eq!(fs::metadata(&bun).unwrap().permissions().mode() & 0o777, 0o755);
-        assert_eq!(fixture.left(), ["/home/.bun/bin/bun"]);
+        let ours = fixture.own().join("bun").join("bin").join("bun");
+        assert_eq!(fs::read_to_string(&ours).unwrap(), "bun");
+        assert_eq!(fs::metadata(&ours).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::read_to_string(&theirs).unwrap(), "theirs, too slow to answer");
+        assert_eq!(fixture.left(), ["/home/.bun/bin/bun", "/home/.jobdesk/bun/bin/bun"]);
     }
 
     #[test]
-    fn a_place_holding_a_folder_jobdesk_did_not_make_is_left_alone() {
+    fn the_users_tinytex_is_left_alone() {
         let fixture = fixture(vec![latex(Ok(tex_package("moderncv")))]);
         let theirs = fixture.home().join("Library").join("TinyTeX").join("texmf-local").join("mine.sty");
         fs::create_dir_all(theirs.parent().unwrap()).unwrap();
         fs::write(&theirs, "theirs").unwrap();
-        assert_eq!(fixture.install(Helper::Latex), Err(Failure::NotEmpty));
+        assert_eq!(fixture.install(Helper::Latex), Ok(()));
         assert_eq!(fs::read_to_string(&theirs).unwrap(), "theirs");
-        assert_eq!(fixture.left(), ["/home/Library/TinyTeX/texmf-local/mine.sty"], "the staging folder is gone");
+        assert!(fixture.own().join("TinyTeX/texmf-dist/tex/latex/moderncv/moderncv.cls").is_file());
+        assert!(!fixture.home().join("Library/TinyTeX/texmf-dist").exists());
+    }
+
+    #[test]
+    fn an_earlier_install_of_jobdesks_own_that_does_not_run_is_replaced_without_following_links() {
+        let fixture = fixture(vec![python()]);
+        let outside = fixture.root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep"), "theirs").unwrap();
+        let broken = fixture.own().join("python");
+        fs::create_dir_all(broken.join("bin")).unwrap();
+        fs::write(broken.join("bin").join("python3"), "broken").unwrap();
+        symlink(&outside, broken.join("lib")).unwrap();
+        assert_eq!(fixture.install(Helper::Python), Ok(()));
+        assert_eq!(fs::read_link(broken.join("bin").join("python3")).unwrap(), Path::new("python3.14"));
+        assert!(broken.join("lib").join("python3.14").join("os.py").is_file());
+        assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "theirs", "a link is removed, never followed");
+    }
+
+    #[test]
+    fn an_own_folder_that_links_elsewhere_is_never_cleared() {
+        let fixture = fixture(vec![python()]);
+        let elsewhere = fixture.root.path().join("elsewhere");
+        fs::create_dir_all(elsewhere.join("python")).unwrap();
+        fs::write(elsewhere.join("python").join("keep"), "theirs").unwrap();
+        symlink(&elsewhere, fixture.own()).unwrap();
+        assert_eq!(fixture.install(Helper::Python), Err(Failure::NotEmpty));
+        assert_eq!(fs::read_to_string(elsewhere.join("python").join("keep")).unwrap(), "theirs");
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 1, "the staging folder is gone");
+    }
+
+    #[test]
+    fn a_failed_install_removes_only_the_own_folder_it_made() {
+        let fixture = fixture(vec![bad_python()]);
+        assert_eq!(fixture.install(Helper::Python), Err(Failure::BadArchive));
+        assert!(!fixture.own().exists(), "no empty ~/.jobdesk is left");
+        let finished = fixture.own().join("bun").join("bin").join("bun");
+        fs::create_dir_all(finished.parent().unwrap()).unwrap();
+        fs::write(&finished, "bun").unwrap();
+        assert_eq!(fixture.install(Helper::Python), Err(Failure::BadArchive));
+        assert_eq!(fixture.left(), ["/home/.jobdesk/bun/bin/bun"], "a ~/.jobdesk that was there stays, with what it holds");
     }
 
     #[test]
@@ -614,6 +709,7 @@ mod tests {
         });
         assert_eq!(result, Err(Failure::Cancelled));
         assert!(fixture.left().is_empty(), "{:?}", fixture.left());
+        assert!(!fixture.own().exists());
     }
 
     #[test]
@@ -634,6 +730,7 @@ mod tests {
             let fixture = fixture(vec![(Helper::Python, vec![served("python", gz(&tar(&entries)), Layout::Tree { top: "python" })])]);
             assert_eq!(fixture.install(Helper::Python), Err(Failure::BadArchive), "{:?}", entries.len());
             assert!(fixture.left().is_empty(), "{:?}", fixture.left());
+            assert!(!fixture.own().exists());
         }
     }
 
@@ -661,20 +758,19 @@ mod tests {
     #[test]
     fn the_next_open_removes_half_installs_no_jobdesk_holds() {
         let fixture = fixture(vec![python()]);
-        let library = fixture.home().join("Library");
-        let dead = library.join(".TinyTeX.jobdesk-1");
+        let own = fixture.own();
+        let dead = own.join(".TinyTeX.jobdesk-1");
         fs::create_dir_all(dead.join("texmf-dist")).unwrap();
-        let bun = fixture.home().join(".bun").join("bin");
-        fs::create_dir_all(&bun).unwrap();
-        fs::write(bun.join(".bun.jobdesk-1"), "half").unwrap();
-        fs::write(bun.join("bun"), "finished").unwrap();
-        let own = claim(&fixture.dir()).unwrap();
-        let running = staging_of(&library.join("TinyTeX"), &own).unwrap();
+        fs::create_dir_all(own.join(".bun.jobdesk-1").join("bin")).unwrap();
+        let finished = own.join("bun").join("bin");
+        fs::create_dir_all(&finished).unwrap();
+        fs::write(finished.join("bun"), "finished").unwrap();
+        let running = staging_of(&own.join("TinyTeX"), &claim(&fixture.dir()).unwrap()).unwrap();
         fs::create_dir_all(&running).unwrap();
         fixture.installer.clear_leftovers();
         assert!(!dead.exists());
-        assert!(!bun.join(".bun.jobdesk-1").exists());
-        assert!(bun.join("bun").exists(), "a finished helper stays");
+        assert!(!own.join(".bun.jobdesk-1").exists());
+        assert!(finished.join("bun").exists(), "a finished helper stays");
         assert!(running.exists(), "this Jobdesk's own install goes on");
     }
 }

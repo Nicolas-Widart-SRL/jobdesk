@@ -1,6 +1,6 @@
 //! First-run setup: the progress record, the job search folder, and the ai-job-search release downloaded into it,
 //! checked against the SHA-256 that Jobdesk's signed release feed pins before anything is unpacked. Then, on macOS,
-//! the helpers its commands call, installed in the home folder from files Jobdesk pins.
+//! the helpers its commands call, installed in Jobdesk's own folder of the home folder from files Jobdesk pins.
 
 pub mod application;
 mod domain;
@@ -32,12 +32,13 @@ pub fn first_run(data: &Path, current: &str, documents: PathBuf, repaint: Arc<dy
 }
 
 /// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, and a missing one installed in
-/// `home` from the files pinned for this copy's processor, downloaded into `data` first. It removes the half installs
-/// a setup that stopped midway left. macOS only, and `None` on a processor setup has no files for.
+/// `~/.jobdesk` under `home` from the files pinned for this copy's processor, downloaded into `data` first. It removes
+/// the half installs a setup that stopped midway left. macOS only, and `None` on a processor setup has no files for.
 #[cfg(target_os = "macos")]
 pub fn helper_setup(data: &Path, current: &str, home: PathBuf) -> Option<HelperSetup> {
     let arch = Arch::of_this_build()?;
     let fetcher = HttpsFetcher::new(Arc::new(HttpsTransport::new(current)), downloads(data));
     let installer = HomeInstaller::new(fetcher, downloads(data), home, arch);
-    Some(HelperSetup::new(Arc::new(ProgramProbe::new(crate::workspace::tool_version)), Arc::new(installer)))
+    let probe = ProgramProbe::new(crate::workspace::tool_version, crate::workspace::output_beside);
+    Some(HelperSetup::new(Arc::new(probe), Arc::new(installer)))
 }

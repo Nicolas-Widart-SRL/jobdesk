@@ -221,21 +221,22 @@ fn list_and_detail(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, 
 }
 
 /// The portals in their two groups, on then off, each in the order the list first showed it since the screen opened.
-/// A portal that came since joins the end of its group, and one that went is left out.
+/// A portal that came since joins the end of its group, and keeps that place from then on. One that went is left out.
 fn listed<'a>(view: &'a PortalsView, order: &mut Option<Vec<(String, bool)>>) -> [Vec<&'a PortalView>; 2] {
     let order = order.get_or_insert_with(|| {
         let (on, off): (Vec<&PortalView>, Vec<&PortalView>) = view.portals.iter().partition(|portal| portal.on);
         on.into_iter().chain(off).map(|portal| (portal.folder.clone(), portal.on)).collect()
     });
-    let group = |on: bool| usize::from(!on);
+    for portal in &view.portals {
+        if !order.iter().any(|(folder, _)| *folder == portal.folder) {
+            order.push((portal.folder.clone(), portal.on));
+        }
+    }
     let mut groups = [Vec::new(), Vec::new()];
     for (folder, on) in order.iter() {
         if let Some(portal) = view.portals.iter().find(|portal| portal.folder == *folder) {
-            groups[group(*on)].push(portal);
+            groups[usize::from(!on)].push(portal);
         }
-    }
-    for portal in view.portals.iter().filter(|portal| !order.iter().any(|(folder, _)| *folder == portal.folder)) {
-        groups[group(portal.on)].push(portal);
     }
     groups
 }
@@ -312,6 +313,16 @@ mod tests {
         let mut screen = PortalsScreen { order, ..PortalsScreen::default() };
         screen.put_away();
         assert_eq!(folders(&listed(&flipped, &mut screen.order)), [vec!["b".to_owned()], vec!["a".into(), "c".into()]]);
+    }
+
+    /// A portal a task added while the list was open keeps the group it first showed in once its switch flips.
+    #[test]
+    fn a_portal_that_came_since_keeps_its_place_too() {
+        let mut order = None;
+        listed(&view(&[("a", true)]), &mut order);
+        listed(&view(&[("a", true), ("c", false)]), &mut order);
+        let flipped = view(&[("a", true), ("c", true)]);
+        assert_eq!(folders(&listed(&flipped, &mut order)), [vec!["a".to_owned()], vec!["c".into()]]);
     }
 
     #[test]

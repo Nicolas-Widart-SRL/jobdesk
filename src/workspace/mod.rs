@@ -24,17 +24,10 @@ pub fn environment_checks(repaint: Arc<dyn Fn() + Send + Sync>) -> EnvironmentCh
     EnvironmentChecks::new(Arc::new(ProcessProber), repaint)
 }
 
-/// The first line the tool `name` of `TOOLS` prints about itself, found and run as the tool check does. `None` when it
-/// cannot run, or the check knows no tool of that name.
+/// The first line the tool `name` of `TOOLS` prints about itself, found and run as the tool check does: on macOS,
+/// `python3` as a task's own command runs it. `None` when it cannot run, or the check knows no tool of that name.
 pub fn tool_version(name: &str) -> Option<String> {
     TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe(tool))
-}
-
-/// The first line the tool `name` of `TOOLS` prints about itself, run the way a task's own command runs `name`: the
-/// first file of that name on the resolved `PATH`, past which the tool check may look. `None` when that file is a
-/// developer stub with no tools behind it or cannot run, or the check knows no tool of that name.
-pub fn task_tool_version(name: &str) -> Option<String> {
-    TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe_first(tool))
 }
 
 /// All `program` prints when run with `args` from the folder where the tool check finds `tool`, so both belong to one

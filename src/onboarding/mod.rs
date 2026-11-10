@@ -34,15 +34,15 @@ pub fn first_run(data: &Path, current: &str, documents: PathBuf, helpers: Helper
     Onboarding::new(store, crate::updates::source_pins(current), Arc::new(fetcher), Arc::new(unpacker), helpers, documents, repaint)
 }
 
-/// The Computer step: Bun and LaTeX found and run the way the tool check does, Python as a task runs `python3`, and a
-/// missing one installed in `~/.jobdesk` under `home` from the files pinned for this copy's processor, downloaded into
-/// `data` first. It removes the half installs a setup that stopped midway left. macOS only, and `None` on a processor
-/// setup has no files for.
+/// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, so Python as a task runs
+/// `python3`, and a missing one installed in `~/.jobdesk` under `home` from the files pinned for this copy's processor,
+/// downloaded into `data` first. It removes the half installs a setup that stopped midway left. macOS only, and `None`
+/// on a processor setup has no files for.
 #[cfg(target_os = "macos")]
 pub fn helper_setup(data: &Path, current: &str, home: PathBuf) -> Option<HelperSetup> {
     let arch = Arch::of_this_build()?;
     let fetcher = HttpsFetcher::new(Arc::new(HttpsTransport::new(current)), downloads(data));
     let installer = HomeInstaller::new(fetcher, downloads(data), home, arch);
-    let probe = ProgramProbe::new(crate::workspace::tool_version, crate::workspace::task_tool_version, crate::workspace::output_beside);
+    let probe = ProgramProbe::new(crate::workspace::tool_version, crate::workspace::output_beside);
     Some(HelperSetup::new(Arc::new(probe), Arc::new(installer)))
 }

@@ -46,7 +46,7 @@ Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, 
 Three modules are not features:
 
 - `shared_kernel` holds the few value types every feature agrees on, such as `ModelChoice`, and these shared helpers:
-  - the host `PATH` lookup that `runs` and `workspace` both need, with the helper folders first and macOS's developer stubs skipped (see [runs](docs/architecture/runs.md#the-path)), and `system_program` for the programs that ship with Windows;
+  - the host `PATH` lookup that `runs` and `workspace` both need, with the helper folders first and macOS's developer stubs skipped, except that the tool check takes Python as a task runs `python3` (see [runs](docs/architecture/runs.md#the-path)), and `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
   - `own_folder`, the `<pid>` folder each running Jobdesk claims and locks in `updates/` and `onboarding/`, and the cleanup that leaves another running Jobdesk's folder alone;

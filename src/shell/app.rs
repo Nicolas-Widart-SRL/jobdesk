@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -204,6 +205,10 @@ pub struct Shell {
     /// First-run setup, while it shows in place of the welcome: on macOS, when no folder was asked for or remembered
     /// and setup has not got past the Computer step.
     first_run: Option<FirstRun>,
+    /// First-run setup's worker once setup has handed over, until it has seen the cancel and finished. The window
+    /// never waits on it: it is joined on the first frame after it has finished. Quitting does not wait on it either,
+    /// as for every other worker thread.
+    setup_stopping: Option<JoinHandle<()>>,
     /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
     window: Option<WindowSize>,
 }
@@ -298,6 +303,7 @@ impl Shell {
             restart_slot: RestartSlot::default(),
             launch_args: Vec::new(),
             first_run: None,
+            setup_stopping: None,
             // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
             window: Some(WindowSize::App),
         }
@@ -330,6 +336,11 @@ impl Shell {
     /// First-run setup while it shows, for tests that act as its folder picker would.
     pub fn first_run_mut(&mut self) -> Option<&mut Onboarding> {
         self.first_run.as_mut().map(|first| &mut first.onboarding)
+    }
+
+    /// Whether first-run setup's worker is still ending after setup handed over, for tests.
+    pub fn setup_stopping(&self) -> bool {
+        self.setup_stopping.is_some()
     }
 
     /// Opens `path` as Choose folder and Settings › Change folder do once the picker gives it, for tests that act as
@@ -734,6 +745,7 @@ impl Shell {
     /// Takes what first-run setup's worker said. Once the Folder and Computer steps are done, the folder opens as the
     /// job search.
     fn follow_first_run(&mut self, ctx: &egui::Context) {
+        self.join_stopped_setup(ctx);
         let Some(first) = &mut self.first_run else { return };
         first.onboarding.poll(self.snapshot.today);
         if let SetupStage::Finished { folder } = first.onboarding.stage() {
@@ -744,12 +756,28 @@ impl Shell {
         }
     }
 
-    /// First-run setup hands over to the app, whichever way a folder opened: its worker is stopped and waited for, the
-    /// window grows to the app's own with Today on show, and the tool check starts again, so what setup installed is
-    /// found. Nothing while setup does not show.
+    /// Joins first-run setup's worker once it has finished after setup handed over. Until then the window looks again
+    /// a few times a second, as the worker's last news can wake it just before the thread ends.
+    fn join_stopped_setup(&mut self, ctx: &egui::Context) {
+        match self.setup_stopping.take() {
+            Some(worker) if worker.is_finished() => {
+                // A worker that panicked has nothing left to clean up, and the window goes on.
+                let _ = worker.join();
+            }
+            Some(worker) => {
+                self.setup_stopping = Some(worker);
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
+            None => {}
+        }
+    }
+
+    /// First-run setup hands over to the app at once, whichever way a folder opened: its worker is told to stop and
+    /// left to end on its own, the window grows to the app's own with Today on show, and the tool check starts again,
+    /// so what setup installed is found. Nothing while setup does not show.
     fn leave_first_run(&mut self) {
         let Some(mut first) = self.first_run.take() else { return };
-        first.onboarding.stop();
+        self.setup_stopping = first.onboarding.stop();
         (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
         if let Some(environment) = &mut self.environment {
             environment.restart();
@@ -1689,27 +1717,33 @@ fn first_run(_: &egui::Context, _: &Path) -> Option<(Onboarding, PathBuf)> {
     None
 }
 
-/// Asks the window to take `size`. The app's own size keeps the window's centre where it was.
+/// Asks the window to take `size`, keeping its centre where it was.
 fn resize(ctx: &egui::Context, size: WindowSize) {
-    let (monitor, outer) = ctx.input(|input| (input.viewport().monitor_size, input.viewport().outer_rect));
-    for command in window_commands(size, monitor, outer) {
+    let (monitor, outer, inner) = ctx.input(|input| (input.viewport().monitor_size, input.viewport().outer_rect, input.viewport().inner_rect));
+    for command in window_commands(size, monitor, outer, inner) {
         ctx.send_viewport_cmd(command);
     }
 }
 
-/// What the window is asked, in order, to take `size` on a screen of `monitor` points, from where `outer` stands.
-/// The smallest size goes first for the small window, so the old one never holds it up, and last for the app's.
-fn window_commands(size: WindowSize, monitor: Option<egui::Vec2>, outer: Option<Rect>) -> Vec<egui::ViewportCommand> {
+/// What the window is asked, in order, to take `size` on a screen of `monitor` points, from where `outer` stands
+/// round `inner`. The smallest size goes first for the small window, so the old one never holds it up, and last for the
+/// app's. Either way the window keeps its centre, title bar included, so growing and shrinking it again leaves it
+/// where it was.
+fn window_commands(size: WindowSize, monitor: Option<egui::Vec2>, outer: Option<Rect>, inner: Option<Rect>) -> Vec<egui::ViewportCommand> {
     use egui::ViewportCommand::{InnerSize, MinInnerSize, OuterPosition};
-    match size {
-        WindowSize::FirstRun => vec![MinInnerSize(FIRST_WINDOW), InnerSize(FIRST_WINDOW)],
+    let (to, mut commands) = match size {
+        WindowSize::FirstRun => (FIRST_WINDOW, vec![MinInnerSize(FIRST_WINDOW), InnerSize(FIRST_WINDOW)]),
         WindowSize::App => {
             let grown = monitor.map_or(WINDOW, |monitor| WINDOW.min(monitor)).max(SMALLEST_WINDOW);
-            let mut commands = vec![InnerSize(grown), MinInnerSize(SMALLEST_WINDOW)];
-            commands.extend(outer.map(|outer| OuterPosition(outer.center() - grown / 2.0)));
-            commands
+            (grown, vec![InnerSize(grown), MinInnerSize(SMALLEST_WINDOW)])
         }
+    };
+    if let Some(outer) = outer {
+        // The title bar and borders round the inner rect, which the window keeps at either size.
+        let frame = inner.map_or(egui::Vec2::ZERO, |inner| ((inner.min - outer.min) + (outer.max - inner.max)).max(egui::Vec2::ZERO));
+        commands.push(OuterPosition(outer.center() - (to + frame) / 2.0));
     }
+    commands
 }
 
 /// The welcome's stamp and title, its steps, then the folder promise. Returns whether Choose folder was pressed.
@@ -2785,21 +2819,42 @@ mod tests {
     fn first_run_asks_for_the_small_window_whatever_was_saved() {
         use egui::ViewportCommand::{InnerSize, MinInnerSize};
         let small = vec2(720.0, 560.0);
-        assert_eq!(window_commands(WindowSize::FirstRun, Some(vec2(1728.0, 1117.0)), None), [MinInnerSize(small), InnerSize(small)]);
+        assert_eq!(window_commands(WindowSize::FirstRun, Some(vec2(1728.0, 1117.0)), None, None), [MinInnerSize(small), InnerSize(small)]);
     }
 
-    /// Handing over grows the window to the app's size round its old centre, or to the screen when that is smaller,
-    /// but never below the app's smallest.
+    /// A window at `min` whose title bar is 28 points tall over `inner`.
+    fn framed(min: egui::Pos2, inner: egui::Vec2) -> (Rect, Rect) {
+        (Rect::from_min_size(min, inner + vec2(0.0, 28.0)), Rect::from_min_size(min + vec2(0.0, 28.0), inner))
+    }
+
+    /// Handing over grows the window to the app's size round its old centre, title bar included, or to the screen when
+    /// that is smaller, but never below the app's smallest.
     #[test]
     fn handing_over_grows_the_window_to_the_app_on_the_screen() {
         use egui::ViewportCommand::{InnerSize, MinInnerSize, OuterPosition};
         let smallest = vec2(1040.0, 640.0);
-        let first = Rect::from_min_size(pos2(400.0, 200.0), vec2(720.0, 588.0));
-        let grown = window_commands(WindowSize::App, Some(vec2(1728.0, 1117.0)), Some(first));
-        assert_eq!(grown, [InnerSize(vec2(1280.0, 820.0)), MinInnerSize(smallest), OuterPosition(pos2(120.0, 84.0))]);
-        let laptop = window_commands(WindowSize::App, Some(vec2(1180.0, 700.0)), None);
+        let (outer, inner) = framed(pos2(400.0, 200.0), vec2(720.0, 560.0));
+        let grown = window_commands(WindowSize::App, Some(vec2(1728.0, 1117.0)), Some(outer), Some(inner));
+        assert_eq!(grown, [InnerSize(vec2(1280.0, 820.0)), MinInnerSize(smallest), OuterPosition(pos2(120.0, 70.0))]);
+        let laptop = window_commands(WindowSize::App, Some(vec2(1180.0, 700.0)), None, None);
         assert_eq!(laptop, [InnerSize(vec2(1180.0, 700.0)), MinInnerSize(smallest)], "the screen, when smaller");
-        let tiny = window_commands(WindowSize::App, Some(vec2(800.0, 600.0)), None);
+        let tiny = window_commands(WindowSize::App, Some(vec2(800.0, 600.0)), None, None);
         assert_eq!(tiny, [InnerSize(smallest), MinInnerSize(smallest)], "never below the smallest");
+    }
+
+    /// Growing the window for Settings and shrinking it again puts it back where it was, however often it is done.
+    #[test]
+    fn growing_and_shrinking_the_window_leaves_it_where_it_was() {
+        use egui::ViewportCommand::{InnerSize, OuterPosition};
+        let start = pos2(400.0, 200.0);
+        let (mut outer, mut inner) = framed(start, vec2(720.0, 560.0));
+        for size in [WindowSize::App, WindowSize::FirstRun, WindowSize::App, WindowSize::FirstRun] {
+            let sent = window_commands(size, Some(vec2(1728.0, 1117.0)), Some(outer), Some(inner));
+            let to = sent.iter().find_map(|command| if let InnerSize(to) = command { Some(*to) } else { None }).unwrap();
+            let Some(OuterPosition(at)) = sent.last() else { panic!("no position: {sent:?}") };
+            // The window takes what it was asked.
+            (outer, inner) = framed(*at, to);
+        }
+        assert_eq!(outer.min, start);
     }
 }

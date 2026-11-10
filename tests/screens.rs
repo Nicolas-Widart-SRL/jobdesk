@@ -6800,6 +6800,7 @@ fn the_ways_in_are_heard() {
 mod first_run {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use jobdesk::onboarding::application::{
         Contents, Failure as SetupFailure, Helper, HelperInstaller, HelperProbe, HelperSetup, InstallPhase, Onboarding, Phase, Progress, ProgressStore,
@@ -6847,13 +6848,22 @@ mod first_run {
     }
 
     /// Hands back a path only `Folders` reads, after it has said some bytes arrived. With `hold` it waits for Cancel.
+    /// While `stalled` is set it waits whatever Cancel says, as a read on a stalled network does, then hands the path
+    /// back, as a read that had every byte when the cancel came.
     struct Fetcher {
         hold: bool,
+        stalled: Option<Arc<AtomicBool>>,
     }
 
     impl SourceFetcher for Fetcher {
         fn fetch(&self, _: &str, _: &str, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, SetupFailure> {
             progress(1_000_000);
+            if let Some(stalled) = &self.stalled {
+                while stalled.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                return Ok(PathBuf::from("/fictional/onboarding/1/release.zip.part"));
+            }
             while self.hold && !cancelled() {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -6958,6 +6968,7 @@ mod first_run {
         feed: Option<Result<Option<SourcePin>, FeedFailure>>,
         record: Option<Progress>,
         hold_download: bool,
+        stall_download: Option<Arc<AtomicBool>>,
         mismatch: bool,
         here: Vec<Helper>,
         hold_check: Option<Helper>,
@@ -6981,7 +6992,7 @@ mod first_run {
         let installer = Installer { here: Arc::clone(&probe), fails: script.fails, held: script.hold_install };
         let tools = HelperTools(Arc::clone(&probe));
         let helpers = HelperSetup::new(probe, Arc::new(installer));
-        let (fetcher, folders) = (Fetcher { hold: script.hold_download }, Folders { mismatch: script.mismatch });
+        let (fetcher, folders) = (Fetcher { hold: script.hold_download, stalled: script.stall_download }, Folders { mismatch: script.mismatch });
         let store = Arc::new(Record(Mutex::new(script.record)));
         let documents = home.join("Documents");
         let onboarding = Onboarding::new(store, Some(Arc::new(Pins(feed))), Arc::new(fetcher), Arc::new(folders), helpers, documents, Arc::new(|| {}));
@@ -7256,28 +7267,84 @@ mod first_run {
         (harness, shared)
     }
 
+    /// Tells the shell the window stands at `min` with `inner` under a 28-point title bar, as the system says once the
+    /// window has taken a size and a position.
+    fn place_window(harness: &mut Harness, min: egui::Pos2, inner: egui::Vec2) {
+        let viewport = harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+        viewport.outer_rect = Some(egui::Rect::from_min_size(min, inner + egui::vec2(0.0, 28.0)));
+        viewport.inner_rect = Some(egui::Rect::from_min_size(min + egui::vec2(0.0, 28.0), inner));
+    }
+
     /// Settings needs the app's smallest window, so opening it over first-run setup grows the window to the app's own.
-    /// Closing it while setup still shows gives the small first window back.
+    /// Closing it while setup still shows gives the small first window back. Both keep the window's centre, so it
+    /// ends where it started.
     #[test]
     fn settings_over_first_run_takes_the_app_size_and_gives_it_back() {
-        use egui::ViewportCommand::{InnerSize, MinInnerSize};
+        use egui::ViewportCommand::{InnerSize, MinInnerSize, OuterPosition};
         let (small, app, smallest) = (egui::vec2(720.0, 560.0), egui::vec2(1280.0, 820.0), egui::vec2(1040.0, 640.0));
+        let (start, grown_at) = (egui::pos2(400.0, 200.0), egui::pos2(120.0, 70.0));
         let (shell, _) = first_run_shell("settings_over_first_run", Script::default());
         let (mut harness, shell) = shared_first_window(shell);
         until_shown(&mut harness, "Welcome to Jobdesk");
+        place_window(&mut harness, start, small);
         harness.get_by_role_and_label(egui::accesskit::Role::Button, "Settings").click();
         let sent = sent_over(&mut harness, 3);
         assert!(shell.borrow().settings_open());
-        assert!(sent.contains(&InnerSize(app)) && sent.contains(&MinInnerSize(smallest)), "Settings asks for the app's size and smallest: {sent:?}");
+        assert_eq!(sent, [InnerSize(app), MinInnerSize(smallest), OuterPosition(grown_at)], "Settings asks for the app's size round the same centre");
         assert_eq!(harness.ctx.content_rect().size(), app);
+        place_window(&mut harness, grown_at, app);
         // Pressed in one frame, so that frame's commands are the ones read.
         let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         harness.input_mut().events.push(escape);
         let sent = sent_over(&mut harness, 3);
         assert!(!shell.borrow().settings_open());
-        assert_eq!(sent, [MinInnerSize(small), InnerSize(small)], "closing Settings gives the first window back");
+        assert_eq!(sent, [MinInnerSize(small), InnerSize(small), OuterPosition(start)], "closing Settings gives the first window back where it was");
         assert_eq!(harness.ctx.content_rect().size(), small);
         assert!(harness.query_by_label_contains("Welcome to Jobdesk").is_some(), "setup still shows");
+    }
+
+    /// Every file under `root`, by its path inside it, with its bytes.
+    fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let (mut found, mut folders) = (BTreeMap::new(), vec![root.to_owned()]);
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else {
+                    found.insert(path.strip_prefix(root).unwrap().to_owned(), fs::read(&path).unwrap());
+                }
+            }
+        }
+        found
+    }
+
+    /// A read on a stalled network does not see the cancel until it returns, so a folder opened from Settings hands
+    /// over without waiting for it. The worker ends once the read returns, and writes only into its own folder, never
+    /// into the one opened.
+    #[test]
+    fn a_folder_opened_from_settings_hands_over_while_a_read_is_stalled() {
+        let stalled = Arc::new(AtomicBool::new(true));
+        let (shell, home) = first_run_shell("settings_folder_while_stalled", Script { stall_download: Some(Arc::clone(&stalled)), ..Script::default() });
+        let (mut harness, shell) = shared_first_window(shell);
+        for step in TO_DOWNLOAD {
+            click(&mut harness, step);
+        }
+        until_shown(&mut harness, "The latest version, 1.7.5");
+        shell.borrow_mut().open_settings(Page::General);
+        let theirs = home.join("Their search");
+        sample_workspace(&theirs);
+        let before = files(&theirs);
+        let started = Instant::now();
+        shell.borrow_mut().choose_folder_from(&harness.ctx.clone(), theirs.clone());
+        assert!(started.elapsed() < Duration::from_secs(1), "the hand-over did not wait for the stalled read");
+        assert!(shell.borrow_mut().first_run_mut().is_none(), "setup has handed over");
+        harness.run_steps(3);
+        assert!(shell.borrow().setup_stopping(), "the worker still ends behind the app");
+        stalled.store(false, Ordering::SeqCst);
+        until(&mut harness, |_| !shell.borrow().setup_stopping(), "the worker being joined");
+        assert_eq!(files(&theirs), before, "nothing of the folder opened changed");
+        assert!(home.join("Documents/Job search/CLAUDE.md").is_file(), "the worker unpacked only into its own folder");
     }
 
     /// A folder opened while Settings shows over first-run setup leaves setup, and the window keeps the app's size.

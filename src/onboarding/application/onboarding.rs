@@ -294,13 +294,16 @@ impl Onboarding {
         self.stage = Stage::Finished { folder };
     }
 
-    /// Stops the worker, if one runs, and waits until it has, so nothing setup does outlives it: the download, the
-    /// unpacking or an install ends short and cleans up as Cancel does. The window then leaves setup.
-    pub fn stop(&mut self) {
-        if let Some(attempt) = self.attempt.take() {
-            attempt.cancelled.store(true, Ordering::SeqCst);
-            let _ = attempt.worker.join();
-        }
+    /// Stops the worker, if one runs, without waiting for it, and gives back its thread to join once it has finished.
+    /// The download, the unpacking or an install ends short at its next check and cleans up as Cancel does, but a read
+    /// or a helper check under way ends first, which a stalled network or a hung program can drag out for tens of
+    /// seconds. The worker writes only its own folder, that folder's staging folder, `~/.jobdesk`, its downloads and the
+    /// record, never a folder opened meanwhile.
+    #[must_use = "the worker's thread is joined once it has finished"]
+    pub fn stop(&mut self) -> Option<JoinHandle<()>> {
+        let attempt = self.attempt.take()?;
+        attempt.cancelled.store(true, Ordering::SeqCst);
+        Some(attempt.worker)
     }
 
     /// Takes what the worker said since the last call. Call it every frame.
@@ -507,10 +510,12 @@ mod tests {
     }
 
     /// A fetcher that never reaches the network: it waits for Cancel when `hold` is set, and otherwise hands back a
-    /// path that only the fake unpacker reads.
+    /// path that only the fake unpacker reads. While `stalled` is set it waits whatever Cancel says, as a read on a
+    /// stalled network does.
     #[derive(Default)]
     struct Fetcher {
         hold: bool,
+        stalled: AtomicBool,
         asked: Mutex<Vec<String>>,
         /// Set once a fetch has returned.
         ended: AtomicBool,
@@ -520,7 +525,7 @@ mod tests {
         fn fetch(&self, url: &str, name: &str, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, Failure> {
             self.asked.lock().unwrap().push(format!("{url} {name}"));
             progress(10);
-            while self.hold && !cancelled() {
+            while self.stalled.load(Ordering::SeqCst) || (self.hold && !cancelled()) {
                 thread::sleep(Duration::from_millis(5));
             }
             // A little later than the cancel, so a caller that does not wait for the worker sees it still running.
@@ -969,18 +974,27 @@ mod tests {
         assert!(matches!(onboarding.stage(), Stage::Computer { .. }));
     }
 
+    /// A read on a stalled network does not see Cancel until it returns, so stop gives the worker back at once, and
+    /// the worker ends short once the read returns.
     #[test]
-    fn stop_cancels_the_worker_and_waits_for_it() {
-        let fetcher = Arc::new(Fetcher { hold: true, ..Fetcher::default() });
+    fn stop_cancels_the_worker_without_waiting_for_a_stalled_read() {
+        let fetcher = Arc::new(Fetcher { stalled: AtomicBool::new(true), ..Fetcher::default() });
         let folders = Arc::new(Folders::holding(Contents::Missing));
         let mut onboarding = onboarding(Arc::default(), pinned(), Arc::clone(&fetcher), Arc::clone(&folders));
         onboarding.start_from_scratch();
         onboarding.save_here(today());
         wait_for(&mut onboarding, |stage| matches!(stage, Stage::Download { phase: Phase::Downloading { .. }, .. }));
-        onboarding.stop();
-        assert!(fetcher.ended.load(Ordering::SeqCst), "the download has ended by the time stop returns");
+        let worker = onboarding.stop().expect("a worker runs");
         assert!(!onboarding.is_working());
-        assert!(folders.unpacked.lock().unwrap().is_empty());
-        onboarding.stop();
+        assert!(!worker.is_finished() && !fetcher.ended.load(Ordering::SeqCst), "stop returned while the read is stalled");
+        fetcher.stalled.store(false, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_finished() {
+            assert!(Instant::now() < deadline, "the worker never ended");
+            thread::sleep(Duration::from_millis(2));
+        }
+        worker.join().unwrap();
+        assert!(folders.unpacked.lock().unwrap().is_empty(), "the worker saw the cancel once the read returned");
+        assert!(onboarding.stop().is_none(), "nothing runs any more");
     }
 }

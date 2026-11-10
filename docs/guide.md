@@ -35,7 +35,7 @@ If a helper cannot install, its line says why, and Try again installs it again. 
 
 When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window, and checks the tools again so Setup finds the helpers. Profile then shows what is left to fill in about you.
 
-Settings stays at the bottom right through setup. Choosing a folder in Settings › Change folder ends setup: a download or an install still running stops, and that folder opens on Today in the full-size window.
+Settings stays at the bottom right through setup. Choosing a folder in Settings › Change folder ends setup at once: a download or an install still running stops, and that folder opens on Today in the full-size window, behind Settings. Back to app or Esc shows it.
 
 ### Quitting midway
 

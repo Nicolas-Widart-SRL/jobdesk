@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
 use crate::portals::domain::manifest::{NAME_CHARS, SENTENCE_CHARS, parse_manifest};
 use crate::shared_kernel::visible_text::visible_chars;
@@ -234,6 +234,9 @@ pub struct CommunityList {
     /// The `CODEOWNERS` blob it was read from, if the repository has one.
     pub codeowners_sha: Option<BlobSha>,
 }
+
+/// How long Jobdesk waits after GitHub refuses with 403 or 429 and names no time, as its documentation advises.
+pub const REFUSAL_WAIT: TimeDelta = TimeDelta::minutes(1);
 
 /// Why the community list could not be read, in Jobdesk's own words. No text from the server is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

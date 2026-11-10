@@ -1,6 +1,6 @@
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
-use crate::portals::domain::{CommunityFailure, CommunityList, CommunitySource, ListedPortal, code_url, country_name, install_prompt};
+use crate::portals::domain::{CommunityFailure, CommunityList, CommunitySource, ListedPortal, REFUSAL_WAIT, code_url, country_name, install_prompt};
 
 /// A saved list older than this is read again when the community list opens.
 pub const STALE_AFTER: TimeDelta = TimeDelta::hours(1);
@@ -12,6 +12,8 @@ pub struct Community {
     reading: bool,
     /// Why the last read failed, until a read succeeds.
     failure: Option<CommunityFailure>,
+    /// No read starts before this time: GitHub's rate limit, or a minute after it refused with 403 or 429.
+    wait_until: Option<DateTime<Utc>>,
 }
 
 /// What the community list shows.
@@ -34,6 +36,8 @@ pub struct CommunityView {
     pub state: CommunityState,
     /// Why the last read failed, for the words of an offline note.
     pub failure: Option<CommunityFailure>,
+    /// Try again stays off until this time, while GitHub asks Jobdesk to wait.
+    pub wait_until: Option<DateTime<Utc>>,
     /// When the list shown was read.
     pub saved_at: Option<DateTime<Utc>>,
     /// The user's market first, then Worldwide, then the other countries by name.
@@ -70,19 +74,19 @@ pub struct CommunityPortalView {
 impl Community {
     /// `saved` is the list saved last, read at launch without the network.
     pub fn new(source: Box<dyn CommunitySource>, saved: Option<CommunityList>) -> Self {
-        Self { source, list: saved, reading: false, failure: None }
+        Self { source, list: saved, reading: false, failure: None, wait_until: None }
     }
 
     /// Reads the list again when the user opens it and there is none, or it is over an hour old. Returns whether a read
-    /// started. None starts while one is under way or GitHub's limit holds.
+    /// started. None starts while one is under way or GitHub asks Jobdesk to wait.
     pub fn open(&mut self, now: DateTime<Utc>) -> bool {
         let stale = self.list.as_ref().is_none_or(|list| list.saved_at > now || now - list.saved_at >= STALE_AFTER);
         stale && self.refresh(now)
     }
 
-    /// Reads the list again, unless a read is under way or GitHub's limit holds. Returns whether a read started.
+    /// Reads the list again, unless a read is under way or GitHub asks Jobdesk to wait. Returns whether a read started.
     pub fn refresh(&mut self, now: DateTime<Utc>) -> bool {
-        if self.reading || self.limited_until().is_some_and(|until| now < until) {
+        if self.reading || self.wait_until.is_some_and(|until| now < until) {
             return false;
         }
         self.reading = true;
@@ -90,24 +94,26 @@ impl Community {
         true
     }
 
-    /// Takes the answers that arrived. A failure keeps the saved list.
-    pub fn poll(&mut self) {
+    /// Takes the answers that arrived by `now`. A failure keeps the saved list. A 403 or 429 that is not the rate limit
+    /// still means wait, so no read starts for a minute after it, as GitHub advises.
+    pub fn poll(&mut self, now: DateTime<Utc>) {
         while let Some(answer) = self.source.poll() {
             self.reading = false;
             match answer {
                 Ok(list) => {
                     self.list = Some(list);
                     self.failure = None;
+                    self.wait_until = None;
                 }
-                Err(failure) => self.failure = Some(failure),
+                Err(failure) => {
+                    self.failure = Some(failure);
+                    self.wait_until = match failure {
+                        CommunityFailure::Limited { until } => Some(until),
+                        CommunityFailure::Refused(403 | 429) => Some(now + REFUSAL_WAIT),
+                        _ => None,
+                    };
+                }
             }
-        }
-    }
-
-    fn limited_until(&self) -> Option<DateTime<Utc>> {
-        match self.failure {
-            Some(CommunityFailure::Limited { until }) => Some(until),
-            _ => None,
         }
     }
 
@@ -142,7 +148,7 @@ impl Community {
             group.portals.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.folder.cmp(&b.folder)));
         }
         groups.sort_by_key(|group| (!group.your_market, group.country != "Worldwide", group.country.to_lowercase()));
-        CommunityView { state, failure: self.failure, saved_at: self.list.as_ref().map(|list| list.saved_at), groups }
+        CommunityView { state, failure: self.failure, wait_until: self.wait_until, saved_at: self.list.as_ref().map(|list| list.saved_at), groups }
     }
 
     fn portal_view(&self, portal: &ListedPortal, installed: &[&str]) -> CommunityPortalView {
@@ -300,7 +306,7 @@ mod tests {
         assert!(community.refresh(now()), "Try again reads it anyway");
         assert_eq!(community.view(&[], None, "").state, CommunityState::Loading);
         assert!(!community.refresh(now()), "never two reads at once");
-        community.poll();
+        community.poll(now());
         assert_eq!((community.view(&[], None, "").state, community.view(&[], None, "").saved_at), (CommunityState::Ready, Some(now())));
     }
 
@@ -309,7 +315,7 @@ mod tests {
         for saved in [None, Some(list(now() - TimeDelta::hours(1))), Some(list(now() + TimeDelta::days(1)))] {
             let mut community = community(saved, vec![Ok(list(now()))]);
             assert!(community.open(now()));
-            community.poll();
+            community.poll(now());
             assert_eq!(community.view(&[], None, "").saved_at, Some(now()));
         }
         assert_eq!(community(None, vec![]).view(&[], None, "").state, CommunityState::NoList);
@@ -320,17 +326,17 @@ mod tests {
         let saved = list(now() - TimeDelta::hours(3));
         let mut community = community(Some(saved.clone()), vec![Err(CommunityFailure::TimedOut), Ok(list(now()))]);
         assert!(community.open(now()));
-        community.poll();
+        community.poll(now());
         let view = community.view(&[], None, "");
         assert_eq!((view.state, view.failure, view.saved_at), (CommunityState::Offline, Some(CommunityFailure::TimedOut), Some(saved.saved_at)));
         assert_eq!(view.groups.len(), 4);
         assert!(community.refresh(now()));
-        community.poll();
+        community.poll(now());
         let view = community.view(&[], None, "");
         assert_eq!((view.state, view.failure), (CommunityState::Ready, None));
         let mut empty = super::tests::community(None, vec![Err(CommunityFailure::Unreachable)]);
         empty.open(now());
-        empty.poll();
+        empty.poll(now());
         let view = empty.view(&[], None, "");
         assert_eq!((view.state, view.groups.len()), (CommunityState::NoList, 0));
     }
@@ -340,13 +346,34 @@ mod tests {
         let until = now() + TimeDelta::minutes(20);
         let mut community = community(None, vec![Err(CommunityFailure::Limited { until }), Ok(list(now()))]);
         assert!(community.open(now()));
-        community.poll();
+        community.poll(now());
         assert_eq!(community.view(&[], None, "").state, CommunityState::Limited { until });
         assert!(!community.refresh(now() + TimeDelta::minutes(19)));
         assert!(!community.open(now() + TimeDelta::minutes(19)));
         assert!(community.refresh(until));
-        community.poll();
+        community.poll(now());
         assert_eq!(community.view(&[], None, "").state, CommunityState::Ready);
+    }
+
+    #[test]
+    fn a_bare_refusal_403_or_429_waits_a_minute() {
+        for code in [403, 429] {
+            let refused = Err(CommunityFailure::Refused(code));
+            let mut community = community(Some(list(now() - TimeDelta::hours(2))), vec![refused, Ok(list(now()))]);
+            assert!(community.open(now()));
+            community.poll(now());
+            let view = community.view(&[], None, "");
+            assert_eq!((view.state, view.failure), (CommunityState::Offline, Some(CommunityFailure::Refused(code))), "it stays a refusal");
+            assert_eq!(view.wait_until, Some(now() + TimeDelta::minutes(1)));
+            assert!(!community.refresh(now() + TimeDelta::seconds(59)));
+            assert!(community.refresh(now() + TimeDelta::minutes(1)));
+            community.poll(now() + TimeDelta::minutes(1));
+            assert_eq!(community.view(&[], None, "").wait_until, None);
+        }
+        let mut down = community(None, vec![Err(CommunityFailure::Refused(503))]);
+        down.open(now());
+        down.poll(now());
+        assert!(down.refresh(now()), "another refusal waits for nothing");
     }
 
     #[test]

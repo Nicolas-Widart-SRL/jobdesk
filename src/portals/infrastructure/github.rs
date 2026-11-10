@@ -10,7 +10,7 @@ use serde::Deserialize;
 use ureq::Agent;
 
 use crate::portals::domain::{
-    BlobSha, COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, ListedPortal, parse_codeowners, parse_tree_path,
+    BlobSha, COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, ListedPortal, REFUSAL_WAIT, parse_codeowners, parse_tree_path,
 };
 use crate::portals::infrastructure::community_cache::CommunityCache;
 use crate::shared_kernel::https::{TimedBody, github_config};
@@ -26,8 +26,6 @@ const JSON: &str = "application/vnd.github+json";
 const RAW: &str = "application/vnd.github.raw+json";
 /// The longest Jobdesk waits on a rate limit, whatever GitHub says: its limit resets every hour.
 const LONGEST_WAIT: TimeDelta = TimeDelta::hours(1);
-/// The wait when GitHub names neither a reset time nor a delay, as its documentation advises.
-const DEFAULT_WAIT: TimeDelta = TimeDelta::minutes(1);
 
 /// Every file of the repository's default branch, in one request.
 pub fn tree_url() -> String {
@@ -92,7 +90,7 @@ fn status_failure(status: u16, headers: &RateHeaders, now: DateTime<Utc>) -> Com
     }
     let reset =
         headers.reset.filter(|_| used_up).and_then(|seconds| seconds.trim().parse::<i64>().ok()).and_then(|seconds| DateTime::from_timestamp(seconds, 0));
-    let until = reset.or_else(|| wait.and_then(|wait| now.checked_add_signed(wait))).unwrap_or(now + DEFAULT_WAIT);
+    let until = reset.or_else(|| wait.and_then(|wait| now.checked_add_signed(wait))).unwrap_or(now + REFUSAL_WAIT);
     CommunityFailure::Limited { until: until.clamp(now, now + LONGEST_WAIT) }
 }
 

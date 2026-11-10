@@ -3723,6 +3723,8 @@ fn launcher_cap_light() {
 /// A task in plain words, as a screen of Jobdesk writes one. The address is fictional.
 const WORDS: &str = "Copy https://github.example/sample/portals/tree/main/sample-board into `.agents/skills/`. Read its code and tell me what it does. Then ask me before you run `python3 tools/install_portal_clis.py`.";
 const WORDS_TITLE: &str = "Task in plain words";
+/// The launcher's subtitle on a task in plain words, which has no command to pick.
+const WORDS_LAUNCHER: &str = "Read the task. Nothing runs until you press Run.";
 
 /// Leaves `line` for the shell as a command action does, under the id `ui_kit` keeps for it, and lets the shell take it.
 fn request_line(harness: &mut Harness, line: &str) {
@@ -3737,7 +3739,8 @@ fn a_task_in_plain_words_opens_the_launcher_and_runs_as_written() {
     let calls = SharedCalls::default();
     let (mut harness, shell) = shared_harness(recording_shell(Screen::Insights, "launcher_words", &calls));
     request_line(&mut harness, WORDS);
-    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "the launcher opens, asking to read the task");
+    assert!(!is_shown(&harness, LAUNCHER));
     assert!(is_shown(&harness, WORDS_TITLE));
     assert!(is_shown(&harness, WORDS), "the task shows as Claude will get it");
     assert!(harness.query_by_role(egui::accesskit::Role::MultilineTextInput).is_none(), "the task is read only");

@@ -29,6 +29,9 @@ const TESTING: &str = "Test connection is running. Run opens once it ends.";
 /// The form's header for a task in plain words, which has no command name to show.
 const WORDS_TITLE: &str = "Task in plain words";
 const WORDS_NOTE: &str = "Jobdesk wrote this task. Claude reads it as your request.";
+/// The page's subtitle over a task in plain words, which has no command to pick.
+const WORDS_SUBTITLE: &str = "Read the task. Nothing runs until you press Run.";
+const COMMAND_SUBTITLE: &str = "Pick a command. Nothing runs until you press Run.";
 
 /// What a new task starts with, and whether the monthly cap lets one start.
 pub struct LaunchRules<'a> {
@@ -135,7 +138,7 @@ impl Launcher {
     pub fn show(&mut self, ui: &mut Ui, desk: &mut RunDesk, rules: &LaunchRules) -> Option<LauncherRequest> {
         // Taken before any field runs, so a multiline field never reads the keys as a new line, even while Run waits.
         let run_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
-        let subtitle = Subtitle::Text("Pick a command. Nothing runs until you press Run.");
+        let subtitle = Subtitle::Text(if self.words.is_some() { WORDS_SUBTITLE } else { COMMAND_SUBTITLE });
         page_head(ui, Title::Slab("New task"), Some(subtitle), |_| {});
         page_body(ui, |ui| self.body(ui, desk, rules, run_keys))
     }

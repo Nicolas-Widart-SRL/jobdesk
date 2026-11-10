@@ -279,6 +279,21 @@ mod tests {
         assert!(refused(writer.set_enabled("latin-search", true)).contains("UTF-8"));
     }
 
+    /// Each refusal in the switch's own words, so none is swapped for another.
+    #[test]
+    fn each_refusal_has_its_own_words() {
+        let words = [REFUSALS.read_only, REFUSALS.not_yours, REFUSALS.cannot_write, REFUSALS.gone.unwrap_or_default()];
+        assert_eq!(
+            words,
+            [
+                "is read-only, so nothing changed",
+                "belongs to another user, so nothing changed",
+                "cannot be written, or is open in another program, so nothing changed",
+                "is no longer there, so nothing changed",
+            ]
+        );
+    }
+
     /// A `SKILL.md` another program removed after the switch read it is refused, so the switch never puts it back.
     #[test]
     fn a_manifest_gone_before_the_write_is_refused() {

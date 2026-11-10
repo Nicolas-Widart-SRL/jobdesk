@@ -237,6 +237,20 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 
+    /// Each refusal in the save's own words, so none is swapped for another. A file that is gone is no refusal.
+    #[test]
+    fn each_refusal_has_its_own_words() {
+        assert_eq!(
+            [REFUSALS.read_only, REFUSALS.not_yours, REFUSALS.cannot_write],
+            ["is read-only, so it was not saved", "belongs to another user, so it was not saved", CANNOT_WRITE]
+        );
+        assert_eq!(REFUSALS.gone, None);
+        #[cfg(unix)]
+        assert_eq!(CANNOT_WRITE, "cannot be written by your user, so it was not saved");
+        #[cfg(not(unix))]
+        assert_eq!(CANNOT_WRITE, "cannot be written, or is open in another program, so it was not saved");
+    }
+
     /// A file gone between the checks is not a refusal: the save creates it.
     #[test]
     fn a_file_gone_before_the_write_is_saved() {

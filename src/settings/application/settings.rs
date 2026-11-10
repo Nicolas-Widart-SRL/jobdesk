@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport};
+use crate::runs::application::{CATALOG, CommandSpec, Period, UsageReport, WORDS_BUDGET_USD};
 use crate::settings::application::usage::money;
 use crate::settings::domain::{
     AutoCheck, CapReached, ComingUp, CommandDefault, Dollars, Drawn, KeyTest, LaterLasts, Page, PermissionMode, Preferences, PreferencesStore, ReasonRefusal,
@@ -211,6 +211,12 @@ impl Settings {
 /// What a task of the command starts with: its row, else the defaults for every task, else the catalog's suggestion.
 pub fn start_values(defaults: &RunDefaults, command: &CommandSpec) -> StartValues {
     defaults.resolve(command.name, Dollars::whole(command.budget_usd))
+}
+
+/// What a task in plain words starts with: the defaults for every task, else its own suggestion.
+/// No command's row applies, because the task is no command.
+pub fn task_start_values(defaults: &RunDefaults) -> StartValues {
+    defaults.resolve("", Dollars::whole(WORDS_BUDGET_USD))
 }
 
 /// The commands that have no row yet, in catalog order.
@@ -827,6 +833,18 @@ mod tests {
         };
         assert_eq!(start_values(&defaults, rank), StartValues { model: ModelChoice::Haiku, budget: dollars("1") });
         assert_eq!(start_values(&defaults, scrape), StartValues { model: ModelChoice::Opus, budget: dollars("4") });
+    }
+
+    #[test]
+    fn a_task_in_plain_words_starts_from_the_defaults_for_every_task() {
+        let none = RunDefaults::default();
+        assert_eq!(task_start_values(&none), StartValues { model: ModelChoice::Default, budget: Dollars::whole(WORDS_BUDGET_USD) });
+        let defaults = RunDefaults {
+            model: ModelChoice::Opus,
+            budget: Some(dollars("4")),
+            commands: vec![CommandDefault { command: "/rank".to_owned(), model: ModelChoice::Haiku, budget: dollars("1") }],
+        };
+        assert_eq!(task_start_values(&defaults), StartValues { model: ModelChoice::Opus, budget: dollars("4") });
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::motion_time;
 use crate::ui_kit::palette::{Ink, Tone};
 use crate::ui_kit::surfaces::{folder_fill, on_desk};
-use crate::ui_kit::text::{add_galley, add_job, add_text, cut_hover, line, paint_centred, paint_text};
+use crate::ui_kit::text::{add_cut_text, add_galley, add_job, add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE,
     DAY_STAMP_SIZE, DAY_STAMP_TICK, FADED_OPACITY, HAIRLINE, HEAT_LABELS, HEAT_SIDE, ITEM_GAP, KEY_PADDING, KEY_SIZE, KNOT_PADDING, KNOT_SIZE, RADIUS_CARD,
@@ -28,6 +28,14 @@ pub fn tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
 /// A `tag` a step smaller, for a mark inside a pick row beside a title that should not be cut.
 pub fn row_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
     sized_tag(ui, text.into(), tone, ROW_TAG_PADDING, ROW_TAG_HEIGHT)
+}
+
+/// A `row_tag` where it fits in the room left, or else its words cut with an ellipsis in the tag's ink, whole on hover,
+/// for a column that gives up its width before the actions beside it.
+pub fn fitted_row_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Response {
+    let text = text.into();
+    let needed = line(ui, &text, Type::TAG, tone.color(&Palette::of(ui)), f32::INFINITY).size().x + ROW_TAG_PADDING * 2.0;
+    if needed <= ui.available_width() { row_tag(ui, text, tone) } else { add_cut_text(ui, text, Type::TAG, tone) }
 }
 
 fn sized_tag(ui: &mut Ui, text: String, tone: Tone, padding: f32, height: f32) -> Response {
@@ -776,6 +784,22 @@ mod tests {
         });
         harness.step();
         assert_eq!(harness.get_by_label(spoken).rect().width(), DAY_STAMP_SIZE);
+    }
+
+    /// A fitted row tag is a tag where it fits, and stays inside a narrower room by cutting its words.
+    #[test]
+    fn a_fitted_row_tag_cuts_its_words_in_a_narrow_room() {
+        for width in [300.0, 60.0] {
+            let mut harness = harness(move |ui| {
+                ui.allocate_ui_with_layout(vec2(width, ROW_TAG_HEIGHT), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    fitted_row_tag(ui, "Unmaintained since 2026-05", Tone::Interview);
+                });
+            });
+            harness.step();
+            let tag = harness.get_by_label("Unmaintained since 2026-05").rect();
+            assert!(tag.width() <= width, "{width}: {tag:?}");
+            assert_eq!(tag.height() == ROW_TAG_HEIGHT, width > 200.0, "a whole tag only where it fits: {tag:?}");
+        }
     }
 
     #[test]

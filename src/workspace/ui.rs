@@ -1,25 +1,18 @@
 use egui::{Align, Frame, Layout, Margin, ScrollArea, Ui, vec2};
-use egui_extras::{Column, TableBuilder};
 
-use crate::shared_kernel::Source;
-use crate::ui_kit::tokens::{
-    INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_PADDING, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TABLE_CELL_PADDING, TABLE_HEAD_HEIGHT, TAG_HEIGHT,
-};
+use crate::ui_kit::tokens::{INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_PADDING, SMALL_BUTTON_HEIGHT, SPLIT_GAP, SPLIT_SIDE_BASIS, TAG_HEIGHT};
 use crate::ui_kit::{
-    CellRule, FillMarks, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono,
-    fill_tally, hidden_note, hit_mark, lead_line, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich, setting_row,
-    setting_section, settings_page, skeleton, skeleton_lines, slip, small_button, small_command_action, split, table_cell, table_head, tag,
+    FillMarks, Ink, ScreenState, Subtitle, Title, Tone, Type, button, command_action, danger_command_button, divider, enabled_when, faint_mono, fill_tally,
+    hidden_note, hit_mark, lead_line, list_row, muted, page_body, page_head, panel, panel_body, panel_header, panel_header_tone, rich, setting_row,
+    setting_section, settings_page, skeleton, skeleton_lines, slip, small_button, small_command_action, split, tag,
 };
-use crate::workspace::application::{AuthMode, EnvironmentChecks, PortalRow, ToolCheck, WorkspaceView};
+use crate::workspace::application::{AuthMode, EnvironmentChecks, ToolCheck, WorkspaceView};
 
 /// Environment rows sit closer than other list rows.
 const TOOL_ROW_PADDING: i8 = 6;
-/// Shares of the portal table's width: portal, jobs seen, state.
-const PORTAL_COLUMNS: [f32; 3] = [0.5, 0.3, 0.2];
 
 /// What Jobdesk promises about the folder, on Setup and on Runtime status.
-const PROMISE: &str =
-    "Jobdesk reads your folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
+const PROMISE: &str = "Jobdesk reads your folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.";
 
 /// Runtime status's title and lead, as Settings indexes them for search.
 const RUNTIME_TITLE: &str = "Runtime status";
@@ -86,11 +79,13 @@ pub enum WorkspaceAction {
     ChangeFolder,
     /// Switch to the Profile screen.
     OpenProfile,
+    /// Switch to the Portals screen.
+    OpenPortals,
 }
 
 /// `name` is the checkout's folder name, never its full path.
-/// Setup draws the alert for every source that failed. Of those, it reads only the saved jobs, for each portal's jobs seen,
-/// so a failed one hides those counts. Until the first read, the slips show their names over grey lines.
+/// Setup draws the alert for every source that failed. The portals' jobs found hide while the saved jobs cannot be read.
+/// Until the first read, the slips show their names over grey lines.
 /// `folder_wait` says why Change folder waits, if it does, as the shell words it.
 pub fn show(
     ui: &mut Ui,
@@ -120,7 +115,6 @@ pub fn show(
             loading(ui);
             return;
         }
-        let jobs_failed = state.cannot_read(Source::Jobs);
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             // The profile is one line, so the portals sit under it rather than under the taller tools.
             split(ui, SPLIT_SIDE_BASIS, |main, side| {
@@ -128,7 +122,9 @@ pub fn show(
                     action = Some(WorkspaceAction::OpenProfile);
                 }
                 main.add_space(12.0);
-                portals(main, view, jobs_failed);
+                if portals(main, view).is_some() {
+                    action = Some(WorkspaceAction::OpenPortals);
+                }
                 tools(side, environment, view.has_salary_data);
                 side.add_space(12.0);
                 templates(side, view);
@@ -195,7 +191,9 @@ pub fn runtime_status(
                 return;
             }
             setting_section(ui, "Portals", Some(".agents/skills"), query);
-            portal_rows(ui, view, state.cannot_read(Source::Jobs));
+            if let Some(asked) = portals_line(ui, view, Rows::Flush) {
+                action = Some(asked);
+            }
             setting_section(ui, "Templates", None, query);
             template_rows(ui, view, Rows::Flush);
             actions_line(ui, |ui| {
@@ -251,18 +249,7 @@ fn actions_line(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Runtime status's portals: the table flush on the page, then its actions.
-fn portal_rows(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
-    if view.portals.is_empty() {
-        flush_row(ui, true, |ui| muted(ui, "No portals installed."));
-    } else {
-        portal_table(ui, &view.portals, !jobs_failed);
-        if jobs_failed {
-            flush_row(ui, false, |ui| hidden_note(ui, "Jobs seen are hidden while your saved jobs cannot be read."));
-        }
-    }
-    actions_line(ui, portal_actions);
-}
+const PORTALS_HIDDEN: &str = "Your portals are hidden while their folder cannot be read.";
 
 /// A section's name over grey lines where its rows go.
 fn loading_lines(ui: &mut Ui, title: &str, note: Option<&str>, widths: &[f32]) {
@@ -278,7 +265,7 @@ fn loading(ui: &mut Ui) {
     split(ui, SPLIT_SIDE_BASIS, |main, side| {
         panel(main, |ui| loading_lines(ui, "Profile", Some(".claude/skills/job-application-assistant"), &[260.0]));
         main.add_space(12.0);
-        panel(main, |ui| loading_lines(ui, "Portals", Some(".agents/skills"), &[180.0, 150.0, 200.0]));
+        panel(main, |ui| loading_lines(ui, "Portals", Some(".agents/skills"), &[220.0]));
         slip(side, |ui| loading_lines(ui, "Environment", None, &[200.0, 170.0, 190.0, 160.0, 180.0]));
         side.add_space(12.0);
         slip(side, |ui| loading_lines(ui, "Templates", None, &[190.0, 160.0]));
@@ -322,78 +309,47 @@ fn profile_line(ui: &mut Ui, view: &WorkspaceView, rows: Rows) -> Option<Workspa
     action
 }
 
-/// Without `counted`, the Jobs seen column is left out: its counts would read zero.
-fn portal_table(ui: &mut Ui, portals: &[PortalRow], counted: bool) {
-    let total = ui.available_width();
-    let last = portals.len().saturating_sub(1);
-    let titles: &[&str] = if counted { &["Portal", "Jobs seen", "State"] } else { &["Portal", "State"] };
-    // Cells pad themselves, so the rules run unbroken.
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        let mut table = TableBuilder::new(ui)
-            .id_salt("workspace_portals")
-            .vscroll(false)
-            .striped(false)
-            .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact((total * PORTAL_COLUMNS[0]).floor()).clip(true));
-        if counted {
-            table = table.column(Column::exact((total * PORTAL_COLUMNS[1]).floor()).clip(true));
-        }
-        table
-            .column(Column::remainder().clip(true))
-            .header(TABLE_HEAD_HEIGHT, |mut header| {
-                for &title in titles {
-                    header.col(|ui| {
-                        table_cell(ui, CellRule::Head, |ui| table_head(ui, title));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(TAG_HEIGHT + TABLE_CELL_PADDING.1 * 2.0, portals.len(), |mut line| {
-                    let index = line.index();
-                    let portal = &portals[index];
-                    let rule = if index == last { CellRule::Last } else { CellRule::Row };
-                    line.col(|ui| {
-                        table_cell(ui, rule, |ui| ui.monospace(portal.name.as_str()));
-                    });
-                    if counted {
-                        line.col(|ui| {
-                            table_cell(ui, rule, |ui| ui.monospace(portal.jobs_seen.to_string()));
-                        });
-                    }
-                    line.col(|ui| {
-                        table_cell(ui, rule, |ui| if portal.enabled { tag(ui, "Enabled", Tone::Hired) } else { tag(ui, "Disabled", Tone::Plain) });
-                    });
-                });
-            });
-    });
-}
-
-/// The jobs seen on each portal come from the saved jobs, so they hide while those cannot be read.
-fn portals(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
+fn portals(ui: &mut Ui, view: &WorkspaceView) -> Option<WorkspaceAction> {
     panel(ui, |ui| {
         panel_header(ui, "Portals", Some(".agents/skills"));
-        if view.portals.is_empty() {
-            panel_body(ui, |ui| {
-                ui.set_width(ui.available_width());
-                muted(ui, "No portals installed.");
-            });
-        } else {
-            portal_table(ui, &view.portals, !jobs_failed);
-            if jobs_failed {
-                panel_body(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    hidden_note(ui, "Jobs seen are hidden while your saved jobs cannot be read.");
-                });
-            }
-        }
-        actions_line(ui, portal_actions);
-    });
+        portals_line(ui, view, Rows::Listed)
+    })
 }
 
-fn portal_actions(ui: &mut Ui) {
-    small_command_action(ui, "Check portal health", "/scrape health");
-    small_command_action(ui, "Add portal", "/add-portal");
+/// The portals in one line: how many are on, then the jobs every installed one found, then Open Portals. With none
+/// installed it says so, and Open Portals stays. The jobs found hide while the saved jobs cannot be read, and the portals
+/// hide while their folder cannot be read, so the line never calls them none. Returns Open Portals' press.
+fn portals_line(ui: &mut Ui, view: &WorkspaceView, rows: Rows) -> Option<WorkspaceAction> {
+    let summary = view.portals;
+    let mut action = None;
+    rows.row(ui, true, |ui| {
+        line(ui, SMALL_BUTTON_HEIGHT, |ui| {
+            right(ui, |ui| {
+                if small_button(ui, "Open Portals").clicked() {
+                    action = Some(WorkspaceAction::OpenPortals);
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if view.portals_unread {
+                        hidden_note(ui, PORTALS_HIDDEN);
+                        return;
+                    }
+                    if summary.total == 0 {
+                        muted(ui, "No portals installed.");
+                        return;
+                    }
+                    // The dot stands alone, so the room on each side of it is the same.
+                    ui.spacing_mut().item_spacing.x = ITEM_GAP;
+                    lead_line(ui, &format!("{} of {}", summary.on, summary.total), "portals on");
+                    muted(ui, "·");
+                    match summary.jobs_found {
+                        Some(jobs) => muted(ui, format!("{jobs} {}", if jobs == 1 { "job found" } else { "jobs found" })),
+                        None => hidden_note(ui, "Jobs found are hidden while your saved jobs cannot be read."),
+                    };
+                });
+            });
+        });
+    });
+    action
 }
 
 /// A row of the Environment slip: the name in mono (or plain words), a note, then a tag.

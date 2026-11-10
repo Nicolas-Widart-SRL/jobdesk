@@ -1,9 +1,3 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortalInfo {
-    pub name: String,
-    pub enabled: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TemplateState {
     pub custom_cv: bool,
@@ -21,7 +15,6 @@ pub struct SyncState {
 /// What the checkout holds right now.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkspaceStatus {
-    pub portals: Vec<PortalInfo>,
     pub templates: TemplateState,
     pub sync: SyncState,
     pub has_salary_data: bool,

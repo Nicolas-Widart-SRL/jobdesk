@@ -63,5 +63,10 @@ libc = "0.2"
 lzma-rs = { version = "0.3", default-features = false }
 tar = { version = "0.4", default-features = false }
 
+# Removing a portal moves its folder to the Trash. The crate needs a backend feature on Linux, where Jobdesk does not run.
+# Windows calls it on the UI thread, which winit already joins to a single-threaded COM apartment, so it asks for one too.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+trash = { version = "5.3", default-features = false, features = ["coinit_apartmentthreaded"] }
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::shared_kernel::file_text::without_bom;
-use crate::workspace::domain::{PortalInfo, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
+use crate::workspace::domain::{SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
 
 const ASSISTANT: &str = ".claude/skills/job-application-assistant";
 const ACTIVE_TEMPLATE: &str = "BEGIN ACTIVE-TEMPLATE";
@@ -18,18 +18,6 @@ impl CheckoutInspector {
 
     fn read(&self, relative: &str) -> Option<String> {
         fs::read_to_string(self.root.join(relative)).ok().map(|text| without_bom(&text).to_owned())
-    }
-
-    fn portals(&self) -> Vec<PortalInfo> {
-        let mut names = folders_in(&self.root.join(".agents/skills"));
-        names.sort();
-        names
-            .into_iter()
-            .filter_map(|name| {
-                let manifest = self.read(&format!(".agents/skills/{name}/SKILL.md"))?;
-                Some(PortalInfo { enabled: is_enabled(&manifest), name })
-            })
-            .collect()
     }
 
     fn templates(&self) -> TemplateState {
@@ -58,24 +46,13 @@ impl CheckoutInspector {
 
 impl WorkspaceInspector for CheckoutInspector {
     fn status(&self) -> WorkspaceStatus {
-        WorkspaceStatus {
-            portals: self.portals(),
-            templates: self.templates(),
-            sync: self.sync(),
-            has_salary_data: self.root.join("salary_data.json").is_file(),
-        }
+        WorkspaceStatus { templates: self.templates(), sync: self.sync(), has_salary_data: self.root.join("salary_data.json").is_file() }
     }
 }
 
 fn folders_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     entries.flatten().filter(|entry| entry.path().is_dir()).filter_map(|entry| entry.file_name().into_string().ok()).collect()
-}
-
-/// A portal is enabled unless its frontmatter sets `enabled: false`.
-fn is_enabled(manifest: &str) -> bool {
-    let frontmatter = manifest.strip_prefix("---").and_then(|rest| rest.split_once("\n---")).map_or("", |(front, _)| front);
-    !frontmatter.lines().any(|line| line.trim() == "enabled: false")
 }
 
 #[cfg(test)]
@@ -93,23 +70,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write(root, ".claude/skills/job-application-assistant/05-cv-templates.md", "<!-- BEGIN ACTIVE-TEMPLATE (managed) -->");
-        write(root, ".agents/skills/on-search/SKILL.md", "---\nname: on\n---\nenabled: false in prose\n");
-        write(root, ".agents/skills/off-search/SKILL.md", "---\nname: off\nenabled: false\n---\n");
         write(root, "templates/cv/modern/TEMPLATE.md", "x");
         write(root, "gmail_sync/state.json", r#"{"last_sync":"2026-10-29T08:00:00Z","processed_message_ids":[]}"#);
 
         let status = CheckoutInspector::in_workspace(root).status();
 
-        assert_eq!(status.portals, [PortalInfo { name: "off-search".into(), enabled: false }, PortalInfo { name: "on-search".into(), enabled: true }]);
         assert!(status.templates.custom_cv && !status.templates.custom_letter);
         assert_eq!(status.templates.registered, ["modern"]);
         assert_eq!(status.sync.gmail_last_sync.as_deref(), Some("2026-10-29T08:00:00Z"));
         assert!(!status.sync.notion_set_up);
-    }
-
-    #[test]
-    fn empty_checkout_has_no_portals() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(CheckoutInspector::in_workspace(dir.path()).status().portals.is_empty());
     }
 }

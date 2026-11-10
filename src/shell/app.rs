@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::application::hidden_total;
@@ -20,6 +20,9 @@ use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::onboarding::application::{Onboarding, Stage as SetupStage};
 use crate::onboarding::ui::{FirstRunRequest, FirstRunScreen};
+use crate::portals;
+use crate::portals::application::{Community, PortalChanges};
+use crate::portals::ui::{BrowseContext, PortalsRequest, PortalsScreen};
 use crate::profile;
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
@@ -83,13 +86,14 @@ pub enum Screen {
     Insights,
     Runs,
     Profile,
+    Portals,
     Workspace,
     Launcher,
     Dossier,
 }
 
 impl Screen {
-    const NAV: [Self; 7] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Workspace];
+    const NAV: [Self; 8] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Portals, Self::Workspace];
 
     fn title(self) -> &'static str {
         match self {
@@ -99,6 +103,7 @@ impl Screen {
             Self::Insights => "Insights",
             Self::Runs => "Tasks",
             Self::Profile => "Profile",
+            Self::Portals => "Portals",
             Self::Workspace => "Setup",
             Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
@@ -115,8 +120,9 @@ impl Screen {
     }
 }
 
-/// Window state. It reads the checkout through snapshots, except the profile: it writes one block at a time through
-/// `ProfileEditor`, and reads the profile back after a Save, or after a run that no snapshot follows in time.
+/// Window state. It reads the checkout through snapshots, except the profile and the portals: it writes one profile block
+/// at a time through `ProfileEditor`, switches portals and moves them to the Trash through `PortalChanges`, and reads
+/// what it wrote back at once, as it reads the profile after a run that no snapshot follows in time.
 pub struct Shell {
     screen: Screen,
     workspace: Option<WorkspaceRoot>,
@@ -179,6 +185,14 @@ pub struct Shell {
     leave_to: Option<Screen>,
     /// When the profile was last read back, after a save or a run, so a snapshot read before it cannot show the old text again.
     profile_saved: Option<Instant>,
+    portals_screen: PortalsScreen,
+    /// Switches the open folder's portals and moves them to the Trash.
+    portal_changes: Option<PortalChanges>,
+    /// When the portals were last read back, after a switch or a removal, so a snapshot read before it cannot undo it on screen.
+    portals_changed: Option<Instant>,
+    /// The community portal list from GitHub, with the copy saved in the data folder. Reading it is not a run: no Claude,
+    /// no run log, nothing counted in Usage. It names the installed portals that came from it, on every snapshot.
+    community: Community,
     /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
     /// take the focus.
     away: Option<(Pending, bool)>,
@@ -291,6 +305,11 @@ impl Shell {
             profile_editor: None,
             leave_to: None,
             profile_saved: None,
+            portals_screen: PortalsScreen::default(),
+            portal_changes: None,
+            portals_changed: None,
+            // A list that never answers, so a preview or a test never reaches the network.
+            community: portals::scripted_community(None, Vec::new()),
             away: None,
             quit_after: false,
             quit_agreed: false,
@@ -312,14 +331,43 @@ impl Shell {
     /// A shell with fixed data, for tests and previews.
     pub fn with_snapshot(screen: Screen, workspace: WorkspaceRoot, snapshot: Snapshot) -> Self {
         let today = snapshot.today;
-        let profile_editor = Some(profile::open_editor(workspace.path()));
-        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
+        let (profile_editor, portal_changes) = (Some(profile::open_editor(workspace.path())), Some(portals::open_changes(workspace.path())));
+        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, portal_changes, ..Self::empty(screen, today) }
     }
 
     /// A shell whose folder is open but not read yet, for tests and previews.
     pub fn loading(screen: Screen, workspace: WorkspaceRoot, today: NaiveDate) -> Self {
-        let profile_editor = Some(profile::open_editor(workspace.path()));
-        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
+        let (profile_editor, portal_changes) = (Some(profile::open_editor(workspace.path())), Some(portals::open_changes(workspace.path())));
+        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, portal_changes, ..Self::empty(screen, today) }
+    }
+
+    /// Switches portals and moves them to the Trash through `changes`, such as a fake store, for tests.
+    pub fn with_portal_changes(self, changes: PortalChanges) -> Self {
+        Self { portal_changes: Some(changes), ..self }
+    }
+
+    /// Reads the community list through `community`, such as a scripted one, for tests and snapshots. The installed
+    /// portals it holds read Community at once.
+    pub fn with_community(self, community: Community) -> Self {
+        let mut shell = Self { community, ..self };
+        shell.name_community_portals();
+        shell
+    }
+
+    /// Names the installed portals that came from the community list, with their country, on the snapshot shown.
+    fn name_community_portals(&mut self) {
+        let hints = self.community.installed_hints();
+        self.snapshot.portals.set_community(&hints);
+    }
+
+    /// Now in UTC, as the community list keeps its times: the system's clock, or a test's clock read as local time. The
+    /// wall clock is never turned back into UTC, because in the hour repeated when clocks go back it would read an hour
+    /// early, and a list just read would look as if it came from the future.
+    fn now_utc(&self) -> DateTime<Utc> {
+        match self.now {
+            Some(now) => Local.from_local_datetime(&now).earliest().map_or_else(|| now.and_utc(), |local| local.to_utc()),
+            None => Utc::now(),
+        }
     }
 
     /// The first run: no folder is open yet.
@@ -484,17 +532,20 @@ impl Shell {
             Some(folder) => updates::github(&folder, env!("CARGO_PKG_VERSION"), updates::install_block(), auto, wake),
             None => updates::idle_updates(env!("CARGO_PKG_VERSION"), auto),
         };
+        let repaint = ctx.clone();
+        let make_community = move |data: Option<&Path>| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
         // Only a launch with no folder asked for or remembered may show first-run setup.
         let first_run = if path.is_none() { data.as_deref().and_then(|data| first_run(ctx, data)) } else { None };
-        let shell = Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates) };
+        let shell = Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) };
         match first_run {
             Some((onboarding, home)) => shell.with_first_run(onboarding, home),
             None => shell,
         }
     }
 
-    /// `start` with the tool check, the providers and the updates given, so tests can launch without asking real tools,
-    /// the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
+    /// `start` with the tool check, the providers, the updates and the community list given, so tests can launch without
+    /// asking real tools, the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
+    /// `make_community` takes the data folder, where the list read last is saved, and is asked with none too.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
     fn launch(
         ctx: &egui::Context,
@@ -503,6 +554,7 @@ impl Shell {
         mut environment: EnvironmentChecks,
         providers: Providers,
         make_updates: impl FnOnce(bool) -> Updates,
+        make_community: impl FnOnce(Option<&Path>) -> Community,
     ) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
@@ -523,7 +575,10 @@ impl Shell {
         }
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
+        // With no data folder too, so Browse reads the list rather than wait on one that never comes.
+        let community = make_community(data.as_deref());
         let mut shell = Self {
+            community,
             data,
             environment: Some(environment),
             settings,
@@ -581,8 +636,11 @@ impl Shell {
                 // The last folder's marks, picked topic and edit mean nothing here.
                 (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
                 (self.profile_editor, self.leave_to, self.profile_saved, self.away) = (Some(profile::open_editor(root.path())), None, None, None);
+                (self.portals_screen, self.portal_changes, self.portals_changed) = (PortalsScreen::default(), Some(portals::open_changes(root.path())), None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
+                // A task in plain words was written for the last folder.
+                self.launcher.clear_words();
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
@@ -689,6 +747,9 @@ impl Shell {
             environment.poll();
         }
         self.follow_updates(ui.ctx(), now);
+        if self.community.poll(self.now_utc()) {
+            self.name_community_portals();
+        }
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
@@ -719,8 +780,10 @@ impl Shell {
                 }
             });
         });
-        if let Some(line) = take_command_request(ui.ctx()) {
-            self.launcher.prefill(&line);
+        // A line the launcher refuses opens nothing.
+        if let Some(line) = take_command_request(ui.ctx())
+            && self.launcher.prefill(&line)
+        {
             self.open_launcher();
         }
         if self.confirm_quit {
@@ -936,6 +999,16 @@ impl Shell {
             Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
             _ => self.profile_saved = None,
         }
+        // The same for the portals read back after a switch or a removal.
+        match self.portals_changed {
+            Some(changed) if latest.read_at.is_some_and(|read| read < changed) => {
+                latest.portals = std::mem::take(&mut self.snapshot.portals);
+                latest.workspace.set_portals(&latest.portals);
+                latest.issues.retain(|issue| issue.source != Source::Portals);
+                latest.issues.extend(self.snapshot.issues.iter().filter(|issue| issue.source == Source::Portals).cloned());
+            }
+            _ => self.portals_changed = None,
+        }
         // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
         if let Some(ended) = self.run_ended
             && latest.read_at.is_some_and(|read| read >= ended)
@@ -946,6 +1019,7 @@ impl Shell {
         // A run that started before the folder was first read keeps the first snapshot as its start.
         let first = !self.loaded;
         self.snapshot = latest;
+        self.name_community_portals();
         self.loaded = true;
         if first && self.was_busy && self.run_ended.is_none() {
             self.marks.begin(&self.snapshot.profile);
@@ -1019,8 +1093,10 @@ impl Shell {
     fn follow(&mut self, ctx: &egui::Context, request: Request) {
         match request {
             Request::Command(line) => {
-                self.launcher.prefill(&line);
-                self.open_launcher();
+                // A line the launcher refuses opens nothing.
+                if self.launcher.prefill(&line) {
+                    self.open_launcher();
+                }
             }
             Request::Dossier(folder) => self.show_dossier(folder),
             Request::Run(id) => {
@@ -1030,6 +1106,13 @@ impl Shell {
             Request::Posting(url) => ctx.open_url(egui::OpenUrl::new_tab(url.as_str())),
             Request::Copy(text) => ctx.copy_text(text),
         }
+    }
+
+    /// Opens the launcher with no line, as New task does: a task in plain words left from before is dropped,
+    /// so Cmd Enter on the fresh form never repeats it.
+    fn new_task(&mut self) {
+        self.launcher.clear_words();
+        self.open_launcher();
     }
 
     /// Opens the launcher and keeps where it came from, for Esc. It closes Settings, which keeps its page for next time.
@@ -1092,7 +1175,7 @@ impl Shell {
             self.settings_open = true;
         }
         if ask && self.workspace.is_some() {
-            self.open_launcher();
+            self.new_task();
         }
     }
 
@@ -1156,7 +1239,7 @@ impl Shell {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if enabled_when(ui, open, CHOOSE_FOLDER, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).clicked() {
-                    self.open_launcher();
+                    self.new_task();
                 }
             });
         });
@@ -1263,6 +1346,7 @@ impl Shell {
     /// and a screen whose source failed hides its content instead of showing it empty.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
         let failures = self.failures();
+        let (now, now_utc) = (self.now(), self.now_utc());
         let open_setup = Cell::new(false);
         // The alert leads to the tools: Setup while its tab shows, else Settings' Runtime status. Setup has no button to itself.
         let setup_tab = self.setup_tab();
@@ -1292,7 +1376,7 @@ impl Shell {
         let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
         // Each screen says where its alert goes, so a new one must choose.
         let alert_over_head = match self.screen {
-            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Workspace => false,
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Portals | Screen::Workspace => false,
             // These keep it over their head until they take a `ScreenState` too.
             Screen::Runs | Screen::Launcher | Screen::Dossier => true,
         };
@@ -1367,7 +1451,7 @@ impl Shell {
                 if let Some(desk) = &mut self.desk
                     && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask)
                 {
-                    self.open_launcher();
+                    self.new_task();
                 }
             }
             Screen::Profile => {
@@ -1413,6 +1497,14 @@ impl Shell {
                     None => {}
                 }
             }
+            Screen::Portals => {
+                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+                let market = profile::application::home_country(&snapshot.profile);
+                let browse = BrowseContext { community: &mut self.community, market: market.as_deref(), now, now_utc };
+                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, busy, browse) {
+                    self.change_portals(request);
+                }
+            }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
@@ -1430,6 +1522,7 @@ impl Shell {
                         self.choose_folder(&ctx);
                     }
                     Some(WorkspaceAction::OpenProfile) => self.screen = Screen::Profile,
+                    Some(WorkspaceAction::OpenPortals) => self.screen = Screen::Portals,
                     None => {}
                 }
             }
@@ -1464,6 +1557,40 @@ impl Shell {
         if self.screen != Screen::Profile {
             self.profile_screen.put_away();
         }
+        if self.screen != Screen::Portals {
+            self.portals_screen.put_away();
+        }
+    }
+
+    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works, which the shell
+    /// checks again here, whatever the screen showed. What it wrote is read back at once, and the snapshot worker is
+    /// asked to read again. The Portals screen asks for it; tests ask directly.
+    pub fn change_portals(&mut self, request: PortalsRequest) {
+        let Some(changes) = &self.portal_changes else { return };
+        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        let result = match &request {
+            PortalsRequest::Switch { folder, on } => changes.switch(folder, *on, busy),
+            PortalsRequest::Remove { folder, origin } => changes.remove(folder, *origin, busy),
+        };
+        self.portals_screen.settle(&request, result);
+        self.read_back_portals();
+        if let Some(reload) = &self.reload {
+            reload.ask();
+        }
+    }
+
+    /// Reads the portals back after a switch or a removal, so the change shows at once. The jobs they found come from the
+    /// snapshot's saved jobs, and stay hidden while those cannot be read.
+    fn read_back_portals(&mut self) {
+        let Some(root) = self.workspace.as_ref() else { return };
+        let jobs_failed = self.snapshot.issues.iter().any(|issue| issue.source == Source::Jobs);
+        let (mut view, error) = portals::load(root.path(), (!jobs_failed).then_some(&self.snapshot.board));
+        view.set_community(&self.community.installed_hints());
+        self.snapshot.workspace.set_portals(&view);
+        self.snapshot.portals = view;
+        self.snapshot.issues.retain(|issue| issue.source != Source::Portals);
+        self.snapshot.issues.extend(error.map(|error| Issue { source: Source::Portals, error }));
+        self.portals_changed = Some(Instant::now());
     }
 
     /// Reads the profile back after a save, so the saved block shows at once instead of after the folder watcher's next
@@ -1607,10 +1734,11 @@ impl Shell {
                 })
             })
             .inner;
-        // Open Profile leaves Settings for the Profile screen, as Back to app would leave it for the screen underneath.
-        if runtime_asked == Some(WorkspaceAction::OpenProfile) {
-            self.settings_open = false;
-            self.screen = Screen::Profile;
+        // Open Profile and Open Portals leave Settings for their screen, as Back to app would leave it for the screen underneath.
+        match runtime_asked {
+            Some(WorkspaceAction::OpenProfile) => (self.settings_open, self.screen) = (false, Screen::Profile),
+            Some(WorkspaceAction::OpenPortals) => (self.settings_open, self.screen) = (false, Screen::Portals),
+            Some(WorkspaceAction::ChangeFolder) | None => {}
         }
         let ctx = ui.ctx().clone();
         // Providers picked this frame drew before the read, so it reads now and draws again.
@@ -1646,7 +1774,7 @@ impl Shell {
                 self.screen = Screen::Tracker;
                 ctx.request_repaint();
             }
-            Some(SettingsRequest::NewTask) => self.open_launcher(),
+            Some(SettingsRequest::NewTask) => self.new_task(),
             // Edit in Profile leaves Settings for the Profile tab, as Back to app would leave it for the screen underneath.
             Some(SettingsRequest::OpenProfile) => {
                 self.settings_open = false;
@@ -1775,7 +1903,7 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
         alert(ui, error);
         ui.add_space(WELCOME_STEP_PADDING / 2.0);
     }
-    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
+    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.";
     ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
     choose
 }
@@ -1808,6 +1936,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
         Source::Profile | Source::CvDocuments => (Some(Screen::Profile), false),
+        Source::Portals => (Some(Screen::Portals), false),
         Source::Decisions => (None, false),
     }
 }
@@ -1824,6 +1953,7 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
         Source::Profile => ("Part of your profile could not be read.", "Everything else still works."),
         Source::CvDocuments => ("Your CV folder could not be read.", "Your profile topics still show, and every task still runs."),
+        Source::Portals => ("Your portals could not be read.", "Everything else still works."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }
@@ -1961,6 +2091,18 @@ mod tests {
     use crate::settings::application::{Preferences, ThemeChoice};
     use crate::workspace::application::{ToolProber, ToolSpec};
 
+    /// Without a test clock, the community list's times count from the system's UTC clock, never from the wall clock
+    /// turned back, which reads an hour early in the hour repeated when clocks go back. A test clock reads as local time.
+    #[test]
+    fn utc_now_is_the_systems_clock() {
+        let shell = Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 25).unwrap());
+        let (before, now, after) = (Utc::now(), shell.now_utc(), Utc::now());
+        assert!(before <= now && now <= after, "{before} {now} {after}");
+        let wall = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let fixed = Shell::without_workspace(wall.date()).with_now(wall);
+        assert_eq!(fixed.now_utc(), Local.from_local_datetime(&wall).single().unwrap().to_utc());
+    }
+
     /// Every tool answers, so launching asks no real program.
     struct AllTools;
 
@@ -1978,7 +2120,15 @@ mod tests {
     fn launch_with(ctx: &egui::Context, path: Option<PathBuf>, data: &Path, key: Option<&str>) -> Shell {
         let providers = settings::open_providers(settings::memory_keychain(key), settings::idle_tester());
         let checks = EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {}));
-        Shell::launch(ctx, path, Some(data.to_owned()), checks, providers, |auto| updates::idle_updates("0.1.0", auto))
+        Shell::launch(
+            ctx,
+            path,
+            Some(data.to_owned()),
+            checks,
+            providers,
+            |auto| updates::idle_updates("0.1.0", auto),
+            |_| portals::scripted_community(None, Vec::new()),
+        )
     }
 
     const FAKE_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";
@@ -2007,6 +2157,28 @@ mod tests {
 
         shell.open(&ctx, &checkout_named(&folder, "third-search"));
         assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ClaudeSignIn, "a new desk takes the method in use, not the last desk's");
+    }
+
+    /// With no data folder, the community list is still asked for, with no folder to save it in, so Browse reads it.
+    #[test]
+    fn no_data_folder_still_asks_for_the_community_list() {
+        let providers = settings::open_providers(settings::memory_keychain(None), settings::idle_tester());
+        let checks = EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {}));
+        let mut asked = None;
+        let ctx = egui::Context::default();
+        Shell::launch(
+            &ctx,
+            None,
+            None,
+            checks,
+            providers,
+            |auto| updates::idle_updates("0.1.0", auto),
+            |data| {
+                asked = Some(data.map(Path::to_owned));
+                portals::scripted_community(None, Vec::new())
+            },
+        );
+        assert_eq!(asked, Some(None));
     }
 
     /// A key known to be gone signs tasks in with the Claude sign-in, whatever the setting says.
@@ -2141,6 +2313,19 @@ mod tests {
         shell.desk = None;
         shell.open(&ctx, &checkout_named(&folder, "other-search"));
         assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
+    }
+
+    /// A task in plain words belongs to the folder it was written for, so a folder change drops it, even from the
+    /// launcher Settings keeps underneath.
+    #[test]
+    fn a_folder_change_drops_a_task_in_plain_words() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        assert!(shell.launcher.prefill("Read the sample portal's code and tell me what it does."));
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+        assert_eq!(shell.launcher.words(), None);
     }
 
     /// A folder change from anywhere, such as Settings, asks before it drops unsaved profile text, and goes on only once

@@ -1,5 +1,6 @@
-//! Replacing a text file in the user's checkout through a copy beside it, so a crash leaves the old file or the new one.
-//! A profile save and a portal switch both write this way.
+//! Replacing a text file in the user's checkout through a copy beside it, so a crash leaves the old file or the new one,
+//! and the checks before it that refuse a file the user may not replace. A profile save and a portal switch both write
+//! this way.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
@@ -30,6 +31,50 @@ pub fn replace_through_copy(target: &Path, text: &str) -> io::Result<()> {
     #[cfg(not(unix))]
     let _ = folder;
     Ok(())
+}
+
+/// What a caller says for each file `refusal` refuses, in its own words.
+pub struct Refusals {
+    pub read_only: &'static str,
+    /// The file belongs to another user. Unix only.
+    pub not_yours: &'static str,
+    pub cannot_write: &'static str,
+}
+
+/// Why the file at `target`, with this `metadata`, may not be replaced, in the caller's `words`. The rename needs only
+/// the folder, so it would quietly pass over a read-only file, a file another user owns, which would change hands, or a
+/// file the user cannot write.
+pub fn refusal(target: &Path, metadata: &fs::Metadata, words: &Refusals) -> Option<&'static str> {
+    if metadata.permissions().readonly() {
+        return Some(words.read_only);
+    }
+    #[cfg(unix)]
+    if owned_by_other(metadata, current_user()) {
+        return Some(words.not_yours);
+    }
+    cannot_write(target, metadata).then_some(words.cannot_write)
+}
+
+#[cfg(unix)]
+pub(crate) fn current_user() -> libc::uid_t {
+    // SAFETY: geteuid takes nothing and always succeeds.
+    unsafe { libc::geteuid() }
+}
+
+/// Whether a file with this `metadata` belongs to someone other than `user`. The rename puts a new file in its place,
+/// owned by whoever saves, so the file would quietly change hands.
+#[cfg(unix)]
+fn owned_by_other(metadata: &fs::Metadata, user: libc::uid_t) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.uid() != user
+}
+
+/// Whether the file at `target` cannot be written in place, which the rename would not notice, because it needs only the
+/// folder. The mode bits or an access list can deny a write that the read-only flag does not show, so the file is opened
+/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file that is
+/// gone by now is not a refusal: the save creates it.
+fn cannot_write(target: &Path, metadata: &fs::Metadata) -> bool {
+    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err_and(|error| error.kind() != ErrorKind::NotFound)
 }
 
 /// How long a copy must sit unchanged before a later save takes it for one an interrupted save left. A save writes and
@@ -279,6 +324,35 @@ mod tests {
     /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then. The
     /// umask is `022` for the write, so a copy opened with the default mode would read `644`, not `600`, whatever the
     /// umask of the shell. Files other tests make meanwhile may get `022` too, and none of them checks a default mode.
+    /// The rename would hand the file to the current user, so a file someone else owns is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_owned_by_another_user_is_refused() {
+        let (_dir, target) = notes();
+        let metadata = fs::metadata(&target).unwrap();
+        assert!(owned_by_other(&metadata, current_user().wrapping_add(1)));
+        assert!(!owned_by_other(&metadata, current_user()));
+    }
+
+    #[test]
+    fn a_file_that_is_gone_is_not_a_refusal_to_write() {
+        let (_dir, target) = notes();
+        let metadata = fs::metadata(&target).unwrap();
+        fs::remove_file(&target).unwrap();
+        assert!(!cannot_write(&target, &metadata));
+    }
+
+    #[test]
+    fn a_refusal_is_in_the_callers_words() {
+        let words = Refusals { read_only: "read-only here", not_yours: "not yours here", cannot_write: "not writable here" };
+        let (_dir, target) = notes();
+        assert_eq!(refusal(&target, &fs::metadata(&target).unwrap(), &words), None);
+        let mut permissions = fs::metadata(&target).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&target, permissions).unwrap();
+        assert_eq!(refusal(&target, &fs::metadata(&target).unwrap(), &words), Some("read-only here"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_copy_is_private_until_its_text_is_in() {

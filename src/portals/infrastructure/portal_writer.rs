@@ -1,11 +1,11 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 
 use crate::portals::domain::{ChangeError, Edit, PortalStore, set_enabled};
 use crate::portals::infrastructure::portal_folder::SKILLS;
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::safe_save::replace_through_copy;
+use crate::shared_kernel::safe_save::{Refusals, refusal, replace_through_copy};
 use crate::shared_kernel::visible_text::visible_chars;
 
 const MANIFEST: &str = "SKILL.md";
@@ -71,7 +71,7 @@ impl PortalStore for PortalWriter {
             Edit::NoFrontmatter => Err(ChangeError::NoFrontmatter),
             Edit::Changed(text) => {
                 let metadata = fs::metadata(&file).map_err(failed)?;
-                if let Some(why) = cannot_replace(&file, &metadata) {
+                if let Some(why) = refusal(&file, &metadata, &REFUSALS) {
                     return Err(ChangeError::Failed(LoadError::new(&source, why)));
                 }
                 replace_through_copy(&file, &text).map_err(failed)
@@ -107,26 +107,12 @@ fn read_whole(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Why the file at `target` may not be replaced, as a profile save refuses it. The rename needs only the folder, so it
-/// would quietly pass over a read-only file, a file another user owns or one the user cannot write.
-fn cannot_replace(target: &Path, metadata: &fs::Metadata) -> Option<&'static str> {
-    if metadata.permissions().readonly() {
-        return Some("is read-only, so nothing changed");
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // SAFETY: geteuid takes nothing and always succeeds.
-        if metadata.uid() != unsafe { libc::geteuid() } {
-            return Some("belongs to another user, so nothing changed");
-        }
-    }
-    // Opening for writing changes nothing, and fails where mode bits, an access list or another program deny the write.
-    if OpenOptions::new().write(true).open(target).is_err() {
-        return Some("cannot be written, or is open in another program, so nothing changed");
-    }
-    None
-}
+/// Why a switch refuses a `SKILL.md`, as a profile save refuses a file.
+const REFUSALS: Refusals = Refusals {
+    read_only: "is read-only, so nothing changed",
+    not_yours: "belongs to another user, so nothing changed",
+    cannot_write: "cannot be written, or is open in another program, so nothing changed",
+};
 
 /// Moves `path` to the Trash through `NSFileManager`'s `trashItemAtURL`, never through Finder and AppleScript, so macOS
 /// asks for no Automation permission.

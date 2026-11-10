@@ -1,10 +1,10 @@
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use crate::profile::domain::{ProfileFile, ProfileStore};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::safe_save::replace_through_copy;
+use crate::shared_kernel::safe_save::{Refusals, refusal, replace_through_copy};
 
 /// The profile files of one checkout. A save of one block is the only write the profile makes to the checkout.
 pub struct ProfileFiles {
@@ -46,34 +46,11 @@ impl ProfileFiles {
         if !target.starts_with(&root) {
             return Err(LoadError::new(file.name(), "is outside your job search folder, so it was not saved"));
         }
-        if let Ok(metadata) = fs::metadata(&target) {
-            if metadata.permissions().readonly() {
-                return Err(LoadError::new(file.name(), "is read-only, so it was not saved"));
-            }
-            #[cfg(unix)]
-            if let Some(why) = not_yours(&metadata, current_user()) {
-                return Err(LoadError::new(file.name(), why));
-            }
-            if cannot_write(&target, &metadata) {
-                return Err(LoadError::new(file.name(), CANNOT_WRITE));
-            }
+        if let Some(why) = fs::metadata(&target).ok().and_then(|metadata| refusal(&target, &metadata, &REFUSALS)) {
+            return Err(LoadError::new(file.name(), why));
         }
         Ok(target)
     }
-}
-
-#[cfg(unix)]
-fn current_user() -> libc::uid_t {
-    // SAFETY: geteuid takes nothing and always succeeds.
-    unsafe { libc::geteuid() }
-}
-
-/// Why `user` may not replace a file with this `metadata`, if they may not. The rename puts a new file in its place, owned
-/// by whoever saves, so a file owned by another user would quietly change hands.
-#[cfg(unix)]
-fn not_yours(metadata: &fs::Metadata, user: libc::uid_t) -> Option<&'static str> {
-    use std::os::unix::fs::MetadataExt;
-    (metadata.uid() != user).then_some("belongs to another user, so it was not saved")
 }
 
 #[cfg(unix)]
@@ -81,13 +58,9 @@ const CANNOT_WRITE: &str = "cannot be written by your user, so it was not saved"
 #[cfg(not(unix))]
 const CANNOT_WRITE: &str = "cannot be written, or is open in another program, so it was not saved";
 
-/// Whether the file at `target` cannot be written in place, which the rename would not notice, because it needs only the
-/// folder. The mode bits or an access list can deny a write that the read-only flag does not show, so the file is opened
-/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file that is
-/// gone by now is not a refusal: the save creates it.
-fn cannot_write(target: &Path, metadata: &fs::Metadata) -> bool {
-    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err_and(|error| error.kind() != ErrorKind::NotFound)
-}
+/// Why a save refuses a file it may not replace.
+const REFUSALS: Refusals =
+    Refusals { read_only: "is read-only, so it was not saved", not_yours: "belongs to another user, so it was not saved", cannot_write: CANNOT_WRITE };
 
 /// The folder of `file` from the root, as the user would look for it.
 fn folder_of(file: ProfileFile) -> &'static str {
@@ -116,7 +89,12 @@ impl ProfileStore for ProfileFiles {
 mod tests {
     use std::time::{Duration, SystemTime};
 
+    #[cfg(windows)]
+    use std::fs::OpenOptions;
+
     use super::*;
+    #[cfg(unix)]
+    use crate::shared_kernel::safe_save::current_user;
 
     fn files() -> (tempfile::TempDir, ProfileFiles) {
         let dir = tempfile::tempdir().unwrap();
@@ -255,18 +233,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 
-    /// The rename would hand the file to the current user, so a file someone else owns is not saved.
-    #[cfg(unix)]
-    #[test]
-    fn a_file_owned_by_another_user_is_not_saved() {
-        let (dir, _) = files();
-        let path = dir.path().join(ProfileFile::Candidate.relative_path());
-        fs::write(&path, "old").unwrap();
-        let metadata = fs::metadata(&path).unwrap();
-        assert_eq!(not_yours(&metadata, current_user().wrapping_add(1)), Some("belongs to another user, so it was not saved"));
-        assert_eq!(not_yours(&metadata, current_user()), None);
-    }
-
     /// Write bits for the group alone do not read as read-only, yet the owner cannot write the file in place.
     #[cfg(unix)]
     #[test]
@@ -296,16 +262,6 @@ mod tests {
         assert_eq!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason, CANNOT_WRITE);
         drop(held);
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
-    }
-
-    #[test]
-    fn a_file_that_is_gone_is_not_a_refusal_to_write() {
-        let (dir, _) = files();
-        let path = dir.path().join(ProfileFile::Candidate.relative_path());
-        fs::write(&path, "old").unwrap();
-        let metadata = fs::metadata(&path).unwrap();
-        fs::remove_file(&path).unwrap();
-        assert!(!cannot_write(&path, &metadata));
     }
 
     #[cfg(unix)]

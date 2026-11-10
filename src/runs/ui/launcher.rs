@@ -369,4 +369,46 @@ mod tests {
         launcher.prefill("Read the code.\tThen ask me.");
         assert_eq!(launcher.words.as_deref(), Some("Read the code.\tThen ask me."), "a tab shows as it is");
     }
+
+    /// A session that stays up until the test ends.
+    struct Idle;
+
+    impl crate::runs::application::AgentGateway for Idle {
+        fn start(&self, _: &crate::runs::application::RunRequest, _: crate::runs::application::EventSink) -> Box<dyn crate::runs::application::AgentSession> {
+            Box::new(Idle)
+        }
+    }
+
+    impl crate::runs::application::AgentSession for Idle {
+        fn send_message(&mut self, _: &str) {}
+        fn respond(&mut self, _: &crate::runs::application::Prompt, _: &crate::runs::application::Decision) {}
+        fn interrupt(&mut self) {}
+    }
+
+    /// Once Run starts a task in plain words the form drops it, whatever opens the launcher next.
+    #[test]
+    fn a_started_task_in_plain_words_is_dropped() {
+        const WORDS: &str = "Read the sample portal's code and tell me what it does.";
+        let mut launcher = Launcher::default();
+        assert!(launcher.prefill(WORDS));
+        let desk = RunDesk::new(Box::new(Idle), std::sync::Arc::new(|| {}));
+        let state = std::rc::Rc::new(std::cell::RefCell::new((launcher, desk, Vec::new())));
+        let inner = std::rc::Rc::clone(&state);
+        let setup = |ctx: &egui::Context| {
+            crate::ui_kit::install_fonts(ctx);
+            crate::ui_kit::install_theme(ctx);
+        };
+        let mut harness = egui_kittest::Harness::builder().with_size([1280.0, 820.0]).with_context_setup(setup).build_ui(move |ui| {
+            let (launcher, desk, asked) = &mut *inner.borrow_mut();
+            let rules = LaunchRules { defaults: &RunDefaults::default(), cap: &CapCheck::Open, testing: false };
+            asked.extend(launcher.show(ui, desk, &rules));
+        });
+        harness.run_steps(2);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+        harness.run_steps(2);
+        let (launcher, desk, asked) = &*state.borrow();
+        assert!(matches!(asked.as_slice(), [LauncherRequest::Started(_)]), "{asked:?}");
+        assert_eq!(desk.runs()[0].line, WORDS);
+        assert_eq!(launcher.words(), None);
+    }
 }

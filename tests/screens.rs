@@ -3843,6 +3843,14 @@ fn a_task_in_plain_words_is_dropped_once_it_runs_or_the_launcher_opens_bare() {
     assert!(!is_shown(&harness, WORDS));
 
     request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    harness.get_by(|node| node.role() == egui::accesskit::Role::Button && node.label().as_deref() == Some("New task")).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the New task button opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "on a fresh form");
+    assert!(!is_shown(&harness, WORDS));
+
+    request_line(&mut harness, WORDS);
     harness.get_by_label("Run").click();
     harness.run_steps(3);
     assert_eq!(calls.lock().unwrap().starts, 1);

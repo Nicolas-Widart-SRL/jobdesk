@@ -22,7 +22,8 @@ const TEX_LIVE: &str = "2025";
 
 /// The folder in the home folder that holds every helper setup installs. Jobdesk owns it, and setup writes, replaces
 /// and removes nothing in the home folder outside it. In it, setup touches only the helpers' places and their staging
-/// folders.
+/// folders. Helpers install on macOS only, and the tests check the folder on every system.
+#[cfg(any(target_os = "macos", test))]
 pub const OWN_FOLDER: &str = ".jobdesk";
 
 /// A helper, in the order setup checks and installs them.

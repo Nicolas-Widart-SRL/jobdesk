@@ -38,6 +38,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub fn write_into(staging: &Path, source: &InstalledSource, bytes: &[u8]) -> io::Result<()> {
     let dir = staging.join(DIR);
     let mut builder = fs::DirBuilder::new();
+    // Not recursive: a missing `staging` is an error, and so is a `.jobdesk` that is there already.
+    builder.recursive(false);
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder.create(&dir)?;

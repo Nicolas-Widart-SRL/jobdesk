@@ -150,7 +150,8 @@ pub fn staging_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
 }
 
 /// Where this Jobdesk renames what was in `folder` before, until its own install is in: beside its staging folder,
-/// and cleared the same way.
+/// and cleared the same way. Only the helper installs rename aside, and they run on macOS only.
+#[cfg(target_os = "macos")]
 pub fn aside_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
     let mut name = staging_of(folder, own)?.into_os_string();
     name.push(ASIDE);

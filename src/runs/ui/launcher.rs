@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use egui::{ComboBox, Frame, Key, Margin, Modifiers, ScrollArea, TextEdit, Ui, vec2};
 
 use crate::runs::application::{
-    CAP_READING, CATALOG, CapCheck, CommandGroup, CommandSpec, FieldSpec, RunDefaults, RunDesk, StartOptions, cap_line, cap_reason, compose_line,
-    spec_for_line, start_values,
+    CAP_READING, CATALOG, CapCheck, CommandGroup, CommandSpec, FieldSpec, RunDefaults, RunDesk, StartOptions, StartValues, cap_line, cap_reason, compose_line,
+    spec_for_line, start_values, task_start_values,
 };
 use crate::shared_kernel::ModelChoice;
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
@@ -25,6 +25,10 @@ const TICK_FIRST: &str = "Tick \"I understand\" first.";
 /// Test connection runs Claude Code too, and one Claude process runs at a time.
 const TESTING: &str = "Test connection is running. Run opens once it ends.";
 
+/// The form's header for a task in plain words, which has no command name to show.
+const WORDS_TITLE: &str = "Task in plain words";
+const WORDS_NOTE: &str = "Jobdesk wrote this task. Claude reads it as your request.";
+
 /// What a new task starts with, and whether the monthly cap lets one start.
 pub struct LaunchRules<'a> {
     pub defaults: &'a RunDefaults,
@@ -44,6 +48,9 @@ pub enum LauncherRequest {
 /// The model and the budget hold only what the user changed. Untouched, they show what the run defaults give the command.
 pub struct Launcher {
     command: &'static CommandSpec,
+    /// A task in plain words, which a screen of Jobdesk wrote. While it is set, the form shows it in place of the command,
+    /// read only, and Run sends it as it stands. Picking a command clears it.
+    words: Option<String>,
     values: HashMap<&'static str, String>,
     budget: Option<String>,
     model: Option<ModelChoice>,
@@ -58,12 +65,18 @@ impl Default for Launcher {
 
 impl Launcher {
     fn for_command(command: &'static CommandSpec) -> Self {
-        Self { command, values: HashMap::new(), budget: None, model: None, reset_confirmed: false }
+        Self { command, words: None, values: HashMap::new(), budget: None, model: None, reset_confirmed: false }
     }
 
     /// Fills the form from a line such as `/outcome followup acme`. A field with a flag, such as `/setup --section goals`,
     /// takes only the value after its flag, because the line puts the flag back.
+    /// A line that does not start with `/` is a task in plain words. A `/` line the catalog does not hold changes nothing.
     pub fn prefill(&mut self, line: &str) {
+        let line = line.trim();
+        if !line.is_empty() && !line.starts_with('/') {
+            *self = Self { words: Some(line.to_owned()), ..Self::default() };
+            return;
+        }
         let Some(command) = spec_for_line(line) else { return };
         *self = Self::for_command(command);
         let arguments = line[command.name.len()..].trim();
@@ -77,8 +90,25 @@ impl Launcher {
         self.values.get(field.key).cloned().unwrap_or_else(|| field.default.to_owned())
     }
 
+    /// What Run sends: the task in plain words, or the command line the form composes.
     fn line(&self) -> String {
-        compose_line(self.command, |field| self.value_of(field))
+        match &self.words {
+            Some(words) => words.clone(),
+            None => compose_line(self.command, |field| self.value_of(field)),
+        }
+    }
+
+    /// A task in plain words starts from the defaults for every task, since no command's row names it.
+    fn start_values(&self, defaults: &RunDefaults) -> StartValues {
+        if self.words.is_some() { task_start_values(defaults) } else { start_values(defaults, self.command) }
+    }
+
+    fn fields(&self) -> &'static [FieldSpec] {
+        if self.words.is_some() { &[] } else { self.command.fields }
+    }
+
+    fn destructive(&self) -> bool {
+        self.words.is_none() && self.command.destructive
     }
 
     /// Returns the run the user just started, or the way to the cap.
@@ -97,12 +127,12 @@ impl Launcher {
         })
     }
 
-    /// Each group's heading stands on the hairline of its first row.
+    /// Each group's heading stands on the hairline of its first row. No row is picked while the form holds a task in plain words.
     fn list(&mut self, ui: &mut Ui) {
         for group in CommandGroup::ALL {
             group_title(ui, group.label());
             for command in CATALOG.iter().filter(|command| command.group == group) {
-                let on = command.name == self.command.name;
+                let on = self.words.is_none() && command.name == self.command.name;
                 if command_row(ui, command.name, command.summary, command.writes, on).clicked() {
                     *self = Self::for_command(command);
                 }
@@ -114,17 +144,20 @@ impl Launcher {
     /// A reached cap holds back only a new task: a running one, and replies to a live session, go on elsewhere.
     fn form(&mut self, ui: &mut Ui, desk: &mut RunDesk, rules: &LaunchRules, run_keys: bool) -> Option<LauncherRequest> {
         let mut asked = None;
-        let start = start_values(rules.defaults, self.command);
+        let start = self.start_values(rules.defaults);
         Frame::new().inner_margin(Margin::symmetric(INSET, HEADER_PADDING)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(rich(ui, self.command.name, Type::COMMAND, Ink::Text));
+            match self.words {
+                Some(_) => ui.label(rich(ui, WORDS_TITLE, Type::SLIP_TITLE, Ink::Text)),
+                None => ui.label(rich(ui, self.command.name, Type::COMMAND, Ink::Text)),
+            };
         });
         divider(ui);
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = ROW_GAP;
-            muted(ui, self.command.summary);
-            for field in self.command.fields {
+            muted(ui, if self.words.is_some() { WORDS_NOTE } else { self.command.summary });
+            for field in self.fields() {
                 let mut value = self.value_of(field);
                 let changed = labelled(ui, field.label, |ui, label| {
                     let edit = if field.multiline {
@@ -171,7 +204,8 @@ impl Launcher {
                 code_box(ui, |ui| ui.add(egui::Label::new(rich(ui, &line, Type::MONO, Ink::Text)).wrap()));
             });
             muted(ui, "Runs in your job search folder.");
-            if self.command.destructive {
+            let destructive = self.destructive();
+            if destructive {
                 ui.label(rich(ui, "This deletes your data", Type::STRONG, Tone::Closed));
                 muted(ui, "Files deleted from documents/ cannot be recovered by this app. The command also asks before it deletes anything.");
                 hand(ui.checkbox(&mut self.reset_confirmed, "I understand"));
@@ -182,7 +216,7 @@ impl Launcher {
                 CapCheck::Reached(reached) => Some(reached),
                 CapCheck::Open | CapCheck::Reading => None,
             };
-            let ready = budget.is_some() && !busy && !rules.testing && *rules.cap == CapCheck::Open && (!self.command.destructive || self.reset_confirmed);
+            let ready = budget.is_some() && !busy && !rules.testing && *rules.cap == CapCheck::Open && (!destructive || self.reset_confirmed);
             if budget.is_none() {
                 alert(ui, NO_BUDGET);
             }
@@ -265,5 +299,31 @@ mod tests {
         assert_eq!(launcher.line(), "/build-cv --all");
         launcher.prefill("/build-cv");
         assert_eq!(launcher.line(), "/build-cv");
+    }
+
+    /// A line that does not start with `/` opens a task in plain words, trimmed, which Run sends as it stands.
+    /// A command line after it opens the command again.
+    #[test]
+    fn a_line_in_plain_words_opens_a_task() {
+        let mut launcher = Launcher::default();
+        launcher.prefill("  Read the sample portal's code and tell me what it does.\n");
+        assert_eq!(launcher.words.as_deref(), Some("Read the sample portal's code and tell me what it does."));
+        assert_eq!(launcher.line(), "Read the sample portal's code and tell me what it does.");
+        assert!(launcher.fields().is_empty() && !launcher.destructive());
+        launcher.prefill("/setup --section experience");
+        assert_eq!((launcher.words.as_deref(), launcher.line().as_str()), (None, "/setup --section experience"));
+    }
+
+    /// A `/` line the catalog does not hold, and an empty line, leave the form as it was.
+    #[test]
+    fn an_unknown_command_or_an_empty_line_changes_nothing() {
+        let mut launcher = Launcher::default();
+        launcher.prefill("Tell me what this does.");
+        launcher.prefill("/unknown arg");
+        launcher.prefill("   ");
+        assert_eq!(launcher.line(), "Tell me what this does.");
+        launcher.prefill("/outcome followup acme");
+        launcher.prefill("/unknown");
+        assert_eq!((launcher.words.as_deref(), launcher.line().as_str()), (None, "/outcome followup acme"));
     }
 }

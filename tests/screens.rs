@@ -3720,6 +3720,96 @@ fn launcher_cap_light() {
     compare(&mut harness, name);
 }
 
+/// A task in plain words, as a screen of Jobdesk writes one. The address is fictional.
+const WORDS: &str = "Copy https://github.example/sample/portals/tree/main/sample-board into `.agents/skills/`. Read its code and tell me what it does. Then ask me before you run `python3 tools/install_portal_clis.py`.";
+const WORDS_TITLE: &str = "Task in plain words";
+
+/// Leaves `line` for the shell as a command action does, under the id `ui_kit` keeps for it, and lets the shell take it.
+fn request_line(harness: &mut Harness, line: &str) {
+    harness.ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("requested_command"), line.to_owned()));
+    harness.run_steps(3);
+}
+
+/// A line in plain words opens the launcher on it and starts nothing. Run sends it as it stands, on the defaults for
+/// every task, and Usage counts it with no command.
+#[test]
+fn a_task_in_plain_words_opens_the_launcher_and_runs_as_written() {
+    let calls = SharedCalls::default();
+    let (mut harness, shell) = shared_harness(recording_shell(Screen::Insights, "launcher_words", &calls));
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(is_shown(&harness, WORDS_TITLE));
+    assert!(is_shown(&harness, WORDS), "the task shows as Claude will get it");
+    assert!(harness.query_by_role(egui::accesskit::Role::MultilineTextInput).is_none(), "the task is read only");
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    let suggested = f64::from(jobdesk::runs::application::WORDS_BUDGET_USD);
+    assert_eq!(calls.lock().unwrap().asked, [(None, suggested)]);
+    let line = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].line.clone();
+    assert_eq!(line, WORDS);
+
+    // The log's meta line holds the line the run started with, which is all Usage reads to name its command.
+    let logs = tempfile::tempdir().unwrap();
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("launcher_words").join("ai-job-search");
+    let workspace = jobdesk::workspace::open(&root).unwrap();
+    let meta = serde_json::json!({
+        "type": "jobdesk_meta", "workspace": workspace.path().display().to_string(), "id": "a", "line": line,
+        "model": null, "budget_usd": suggested, "started_at": "2026-10-30 10:00",
+    });
+    let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
+    fs::write(logs.path().join("a.jsonl"), format!("{meta}\n{result}\n")).unwrap();
+    let tasks = jobdesk::runs::usage_logs(logs.path().to_owned(), workspace.path()).tasks();
+    assert_eq!(tasks.iter().map(|task| task.command.clone()).collect::<Vec<_>>(), [None]);
+}
+
+/// Run defaults for every task fill a task in plain words, and a command's own row does not.
+/// Picking a command clears the task, and Run then sends the command.
+#[test]
+fn a_picked_command_replaces_a_task_in_plain_words() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::Insights, "launcher_words_pick", &calls);
+    shell.settings_mut().set_model(ModelChoice::Opus);
+    shell.settings_mut().set_budget(Dollars::parse("4.00"));
+    command_row(shell.settings_mut(), "/rank", ModelChoice::Haiku, "1.00");
+    let (mut harness, shell) = shared_harness(shell);
+    request_line(&mut harness, WORDS);
+    assert_eq!((budget_field(&harness).value().as_deref(), model_box(&harness).value().as_deref()), (Some("4.00"), Some("Opus")));
+
+    pick_command(&mut harness, "/rank");
+    assert!(!is_shown(&harness, WORDS_TITLE));
+    assert!(!is_shown(&harness, WORDS));
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    let line = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].line.clone();
+    assert!(line.starts_with("/rank"), "{line}");
+    assert_eq!(calls.lock().unwrap().asked, [(Some("haiku".to_owned()), 1.0)]);
+}
+
+/// A `/` line the catalog does not hold leaves the form as it was.
+#[test]
+fn an_unknown_command_leaves_the_task_in_plain_words() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_unknown", &calls));
+    request_line(&mut harness, WORDS);
+    request_line(&mut harness, "/unknown now");
+    assert!(is_shown(&harness, WORDS));
+    assert!(!is_shown(&harness, "/unknown now"));
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
+/// The launcher on a task in plain words.
+#[test]
+fn launcher_words_light() {
+    let name = "launcher_words_light";
+    let mut shell = shell(Screen::Insights, name);
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
+    let mut harness = wgpu_tray(shell, Theme::Light);
+    request_line(&mut harness, WORDS);
+    compare(&mut harness, name);
+}
+
 /// A fictional decisions file in `folder`: `count` skips for the folder at `root`, and one for a folder elsewhere.
 fn decisions_file(folder: &Path, root: &Path, count: usize) {
     let record = |at: usize| serde_json::json!({ "key": format!("triage:fictional-{at}"), "name": "Kestrel Labs", "outcome": "skipped", "reason": null, "on": "2026-10-30" });

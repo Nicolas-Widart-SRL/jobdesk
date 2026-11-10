@@ -207,10 +207,12 @@ fn say(value: &str, note: &str, tone: BandTone) -> BandText {
 }
 
 /// "2 Draft" with an optional ending, or the command word when the command has no rail.
+/// A task in plain words has no command, so it reads "Task" rather than its first word.
 fn where_value(run: &Run, ending: &str) -> String {
     match run.steps.as_ref().and_then(|rail| rail.labels.get(rail.current).map(|label| (rail.current, label))) {
         Some((at, label)) => format!("{at} {label}{ending}"),
-        None => command_word(&run.line),
+        None if run.line.trim_start().starts_with('/') => command_word(&run.line),
+        None => "Task".to_owned(),
     }
 }
 
@@ -773,6 +775,15 @@ mod tests {
         run.apply(AgentEvent::ProcessExited { failure: None });
         let closed = band(&run);
         assert_eq!((closed.place.value.as_str(), closed.next.value.as_str()), ("/outcome", "Nothing for now"));
+    }
+
+    #[test]
+    fn a_task_in_plain_words_reads_task() {
+        let mut run = started("Copy the portal. Read its code and tell me what it does.");
+        assert_eq!(band(&run).place, cell("Task", "", BandTone::Plain));
+        ends_turn(&mut run);
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        assert_eq!(band(&run).place.value, "Task");
     }
 
     fn fetched() -> Run {

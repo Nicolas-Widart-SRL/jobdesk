@@ -15,6 +15,17 @@ Jobdesk drives each process like this:
 - The UI thread applies them once per frame through `RunDesk::poll`.
 - Dropping a session ends its process.
 
+## A task in plain words
+
+Most tasks run a slash command from the catalog. A screen can also open the launcher on a task written in plain words, such as a request to read a portal's code before it installs. The launcher then works like this:
+
+- `Launcher::prefill` opens a trimmed line that does not start with `/` as a task in plain words. A `/` line the catalog does not hold still changes nothing.
+- The form shows the text read only under "Claude will run", with no fields, and Run sends it as the prompt, unchanged. Picking a command clears it.
+- Model and Spend come from the run defaults for every task, else `WORDS_BUDGET_USD`. No command's row applies.
+- Run waits on the same rules as a command: one run at a time, Test connection, the monthly cap and a budget above zero. Nothing runs until the user presses Run.
+
+Usage counts such a task with no command, and the band's place reads "Task" in place of a command word.
+
 ## Finding `claude`
 
 `claude` is looked for in this order:

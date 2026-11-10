@@ -110,11 +110,12 @@ fn clean_sentence(sentence: Option<&str>) -> Option<String> {
     sentence.map(|sentence| one_line(sentence, SENTENCE_CHARS)).filter(|sentence| !sentence.is_empty())
 }
 
-/// `text` on one line: a line break or other space becomes one space, then hidden characters go, and it keeps at most
-/// `limit` characters with no space at either end.
+/// `text` on one line: a line break or other space becomes one space, then hidden characters and variation selectors
+/// go, and it keeps at most `limit` characters with no space at either end. A variation selector passes `visible_chars`,
+/// but after a letter it shows nothing and can carry a payload.
 fn one_line(text: &str, limit: usize) -> String {
     let spaced: String = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).collect();
-    let visible: String = visible_chars(&spaced).collect();
+    let visible: String = visible_chars(&spaced).filter(|c| !matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')).collect();
     let joined = visible.split_whitespace().collect::<Vec<_>>().join(" ");
     joined.chars().take(limit).collect::<String>().trim_end().to_owned()
 }
@@ -369,6 +370,14 @@ portals/be/northfield-search @lena-vos # no longer looked after
         assert_eq!(ListedPortal::from_parts(dk(), folder("x"), sha.clone(), "\u{200B}\n", None), None);
         let long = ListedPortal::from_parts(dk(), folder("x"), sha, &format!("{} b", "a".repeat(59)), None).unwrap();
         assert_eq!(long.name, "a".repeat(59), "cut, with no space left at the end");
+    }
+
+    #[test]
+    fn variation_selectors_are_dropped_from_names_and_sentences() {
+        let sha = BlobSha::parse(&"a".repeat(40)).unwrap();
+        let name = "North\u{FE0F}field\u{E0100}";
+        let portal = ListedPortal::from_parts(dk(), folder("x"), sha, name, Some("Finds\u{FE00} jobs\u{E01EF}.")).unwrap();
+        assert_eq!((portal.name.as_str(), portal.sentence.as_deref()), ("Northfield", Some("Finds jobs.")));
     }
 
     #[test]

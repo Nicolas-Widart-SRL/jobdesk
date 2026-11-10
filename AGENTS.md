@@ -1,6 +1,6 @@
 # Jobdesk
 
-Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` slash commands. It holds no workflow logic. Every action runs an unchanged slash command through the local `claude` CLI.
+Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` slash commands. It holds no workflow logic. Every task runs through the local `claude` CLI, nearly always as an unchanged slash command. Two things are not that: Install… on a community portal, whose plain-words task Jobdesk writes from validated parts, and the portal On/Off switch and Remove, which are Jobdesk's own writes, not tasks.
 
 ## Commands
 

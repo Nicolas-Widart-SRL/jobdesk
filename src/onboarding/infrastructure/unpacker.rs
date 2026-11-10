@@ -124,6 +124,9 @@ fn staging_prefix(folder: &Path) -> Option<String> {
     Some(format!(".{}.jobdesk-", folder.file_name()?.to_str()?))
 }
 
+/// The end of the name of what was in `folder` before, once a Jobdesk renamed it aside: `.<name>.jobdesk-<pid>-old`.
+const ASIDE: &str = "-old";
+
 /// This Jobdesk's staging folder for `folder`: hidden, beside it, so the rename that puts it in place stays on one
 /// disk. `own` is this Jobdesk's folder of `onboarding/`, whose name is its pid.
 pub fn staging_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
@@ -133,14 +136,24 @@ pub fn staging_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
     Ok(parent.join(name))
 }
 
-/// Removes the staging folders, or files, beside `folder` that a Jobdesk which no longer runs left. `dir` is
-/// `<data>/onboarding`, whose `<pid>` folders say which Jobdesk still runs. Links are removed, never followed.
+/// Where this Jobdesk renames what was in `folder` before, until its own install is in: beside its staging folder,
+/// and cleared the same way.
+pub fn aside_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
+    let mut name = staging_of(folder, own)?.into_os_string();
+    name.push(ASIDE);
+    Ok(PathBuf::from(name))
+}
+
+/// Removes the staging folders, or files, beside `folder` that a Jobdesk which no longer runs left, and what it
+/// renamed aside. `dir` is `<data>/onboarding`, whose `<pid>` folders say which Jobdesk still runs. Links are removed,
+/// never followed.
 pub fn clear_stagings(folder: &Path, dir: &Path) {
     let (Some(parent), Some(prefix)) = (folder.parent(), staging_prefix(folder)) else { return };
     let Ok(entries) = fs::read_dir(parent) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|name| name.strip_prefix(prefix.as_str())) else { continue };
+        let rest = name.to_str().and_then(|name| name.strip_prefix(prefix.as_str()));
+        let Some(pid) = rest.map(|rest| rest.strip_suffix(ASIDE).unwrap_or(rest)) else { continue };
         if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) || in_use(&dir.join(pid)) {
             continue;
         }

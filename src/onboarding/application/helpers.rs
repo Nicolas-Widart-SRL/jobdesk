@@ -29,7 +29,7 @@ impl HelperSetup {
         if self.probe.is_here(helper) {
             return Outcome::AlreadyHere;
         }
-        match self.installer.install(helper, cancelled, phase) {
+        match self.installer.install(helper, &|| self.probe.is_here(helper), cancelled, phase) {
             Ok(()) if self.probe.is_here(helper) => Outcome::Installed,
             Ok(()) => Outcome::CouldNotInstall(Failure::DoesNotRun),
             Err(failure) => Outcome::CouldNotInstall(failure),
@@ -63,7 +63,7 @@ mod tests {
     }
 
     impl HelperInstaller for Installer {
-        fn install(&self, helper: Helper, _: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
+        fn install(&self, helper: Helper, _: &dyn Fn() -> bool, _: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
             *self.installs.lock().unwrap() += 1;
             phase(InstallPhase::Checking);
             let runs = self.end?;

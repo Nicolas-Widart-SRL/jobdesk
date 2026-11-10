@@ -1,7 +1,8 @@
 //! Installs a helper in Jobdesk's own folder of the home folder, `~/.jobdesk`, on macOS. Every file of it downloads into
 //! this Jobdesk's own folder of `onboarding/`, and is compared with its pinned SHA-256 and size. Only once all of them
 //! match is anything unpacked, into a hidden staging folder beside the helper's place, which then takes that place in
-//! one rename. Nothing in the home folder outside `~/.jobdesk` is written, replaced or removed.
+//! one rename. A working install already there stays, and one that does not work is renamed aside first, so neither
+//! is ever half removed. Nothing in the home folder outside `~/.jobdesk` is written, replaced or removed.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
@@ -15,7 +16,7 @@ use zip::{CompressionMethod, ZipArchive};
 
 use crate::onboarding::domain::{Arch, Artifact, Failure, HELPERS, Helper, HelperInstaller, InstallPhase, Layout, OWN_FOLDER, SourceFetcher};
 use crate::onboarding::infrastructure::fetcher::HttpsFetcher;
-use crate::onboarding::infrastructure::unpacker::{clear_stagings, file_mode, make_folders, remove, rename_into, sha256_hex, staging_of};
+use crate::onboarding::infrastructure::unpacker::{aside_of, clear_stagings, file_mode, make_folders, remove, rename_into, sha256_hex, staging_of};
 use crate::shared_kernel::own_folder::claim;
 
 /// The most one archive may unpack to, and the most entries it may hold. TinyTeX, the largest, unpacks to 227 MB in
@@ -88,7 +89,7 @@ impl HomeInstaller {
 }
 
 impl HelperInstaller for HomeInstaller {
-    fn install(&self, helper: Helper, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
+    fn install(&self, helper: Helper, is_here: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
         let artifacts = (self.pins)(helper);
         let files = self.fetch_checked(&artifacts, cancelled, phase)?;
         if cancelled() {
@@ -96,18 +97,18 @@ impl HelperInstaller for HomeInstaller {
         }
         phase(InstallPhase::Unpacking);
         let (own, place) = (self.own(), self.place(helper));
-        let staging = staging_of(&place, &claim(&self.dir).map_err(|_| Failure::Disk)?)?;
+        let mine = claim(&self.dir).map_err(|_| Failure::Disk)?;
+        let (staging, aside) = (staging_of(&place, &mine)?, aside_of(&place, &mine)?);
         let made = make_own(&own)?;
         remove(&staging);
         let bin: PathBuf = helper.bin().iter().collect();
         let placed = unpack_all(&artifacts, &files, &staging, &bin, cancelled)
-            .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { replace(&own, &staging, &place) });
-        if placed.is_err() {
-            remove(&staging);
-            if made {
-                // Only while it is still empty, so another Jobdesk's install there stays.
-                let _ = fs::remove_dir(&own);
-            }
+            .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { replace(&own, &staging, &place, &aside, is_here) });
+        // Gone once it took the place. Still here when it did not, or when another Jobdesk's install stayed.
+        remove(&staging);
+        if placed.is_err() && made {
+            // Only while it is still empty, so another Jobdesk's install there stays.
+            let _ = fs::remove_dir(&own);
         }
         placed
     }
@@ -129,17 +130,32 @@ fn make_own(own: &Path) -> Result<bool, Failure> {
     }
 }
 
-/// Puts `staging` in `place`, in `own`. Setup installs only a helper that is not here, so a place still taken holds an
-/// earlier install of Jobdesk's own that does not work. It goes first, a link itself and never what it points to, but
-/// only while `own` is a real folder, not a link to one elsewhere.
-fn replace(own: &Path, staging: &Path, place: &Path) -> Result<(), Failure> {
-    if fs::symlink_metadata(place).is_ok() {
-        if !fs::symlink_metadata(own).is_ok_and(|meta| meta.is_dir()) {
-            return Err(Failure::NotEmpty);
-        }
-        remove(place);
+/// Puts `staging` in `place`, in `own`. Setup installs only a helper that was not here when it checked, so a place
+/// taken now holds either a working install another Jobdesk put there since, which `is_here` finds and which stays, or
+/// an earlier install of Jobdesk's own that does not work. That one is renamed to `aside`, a link itself and never
+/// what it points to, and only while `own` is a real folder, not a link to one elsewhere. It is removed once the new
+/// install is in, and put back when that fails. Each step is one rename, so no install is half removed while another
+/// Jobdesk checks it.
+fn replace(own: &Path, staging: &Path, place: &Path, aside: &Path, is_here: &dyn Fn() -> bool) -> Result<(), Failure> {
+    match rename_into(staging, place) {
+        Err(Failure::NotEmpty) => {}
+        placed => return placed,
     }
-    rename_into(staging, place)
+    if is_here() {
+        return Ok(());
+    }
+    if !fs::symlink_metadata(own).is_ok_and(|meta| meta.is_dir()) {
+        return Err(Failure::NotEmpty);
+    }
+    remove(aside);
+    fs::rename(place, aside).map_err(|_| Failure::Disk)?;
+    let placed = rename_into(staging, place);
+    if placed.is_ok() {
+        remove(aside);
+    } else {
+        let _ = fs::rename(aside, place);
+    }
+    placed
 }
 
 /// The bytes of the part file, when they are the pinned file: its size, then its SHA-256.
@@ -366,6 +382,7 @@ fn write_ls_r(texmf: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
@@ -422,7 +439,7 @@ mod tests {
         }
 
         fn install(&self, helper: Helper) -> Result<(), Failure> {
-            self.installer.install(helper, &|| false, &mut |_| {})
+            self.installer.install(helper, &|| false, &|| false, &mut |_| {})
         }
 
         /// Every file and link left under the home folder and in the downloads folder, but the download folder's lock,
@@ -573,7 +590,8 @@ mod tests {
     fn python_lands_in_its_place_with_its_link_and_run_bits() {
         let fixture = fixture(vec![python()]);
         let mut heard = Vec::new();
-        assert_eq!(fixture.installer.install(Helper::Python, &|| false, &mut |phase| heard.push(phase)), Ok(()));
+        let is_here = || -> bool { panic!("a free place needs no second check") };
+        assert_eq!(fixture.installer.install(Helper::Python, &is_here, &|| false, &mut |phase| heard.push(phase)), Ok(()));
         let bin = fixture.own().join("python").join("bin");
         assert_eq!(fs::read_link(bin.join("python3")).unwrap(), Path::new("python3.14"));
         assert_eq!(fs::metadata(bin.join("python3.14")).unwrap().permissions().mode() & 0o7777, 0o755, "no set-id bit");
@@ -668,10 +686,35 @@ mod tests {
         fs::create_dir_all(broken.join("bin")).unwrap();
         fs::write(broken.join("bin").join("python3"), "broken").unwrap();
         symlink(&outside, broken.join("lib")).unwrap();
-        assert_eq!(fixture.install(Helper::Python), Ok(()));
+        let asked = Cell::new(0);
+        let is_here = || {
+            asked.set(asked.get() + 1);
+            false
+        };
+        assert_eq!(fixture.installer.install(Helper::Python, &is_here, &|| false, &mut |_| {}), Ok(()));
+        assert_eq!(asked.get(), 1, "a taken place is checked again before it is replaced");
         assert_eq!(fs::read_link(broken.join("bin").join("python3")).unwrap(), Path::new("python3.14"));
         assert!(broken.join("lib").join("python3.14").join("os.py").is_file());
         assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "theirs", "a link is removed, never followed");
+        let left = fixture.left();
+        assert!(left.iter().all(|path| path.starts_with("/home/.jobdesk/python/")), "nothing renamed aside is left: {left:?}");
+    }
+
+    #[test]
+    fn an_install_another_jobdesk_finished_meanwhile_stays_untouched_and_working() {
+        let fixture = fixture(vec![python()]);
+        let theirs = fixture.own().join("python").join("bin").join("python3");
+        let is_here = || fs::read_to_string(&theirs).is_ok_and(|text| text == "theirs, working");
+        let result = fixture.installer.install(Helper::Python, &is_here, &|| false, &mut |phase| {
+            if phase == InstallPhase::Unpacking {
+                // Another Jobdesk puts its working install in place after this one checked, while this one unpacks.
+                fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+                fs::write(&theirs, "theirs, working").unwrap();
+            }
+        });
+        assert_eq!(result, Ok(()), "the helper is here, whoever installed it");
+        assert!(is_here(), "still working");
+        assert_eq!(fixture.left(), ["/home/.jobdesk/python/bin/python3"], "this install's staging folder goes, and nothing else changed");
     }
 
     #[test]
@@ -702,7 +745,7 @@ mod tests {
     fn a_cancelled_install_leaves_nothing() {
         let fixture = fixture(vec![python()]);
         let cancelled = AtomicBool::new(false);
-        let result = fixture.installer.install(Helper::Python, &|| cancelled.load(Ordering::SeqCst), &mut |phase| {
+        let result = fixture.installer.install(Helper::Python, &|| false, &|| cancelled.load(Ordering::SeqCst), &mut |phase| {
             if phase == InstallPhase::Unpacking {
                 cancelled.store(true, Ordering::SeqCst);
             }
@@ -765,12 +808,29 @@ mod tests {
         let finished = own.join("bun").join("bin");
         fs::create_dir_all(&finished).unwrap();
         fs::write(finished.join("bun"), "finished").unwrap();
-        let running = staging_of(&own.join("TinyTeX"), &claim(&fixture.dir()).unwrap()).unwrap();
+        let dead_aside = own.join(".python.jobdesk-1-old");
+        fs::create_dir_all(dead_aside.join("bin")).unwrap();
+        let outside = fixture.root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep"), "theirs").unwrap();
+        let linked_aside = own.join(".bun.jobdesk-2-old");
+        symlink(&outside, &linked_aside).unwrap();
+        let alike = own.join(".bun.jobdesk-old");
+        fs::create_dir_all(&alike).unwrap();
+        let mine = claim(&fixture.dir()).unwrap();
+        let running = staging_of(&own.join("TinyTeX"), &mine).unwrap();
         fs::create_dir_all(&running).unwrap();
+        let running_aside = aside_of(&own.join("TinyTeX"), &mine).unwrap();
+        fs::create_dir_all(&running_aside).unwrap();
         fixture.installer.clear_leftovers();
         assert!(!dead.exists());
         assert!(!own.join(".bun.jobdesk-1").exists());
+        assert!(!dead_aside.exists(), "what a stopped install renamed aside goes");
+        assert!(fs::symlink_metadata(&linked_aside).is_err(), "a link renamed aside goes itself");
+        assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "theirs", "and is never followed");
+        assert!(alike.exists(), "a name that only looks alike stays");
         assert!(finished.join("bun").exists(), "a finished helper stays");
         assert!(running.exists(), "this Jobdesk's own install goes on");
+        assert!(running_aside.exists());
     }
 }

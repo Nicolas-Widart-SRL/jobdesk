@@ -265,10 +265,12 @@ pub trait HelperProbe: Send + Sync {
 /// Installs a helper in `OWN_FOLDER` of the home folder.
 pub trait HelperInstaller: Send + Sync {
     /// Downloads every file of `helper`, checks each against its pin, unpacks them beside the helper's place and puts
-    /// them there in one step. Setup installs only a helper that is not here, so an earlier install still in the place
-    /// does not work, and goes first. It blocks, and stops soon after `cancelled` turns true. Whatever ends it short
-    /// leaves nothing new in the home folder.
-    fn install(&self, helper: Helper, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure>;
+    /// them there in one step. When the place is taken, `is_here` is asked again: another Jobdesk may have installed
+    /// the helper since setup checked, and then that install stays and this one is dropped. Otherwise the place holds
+    /// an earlier install of Jobdesk's own that does not work, which is renamed aside, then removed once the new one
+    /// is in. It blocks, and stops soon after `cancelled` turns true. Whatever ends it short leaves nothing new in the
+    /// home folder.
+    fn install(&self, helper: Helper, is_here: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure>;
     /// Removes the half installs and downloads a Jobdesk that no longer runs left. Links are removed, never followed.
     fn clear_leftovers(&self);
 }

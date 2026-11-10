@@ -31,7 +31,8 @@ pub fn tool_version(name: &str) -> Option<String> {
 }
 
 /// All `program` prints when run with `args` from the folder where the tool check finds `tool`, so both belong to one
-/// install. `None` when either is missing, or it fails or takes too long.
+/// install. When `tool` links elsewhere, the folder of the file it links to comes first. `None` when either is missing,
+/// or it fails or takes too long.
 pub fn output_beside(tool: &str, program: &str, args: &[&str]) -> Option<String> {
     ProcessProber.beside(tool, program, args)
 }

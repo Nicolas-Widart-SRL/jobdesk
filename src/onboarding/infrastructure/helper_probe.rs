@@ -8,9 +8,9 @@ type Printed = Option<String>;
 
 /// Asks each of a helper's programs for its version, then has the program beside it look up the files the helper
 /// needs. `version` gives the first line a program printed. `beside` gives all a program printed when run, with the
-/// given arguments, from the folder of another program, so both belong to one install. The wiring gives both the tool
-/// check's own prober, so they look the same way: on the resolved `PATH`, helper folders first, and never through a
-/// developer stub that would open a dialog.
+/// given arguments, from the folder of another program or of the file it links to, so both belong to one install. The
+/// wiring gives both the tool check's own prober, so they look the same way: on the resolved `PATH`, helper folders
+/// first, and never through a developer stub that would open a dialog.
 pub struct ProgramProbe {
     version: fn(&str) -> Printed,
     beside: fn(&str, &str, &[&str]) -> Printed,

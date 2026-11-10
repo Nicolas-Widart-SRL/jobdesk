@@ -12,8 +12,10 @@ const MANIFEST: &str = "SKILL.md";
 /// A `SKILL.md` larger than this is not edited, so a huge file cannot stall the screen. A real one is a few KiB.
 const EDIT_LIMIT: u64 = 1024 * 1024;
 
-/// The writes to the portal folders of one checkout: the `enabled:` line of a `SKILL.md`, and a folder moved to the
-/// Trash. Nothing here deletes a file or a folder for good.
+/// The writes to the portal folders of one checkout: the `enabled:` lines of a `SKILL.md`, and a portal folder moved to
+/// the Trash. A portal folder is never deleted, only moved to the Trash. The only files removed are Jobdesk's own
+/// temporary copies of a `SKILL.md`: the copy of a switch that failed, and copies an interrupted switch left, as a
+/// profile save removes its own.
 pub struct PortalWriter {
     root: PathBuf,
 }

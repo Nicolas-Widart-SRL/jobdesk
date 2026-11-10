@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+use std::collections::hash_map::Entry as Slot;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+use icu_normalizer::DecomposingNormalizerBorrowed;
 use sha2::{Digest, Sha256};
 use zip::read::ZipFile;
 use zip::{CompressionMethod, ZipArchive};
@@ -14,6 +17,14 @@ use crate::shared_kernel::own_folder::{claim, in_use};
 const TYPE_BITS: u32 = 0o170_000;
 const REGULAR: u32 = 0o100_000;
 const DIRECTORY: u32 = 0o040_000;
+
+/// Files Finder writes into a folder the user only opened: its view settings, and on macOS the mark of a folder whose
+/// name is shown translated. A folder that holds only these is empty, and they go just before the release takes its
+/// place.
+const FINDER_FILES: &[&str] = if cfg!(target_os = "macos") { &[".DS_Store", ".localized"] } else { &[".DS_Store"] };
+
+/// How many times the release tries to take the folder's place while Finder keeps writing its files there.
+const PLACE_TRIES: u32 = 3;
 
 /// Unpacks the release zip into the chosen folder: checked whole first, then every entry checked, then written into a
 /// hidden staging folder beside the chosen one, which takes the folder's place in one rename.
@@ -50,7 +61,7 @@ impl ZipUnpacker {
         let staging = staging_of(folder, &claim(&self.dir).map_err(|_| Failure::Disk)?)?;
         remove(&staging);
         fs::create_dir(&staging).map_err(|_| Failure::Disk)?;
-        let placed = write_all(&mut archive, &plan, &staging, cancelled)
+        let placed = write_all(&mut archive, &plan, &staging, MAX_UNPACKED, cancelled)
             .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { put_in_place(&staging, folder) });
         if placed.is_err() {
             remove(&staging);
@@ -68,16 +79,7 @@ impl Unpacker for ZipUnpacker {
         if (self.is_ai_job_search)(folder) {
             return Contents::AiJobSearch;
         }
-        match fs::read_dir(folder) {
-            Ok(mut entries) => {
-                if entries.next().is_none() {
-                    Contents::Empty
-                } else {
-                    Contents::Files
-                }
-            }
-            Err(_) => Contents::Files,
-        }
+        if holds_files(folder) { Contents::Files } else { Contents::Empty }
     }
 
     fn make(&self, folder: &Path) -> Result<(), Failure> {
@@ -104,6 +106,25 @@ impl Unpacker for ZipUnpacker {
             }
             remove(&entry.path());
         }
+    }
+}
+
+/// Whether `entry` is one of `FINDER_FILES`, as a plain file.
+fn is_finder_file(entry: &fs::DirEntry) -> bool {
+    FINDER_FILES.iter().any(|name| entry.file_name() == *name) && entry.file_type().is_ok_and(|kind| kind.is_file())
+}
+
+/// Whether `folder` holds anything but Finder's files. A folder that cannot be read holds something.
+fn holds_files(folder: &Path) -> bool {
+    let Ok(mut entries) = fs::read_dir(folder) else { return true };
+    entries.any(|entry| !entry.is_ok_and(|entry| is_finder_file(&entry)))
+}
+
+/// Deletes Finder's files from `folder`, and nothing else.
+fn remove_finder_files(folder: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten().filter(is_finder_file) {
+        let _ = fs::remove_file(entry.path());
     }
 }
 
@@ -150,11 +171,15 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Every entry of the archive, checked before anything is written. One entry that could lead outside the folder, a
-/// link or any other special file, an encrypted entry, or more than the limits allow refuses the whole archive.
+/// link or any other special file, an encrypted entry, two names one disk would take for the same name, or more than
+/// the limits allow refuses the whole archive.
 fn plan<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<Vec<Planned>, Failure> {
     if archive.len() > MAX_ENTRIES {
         return Err(Failure::BadArchive);
     }
+    // The zip reader keeps one entry of each exact name, so two with the same name are found here, with entries
+    // whose headers disagree or whose bytes overlap.
+    archive.validate_header_consistency().map_err(|_| Failure::BadArchive)?;
     let mut top: Option<String> = None;
     let mut total: u64 = 0;
     let mut plan = Vec::with_capacity(archive.len());
@@ -193,26 +218,76 @@ fn plan<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<Vec<Planned>,
             (Some(path), false) => plan.push(Planned { index, path, file_mode: Some(file_mode(entry.unix_mode())) }),
         }
     }
+    check_names(&plan)?;
     Ok(plan)
 }
 
+/// Refuses two entries that would land on one name, as macOS and Windows compare names by default: ignoring case and
+/// how accented letters are composed. A file whose name a folder also uses, and a folder spelled two ways, are
+/// refused too, so nothing is ever written over something unpacked before it.
+fn check_names(plan: &[Planned]) -> Result<(), Failure> {
+    // Each name as the disk compares it, with its spelling and whether it is a folder.
+    let mut seen: HashMap<String, (&Path, bool)> = HashMap::with_capacity(plan.len());
+    for planned in plan {
+        if seen.insert(compared(&planned.path), (&planned.path, planned.file_mode.is_none())).is_some() {
+            return Err(Failure::BadArchive);
+        }
+    }
+    // The folders each entry needs, which an archive may leave out.
+    for planned in plan {
+        for folder in planned.path.ancestors().skip(1).filter(|folder| !folder.as_os_str().is_empty()) {
+            match seen.entry(compared(folder)) {
+                Slot::Vacant(slot) => {
+                    slot.insert((folder, true));
+                }
+                Slot::Occupied(slot) if *slot.get() != (folder, true) => return Err(Failure::BadArchive),
+                Slot::Occupied(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `path` as a disk that ignores case and Unicode composition compares it.
+fn compared(path: &Path) -> String {
+    DecomposingNormalizerBorrowed::new_nfd().normalize(&path.to_string_lossy().to_lowercase()).into_owned()
+}
+
 /// The top folder of an entry's name and the path under it, or `None` for a name that could lead anywhere but under
-/// it: an absolute path, `..` or `.`, an empty part, a backslash, a colon or a NUL.
+/// it, or that Windows would not write as named: see `plain_part`.
 fn split_entry(name: &str, is_dir: bool) -> Option<(&str, Option<PathBuf>)> {
     let name = if is_dir { name.strip_suffix('/').unwrap_or(name) } else { name };
     let mut parts = name.split('/');
     let first = parts.next()?;
-    let mut path = PathBuf::new();
-    for part in std::iter::once(first).chain(parts.clone()) {
-        let plain = !part.is_empty() && part != "." && part != ".." && !part.contains(['\\', ':', '\0']);
-        if !plain {
-            return None;
-        }
+    if !std::iter::once(first).chain(parts.clone()).all(plain_part) {
+        return None;
     }
-    for part in parts {
-        path.push(part);
-    }
+    let path: PathBuf = parts.collect();
     Some((first, (path.components().next().is_some()).then_some(path)))
+}
+
+/// Whether one part of a name is a plain name on every disk: not empty, `.` or `..`; no backslash, colon, control
+/// character or other character Windows refuses; no trailing dot or space, which Windows drops; and not a Windows
+/// device name.
+fn plain_part(part: &str) -> bool {
+    !part.is_empty()
+        && part != "."
+        && part != ".."
+        && !part.chars().any(|c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        && !part.ends_with(['.', ' '])
+        && !is_device_name(part)
+}
+
+/// Whether Windows reads `part` as a device rather than a file, whatever follows its first dot and in any case: `CON`,
+/// `nul.txt`, `Aux`, `COM1`, `LPT¹`.
+fn is_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or(part).trim_end_matches(' ').to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let Some(number) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) else { return false };
+    let mut chars = number.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if c.is_ascii_digit() || "¹²³".contains(c))
 }
 
 /// The mode a file gets: its own read and run bits, never set-id, sticky or group and other write, and always
@@ -221,22 +296,28 @@ fn file_mode(mode: Option<u32>) -> u32 {
     mode.map_or(0o644, |mode| mode & 0o755) | 0o600
 }
 
-/// Writes every planned entry into `staging`, which is new and holds no link, so no write can leave it. The bytes
-/// written are counted again, whatever sizes the archive claimed.
-fn write_all<R: Read + io::Seek>(archive: &mut ZipArchive<R>, plan: &[Planned], staging: &Path, cancelled: &dyn Fn() -> bool) -> Result<(), Failure> {
+/// Writes every planned entry into `staging`. Folders are made one level at a time below `staging`, never `staging`
+/// itself, so if `staging` goes while this runs, the next write fails rather than starting a new, partial folder. The
+/// bytes written are counted again, whatever sizes the archive claimed, and more than `limit` refuses the archive.
+fn write_all<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    plan: &[Planned],
+    staging: &Path,
+    limit: u64,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), Failure> {
     let mut written: u64 = 0;
     let mut buffer = vec![0; 64 * 1024];
     for planned in plan {
         if cancelled() {
             return Err(Failure::Cancelled);
         }
-        let target = staging.join(&planned.path);
         let Some(mode) = planned.file_mode else {
-            fs::create_dir_all(&target).map_err(|_| Failure::Disk)?;
+            make_folders(staging, &planned.path)?;
             continue;
         };
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|_| Failure::Disk)?;
+        if let Some(parent) = planned.path.parent() {
+            make_folders(staging, parent)?;
         }
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -244,18 +325,18 @@ fn write_all<R: Read + io::Seek>(archive: &mut ZipArchive<R>, plan: &[Planned], 
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
         #[cfg(not(unix))]
         let _ = mode;
-        let mut file = options.open(&target).map_err(|_| Failure::Disk)?;
+        let mut file = options.open(staging.join(&planned.path)).map_err(|_| Failure::Disk)?;
         let mut entry = archive.by_index(planned.index).map_err(|_| Failure::BadArchive)?;
         loop {
             let read = match entry.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                // A corrupt entry, or one whose checksum does not match.
+                // A corrupt entry, one whose checksum does not match, or one larger than its header says.
                 Err(_) => return Err(Failure::BadArchive),
             };
             written += read as u64;
-            if written > MAX_UNPACKED {
+            if written > limit {
                 return Err(Failure::BadArchive);
             }
             file.write_all(&buffer[..read]).map_err(|_| Failure::Disk)?;
@@ -264,8 +345,48 @@ fn write_all<R: Read + io::Seek>(archive: &mut ZipArchive<R>, plan: &[Planned], 
     Ok(())
 }
 
-/// Puts `staging` in the place of `folder` in one rename, which never replaces a folder that holds anything.
+/// Makes each folder of `relative` below `staging` that is missing. A folder already there must be a folder, not a
+/// link or a file.
+fn make_folders(staging: &Path, relative: &Path) -> Result<(), Failure> {
+    let mut at = staging.to_path_buf();
+    for part in relative.components() {
+        at.push(part);
+        match fs::create_dir(&at) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && fs::symlink_metadata(&at).is_ok_and(|meta| meta.is_dir()) => {}
+            Err(_) => return Err(Failure::Disk),
+        }
+    }
+    Ok(())
+}
+
+/// Puts `staging` in the place of `folder` in one rename, which never replaces a folder that holds anything but
+/// Finder's files. The release keeps the permissions the user's folder had.
 fn put_in_place(staging: &Path, folder: &Path) -> Result<(), Failure> {
+    let own = fs::symlink_metadata(staging).map_err(|_| Failure::Disk)?.permissions();
+    if let Ok(meta) = fs::symlink_metadata(folder)
+        && meta.is_dir()
+    {
+        fs::set_permissions(staging, meta.permissions()).map_err(|_| Failure::Disk)?;
+    }
+    let mut tries = 1;
+    let placed = loop {
+        remove_finder_files(folder);
+        match rename_into(staging, folder) {
+            // Finder wrote its files again between the two steps.
+            Err(Failure::NotEmpty) if tries < PLACE_TRIES && !holds_files(folder) => tries += 1,
+            placed => break placed,
+        }
+    };
+    if placed.is_err() {
+        // Its own permissions again, so it can be removed even when the user's folder was read-only.
+        let _ = fs::set_permissions(staging, own);
+    }
+    placed
+}
+
+/// Renames `staging` onto the empty `folder`.
+fn rename_into(staging: &Path, folder: &Path) -> Result<(), Failure> {
     // Windows renames a folder only onto a free name: the empty folder goes first, and only while it is empty.
     #[cfg(windows)]
     if fs::symlink_metadata(folder).is_ok() && fs::remove_dir(folder).is_err() {
@@ -279,6 +400,8 @@ fn put_in_place(staging: &Path, folder: &Path) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
 
@@ -345,6 +468,26 @@ mod tests {
         with_header(bytes, "ai-job-search-1.7.5/secret", |bytes, header| bytes[header + 8] |= 1)
     }
 
+    /// `bytes` with every name `from` spelled `to`, which must be as long, in both the local and the central headers.
+    fn renamed(mut bytes: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let mut at = 0;
+        while let Some(found) = bytes[at..].windows(from.len()).position(|window| window == from.as_bytes()) {
+            let start = at + found;
+            bytes[start..start + to.len()].copy_from_slice(to.as_bytes());
+            at = start + to.len();
+        }
+        bytes
+    }
+
+    /// Two files whose headers each say they hold one byte, when they hold 600.
+    fn under_reported() -> Vec<u8> {
+        let bytes = zip_of(&[Entry::File("ai-job-search-1.7.5/a", &[0; 600]), Entry::File("ai-job-search-1.7.5/b", &[0; 600])]);
+        ["ai-job-search-1.7.5/a", "ai-job-search-1.7.5/b"]
+            .into_iter()
+            .fold(bytes, |bytes, name| with_header(bytes, name, |bytes, header| bytes[header + 24..header + 28].copy_from_slice(&1u32.to_le_bytes())))
+    }
+
     fn release() -> Vec<u8> {
         let bytes = zip_of(&[
             Entry::Dir(TOP),
@@ -403,6 +546,11 @@ mod tests {
         fn is_empty(&self) -> bool {
             fs::read_dir(&self.folder).unwrap().next().is_none()
         }
+
+        /// This Jobdesk's staging folder for the chosen folder.
+        fn staging(&self) -> PathBuf {
+            staging_of(&self.folder, &claim(&self.data.join("onboarding")).unwrap()).unwrap()
+        }
     }
 
     #[test]
@@ -418,6 +566,22 @@ mod tests {
         assert_eq!(setup.unpacker.look(&setup.folder), Contents::AiJobSearch);
     }
 
+    #[test]
+    fn a_release_written_as_a_stream_is_unpacked() {
+        // Sizes and checksums after each file's bytes, as a zip written without seeking has them.
+        let mut writer = ZipWriter::new_stream(Vec::new());
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        writer.add_directory(TOP, deflated).unwrap();
+        writer.start_file("ai-job-search-1.7.5/README.md", deflated).unwrap();
+        writer.write_all(b"# ai-job-search").unwrap();
+        writer.start_file("ai-job-search-1.7.5/.claude/commands/apply.md", deflated).unwrap();
+        writer.write_all(b"apply").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let setup = setup();
+        assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Ok(()));
+        assert_eq!(fs::read_to_string(setup.folder.join(".claude/commands/apply.md")).unwrap(), "apply");
+    }
+
     #[cfg(unix)]
     #[test]
     fn set_id_bits_and_group_and_other_write_are_dropped() {
@@ -428,6 +592,39 @@ mod tests {
         let mode = fs::metadata(setup.folder.join("scripts/run.sh")).unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode & 0o7022, 0, "{mode:o}");
         assert_eq!(mode & 0o700, 0o700, "the user can still read, write and run it");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_keeps_the_permissions_the_user_gave_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let setup = setup();
+        fs::create_dir_all(&setup.folder).unwrap();
+        fs::set_permissions(&setup.folder, fs::Permissions::from_mode(0o700)).unwrap();
+        let bytes = release();
+        assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Ok(()));
+        assert_eq!(fs::metadata(&setup.folder).unwrap().permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_folder_that_filled_still_loses_the_staging_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let setup = setup();
+        let bytes = release();
+        let zip = setup.zip(&bytes);
+        setup.unpacker.make(&setup.folder).unwrap();
+        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
+            if phase == Phase::Unpacking {
+                fs::write(setup.folder.join("cv.pdf"), "mine").unwrap();
+                fs::set_permissions(&setup.folder, fs::Permissions::from_mode(0o500)).unwrap();
+            }
+        });
+        fs::set_permissions(&setup.folder, fs::Permissions::from_mode(0o700)).unwrap();
+        // macOS refuses the rename for the permissions before it looks at what the folder holds.
+        assert!(matches!(end, Err(Failure::NotEmpty | Failure::Disk)), "{end:?}");
+        assert_eq!(fs::read_to_string(setup.folder.join("cv.pdf")).unwrap(), "mine");
+        assert_eq!(setup.around(), ["Job search"], "the staging folder goes");
     }
 
     #[test]
@@ -466,6 +663,22 @@ mod tests {
                 with_mode(zip_of(&[Entry::Dir(TOP), Entry::Dir("ai-job-search-1.7.5/docs/")]), "ai-job-search-1.7.5/docs/", 0o100_644),
             ),
             ("an encrypted entry", encrypted()),
+            ("a Windows device name", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/docs/aux.txt", b"x")])),
+            ("a trailing dot", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/notes.", b"x")])),
+            ("a duplicate name", renamed(zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/READMF.md", b"x")]), "READMF", "README")),
+            ("names that differ only in case", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/readme.md", b"x")])),
+            (
+                "names that differ only in how an accent is composed",
+                zip_of(&[Entry::Dir(TOP), Entry::File("ai-job-search-1.7.5/caf\u{e9}.md", b"x"), Entry::File("ai-job-search-1.7.5/cafe\u{301}.md", b"y")]),
+            ),
+            (
+                "a file a folder also uses",
+                zip_of(&[Entry::Dir(TOP), Entry::File("ai-job-search-1.7.5/docs", b"x"), Entry::File("ai-job-search-1.7.5/docs/a.md", b"y")]),
+            ),
+            (
+                "a folder spelled two ways",
+                zip_of(&[Entry::Dir(TOP), Entry::File("ai-job-search-1.7.5/Docs/a.md", b"x"), Entry::File("ai-job-search-1.7.5/docs/b.md", b"y")]),
+            ),
         ];
         for (what, bytes) in refused {
             let setup = setup();
@@ -482,11 +695,43 @@ mod tests {
         let too_large = zip_of(&[Entry::File("ai-job-search-1.7.5/a", &big), Entry::File("ai-job-search-1.7.5/b", &big)]);
         let names: Vec<String> = (0..=MAX_ENTRIES).map(|n| format!("ai-job-search-1.7.5/{n}")).collect();
         let too_many = zip_of(&names.iter().map(|name| Entry::Mode(name, b"", 0o644)).collect::<Vec<_>>());
-        for (what, bytes) in [("too large", too_large), ("too many", too_many)] {
+        for (what, bytes) in [("too large", too_large), ("too many", too_many), ("sizes under-reported", under_reported())] {
             let setup = setup();
             assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Err(Failure::BadArchive), "{what}");
             assert!(setup.is_empty(), "{what}");
+            assert_eq!(setup.around(), ["Job search"], "{what}");
         }
+    }
+
+    #[test]
+    fn the_bytes_written_are_counted_whatever_the_headers_claim() {
+        // Each file's bytes past its header's size, and headers that disagree, are refused before this count; so is
+        // a total of the headers' sizes past the limit. A smaller limit shows the count of bytes written refuses too.
+        let bytes = zip_of(&[Entry::Dir(TOP), Entry::File("ai-job-search-1.7.5/a", &[0; 600]), Entry::File("ai-job-search-1.7.5/b", &[0; 600])]);
+        let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let plan = plan(&mut archive).unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        assert_eq!(write_all(&mut archive, &plan, staging.path(), 1_000, &|| false), Err(Failure::BadArchive));
+        let staging = tempfile::tempdir().unwrap();
+        assert_eq!(write_all(&mut archive, &plan, staging.path(), 1_200, &|| false), Ok(()));
+    }
+
+    #[test]
+    fn names_one_disk_takes_for_the_same_are_refused_before_anything_is_written() {
+        let planned = |path: &str, is_dir: bool| Planned { index: 0, path: PathBuf::from(path), file_mode: (!is_dir).then_some(0o644) };
+        let refused = [
+            [planned("a.md", false), planned("a.md", false)],
+            [planned("docs", true), planned("docs", true)],
+            [planned("A.md", false), planned("a.md", false)],
+            [planned("caf\u{e9}.md", false), planned("cafe\u{301}.md", false)],
+            [planned("docs", false), planned("docs/a.md", false)],
+            [planned("Docs", true), planned("docs/a.md", false)],
+        ];
+        for plan in refused {
+            assert_eq!(check_names(&plan), Err(Failure::BadArchive), "{:?}", plan.map(|planned| planned.path));
+        }
+        let allowed = [planned("docs/a.md", false), planned("docs", true), planned("docs/b.md", false), planned("Docs.md", false)];
+        assert_eq!(check_names(&allowed), Ok(()));
     }
 
     #[test]
@@ -507,6 +752,55 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_holding_only_finders_files_is_empty_and_they_go() {
+        let setup = setup();
+        fs::create_dir_all(&setup.folder).unwrap();
+        fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
+        assert_eq!(setup.unpacker.look(&setup.folder), Contents::Empty);
+        let bytes = release();
+        assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Ok(()));
+        assert!(!setup.folder.join(".DS_Store").exists());
+        assert_eq!(setup.unpacker.look(&setup.folder), Contents::AiJobSearch);
+    }
+
+    #[test]
+    fn finders_file_beside_another_file_or_as_a_folder_is_not_empty() {
+        let setup = setup();
+        fs::create_dir_all(setup.folder.join(".DS_Store")).unwrap();
+        assert_eq!(setup.unpacker.look(&setup.folder), Contents::Files, "only a plain file is Finder's");
+        fs::remove_dir(setup.folder.join(".DS_Store")).unwrap();
+        fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
+        fs::write(setup.folder.join("cv.pdf"), "mine").unwrap();
+        assert_eq!(setup.unpacker.look(&setup.folder), Contents::Files);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_localized_mark_is_finders_on_macos() {
+        let setup = setup();
+        fs::create_dir_all(&setup.folder).unwrap();
+        fs::write(setup.folder.join(".localized"), "").unwrap();
+        fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
+        assert_eq!(setup.unpacker.look(&setup.folder), Contents::Empty);
+    }
+
+    #[test]
+    fn finder_writing_into_the_folder_during_the_unpack_does_not_stop_it() {
+        let setup = setup();
+        let bytes = release();
+        let zip = setup.zip(&bytes);
+        setup.unpacker.make(&setup.folder).unwrap();
+        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
+            if phase == Phase::Unpacking {
+                fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
+            }
+        });
+        assert_eq!(end, Ok(()));
+        assert_eq!(fs::read_to_string(setup.folder.join("README.md")).unwrap(), "# ai-job-search");
+        assert!(!setup.folder.join(".DS_Store").exists());
+    }
+
+    #[test]
     fn a_folder_that_filled_during_the_unpack_keeps_what_it_holds() {
         let setup = setup();
         let bytes = release();
@@ -515,11 +809,35 @@ mod tests {
         let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
             if phase == Phase::Unpacking {
                 fs::write(setup.folder.join("cv.pdf"), "mine").unwrap();
+                fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
             }
         });
         assert_eq!(end, Err(Failure::NotEmpty));
         assert_eq!(fs::read_to_string(setup.folder.join("cv.pdf")).unwrap(), "mine");
         assert_eq!(setup.around(), ["Job search"], "the staging folder goes");
+    }
+
+    #[test]
+    fn a_staging_folder_removed_mid_unpack_fails_and_leaves_the_folder_empty() {
+        let setup = setup();
+        let bytes = release();
+        let zip = setup.zip(&bytes);
+        setup.unpacker.make(&setup.folder).unwrap();
+        let staging = setup.staging();
+        // Asked before each entry: after the first is written, another Jobdesk removes the staging folder.
+        let asked = Cell::new(0);
+        let cancelled = || {
+            asked.set(asked.get() + 1);
+            if asked.get() == 2 {
+                fs::remove_dir_all(&staging).unwrap();
+            }
+            false
+        };
+        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &cancelled, &mut |_| {});
+        assert_eq!(end, Err(Failure::Disk));
+        assert!(asked.get() >= 2, "the staging folder went mid-unpack");
+        assert!(setup.is_empty());
+        assert_eq!(setup.around(), ["Job search"]);
     }
 
     #[test]
@@ -542,7 +860,7 @@ mod tests {
         let crashed = parent.join(".Job search.jobdesk-1");
         fs::create_dir_all(crashed.join("scripts")).unwrap();
         fs::write(crashed.join("scripts/run.sh"), "half").unwrap();
-        let own = staging_of(&setup.folder, &claim(&setup.data.join("onboarding")).unwrap()).unwrap();
+        let own = setup.staging();
         fs::create_dir(&own).unwrap();
         let theirs = parent.join(".Job search.jobdesk-notes");
         fs::create_dir(&theirs).unwrap();
@@ -575,8 +893,60 @@ mod tests {
         assert_eq!(split_entry("top/a/b.md", false), Some(("top", Some(PathBuf::from("a/b.md")))));
         assert_eq!(split_entry("top/", true), Some(("top", None)));
         assert_eq!(split_entry("top/a/", true), Some(("top", Some(PathBuf::from("a")))));
-        for bad in ["", "/top/a", "top/../a", "top/a/..", "..", "top/a\\b", "top/C:", "top/a\0b", "top//a", "top/a/"] {
+        assert_eq!(split_entry("top/console.md", false), Some(("top", Some(PathBuf::from("console.md")))));
+        assert_eq!(split_entry("top/main.aux", false), Some(("top", Some(PathBuf::from("main.aux")))));
+        assert_eq!(split_entry("top/COM10", false), Some(("top", Some(PathBuf::from("COM10")))));
+        let bad = [
+            "",
+            "/top/a",
+            "top/../a",
+            "top/a/..",
+            "..",
+            "top/a\\b",
+            "top/C:",
+            "top/a\0b",
+            "top//a",
+            "top/a/",
+            "top/a\nb",
+            "top/a?",
+            "top/a*",
+            "top/a|b",
+            "top/a<b",
+            "top/a\"b",
+            "top/a.",
+            "top/a ",
+            "top/dir./a",
+            "CON/a",
+        ];
+        for bad in bad {
             assert_eq!(split_entry(bad, false), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn windows_device_names_are_known_in_any_case_and_with_any_extension() {
+        for device in [
+            "CON",
+            "con",
+            "Prn",
+            "AUX",
+            "aux.txt",
+            "NUL",
+            "nul.tar.gz",
+            "COM1",
+            "com9",
+            "COM0",
+            "LPT1",
+            "COM\u{b9}",
+            "lpt\u{b3}",
+            "CON .txt",
+            "CONIN$",
+            "conout$",
+        ] {
+            assert!(is_device_name(device), "{device:?}");
+        }
+        for plain in ["CONSOLE", "console.md", "auxiliary", "COM", "COM10", "LPT", "nully", "main.aux", "readme.con"] {
+            assert!(!is_device_name(plain), "{plain:?}");
         }
     }
 

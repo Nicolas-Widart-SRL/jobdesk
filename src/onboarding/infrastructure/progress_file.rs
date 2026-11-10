@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -36,19 +36,25 @@ impl ProgressFile {
         Self { path: data.join(FILE) }
     }
 
-    /// Goes through a temporary file, so a crash leaves the previous record whole.
+    /// Goes through a temporary file with a new name each time, on disk before the rename, so a crash or a power loss
+    /// leaves the previous record whole, and two Jobdesks saving at once never write into or remove each other's.
     fn replace(&self, text: &str) -> std::io::Result<()> {
-        if let Some(folder) = self.path.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let temporary = self.path.with_extension("json.tmp");
-        let _ = fs::remove_file(&temporary);
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
+        let folder = self.path.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        fs::create_dir_all(folder)?;
+        // Readable only by the user, and deleted when anything below fails.
+        let mut temporary = tempfile::Builder::new().prefix(".onboarding.json.").suffix(".tmp").tempfile_in(folder)?;
+        temporary.write_all(text.as_bytes())?;
+        // On disk before the rename, or a power loss could keep the rename and lose the data.
+        temporary.as_file().sync_all()?;
+        let temporary = temporary.into_temp_path();
+        crate::shared_kernel::replace_file::rename_over(&temporary, &self.path)?;
+        // The rename took the name, so nothing is left to delete.
+        let _ = temporary.keep();
+        // The rename lives in the folder, which a crash could still lose. Windows cannot open a folder this way.
+        // Best effort: some mounts refuse to sync a folder, and the file is already in place.
         #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        options.open(&temporary)?.write_all(text.as_bytes())?;
-        crate::shared_kernel::replace_file::rename_over(&temporary, &self.path)
+        let _ = fs::File::open(folder).and_then(|folder| folder.sync_all());
+        Ok(())
     }
 }
 
@@ -119,6 +125,12 @@ mod tests {
         }
     }
 
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
     #[test]
     fn the_record_reads_back_after_a_write() {
         let data = tempfile::tempdir().unwrap();
@@ -128,9 +140,21 @@ mod tests {
         assert_eq!(file.load().unwrap(), Some(progress()));
         file.save(&Progress::default()).unwrap();
         assert_eq!(file.load().unwrap(), Some(Progress::default()), "a second write replaces the first");
+        assert_eq!(names(data.path()), [FILE], "no temporary file is left");
         file.clear().unwrap();
         assert_eq!(file.load().unwrap(), None);
         file.clear().unwrap();
+    }
+
+    #[test]
+    fn a_save_leaves_another_jobdesks_temporary_file_alone() {
+        let data = tempfile::tempdir().unwrap();
+        // What another Jobdesk could be writing at the same moment, under a name of its own.
+        let theirs = data.path().join(".onboarding.json.other.tmp");
+        fs::write(&theirs, "half").unwrap();
+        ProgressFile::new(data.path()).save(&progress()).unwrap();
+        assert_eq!(fs::read_to_string(&theirs).unwrap(), "half");
+        assert_eq!(ProgressFile::new(data.path()).load().unwrap(), Some(progress()));
     }
 
     #[cfg(unix)]

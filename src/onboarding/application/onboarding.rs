@@ -7,7 +7,7 @@ use std::thread;
 use chrono::NaiveDate;
 
 use crate::onboarding::domain::{Failure, Phase, Place, Progress, ProgressStore, SourceFetcher, Step, Unpacker, suggested_folder};
-use crate::updates::application::{SourcePinReader, source_zip_name, source_zip_url};
+use crate::updates::application::{Failure as FeedFailure, SourcePinReader, source_zip_name, source_zip_url};
 
 /// Where first-run setup is, as the screens show it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +221,7 @@ fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn
         Ok(Some(pin)) => pin,
         // A feed that answered but vouches for nothing this copy can trust.
         Ok(None) => return Err(Failure::NoPin),
-        Err(_) => return Err(Failure::Offline),
+        Err(failure) => return Err(pin_failure(failure)),
     };
     let version = pin.version.to_string();
     tell(Event::Version(version.clone()));
@@ -236,6 +236,17 @@ fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn
     Ok(version)
 }
 
+/// Why the feed could not give a pin, in setup's words: only a feed that could not be reached is `Offline`.
+fn pin_failure(failure: FeedFailure) -> Failure {
+    match failure {
+        FeedFailure::TimedOut | FeedFailure::Unreachable | FeedFailure::Interrupted => Failure::Offline,
+        FeedFailure::Refused(code) => Failure::Refused(code),
+        FeedFailure::Disk => Failure::Disk,
+        // The feed answered, but with nothing that reads as a pin.
+        FeedFailure::BadFeed | FeedFailure::NoBuild | FeedFailure::TooLarge => Failure::NoPin,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -244,7 +255,7 @@ mod tests {
     use super::*;
     use crate::onboarding::domain::Contents;
     use crate::shared_kernel::LoadError;
-    use crate::updates::application::{Failure as FeedFailure, SourcePin};
+    use crate::updates::application::SourcePin;
 
     const HASH: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -405,7 +416,16 @@ mod tests {
 
     #[test]
     fn no_pin_and_no_feed_each_say_why_and_try_again_starts_afresh() {
-        for (pins, failure) in [(Pins(Ok(None)), Failure::NoPin), (Pins(Err(FeedFailure::Unreachable)), Failure::Offline)] {
+        let cases = [
+            (Pins(Ok(None)), Failure::NoPin),
+            (Pins(Err(FeedFailure::Unreachable)), Failure::Offline),
+            (Pins(Err(FeedFailure::TimedOut)), Failure::Offline),
+            // GitHub refusing or rate limiting the feed is not a lost connection.
+            (Pins(Err(FeedFailure::Refused(403))), Failure::Refused(403)),
+            (Pins(Err(FeedFailure::Refused(503))), Failure::Refused(503)),
+            (Pins(Err(FeedFailure::BadFeed)), Failure::NoPin),
+        ];
+        for (pins, failure) in cases {
             let fetcher = Arc::new(Fetcher::default());
             let mut onboarding = onboarding(Arc::default(), pins, Arc::clone(&fetcher), Arc::new(Folders::holding(Contents::Missing)));
             onboarding.start_from_scratch();

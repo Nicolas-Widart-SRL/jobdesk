@@ -2184,6 +2184,7 @@ dependencies = [
  "egui_kittest",
  "flate2",
  "hayro",
+ "icu_normalizer",
  "keyring",
  "libc",
  "minisign-verify",

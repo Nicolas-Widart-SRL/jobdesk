@@ -12,7 +12,7 @@ pub fn suggested_folder(documents: &Path) -> PathBuf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Contents {
     Missing,
-    /// A folder with nothing in it.
+    /// A folder with nothing in it, or only the files Finder keeps its own settings in, which setup deletes.
     Empty,
     /// Anything else: a folder with files, a file, or a link.
     Files,

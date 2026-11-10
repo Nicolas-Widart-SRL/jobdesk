@@ -24,18 +24,19 @@ pub enum Phase {
 /// Why setting up the folder stopped. Each leaves the folder empty, and no server text is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
-    /// No internet, a timeout, or a download cut short.
+    /// No internet, a timeout, or a download or a read of the feed cut short.
     Offline,
-    /// The server answered with this status code.
+    /// GitHub answered the feed or the download with this status code: it refused, found nothing, failed, or asks
+    /// Jobdesk to wait because it was asked too often.
     Refused(u16),
-    /// Jobdesk's release feed vouches for no ai-job-search release now, or could not be read.
+    /// Jobdesk's release feed vouches for no ai-job-search release now, or what it sent does not read.
     NoPin,
     /// The download grew past `MAX_ZIP`.
     TooLarge,
     /// The download is not the release the feed pins. It is deleted.
     Mismatch,
-    /// The archive holds an entry that could lead outside the folder, a link, or more than the limits allow.
-    /// Nothing of it is unpacked.
+    /// The archive holds an entry that could lead outside the folder, a link, two names one disk would take for the
+    /// same name, or more than the limits allow. Nothing of it is unpacked.
     BadArchive,
     /// The folder holds files now, so nothing was put in it.
     NotEmpty,

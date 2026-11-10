@@ -39,6 +39,9 @@ egui_extras = "0.37"
 # Its default Rust backend inflates the release zips, here and in `zip`.
 flate2 = "1"
 hayro = "0.8"
+# Already built for the `url` crate that `eframe` pulls in. Onboarding uses it to find names in the release zip that
+# one disk would take for the same name.
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native"] }
 minisign-verify = "0.2"
 notify = "8"

@@ -12,7 +12,7 @@ Everything else Jobdesk writes stays in its data folder, with three exceptions:
 
 - Restart to update replaces Jobdesk itself.
 - On macOS, a copy that runs from a `.app` bundle writes beside the bundle at each launch. A build with an update key makes and removes a `.Jobdesk.app.probe-<pid>` folder there, to learn whether an update may apply. Every build deletes the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders that a Jobdesk which no longer runs left there. See [Where an update may apply](docs/architecture/trust.md#where-an-update-may-apply).
-- First-run setup makes the job search folder the user chose, only when it is missing or empty. It unpacks the ai-job-search release into a hidden `.<name>.jobdesk-<pid>` folder beside it, after the zip matches the SHA-256 the signed feed pins, and renames that folder over the empty one. The next launch deletes such a folder that a Jobdesk which no longer runs left.
+- First-run setup makes the job search folder the user chose, only when it is missing or empty. A folder that holds only Finder's `.DS_Store` file, and on macOS its `.localized` file, counts as empty, and setup deletes those files. It unpacks the ai-job-search release into a hidden `.<name>.jobdesk-<pid>` folder beside it, after the zip matches the SHA-256 the signed feed pins, gives that folder the empty folder's permissions, and renames it over the empty one. When setup opens, it deletes such folders that a Jobdesk which no longer runs left, but only beside the folder `onboarding.json` records, not beside other folders setup used before. The shell does not open setup yet.
 
 How Save works is in [profile](docs/architecture/profile.md#save).
 

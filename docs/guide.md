@@ -25,7 +25,7 @@ Your folder keeps a hidden `.jobdesk` folder with a copy of the download and its
 
 ### This computer
 
-ai-job-search needs three free helpers: Python keeps your tracker, Bun searches job sites, and LaTeX makes your CV and cover letter PDFs. Jobdesk first checks which ones this computer already has. A copy you have counts only when it works with ai-job-search: Python 3.10 or newer, or a LaTeX with every package the CV and cover letter templates use.
+ai-job-search needs three free helpers: Python keeps your tracker, Bun searches job sites, and LaTeX makes your CV and cover letter PDFs. Jobdesk first checks which ones this computer already has. A copy you have counts only when it works with ai-job-search: Python 3.10 or newer, or a LaTeX with every package the CV and cover letter templates use. For Python, that means the `python3` your tasks would run first: a newer one behind macOS's own `python3` in `/usr/bin` does not count.
 
 Install what is missing installs the rest. Each line shows its download size and about how long it takes. LaTeX is the slow one, about 100 MB and 1 to 4 minutes, so you can step away. Each file is compared with Jobdesk's own record of it before it is installed. Cancel stops the install and leaves that helper missing.
 

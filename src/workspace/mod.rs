@@ -30,6 +30,13 @@ pub fn tool_version(name: &str) -> Option<String> {
     TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe(tool))
 }
 
+/// The first line the tool `name` of `TOOLS` prints about itself, run the way a task's own command runs `name`: the
+/// first file of that name on the resolved `PATH`, past which the tool check may look. `None` when that file is a
+/// developer stub with no tools behind it or cannot run, or the check knows no tool of that name.
+pub fn task_tool_version(name: &str) -> Option<String> {
+    TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe_first(tool))
+}
+
 /// All `program` prints when run with `args` from the folder where the tool check finds `tool`, so both belong to one
 /// install. When `tool` links elsewhere, the folder of the file it links to comes first. `None` when either is missing,
 /// or it fails or takes too long.

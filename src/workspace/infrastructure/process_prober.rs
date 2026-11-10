@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::shared_kernel::host_path::{find_executable, resolved_path};
+use crate::shared_kernel::host_path::{find_executable, first_on_path, resolved_path};
 use crate::shared_kernel::process_tree::no_window;
 use crate::workspace::domain::{ToolProber, ToolSpec};
 
@@ -18,13 +18,18 @@ impl ToolProber for ProcessProber {
         let path = resolved_path();
         // A python.org install on Windows ships no `python3`.
         let program = find_executable(path, tool.name).or_else(|| (tool.name == "python3").then(|| find_executable(path, "python")).flatten())?;
-        let output = run(program, tool.args, None, path)?;
-        let text = if output.stdout.is_empty() { output.stderr } else { output.stdout };
-        Some(String::from_utf8_lossy(&text).lines().next().unwrap_or_default().trim().to_owned())
+        first_line(program, tool.args, path)
     }
 }
 
 impl ProcessProber {
+    /// The first line `tool` prints about itself, run the way a task's own command runs `tool.name`: the first file of
+    /// that name on the resolved `PATH`, with no stub skipped and no other folder or name tried. `None` when that file
+    /// is a developer stub with no tools behind it, or it cannot run.
+    pub fn probe_first(&self, tool: &ToolSpec) -> Option<String> {
+        version_of_first(resolved_path(), tool)
+    }
+
     /// All `program` prints when run with `args` from the folder where the tool check finds the tool `beside`, so both
     /// belong to one install. `None` when either is missing, or it fails or takes longer than `TIMEOUT`.
     pub fn beside(&self, beside: &str, program: &str, args: &[&str]) -> Option<String> {
@@ -42,6 +47,18 @@ fn output_beside(path: &str, beside: &str, program: &str, args: &[&str]) -> Opti
     let program = folders.into_iter().flatten().filter_map(|file| Some(file.parent()?.join(program))).find(|program| program.is_file())?;
     let output = run(program, args, Some(Path::new("/")), path)?;
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The first line `tool`'s first file on `path` prints when run with its arguments and `path` as its `PATH`.
+fn version_of_first(path: &str, tool: &ToolSpec) -> Option<String> {
+    first_line(first_on_path(path, tool.name)?, tool.args, path)
+}
+
+/// The first line `program` prints when run with `args` and `path` as its `PATH`: on its output, else on its errors.
+fn first_line(program: PathBuf, args: &[&str], path: &str) -> Option<String> {
+    let output = run(program, args, None, path)?;
+    let text = if output.stdout.is_empty() { output.stderr } else { output.stdout };
+    Some(String::from_utf8_lossy(&text).lines().next().unwrap_or_default().trim().to_owned())
 }
 
 /// Runs `program` with `args` and `path` as its `PATH`, in `folder` when one is given, with nothing to read. Gives what
@@ -94,6 +111,19 @@ mod tests {
         assert_eq!(output_beside(&path, "lualatex", "kpsewhich", &["moderncv.cls"]).as_deref(), Some("/tex/moderncv.cls\n"));
         assert_eq!(output_beside(&path, "xelatex", "kpsewhich", &[]), None, "no engine");
         assert_eq!(output_beside(&path_of(&[&tex]), "lualatex", "mktexlsr", &[]), None, "nothing to run beside it");
+    }
+
+    #[test]
+    fn a_task_runs_the_first_python3_on_the_path_and_never_python() {
+        let root = tempfile::tempdir().unwrap();
+        let (old, new, plain) = (root.path().join("old"), root.path().join("new"), root.path().join("plain"));
+        script(&old, "python3", "echo 'Python 3.9.6'");
+        script(&new, "python3", "echo 'Python 3.12.4'");
+        script(&plain, "python", "echo 'Python 3.12.4'");
+        let python = ToolSpec { name: "python3", args: &["--version"], purpose: "", required: true };
+        assert_eq!(version_of_first(&path_of(&[&old, &new]), &python).as_deref(), Some("Python 3.9.6"), "the later one is not reached");
+        assert_eq!(version_of_first(&path_of(&[&new, &old]), &python).as_deref(), Some("Python 3.12.4"));
+        assert_eq!(version_of_first(&path_of(&[&plain]), &python), None, "ai-job-search's tools call python3");
     }
 
     #[test]

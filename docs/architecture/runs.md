@@ -47,7 +47,7 @@ A task's process, Test connection, the tool check and Runtime status all get one
 
 An empty part is left out, as it would name the current folder.
 
-On macOS, `/usr/bin/python3` and `/usr/bin/git` only hand over to Xcode or its Command Line Tools. With neither installed, running one opens a dialog that offers to install them. Looking for a program skips such a stub, so the tool check counts Python as missing and runs nothing. The stub counts as backed when `DEVELOPER_DIR`, else the folder `xcode-select` chose, else Xcode's or the Command Line Tools' usual folder, holds the program.
+On macOS, `/usr/bin/python3` and `/usr/bin/git` only hand over to Xcode or its Command Line Tools. With neither installed, running one opens a dialog that offers to install them. Looking for a program skips such a stub, so the tool check counts Python as missing and runs nothing. The stub counts as backed when `DEVELOPER_DIR`, else the folder `xcode-select` chose, else Xcode's or the Command Line Tools' usual folder, holds the program. A task's command that calls `python3` gets the first one on the `PATH`, stub or not, so first-run setup counts Python as already here only when that first `python3` is not such a stub and runs as 3.10 or newer. A working copy later on the `PATH`, or a `python` with no `python3`, does not count, and setup installs its own in `~/.jobdesk/python`, which comes first.
 
 ## Stopping a run and Windows system programs
 

@@ -121,9 +121,23 @@ pub fn find_executable(path: &str, name: &str) -> Option<PathBuf> {
     first_found(env::split_paths(path).chain(usual), name, extensions, &dead)
 }
 
+/// The program a process given `path` as its `PATH` runs for the bare `name`: the first file of that name on `path`,
+/// with no other folder tried and nothing past it. `None` when there is none, or when on macOS it is a `/usr/bin` stub
+/// with no developer tools behind it, which would open a dialog rather than run.
+pub fn first_on_path(path: &str, name: &str) -> Option<PathBuf> {
+    let extensions: &[&str] = if cfg!(windows) { &WINDOWS_EXTENSIONS } else { &[] };
+    let dead = |candidate: &Path| cfg!(target_os = "macos") && is_dead_stub(candidate, Path::new("/usr/bin"), &developer_dirs);
+    first_unless_dead(env::split_paths(path), name, extensions, &dead)
+}
+
 /// The first file `name` could be in `folders`, in order, that is not `dead`.
 fn first_found(folders: impl Iterator<Item = PathBuf>, name: &str, extensions: &[&str], dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
     folders.flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file() && !dead(candidate))
+}
+
+/// The first file `name` could be in `folders`, in order, unless that one is `dead`.
+fn first_unless_dead(folders: impl Iterator<Item = PathBuf>, name: &str, extensions: &[&str], dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    folders.flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file()).filter(|candidate| !dead(candidate))
 }
 
 /// Whether `candidate` is one of the developer stubs in `usr_bin` with no program behind it in any of the folders
@@ -286,6 +300,29 @@ mod tests {
         fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
         fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
         assert_eq!(first_found(folders(), "python3", &[], &dead), Some(usr_bin.join("python3")), "a backed stub is found first");
+    }
+
+    #[test]
+    fn what_a_task_runs_is_the_first_on_the_path_even_a_dead_stub() {
+        let root = tempfile::tempdir().unwrap();
+        let usr_bin = root.path().join("usr").join("bin");
+        let later = root.path().join("opt").join("bin");
+        let tools = root.path().join("CommandLineTools");
+        for folder in [&usr_bin, &later] {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("python3"), "").unwrap();
+        }
+        let dead = |candidate: &Path| is_dead_stub(candidate, &usr_bin, &|| vec![tools.clone()]);
+        let first = |folders: &[&PathBuf], name: &str| first_unless_dead(folders.iter().map(|folder| folder.to_path_buf()), name, &[], &dead);
+        assert_eq!(first(&[&usr_bin, &later], "python3"), None, "a task would open the stub's dialog, not reach the later one");
+        assert_eq!(first(&[&later, &usr_bin], "python3"), Some(later.join("python3")));
+        fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
+        fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
+        assert_eq!(first(&[&usr_bin, &later], "python3"), Some(usr_bin.join("python3")), "a backed stub runs");
+        let only_python = root.path().join("only");
+        fs::create_dir_all(&only_python).unwrap();
+        fs::write(only_python.join("python"), "").unwrap();
+        assert_eq!(first(&[&only_python], "python3"), None, "no other name is tried");
     }
 
     #[test]

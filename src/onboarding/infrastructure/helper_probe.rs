@@ -11,14 +11,20 @@ type Printed = Option<String>;
 /// given arguments, from the folder of another program or of the file it links to, so both belong to one install. The
 /// wiring gives both the tool check's own prober, so they look the same way: on the resolved `PATH`, helper folders
 /// first, and never through a developer stub that would open a dialog.
+///
+/// Python is asked through `as_tasks_run` instead, which gives the first line printed by the first `python3` on the
+/// resolved `PATH`, as a task's own command runs it, or nothing when that one is a developer stub with no tools behind
+/// it. ai-job-search's tools call `python3` by name, so a working copy the tool check finds past a stub, or a `python`,
+/// is not what they would run.
 pub struct ProgramProbe {
     version: fn(&str) -> Printed,
+    as_tasks_run: fn(&str) -> Printed,
     beside: fn(&str, &str, &[&str]) -> Printed,
 }
 
 impl ProgramProbe {
-    pub fn new(version: fn(&str) -> Printed, beside: fn(&str, &str, &[&str]) -> Printed) -> Self {
-        Self { version, beside }
+    pub fn new(version: fn(&str) -> Printed, as_tasks_run: fn(&str) -> Printed, beside: fn(&str, &str, &[&str]) -> Printed) -> Self {
+        Self { version, as_tasks_run, beside }
     }
 
     /// Whether `finder`, beside `program`, finds every one of `files`: each must end a line it printed.
@@ -32,7 +38,8 @@ impl ProgramProbe {
 impl HelperProbe for ProgramProbe {
     fn is_here(&self, helper: Helper) -> bool {
         let programs = helper.programs();
-        let runs = programs.iter().all(|program| (self.version)(program).is_some_and(|line| helper.accepts(&line)));
+        let version = if helper == Helper::Python { self.as_tasks_run } else { self.version };
+        let runs = programs.iter().all(|program| version(program).is_some_and(|line| helper.accepts(&line)));
         runs && helper.needed_files().is_none_or(|(finder, files)| programs.iter().all(|program| self.finds(program, finder, &files)))
     }
 }
@@ -52,7 +59,7 @@ mod tests {
     }
 
     fn here(helper: Helper, version: fn(&str) -> Printed) -> bool {
-        ProgramProbe::new(version, finds_all).is_here(helper)
+        ProgramProbe::new(version, version, finds_all).is_here(helper)
     }
 
     #[test]
@@ -74,17 +81,29 @@ mod tests {
     }
 
     #[test]
+    fn python_counts_only_as_a_task_would_run_it() {
+        let found_past_a_stub = |_: &str| Some("Python 3.12.4".to_owned());
+        let the_first_is_a_dead_stub = |_: &str| None;
+        assert!(!ProgramProbe::new(found_past_a_stub, the_first_is_a_dead_stub, finds_all).is_here(Helper::Python));
+        assert!(ProgramProbe::new(the_first_is_a_dead_stub, found_past_a_stub, finds_all).is_here(Helper::Python));
+        let other = |_: &str| Some("bun 1.4.4".to_owned());
+        assert!(ProgramProbe::new(other, the_first_is_a_dead_stub, finds_none).is_here(Helper::Bun), "the others as the tool check finds them");
+    }
+
+    #[test]
     fn a_tex_that_lacks_a_package_the_templates_need_is_missing() {
         let runs = |_: &str| Some("XeTeX 3.141592653-2.6-0.999997 (TeX Live 2025)".to_owned());
-        assert!(!ProgramProbe::new(runs, finds_none).is_here(Helper::Latex), "a BasicTeX without moderncv");
+        let new = |beside: fn(&str, &str, &[&str]) -> Printed| ProgramProbe::new(runs, runs, beside);
+        assert!(!new(finds_none).is_here(Helper::Latex), "a BasicTeX without moderncv");
         let without_moderncv =
             |_: &str, finder: &str, files: &[&str]| finds_all("", finder, &files.iter().copied().filter(|file| *file != "moderncv.cls").collect::<Vec<_>>());
-        assert!(!ProgramProbe::new(runs, without_moderncv).is_here(Helper::Latex));
+        assert!(!new(without_moderncv).is_here(Helper::Latex));
         let only_beside_lualatex = |program: &str, finder: &str, files: &[&str]| if program == "lualatex" { finds_all(program, finder, files) } else { None };
-        assert!(!ProgramProbe::new(runs, only_beside_lualatex).is_here(Helper::Latex), "xelatex's own TeX must find them too");
+        assert!(!new(only_beside_lualatex).is_here(Helper::Latex), "xelatex's own TeX must find them too");
         let a_lookalike = |_: &str, _: &str, files: &[&str]| Some(files.iter().map(|file| format!("/x/not-{file}\n")).collect());
-        assert!(!ProgramProbe::new(runs, a_lookalike).is_here(Helper::Latex), "the whole file name must match");
-        assert!(ProgramProbe::new(runs, finds_all).is_here(Helper::Latex));
-        assert!(ProgramProbe::new(|_| Some("bun 1.4.4".to_owned()), finds_none).is_here(Helper::Bun), "Bun needs no file");
+        assert!(!new(a_lookalike).is_here(Helper::Latex), "the whole file name must match");
+        assert!(new(finds_all).is_here(Helper::Latex));
+        let bun = |_: &str| Some("bun 1.4.4".to_owned());
+        assert!(ProgramProbe::new(bun, bun, finds_none).is_here(Helper::Bun), "Bun needs no file");
     }
 }

@@ -20,21 +20,31 @@ pub enum AddError {
     NoWebsite,
     /// The website is not an `http` or `https` address with a dotted host.
     NotWebAddress,
+    /// The website holds a space or a line break, which no web address does. On the line, what follows one would read
+    /// as more words for `/add-portal`, such as an option.
+    SpaceInWebsite,
     /// The field holds characters that show nothing, which the line would carry to Claude unseen.
     Hidden(AddField),
 }
 
 /// The launcher line for a board at `website`, such as
 /// `/add-portal https://jobs.sample-board.example country: Belgium, language: French, test title: Lead Backend Engineer`.
-/// A website without a scheme gets `https://`. Each field is trimmed and its line breaks and other spaces collapse to
-/// one space, so the line stays one line. An empty optional field stays off the line, because `/add-portal` then asks for
+/// A website without a scheme at its start gets `https://`, and a website holding a space or a line break is refused.
+/// Each other field is trimmed and its line breaks and other spaces collapse to one space, so the line stays one line. An empty optional field stays off the line, because `/add-portal` then asks for
 /// it in the task.
 pub fn add_portal_line(website: &str, country: &str, language: &str, title: &str) -> Result<String, AddError> {
-    let website = field(website, AddField::Website)?;
-    if website.is_empty() {
+    // A tab or a line break reads as the space it shows as, so it is refused as one.
+    let website = spaced(website);
+    if !all_visible(&website) {
+        return Err(AddError::Hidden(AddField::Website));
+    }
+    if website.trim().is_empty() {
         return Err(AddError::NoWebsite);
     }
-    let website = web_address(&website).ok_or(AddError::NotWebAddress)?;
+    let website = web_address(website.trim()).ok_or(AddError::NotWebAddress)?;
+    if website.contains(char::is_whitespace) {
+        return Err(AddError::SpaceInWebsite);
+    }
     let mut answers = Vec::new();
     for (key, text, which) in [("country", country, AddField::Country), ("language", language, AddField::Language), ("test title", title, AddField::TestTitle)]
     {
@@ -54,17 +64,30 @@ pub fn add_portal_line(website: &str, country: &str, language: &str, title: &str
 /// `text` trimmed, with every run of spaces and line breaks as one space. A character that shows nothing refuses the
 /// field: the launcher would refuse the line, or Claude would read what the user never saw.
 fn field(text: &str, which: AddField) -> Result<String, AddError> {
-    let spaced: String = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).collect();
+    let spaced = spaced(text);
     if !all_visible(&spaced) {
         return Err(AddError::Hidden(which));
     }
     Ok(spaced.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
+/// `text` with every space and line break as a plain space, so only characters that show nothing fail `all_visible`.
+fn spaced(text: &str) -> String {
+    text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).collect()
+}
+
+/// Whether `website` starts with a scheme, such as `https://`: letters first, then letters, digits, `+`, `-` or `.`,
+/// then `://`. One later in the address, such as in its query, is not its scheme.
+fn has_scheme(website: &str) -> bool {
+    website.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
+}
+
 /// The website as an `http` or `https` address, with `https://` put first when it names no scheme. Its host must hold a
 /// dot between two labels of letters, digits and `-`, with an optional port, so a word or a sentence is no address.
 fn web_address(website: &str) -> Option<String> {
-    let address = if website.contains("://") { website.to_owned() } else { format!("https://{website}") };
+    let address = if has_scheme(website) { website.to_owned() } else { format!("https://{website}") };
     let url = WebUrl::parse(&address)?;
     let rest = &url.as_str()[url.as_str().find("://")? + 3..];
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -105,6 +128,25 @@ mod tests {
         assert_eq!(add_portal_line(" jobs.sample-board.example/listings ", "", "", "").unwrap(), "/add-portal https://jobs.sample-board.example/listings");
         assert_eq!(add_portal_line("http://jobs.sample-board.example:8080", "", "", "").unwrap(), "/add-portal http://jobs.sample-board.example:8080");
         assert_eq!(add_portal_line("HTTPS://Jobs.Sample-Board.example", "", "", "").unwrap(), "/add-portal HTTPS://Jobs.Sample-Board.example");
+    }
+
+    /// A scheme counts only at the start, so an address that holds another one in its query still gets `https://`.
+    #[test]
+    fn a_scheme_counts_only_at_the_start() {
+        let line = add_portal_line("jobs.example.be/jobs?redirect=https://jobs.example.be/results", "", "", "").unwrap();
+        assert_eq!(line, "/add-portal https://jobs.example.be/jobs?redirect=https://jobs.example.be/results");
+        assert_eq!(add_portal_line("jobs.example.be/go?to=ftp://x", "", "", ""), Ok("/add-portal https://jobs.example.be/go?to=ftp://x".to_owned()));
+        assert_eq!(add_portal_line("ftp://jobs.example.be/?to=https://jobs.example.be", "", "", ""), Err(AddError::NotWebAddress));
+    }
+
+    /// A web address holds no space, so nothing after one can reach `/add-portal` as an option such as `--list`.
+    #[test]
+    fn a_website_with_a_space_is_refused() {
+        for spaced in ["jobs.example.be/x --list", "https://jobs.example.be/a b", "jobs.example.be/?q=a\tb", "jobs.example.be/\nx"] {
+            assert_eq!(add_portal_line(spaced, "", "", ""), Err(AddError::SpaceInWebsite), "{spaced:?}");
+        }
+        assert_eq!(add_portal_line("  jobs.example.be/x  ", "", "", ""), Ok("/add-portal https://jobs.example.be/x".to_owned()), "only the ends are trimmed");
+        assert_eq!(add_portal_line("jobs sample board", "", "", ""), Err(AddError::NotWebAddress), "no host is no web address");
     }
 
     #[test]

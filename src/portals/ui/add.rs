@@ -17,6 +17,8 @@ const FIELD_GAP: f32 = 12.0;
 /// The most characters each field takes.
 const WEBSITE_CHARS: usize = 300;
 const ANSWER_CHARS: usize = 100;
+/// What the website's field says when its address holds a space.
+const SPACE_IN_ADDRESS: &str = "A web address has no spaces. Type it as it shows in your browser, such as https://jobs.example.be/jobs.";
 /// What the website's field says when it holds no address.
 const NOT_AN_ADDRESS: &str = "This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be.";
 
@@ -70,6 +72,9 @@ fn fields(ui: &mut Ui, form: &mut AddForm) {
         match line {
             Err(AddError::NotWebAddress) => {
                 desk_label(ui, NOT_AN_ADDRESS, Type::TABLE_HEAD, Tone::Closed);
+            }
+            Err(AddError::SpaceInWebsite) => {
+                desk_label(ui, SPACE_IN_ADDRESS, Type::TABLE_HEAD, Tone::Closed);
             }
             Err(AddError::Hidden(AddField::Website)) => {
                 desk_label(ui, hidden_words(AddField::Website), Type::TABLE_HEAD, Tone::Closed);
@@ -147,6 +152,7 @@ fn waiting_words(error: AddError) -> String {
     match error {
         AddError::NoWebsite => "Type the board’s website first.".to_owned(),
         AddError::NotWebAddress => "Type a web address first.".to_owned(),
+        AddError::SpaceInWebsite => "Take the spaces out of the address first.".to_owned(),
         AddError::Hidden(which) => hidden_words(which),
     }
 }

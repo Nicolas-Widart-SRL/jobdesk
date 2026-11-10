@@ -7685,6 +7685,17 @@ fn build_it_waits_for_a_web_address() {
     assert!(is_shown(&harness, "This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be."));
 }
 
+/// A website with a space makes no line, so nothing after the space reaches `/add-portal`, and the form says why.
+#[test]
+fn build_it_refuses_a_website_with_a_space() {
+    let mut harness = tray_harness(browse_shell("portals_add_space", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.example.be/x --list", "", "", ""]);
+    assert!(harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "Take the spaces out of the address first."));
+    assert!(is_shown(&harness, "A web address has no spaces. Type it as it shows in your browser, such as https://jobs.example.be/jobs."));
+}
+
 /// A field holding a character that shows nothing makes no line, and says which field.
 #[test]
 fn build_it_refuses_hidden_characters() {

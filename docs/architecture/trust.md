@@ -131,7 +131,7 @@ Browse community on the Portals screen reads the list of community portals from 
 - Only a path of the exact shape `portals/<country>/<folder>/SKILL.md` is read. The country is two lower-case letters or `global`, and the folder name holds only lower-case letters, digits and `-`.
 - View code ↗ opens `https://github.com/ai-job-search-dev/community-portals/tree/main/portals/<country>/<folder>`, built from those validated parts, and only on click. Install… opens the launcher on a task in plain words built from the same address: Claude copies the portal into `.agents/skills/`, explains its code and asks before it installs anything. Nothing from the list's text goes into an address or a task. A task the launcher would refuse leaves Install… disabled with its reason.
 - The list read last is saved in `portals/community.json` of the data folder, through a copy of its own. Every field is checked again when it is read back, as if it came from GitHub, and a file that fails a check reads as no saved list.
-- Add a portal builds `/add-portal <website> country: …, language: …, test title: …` from what the user typed. The website must be an `http` or `https` address with a dotted host, and gets `https://` when it names no scheme. A field holding a character that shows nothing makes no line, and the form says which field.
+- Add a portal builds `/add-portal <website> country: …, language: …, test title: …` from what the user typed. The website must be an `http` or `https` address with a dotted host and no space or line break anywhere, so nothing after a space can reach `/add-portal` as an option. It gets `https://` when it does not start with a scheme. A field holding a character that shows nothing makes no line, and the form says which field.
 
 ## Updates
 

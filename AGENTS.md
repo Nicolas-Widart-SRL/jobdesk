@@ -49,7 +49,7 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 ## Team
 
-- The main session in the main checkout runs as the `lead` agent in `.claude/agents/lead.md`, set up as [CONTRIBUTING.md](CONTRIBUTING.md#agent-team) says, and it writes no code or docs. A session in an agent worktree is never the lead. Every code change, even a one-line fix, goes to a builder.
+- The main session in the main checkout runs as the `lead` agent in `.claude/agents/lead.md`, set up as [CONTRIBUTING.md](CONTRIBUTING.md#agent-team) says, and it writes no code or docs. A session in an agent worktree is not the lead, unless its branch is older than this setup: see the same section. Every code change, even a one-line fix, goes to a builder.
   Every docs-only change, one that touches only Markdown in `README.md`, `AGENTS.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md` or `docs/`, goes to `docs-writer`.
 - A small, low-risk change goes through the `quick-fix` skill. Everything else goes through the `ship` skill.
 - The main checkout stays on `main` and clean. Every edit happens in an agent worktree, except the lead's plan files in `.claude/plans/`.

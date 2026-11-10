@@ -207,7 +207,7 @@ TruffleHog scans the whole git history for secrets in CI, and fails on a verifie
 
 Never put it in `.claude/settings.json`. Every worktree holds that file, so a builder session started in a worktree would run as the lead, without the Edit tool.
 
-A branch cut before the setting left `.claude/settings.json` still holds it there. Rebase that branch onto `main` before a builder works on it.
+A branch cut before this setup still sets `agent` in its own `.claude/settings.json`, so a builder thread there still runs as the lead. Rebase that branch onto `origin/main` once this setup has merged, then start a new builder thread, because a running thread keeps the agent it started with.
 
 ## OpenSpec
 

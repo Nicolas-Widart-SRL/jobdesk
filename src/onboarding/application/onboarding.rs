@@ -6,24 +6,66 @@ use std::thread;
 
 use chrono::NaiveDate;
 
-use crate::onboarding::domain::{Failure, Phase, Place, Progress, ProgressStore, SourceFetcher, Step, Unpacker, suggested_folder};
+use crate::onboarding::application::HelperSetup;
+use crate::onboarding::domain::{
+    Contents, Failure, HELPERS, Helper, InstallPhase, Outcome, Phase, Place, Progress, ProgressStore, SourceFetcher, Step, Unpacker, suggested_folder,
+};
 use crate::shared_kernel::installed_source::InstalledSource;
 use crate::updates::application::{Failure as FeedFailure, SourcePinReader, source_zip_name, source_zip_url};
 
 /// Where first-run setup is, as the screens show it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stage {
-    /// Set up from scratch, or open an ai-job-search folder the user already has.
+    /// Set up from scratch, or open an ai-job-search folder the user already has. With a step done, the welcome back.
     Welcome,
     /// Save location: the folder setup will use, and whether it may.
     Place { folder: PathBuf, place: Place },
     /// The folder is being made and filled. `version` is known once the feed has been read. Once Cancel is pressed,
     /// `cancelling` holds until the worker has stopped and cleaned up.
     Download { folder: PathBuf, version: Option<String>, phase: Phase, cancelling: bool },
-    /// The download stopped, and the folder is still empty. Try again starts afresh.
-    Failed { folder: PathBuf, failure: Failure },
+    /// The download stopped at `at`, and the folder is still empty. Try again starts afresh.
+    Failed { folder: PathBuf, failure: Failure, version: Option<String>, at: Phase },
     /// ai-job-search is in the folder.
     Done { folder: PathBuf, version: String },
+    /// The Computer step: each helper's line, in `HELPERS` order, and what runs now.
+    Computer { folder: PathBuf, lines: [HelperLine; 3], work: Work },
+    /// The Folder and Computer steps are done: the folder opens as the job search.
+    Finished { folder: PathBuf },
+}
+
+/// Where one helper stands on the Computer step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperLine {
+    /// Not looked at yet.
+    Next,
+    Checking,
+    /// Its programs ran when setup checked.
+    Here,
+    /// Setup found it missing, and installs it on Install what is missing.
+    Missing,
+    /// Installing, with how far it has got once the install says.
+    Installing(Option<InstallPhase>),
+    Installed,
+    Failed(Failure),
+}
+
+impl HelperLine {
+    /// Whether the helper works now.
+    pub fn ready(self) -> bool {
+        matches!(self, Self::Here | Self::Installed)
+    }
+}
+
+/// What the Computer step runs now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Work {
+    Checking,
+    /// Installing what was missing. Once Cancel is pressed, `cancelling` holds until the worker has stopped.
+    Installing {
+        cancelling: bool,
+    },
+    /// Nothing runs: the lines say what is left.
+    Idle,
 }
 
 /// What the worker tells the window, tagged with the attempt it belongs to.
@@ -31,6 +73,8 @@ enum Event {
     Version(String),
     Phase(Phase),
     Ended(Result<String, Failure>),
+    Helper(Helper, HelperLine),
+    HelpersEnded,
 }
 
 struct Attempt {
@@ -38,16 +82,18 @@ struct Attempt {
     cancelled: Arc<AtomicBool>,
 }
 
-/// The ports one attempt needs on its worker thread.
+/// The ports one attempt needs on its worker thread. `pins` is `None` in a build that can vouch for no release.
 #[derive(Clone)]
 struct Ports {
-    pins: Arc<dyn SourcePinReader>,
+    pins: Option<Arc<dyn SourcePinReader>>,
     fetcher: Arc<dyn SourceFetcher>,
     unpacker: Arc<dyn Unpacker>,
+    helpers: HelperSetup,
 }
 
-/// First-run setup for the welcome, the folder and the download. One worker at a time fetches, checks and unpacks
-/// the release, away from the window's thread. The UI reads `stage` and `progress`, and acts through the methods.
+/// First-run setup for the welcome, the folder, the download and the helpers. One worker at a time fetches, checks and
+/// unpacks the release, or checks and installs the helpers, away from the window's thread. The UI reads `stage` and
+/// `progress`, and acts through the methods.
 pub struct Onboarding {
     store: Arc<dyn ProgressStore>,
     ports: Ports,
@@ -63,12 +109,14 @@ pub struct Onboarding {
 
 impl Onboarding {
     /// Reads the progress record and removes what a setup that stopped midway left: part files in the data folder,
-    /// and staging folders beside the chosen folder. `documents` is the user's Documents folder.
+    /// and staging folders beside the chosen folder. `pins` is `None` in a build with no update key, which offers only
+    /// a folder the user already has. `documents` is the user's Documents folder.
     pub fn new(
         store: Arc<dyn ProgressStore>,
-        pins: Arc<dyn SourcePinReader>,
+        pins: Option<Arc<dyn SourcePinReader>>,
         fetcher: Arc<dyn SourceFetcher>,
         unpacker: Arc<dyn Unpacker>,
+        helpers: HelperSetup,
         documents: PathBuf,
         repaint: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
@@ -79,7 +127,7 @@ impl Onboarding {
             unpacker.clear_leftovers(folder);
         }
         let (sender, events) = mpsc::channel();
-        let ports = Ports { pins, fetcher, unpacker };
+        let ports = Ports { pins, fetcher, unpacker, helpers };
         Self { store, ports, documents, repaint, progress, stage: Stage::Welcome, attempt: None, next_id: 0, events, sender }
     }
 
@@ -91,6 +139,11 @@ impl Onboarding {
         &self.progress
     }
 
+    /// Whether this build can download ai-job-search: one with no update key vouches for no release.
+    pub fn can_download(&self) -> bool {
+        self.ports.pins.is_some()
+    }
+
     /// Set up from scratch: Save location opens on the folder chosen before, or on a new `Job search` folder in
     /// Documents.
     pub fn start_from_scratch(&mut self) {
@@ -100,10 +153,38 @@ impl Onboarding {
         }
     }
 
-    /// Back, from Save location to the welcome.
+    /// Continue setup, on the welcome back: the first step not done. A folder that no longer holds ai-job-search
+    /// starts the Folder step again on it.
+    pub fn resume(&mut self) {
+        if self.stage != Stage::Welcome {
+            return;
+        }
+        let Some(folder) = self.progress.folder.clone() else { return self.start_from_scratch() };
+        if !self.progress.is_done(Step::Folder) || self.ports.unpacker.look(&folder) != Contents::AiJobSearch {
+            self.progress.done.clear();
+            return self.look_at(folder);
+        }
+        if self.progress.is_done(Step::Computer) {
+            self.stage = Stage::Finished { folder };
+        } else {
+            self.check_helpers(folder);
+        }
+    }
+
+    /// Back: from Save location to the welcome, from a failed download to Save location, and from the helper check
+    /// to the folder made. Never while something runs.
     pub fn back(&mut self) {
-        if matches!(self.stage, Stage::Place { .. }) {
-            self.stage = Stage::Welcome;
+        match &self.stage {
+            Stage::Place { .. } => self.stage = Stage::Welcome,
+            Stage::Failed { folder, .. } => {
+                let folder = folder.clone();
+                self.look_at(folder);
+            }
+            Stage::Computer { folder, work: Work::Idle, .. } => {
+                let (folder, version) = (folder.clone(), self.progress.version.clone().unwrap_or_default());
+                self.stage = Stage::Done { folder, version };
+            }
+            _ => {}
         }
     }
 
@@ -137,15 +218,76 @@ impl Onboarding {
         }
         self.progress.folder = Some(folder.clone());
         self.save(today);
-        self.start(folder);
+        self.start_download(folder);
     }
 
-    /// Cancel: stops the worker. The stage holds until the worker has stopped, then goes back to Save location.
-    pub fn cancel(&mut self) {
-        if let (Some(attempt), Stage::Download { cancelling, .. }) = (&self.attempt, &mut self.stage) {
-            attempt.cancelled.store(true, Ordering::SeqCst);
-            *cancelling = true;
+    /// Continue, once the folder is ready: the Computer step checks which helpers this computer has.
+    pub fn go_on(&mut self) {
+        if let Stage::Done { folder, .. } = &self.stage {
+            let folder = folder.clone();
+            self.check_helpers(folder);
         }
+    }
+
+    /// Install what is missing, and Try again after a helper failed: installs each helper missing or failed, in order,
+    /// on a worker.
+    pub fn install(&mut self) {
+        let Stage::Computer { folder, lines, work: Work::Idle } = &self.stage else { return };
+        let wanted: Vec<Helper> =
+            HELPERS.into_iter().zip(lines).filter(|(_, line)| matches!(line, HelperLine::Missing | HelperLine::Failed(_))).map(|(helper, _)| helper).collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let (folder, lines) = (folder.clone(), *lines);
+        self.stage = Stage::Computer { folder, lines, work: Work::Installing { cancelling: false } };
+        let helpers = self.ports.helpers.clone();
+        self.spawn(move |cancelled, tell| {
+            for helper in wanted {
+                tell(Event::Helper(helper, HelperLine::Installing(None)));
+                let outcome = helpers.install(helper, cancelled, &mut |phase| tell(Event::Helper(helper, HelperLine::Installing(Some(phase)))));
+                let line = match outcome {
+                    Outcome::AlreadyHere => HelperLine::Here,
+                    Outcome::Installed => HelperLine::Installed,
+                    Outcome::CouldNotInstall(Failure::Cancelled) => HelperLine::Missing,
+                    Outcome::CouldNotInstall(failure) => HelperLine::Failed(failure),
+                };
+                tell(Event::Helper(helper, line));
+                if cancelled() {
+                    break;
+                }
+            }
+            tell(Event::HelpersEnded);
+        });
+    }
+
+    /// Cancel: stops the worker. The stage holds until the worker has stopped, then goes back to Save location, or to
+    /// the helpers as they were checked.
+    pub fn cancel(&mut self) {
+        let Some(attempt) = &self.attempt else { return };
+        match &mut self.stage {
+            Stage::Download { cancelling, .. } | Stage::Computer { work: Work::Installing { cancelling }, .. } => {
+                attempt.cancelled.store(true, Ordering::SeqCst);
+                *cancelling = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// Continue, once every helper works: the Computer step is done. Continue without PDFs, when only LaTeX does not
+    /// work, ends it too, with LaTeX left out. For now the record is then cleared, as nothing follows these steps yet.
+    pub fn finish(&mut self, without_pdfs: bool) {
+        let Stage::Computer { folder, lines, work: Work::Idle } = &self.stage else { return };
+        let ready = |helper: Helper| HELPERS.into_iter().zip(lines).any(|(each, line)| each == helper && line.ready());
+        let may = if without_pdfs { ready(Helper::Python) && ready(Helper::Bun) && !ready(Helper::Latex) } else { lines.iter().all(|line| line.ready()) };
+        if !may {
+            return;
+        }
+        let folder = folder.clone();
+        self.progress.without_pdfs = without_pdfs;
+        self.progress.done.insert(Step::Computer);
+        // A record that cannot be removed costs only a welcome back at the next open, which opens this folder again.
+        let _ = self.store.clear();
+        self.stage = Stage::Finished { folder };
     }
 
     /// Takes what the worker said since the last call. Call it every frame.
@@ -157,10 +299,19 @@ impl Onboarding {
             match (event, &mut self.stage) {
                 (Event::Version(found), Stage::Download { version, .. }) => *version = Some(found),
                 (Event::Phase(next), Stage::Download { phase, .. }) => *phase = next,
-                (Event::Ended(end), Stage::Download { folder, .. }) => {
-                    let folder = folder.clone();
+                (Event::Ended(end), Stage::Download { folder, version, phase, .. }) => {
+                    let (folder, version, at) = (folder.clone(), version.clone(), *phase);
                     self.attempt = None;
-                    self.end(folder, end, today);
+                    self.end(folder, end, version, at, today);
+                }
+                (Event::Helper(helper, line), Stage::Computer { lines, .. }) => {
+                    if let Some(index) = HELPERS.iter().position(|each| *each == helper) {
+                        lines[index] = line;
+                    }
+                }
+                (Event::HelpersEnded, Stage::Computer { work, .. }) => {
+                    *work = Work::Idle;
+                    self.attempt = None;
                 }
                 _ => {}
             }
@@ -172,7 +323,7 @@ impl Onboarding {
         self.attempt.is_some()
     }
 
-    fn end(&mut self, folder: PathBuf, end: Result<String, Failure>, today: NaiveDate) {
+    fn end(&mut self, folder: PathBuf, end: Result<String, Failure>, version: Option<String>, at: Phase, today: NaiveDate) {
         match end {
             Ok(version) => {
                 self.progress.done.insert(Step::Folder);
@@ -181,7 +332,7 @@ impl Onboarding {
                 self.stage = Stage::Done { folder, version };
             }
             Err(Failure::Cancelled) => self.look_at(folder),
-            Err(failure) => self.stage = Stage::Failed { folder, failure },
+            Err(failure) => self.stage = Stage::Failed { folder, failure, version, at },
         }
     }
 
@@ -196,20 +347,42 @@ impl Onboarding {
         let _ = self.store.save(&self.progress);
     }
 
-    fn start(&mut self, folder: PathBuf) {
+    /// Runs `work` on a worker as a new attempt. What it tells reaches `poll`, and wakes the window.
+    fn spawn(&mut self, work: impl FnOnce(&dyn Fn() -> bool, &dyn Fn(Event)) + Send + 'static) {
         let id = self.next_id;
         self.next_id += 1;
         let cancelled = Arc::new(AtomicBool::new(false));
         self.attempt = Some(Attempt { id, cancelled: Arc::clone(&cancelled) });
-        self.stage = Stage::Download { folder: folder.clone(), version: None, phase: Phase::Made, cancelling: false };
-        let (ports, sender, repaint) = (self.ports.clone(), self.sender.clone(), Arc::clone(&self.repaint));
+        let (sender, repaint) = (self.sender.clone(), Arc::clone(&self.repaint));
         thread::spawn(move || {
             let tell = |event: Event| {
                 let _ = sender.send((id, event));
                 repaint();
             };
-            let end = set_up(&ports, &folder, &|| cancelled.load(Ordering::SeqCst), &tell);
+            work(&|| cancelled.load(Ordering::SeqCst), &tell);
+        });
+    }
+
+    fn start_download(&mut self, folder: PathBuf) {
+        self.stage = Stage::Download { folder: folder.clone(), version: None, phase: Phase::Made, cancelling: false };
+        let ports = self.ports.clone();
+        self.spawn(move |cancelled, tell| {
+            let end = set_up(&ports, &folder, cancelled, tell);
             tell(Event::Ended(end));
+        });
+    }
+
+    /// Checks each helper in turn on a worker. Nothing is installed until Install what is missing.
+    fn check_helpers(&mut self, folder: PathBuf) {
+        self.stage = Stage::Computer { folder, lines: [HelperLine::Next; 3], work: Work::Checking };
+        let helpers = self.ports.helpers.clone();
+        self.spawn(move |_, tell| {
+            for helper in HELPERS {
+                tell(Event::Helper(helper, HelperLine::Checking));
+                let line = if helpers.is_here(helper) { HelperLine::Here } else { HelperLine::Missing };
+                tell(Event::Helper(helper, line));
+            }
+            tell(Event::HelpersEnded);
         });
     }
 }
@@ -218,11 +391,11 @@ impl Onboarding {
 fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn Fn(Event)) -> Result<String, Failure> {
     ports.unpacker.make(folder)?;
     tell(Event::Phase(Phase::Made));
-    let pin = match ports.pins.read() {
-        Ok(Some(pin)) => pin,
-        // A feed that answered but vouches for nothing this copy can trust.
-        Ok(None) => return Err(Failure::NoPin),
-        Err(failure) => return Err(pin_failure(failure)),
+    let pin = match ports.pins.as_ref().map(|pins| pins.read()) {
+        Some(Ok(Some(pin))) => pin,
+        // No update key, or a feed that answered but vouches for nothing this copy can trust.
+        None | Some(Ok(None)) => return Err(Failure::NoPin),
+        Some(Err(failure)) => return Err(pin_failure(failure)),
     };
     let version = pin.version.to_string();
     tell(Event::Version(version.clone()));
@@ -251,11 +424,12 @@ fn pin_failure(failure: FeedFailure) -> Failure {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::onboarding::domain::Contents;
+    use crate::onboarding::domain::{HelperInstaller, HelperProbe};
     use crate::shared_kernel::LoadError;
     use crate::updates::application::SourcePin;
 
@@ -313,7 +487,7 @@ mod tests {
         fn clear_leftovers(&self) {}
     }
 
-    /// Folders by what they hold, and the hash the release must have.
+    /// Folders by what they hold, and the hash the release must have. An unpacked folder holds ai-job-search.
     struct Folders {
         contents: Mutex<Contents>,
         cleared: Mutex<Vec<PathBuf>>,
@@ -351,6 +525,7 @@ mod tests {
             }
             phase(Phase::Unpacking);
             self.unpacked.lock().unwrap().push(folder.display().to_string());
+            *self.contents.lock().unwrap() = Contents::AiJobSearch;
             Ok(())
         }
         fn clear_leftovers(&self, folder: &Path) {
@@ -358,12 +533,57 @@ mod tests {
         }
     }
 
+    /// The helpers whose programs run.
+    #[derive(Default)]
+    struct Here(Mutex<BTreeSet<Helper>>);
+
+    impl HelperProbe for Here {
+        fn is_here(&self, helper: Helper) -> bool {
+            self.0.lock().unwrap().contains(&helper)
+        }
+    }
+
+    /// Installs a helper into `here`, fails it with its scripted failure, or waits for Cancel when `hold` is set.
+    #[derive(Default)]
+    struct Installer {
+        here: Arc<Here>,
+        fails: Mutex<BTreeMap<Helper, Failure>>,
+        hold: bool,
+    }
+
+    impl HelperInstaller for Installer {
+        fn install(&self, helper: Helper, _: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
+            phase(InstallPhase::Downloading { received: 1, total: 4 });
+            while self.hold && !cancelled() {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if cancelled() {
+                return Err(Failure::Cancelled);
+            }
+            if let Some(failure) = self.fails.lock().unwrap().get(&helper) {
+                return Err(*failure);
+            }
+            self.here.0.lock().unwrap().insert(helper);
+            Ok(())
+        }
+        fn clear_leftovers(&self) {}
+    }
+
+    fn installer(here: &[Helper]) -> Arc<Installer> {
+        Arc::new(Installer { here: Arc::new(Here(Mutex::new(here.iter().copied().collect()))), ..Installer::default() })
+    }
+
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 11, 10).unwrap()
     }
 
     fn onboarding(store: Arc<Memory>, pins: Pins, fetcher: Arc<Fetcher>, folders: Arc<Folders>) -> Onboarding {
-        Onboarding::new(store, Arc::new(pins), fetcher, folders, PathBuf::from("/Users/sam/Documents"), Arc::new(|| {}))
+        with_helpers(store, pins, fetcher, folders, installer(&[]))
+    }
+
+    fn with_helpers(store: Arc<Memory>, pins: Pins, fetcher: Arc<Fetcher>, folders: Arc<Folders>, installer: Arc<Installer>) -> Onboarding {
+        let helpers = HelperSetup::new(Arc::clone(&installer.here) as Arc<dyn HelperProbe>, installer);
+        Onboarding::new(store, Some(Arc::new(pins)), fetcher, folders, helpers, PathBuf::from("/Users/sam/Documents"), Arc::new(|| {}))
     }
 
     /// Polls until the worker has ended, or fails the test after two seconds.
@@ -371,6 +591,16 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while onboarding.is_working() {
             assert!(Instant::now() < deadline, "the worker never ended");
+            onboarding.poll(today());
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Polls until `seen` holds of the stage, or fails the test after two seconds.
+    fn wait_for(onboarding: &mut Onboarding, seen: impl Fn(&Stage) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !seen(onboarding.stage()) {
+            assert!(Instant::now() < deadline, "never reached: {:?}", onboarding.stage());
             onboarding.poll(today());
             thread::sleep(Duration::from_millis(2));
         }
@@ -450,7 +680,22 @@ mod tests {
     }
 
     #[test]
-    fn a_mismatch_fails_and_nothing_is_recorded_as_done() {
+    fn a_build_without_an_update_key_downloads_nothing() {
+        let fetcher = Arc::new(Fetcher::default());
+        let helpers = HelperSetup::new(Arc::new(Here::default()), installer(&[]));
+        let folders = Arc::new(Folders::holding(Contents::Missing));
+        let documents = PathBuf::from("/Users/sam/Documents");
+        let mut onboarding = Onboarding::new(Arc::new(Memory::default()), None, Arc::clone(&fetcher) as _, folders, helpers, documents, Arc::new(|| {}));
+        assert!(!onboarding.can_download());
+        onboarding.start_from_scratch();
+        onboarding.save_here(today());
+        settle(&mut onboarding);
+        assert!(matches!(onboarding.stage(), Stage::Failed { failure: Failure::NoPin, .. }));
+        assert!(fetcher.asked.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_mismatch_fails_at_the_check_and_nothing_is_recorded_as_done() {
         let store = Arc::new(Memory::default());
         let pins = Pins(Ok(Some(SourcePin::parse("1.7.5", &HASH.replace('1', "2")).unwrap())));
         let folders = Arc::new(Folders::holding(Contents::Missing));
@@ -458,9 +703,15 @@ mod tests {
         onboarding.start_from_scratch();
         onboarding.save_here(today());
         settle(&mut onboarding);
-        assert!(matches!(onboarding.stage(), Stage::Failed { failure: Failure::Mismatch, .. }));
+        assert!(
+            matches!(onboarding.stage(), Stage::Failed { failure: Failure::Mismatch, version: Some(version), at: Phase::Checking, .. } if version == "1.7.5"),
+            "{:?}",
+            onboarding.stage()
+        );
         assert!(folders.unpacked.lock().unwrap().is_empty());
         assert!(!store.load().unwrap().unwrap().is_done(Step::Folder));
+        onboarding.back();
+        assert!(matches!(onboarding.stage(), Stage::Place { .. }), "Back leads to Save location");
     }
 
     #[test]
@@ -484,5 +735,99 @@ mod tests {
         assert_eq!(*folders.cleared.lock().unwrap(), std::slice::from_ref(&folder));
         onboarding.start_from_scratch();
         assert_eq!(onboarding.stage(), &Stage::Place { folder, place: Place::Empty });
+    }
+
+    /// A setup with its folder made, on the helper check once it has ended.
+    fn on_the_computer_step(store: Arc<Memory>, installer: Arc<Installer>) -> Onboarding {
+        let mut onboarding = with_helpers(store, pinned(), Arc::default(), Arc::new(Folders::holding(Contents::Missing)), installer);
+        onboarding.start_from_scratch();
+        onboarding.save_here(today());
+        settle(&mut onboarding);
+        onboarding.go_on();
+        settle(&mut onboarding);
+        onboarding
+    }
+
+    fn lines(onboarding: &Onboarding) -> [HelperLine; 3] {
+        match onboarding.stage() {
+            Stage::Computer { lines, .. } => *lines,
+            stage => panic!("not on the Computer step: {stage:?}"),
+        }
+    }
+
+    #[test]
+    fn the_helpers_are_checked_then_only_the_missing_ones_install_and_continue_clears_the_record() {
+        let store = Arc::new(Memory::default());
+        let mut onboarding = on_the_computer_step(Arc::clone(&store), installer(&[Helper::Python]));
+        assert_eq!(lines(&onboarding), [HelperLine::Here, HelperLine::Missing, HelperLine::Missing]);
+        onboarding.finish(false);
+        assert!(matches!(onboarding.stage(), Stage::Computer { .. }), "Continue waits for every helper");
+        onboarding.install();
+        settle(&mut onboarding);
+        assert_eq!(lines(&onboarding), [HelperLine::Here, HelperLine::Installed, HelperLine::Installed]);
+        onboarding.finish(false);
+        assert_eq!(onboarding.stage(), &Stage::Finished { folder: PathBuf::from("/Users/sam/Documents/Job search") });
+        assert_eq!(store.load().unwrap(), None, "the record is cleared");
+        assert!(onboarding.progress().is_done(Step::Computer));
+    }
+
+    #[test]
+    fn a_failed_latex_may_be_left_out_but_python_or_bun_may_not() {
+        let latex = installer(&[]);
+        latex.fails.lock().unwrap().insert(Helper::Latex, Failure::Offline);
+        let mut onboarding = on_the_computer_step(Arc::default(), latex);
+        onboarding.install();
+        settle(&mut onboarding);
+        assert_eq!(lines(&onboarding), [HelperLine::Installed, HelperLine::Installed, HelperLine::Failed(Failure::Offline)]);
+        onboarding.finish(false);
+        assert!(matches!(onboarding.stage(), Stage::Computer { .. }));
+        onboarding.finish(true);
+        assert!(matches!(onboarding.stage(), Stage::Finished { .. }));
+        assert!(onboarding.progress().without_pdfs);
+
+        let bun = installer(&[]);
+        bun.fails.lock().unwrap().insert(Helper::Bun, Failure::Mismatch);
+        let mut onboarding = on_the_computer_step(Arc::default(), Arc::clone(&bun));
+        onboarding.install();
+        settle(&mut onboarding);
+        onboarding.finish(true);
+        assert!(matches!(onboarding.stage(), Stage::Computer { .. }), "Bun is needed");
+        bun.fails.lock().unwrap().clear();
+        onboarding.install();
+        settle(&mut onboarding);
+        assert_eq!(lines(&onboarding), [HelperLine::Installed; 3], "Try again installs only what failed");
+    }
+
+    #[test]
+    fn cancel_stops_the_install_and_leaves_the_helper_missing() {
+        let held = Arc::new(Installer { hold: true, ..Installer::default() });
+        let mut onboarding = on_the_computer_step(Arc::default(), held);
+        onboarding.install();
+        wait_for(&mut onboarding, |stage| matches!(stage, Stage::Computer { lines: [HelperLine::Installing(Some(_)), ..], .. }));
+        onboarding.cancel();
+        assert!(matches!(onboarding.stage(), Stage::Computer { work: Work::Installing { cancelling: true }, .. }));
+        settle(&mut onboarding);
+        let folder = PathBuf::from("/Users/sam/Documents/Job search");
+        assert_eq!(onboarding.stage(), &Stage::Computer { folder, lines: [HelperLine::Missing; 3], work: Work::Idle });
+        onboarding.back();
+        assert!(matches!(onboarding.stage(), Stage::Done { version, .. } if version == "1.7.5"), "Back leads to the folder made");
+    }
+
+    #[test]
+    fn continue_setup_picks_up_at_the_first_step_not_done() {
+        let folder = PathBuf::from("/Users/sam/Job search");
+        let made = Progress { folder: Some(folder.clone()), done: BTreeSet::from([Step::Folder]), ..Progress::default() };
+        let store = Arc::new(Memory(Mutex::new(Some(made.clone()))));
+        let mut set_up = with_helpers(store, pinned(), Arc::default(), Arc::new(Folders::holding(Contents::AiJobSearch)), installer(&HELPERS));
+        set_up.resume();
+        settle(&mut set_up);
+        assert_eq!(lines(&set_up), [HelperLine::Here; 3]);
+
+        // A folder that no longer holds ai-job-search starts the Folder step again on it.
+        let store = Arc::new(Memory(Mutex::new(Some(made))));
+        let mut onboarding = onboarding(store, pinned(), Arc::default(), Arc::new(Folders::holding(Contents::Missing)));
+        onboarding.resume();
+        assert_eq!(onboarding.stage(), &Stage::Place { folder, place: Place::New });
+        assert!(!onboarding.progress().is_done(Step::Folder));
     }
 }

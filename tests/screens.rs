@@ -6794,3 +6794,372 @@ fn the_ways_in_are_heard() {
     assert!(cloud.accesskit_node().is_disabled());
     assert_eq!(cloud.accesskit_node().description().as_deref(), Some("Not available yet."));
 }
+
+/// First-run setup in the small first window, from a scripted feed, download, helper check and install, over a
+/// fictional home folder in the test's own folder. Nothing reaches the network or the user's home.
+mod first_run {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use jobdesk::onboarding::application::{
+        Contents, Failure as SetupFailure, Helper, HelperInstaller, HelperProbe, HelperSetup, InstallPhase, Onboarding, Phase, Progress, ProgressStore,
+        SourceFetcher, Step, Unpacker,
+    };
+    use jobdesk::shared_kernel::LoadError;
+    use jobdesk::shared_kernel::installed_source::InstalledSource;
+    use jobdesk::updates::application::{Failure as FeedFailure, SourcePin, SourcePinReader};
+
+    use super::*;
+
+    /// The first window, as the shell asks for it.
+    const FIRST_WINDOW: [f32; 2] = [720.0, 560.0];
+    const HASH: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+    /// How long a test waits for a worker's news before it fails.
+    const PATIENCE: Duration = Duration::from_secs(5);
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, 10).unwrap()
+    }
+
+    #[derive(Default)]
+    struct Record(Mutex<Option<Progress>>);
+
+    impl ProgressStore for Record {
+        fn load(&self) -> Result<Option<Progress>, LoadError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn save(&self, progress: &Progress) -> Result<(), LoadError> {
+            *self.0.lock().unwrap() = Some(progress.clone());
+            Ok(())
+        }
+        fn clear(&self) -> Result<(), LoadError> {
+            *self.0.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    struct Pins(Result<Option<SourcePin>, FeedFailure>);
+
+    impl SourcePinReader for Pins {
+        fn read(&self) -> Result<Option<SourcePin>, FeedFailure> {
+            self.0.clone()
+        }
+    }
+
+    /// Hands back a path only `Folders` reads, after it has said some bytes arrived. With `hold` it waits for Cancel.
+    struct Fetcher {
+        hold: bool,
+    }
+
+    impl SourceFetcher for Fetcher {
+        fn fetch(&self, _: &str, _: &str, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, SetupFailure> {
+            progress(1_000_000);
+            while self.hold && !cancelled() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if cancelled() { Err(SetupFailure::Cancelled) } else { Ok(PathBuf::from("/fictional/onboarding/1/release.zip.part")) }
+        }
+        fn clear_leftovers(&self) {}
+    }
+
+    /// Real folders on disk. Unpacking puts the sample workspace in the folder, or fails the check when `mismatch`.
+    struct Folders {
+        mismatch: bool,
+    }
+
+    impl Unpacker for Folders {
+        fn look(&self, folder: &Path) -> Contents {
+            match fs::read_dir(folder).map(|mut entries| entries.next().is_none()) {
+                Err(_) if !folder.exists() => Contents::Missing,
+                Ok(true) => Contents::Empty,
+                _ if jobdesk::workspace::open(folder).is_some() => Contents::AiJobSearch,
+                _ => Contents::Files,
+            }
+        }
+        fn make(&self, folder: &Path) -> Result<(), SetupFailure> {
+            fs::create_dir_all(folder).map_err(|_| SetupFailure::Disk)?;
+            if self.look(folder) == Contents::Empty { Ok(()) } else { Err(SetupFailure::NotEmpty) }
+        }
+        fn unpack(&self, _: &Path, source: &InstalledSource, folder: &Path, _: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), SetupFailure> {
+            phase(Phase::Checking);
+            if self.mismatch || source.sha256 != HASH {
+                return Err(SetupFailure::Mismatch);
+            }
+            phase(Phase::Unpacking);
+            sample_workspace(folder);
+            Ok(())
+        }
+        fn clear_leftovers(&self, _: &Path) {}
+    }
+
+    /// The helpers whose programs run. The check of `held` never ends.
+    struct Here {
+        here: Mutex<BTreeSet<Helper>>,
+        held: Option<Helper>,
+    }
+
+    impl HelperProbe for Here {
+        fn is_here(&self, helper: Helper) -> bool {
+            while self.held == Some(helper) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.here.lock().unwrap().contains(&helper)
+        }
+    }
+
+    /// Installs a helper into `here` once it has said a third of it arrived, fails one in `fails`, and holds `held`
+    /// there until Cancel.
+    struct Installer {
+        here: Arc<Here>,
+        fails: BTreeMap<Helper, SetupFailure>,
+        held: Option<Helper>,
+    }
+
+    impl HelperInstaller for Installer {
+        fn install(&self, helper: Helper, _: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), SetupFailure> {
+            phase(InstallPhase::Downloading { received: 35, total: 100 });
+            while self.held == Some(helper) && !cancelled() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if cancelled() {
+                return Err(SetupFailure::Cancelled);
+            }
+            if let Some(failure) = self.fails.get(&helper) {
+                return Err(*failure);
+            }
+            self.here.here.lock().unwrap().insert(helper);
+            Ok(())
+        }
+        fn clear_leftovers(&self) {}
+    }
+
+    /// How a scripted setup goes. By default the feed pins 1.7.5, everything downloads and no helper is here.
+    #[derive(Default)]
+    struct Script {
+        feed: Option<Result<Option<SourcePin>, FeedFailure>>,
+        record: Option<Progress>,
+        hold_download: bool,
+        mismatch: bool,
+        here: Vec<Helper>,
+        hold_check: Option<Helper>,
+        hold_install: Option<Helper>,
+        fails: BTreeMap<Helper, SetupFailure>,
+    }
+
+    /// A fictional home folder in the test's own folder, emptied first, with an empty `Documents` in it.
+    fn home(name: &str) -> PathBuf {
+        let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("home");
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join("Documents")).unwrap();
+        home
+    }
+
+    /// The shell on the first-run setup the script describes, and the home folder it works in.
+    fn first_run_shell(name: &str, script: Script) -> (Shell, PathBuf) {
+        let home = home(name);
+        let feed = script.feed.unwrap_or_else(|| Ok(Some(SourcePin::parse("1.7.5", HASH).unwrap())));
+        let probe = Arc::new(Here { here: Mutex::new(script.here.into_iter().collect()), held: script.hold_check });
+        let installer = Installer { here: Arc::clone(&probe), fails: script.fails, held: script.hold_install };
+        let helpers = HelperSetup::new(probe, Arc::new(installer));
+        let (fetcher, folders) = (Fetcher { hold: script.hold_download }, Folders { mismatch: script.mismatch });
+        let store = Arc::new(Record(Mutex::new(script.record)));
+        let documents = home.join("Documents");
+        let onboarding = Onboarding::new(store, Some(Arc::new(Pins(feed))), Arc::new(fetcher), Arc::new(folders), helpers, documents, Arc::new(|| {}));
+        (probed(Shell::without_workspace(today()), AllTools).with_first_run(onboarding, home.clone()), home)
+    }
+
+    /// A harness in the first window on `shell`, which renders where snapshots are compared.
+    fn first_window(mut shell: Shell, theme: Theme) -> Harness<'static> {
+        with_renderer(Harness::builder().with_size(FIRST_WINDOW).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+            .build_ui(move |ui| shell.show(ui))
+    }
+
+    /// A harness on a shell the test keeps, so it can act on the shell between harnesses.
+    fn first_window_on(shell: &mut Shell) -> Harness<'_> {
+        Harness::builder().with_size(FIRST_WINDOW).with_context_setup(install_look).build_ui(move |ui| shell.show(ui))
+    }
+
+    /// Steps until `label` shows, as the worker's news arrives, then lets the news that follows it settle.
+    fn until_shown(harness: &mut Harness, label: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while harness.query_by_label_contains(label).is_none() {
+            assert!(Instant::now() < deadline, "{label} never showed");
+            harness.run_steps(1);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        harness.run_steps(4);
+    }
+
+    /// Clicks the button or link named `label` once it shows and is enabled, as a worker's end turns it on.
+    fn click(harness: &mut Harness, label: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while harness.query_by_label(label).is_none_or(|node| node.accesskit_node().is_disabled()) {
+            assert!(Instant::now() < deadline, "{label} never turned on");
+            harness.run_steps(1);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.get_by_label(label).click();
+        harness.run_steps(2);
+    }
+
+    /// Moves the pointer off the window, so no button the clicks left under it shows its hover look, then compares.
+    fn snapshot(harness: &mut Harness, name: &str) {
+        harness.input_mut().events.push(egui::Event::PointerGone);
+        harness.run_steps(3);
+        compare(harness, name);
+    }
+
+    /// Clicks through `steps`, then renders the first window once `label` shows, and compares it to `name`.
+    fn render_first_run(script: Script, theme: Theme, name: &str, steps: &[&str], label: &str) {
+        let (shell, _) = first_run_shell(name, script);
+        let mut harness = first_window(shell, theme);
+        for step in steps {
+            click(&mut harness, step);
+        }
+        until_shown(&mut harness, label);
+        snapshot(&mut harness, name);
+    }
+
+    const TO_DOWNLOAD: [&str; 2] = ["Start setup", "Save here"];
+    const TO_COMPUTER: [&str; 3] = ["Start setup", "Save here", "Continue"];
+    const TO_INSTALL: [&str; 4] = ["Start setup", "Save here", "Continue", "Install what is missing"];
+
+    #[test]
+    fn onboarding_welcome_light() {
+        render_first_run(Script::default(), Theme::Light, "onboarding_welcome_light", &[], "Welcome to Jobdesk");
+    }
+
+    #[test]
+    fn onboarding_welcome_dark() {
+        render_first_run(Script::default(), Theme::Dark, "onboarding_welcome_dark", &[], "Welcome to Jobdesk");
+    }
+
+    /// Folder and Computer done, as a setup that stopped at the Profile chapter leaves its record.
+    #[test]
+    fn onboarding_resume_light() {
+        let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("onboarding_resume_light/home/Documents/Job search");
+        let record = Progress { folder: Some(folder), done: BTreeSet::from([Step::Folder, Step::Computer]), stopped: Some(today()), ..Progress::default() };
+        render_first_run(Script { record: Some(record), ..Script::default() }, Theme::Light, "onboarding_resume_light", &[], "Continue setup");
+    }
+
+    #[test]
+    fn onboarding_place_light() {
+        render_first_run(Script::default(), Theme::Light, "onboarding_place_light", &["Start setup"], "Save here");
+    }
+
+    #[test]
+    fn onboarding_notempty_light() {
+        let (mut shell, home) = first_run_shell("onboarding_notempty_light", Script::default());
+        let projects = home.join("Documents/Projects");
+        fs::create_dir_all(&projects).unwrap();
+        fs::write(projects.join("notes.txt"), "Fictional notes.").unwrap();
+        click(&mut first_window_on(&mut shell), "Start setup");
+        // Change… opens the system picker, so the folder it would give is chosen as the shell does once it answers.
+        shell.first_run_mut().expect("first-run setup shows").choose(projects);
+        let mut harness = first_window(shell, Theme::Light);
+        until_shown(&mut harness, "Use this new folder");
+        snapshot(&mut harness, "onboarding_notempty_light");
+    }
+
+    #[test]
+    fn onboarding_download_light() {
+        let script = Script { hold_download: true, ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_download_light", &TO_DOWNLOAD, "The latest version, 1.7.5");
+    }
+
+    #[test]
+    fn onboarding_offline_light() {
+        let script = Script { feed: Some(Err(FeedFailure::Unreachable)), ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_offline_light", &TO_DOWNLOAD, "Jobdesk could not reach the internet.");
+    }
+
+    #[test]
+    fn onboarding_mismatch_light() {
+        let script = Script { mismatch: true, ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_mismatch_light", &TO_DOWNLOAD, "This download doesn't match.");
+    }
+
+    /// Python found, Bun being checked, LaTeX next.
+    #[test]
+    fn onboarding_checking_light() {
+        let script = Script { here: vec![Helper::Python], hold_check: Some(Helper::Bun), ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_checking_light", &TO_COMPUTER, "Already here");
+    }
+
+    /// Python found, Bun installed, LaTeX a third downloaded.
+    #[test]
+    fn onboarding_installing_light() {
+        let script = Script { here: vec![Helper::Python], hold_install: Some(Helper::Latex), ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_installing_light", &TO_INSTALL, "Downloading");
+    }
+
+    /// Python found, Bun installed, LaTeX stopped.
+    #[test]
+    fn onboarding_toolfail_light() {
+        let script = Script { here: vec![Helper::Python], fails: BTreeMap::from([(Helper::Latex, SetupFailure::Offline)]), ..Script::default() };
+        render_first_run(script, Theme::Light, "onboarding_toolfail_light", &TO_INSTALL, "Could not install");
+    }
+
+    #[test]
+    fn start_setup_leads_to_save_location_in_documents() {
+        let (mut shell, _) = first_run_shell("start_setup_leads_to_place", Script::default());
+        let mut harness = first_window_on(&mut shell);
+        until_shown(&mut harness, "Welcome to Jobdesk");
+        assert!(harness.query_by_label_contains("New task").is_none(), "no menu until setup hands over");
+        click(&mut harness, "Start setup");
+        until_shown(&mut harness, "Where should your job search live?");
+        assert!(harness.query_by_label_contains("A new folder in your Documents folder.").is_some());
+        click(&mut harness, "Back");
+        until_shown(&mut harness, "Welcome to Jobdesk");
+    }
+
+    #[test]
+    fn a_folder_with_files_leads_to_a_new_folder_inside_it() {
+        let (mut shell, home) = first_run_shell("a_folder_with_files_is_refused", Script::default());
+        let full = home.join("Documents/Old stuff");
+        fs::create_dir_all(&full).unwrap();
+        fs::write(full.join("letter.txt"), "Fictional letter.").unwrap();
+        click(&mut first_window_on(&mut shell), "Start setup");
+        shell.first_run_mut().expect("first-run setup shows").choose(full.clone());
+        let mut harness = first_window_on(&mut shell);
+        until_shown(&mut harness, "Jobdesk sets up only in a new or empty folder.");
+        assert!(harness.query_by_label("Save here").is_none(), "a folder with files cannot be used");
+        click(&mut harness, "Use this new folder");
+        click(&mut harness, "Save here");
+        until_shown(&mut harness, "Your folder is ready.");
+        assert!(full.join("Job search/CLAUDE.md").is_file(), "set up inside the folder with files");
+        assert_eq!(fs::read_to_string(full.join("letter.txt")).unwrap(), "Fictional letter.", "nothing of the user's changed");
+    }
+
+    #[test]
+    fn cancel_during_the_download_leaves_the_folder_empty() {
+        let (mut shell, home) = first_run_shell("cancel_leaves_the_folder_empty", Script { hold_download: true, ..Script::default() });
+        let mut harness = first_window_on(&mut shell);
+        for step in TO_DOWNLOAD {
+            click(&mut harness, step);
+        }
+        until_shown(&mut harness, "The latest version, 1.7.5");
+        click(&mut harness, "Cancel");
+        until_shown(&mut harness, "Save here");
+        assert!(fs::read_dir(home.join("Documents/Job search")).unwrap().next().is_none(), "the folder is still empty");
+        assert!(harness.query_by_label_contains("An empty folder").is_some(), "Save location offers it again");
+    }
+
+    #[test]
+    fn continue_without_pdfs_leads_on_to_today_in_the_folder() {
+        let script = Script { here: vec![Helper::Python, Helper::Bun], fails: BTreeMap::from([(Helper::Latex, SetupFailure::Offline)]), ..Script::default() };
+        let (mut shell, home) = first_run_shell("continue_without_pdfs_leads_on", script);
+        let mut harness = first_window_on(&mut shell);
+        for step in TO_INSTALL {
+            click(&mut harness, step);
+        }
+        until_shown(&mut harness, "Could not install");
+        click(&mut harness, "Continue without PDFs");
+        until_shown(&mut harness, "New task");
+        assert!(harness.query_by_label("Start setup").is_none(), "setup has handed over");
+        drop(harness);
+        assert!(shell.first_run_mut().is_none());
+        assert!(home.join("Documents/Job search/CLAUDE.md").is_file());
+    }
+}

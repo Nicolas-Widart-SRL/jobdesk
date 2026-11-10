@@ -5,13 +5,14 @@
 pub mod application;
 mod domain;
 mod infrastructure;
+pub mod ui;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::onboarding::application::Onboarding;
 #[cfg(target_os = "macos")]
-use crate::onboarding::application::{Arch, HelperSetup};
+use crate::onboarding::application::Arch;
+use crate::onboarding::application::{HelperSetup, Onboarding};
 #[cfg(target_os = "macos")]
 use crate::onboarding::infrastructure::{HomeInstaller, ProgramProbe};
 use crate::onboarding::infrastructure::{HttpsFetcher, ProgressFile, ZipUnpacker};
@@ -23,12 +24,14 @@ fn downloads(data: &Path) -> PathBuf {
 }
 
 /// First-run setup over the app's data folder `data`, where the record and the download live. `current` is the
-/// version this copy runs, `documents` the user's Documents folder, and `repaint` wakes the window when the worker
-/// has news. It removes what a setup that stopped midway left. Nothing here starts `claude` or writes a run log.
-pub fn first_run(data: &Path, current: &str, documents: PathBuf, repaint: Arc<dyn Fn() + Send + Sync>) -> Onboarding {
+/// version this copy runs, `documents` the user's Documents folder, `helpers` the Computer step, and `repaint` wakes
+/// the window when a worker has news. It removes what a setup that stopped midway left. Nothing here starts `claude`
+/// or writes a run log.
+pub fn first_run(data: &Path, current: &str, documents: PathBuf, helpers: HelperSetup, repaint: Arc<dyn Fn() + Send + Sync>) -> Onboarding {
     let fetcher = HttpsFetcher::new(Arc::new(HttpsTransport::new(current)), downloads(data));
     let unpacker = ZipUnpacker::new(downloads(data), |folder| crate::workspace::open(folder).is_some());
-    Onboarding::new(Arc::new(ProgressFile::new(data)), crate::updates::source_pins(current), Arc::new(fetcher), Arc::new(unpacker), documents, repaint)
+    let store = Arc::new(ProgressFile::new(data));
+    Onboarding::new(store, crate::updates::source_pins(current), Arc::new(fetcher), Arc::new(unpacker), helpers, documents, repaint)
 }
 
 /// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, and a missing one installed in

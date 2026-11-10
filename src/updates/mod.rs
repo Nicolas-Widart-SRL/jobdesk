@@ -32,10 +32,11 @@ pub fn github(data: &Path, current: &str, block: Option<InstallBlock>, auto: boo
 }
 
 /// The `ai-job-search` release this copy vouches for, read from the feed on GitHub and checked against the update key
-/// built into it. `current` is the version this copy runs. A build with no update key has no pin, and reads nothing.
-/// Nothing here starts `claude`, uses the API key or writes a run log.
-pub fn source_pins(current: &str) -> Arc<dyn SourcePinReader> {
-    Arc::new(GithubSourcePins::new(Arc::new(HttpsTransport::new(current)), UpdateKey::embedded()))
+/// built into it. `current` is the version this copy runs. `None` in a build with no update key, which can vouch for
+/// no release. Nothing here starts `claude`, uses the API key or writes a run log.
+pub fn source_pins(current: &str) -> Option<Arc<dyn SourcePinReader>> {
+    let key = UpdateKey::embedded()?;
+    Some(Arc::new(GithubSourcePins::new(Arc::new(HttpsTransport::new(current)), Some(key))))
 }
 
 /// Why this copy cannot replace itself, if it cannot: a build with no update key, a copy no installer put in place,

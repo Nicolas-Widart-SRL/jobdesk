@@ -69,10 +69,12 @@ impl CommunityCache {
         copy.write_all(&bytes)?;
         // On disk before the rename, or a power loss could keep the rename and lose the list.
         copy.as_file().sync_all()?;
-        let copy = copy.into_temp_path();
-        rename_over(&copy, &self.path)?;
-        // In place now: nothing is left to remove.
-        copy.keep().map(drop).map_err(|error| error.error)
+        // Kept while it is still at its own path: on Windows keeping clears the temporary attribute there, and fails once
+        // the copy has moved. From here on, this save removes its copy itself.
+        let copy = copy.into_temp_path().keep().map_err(|error| error.error)?;
+        rename_over(&copy, &self.path).inspect_err(|_| {
+            let _ = fs::remove_file(&copy);
+        })
     }
 }
 

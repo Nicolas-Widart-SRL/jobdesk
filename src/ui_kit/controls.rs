@@ -10,10 +10,11 @@ use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{code_box, hairline, on_desk};
 use crate::ui_kit::text::{add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
-    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FIELD_HEIGHT, FIELD_PADDING, FOCUS_OFFSET, FOCUS_RING,
-    HAIRLINE, KEY_SIZE, KEYS_GAP, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_EDGE, PICK_ROW_HEIGHT,
-    PICK_ROW_INLINE, RADIUS_BUTTON, ROW_ITEM_GAP, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP, SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING,
-    STATUS_DOT, STATUS_MARK_GAP, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, SWEEP_DASH, SWEEP_SHARE, TOGGLE_GAP, Type,
+    BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PADDING, CHECK_BOX, CHIP_HEIGHT, COMMAND_NAME_WIDTH, DISABLED_OPACITY, FIELD_HEIGHT, FIELD_PADDING, FOCUS_OFFSET,
+    FOCUS_RING, HAIRLINE, ITEM_GAP, KEY_SIZE, KEYS_GAP, MARK_HEIGHT, MARK_LINE, MARK_OVERHANG, MARK_RULE, MIN_HIT, NAV_TAB_HEIGHT, NAV_TAB_PADDING, PICK_EDGE,
+    PICK_ROW_HEIGHT, PICK_ROW_INLINE, RADIUS_BUTTON, RADIUS_CARD, RADIUS_STAMP, ROW_ITEM_GAP, SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_PADDING, SEGMENT_TOP,
+    SMALL_BUTTON_HEIGHT, SMALL_BUTTON_PADDING, STATUS_DOT, STATUS_MARK_GAP, STATUS_SEGMENT_HEIGHT, STATUS_SEGMENT_PADDING, SWEEP_DASH, SWEEP_SHARE, TOGGLE_GAP,
+    Type,
 };
 
 #[derive(Clone, Copy)]
@@ -246,6 +247,50 @@ pub fn toggle_group<T: Copy + PartialEq>(ui: &mut Ui, current: Option<T>, option
         });
     });
     picked
+}
+
+/// A state that takes effect at once on a thing in a list, such as a portal on or off: a track `CHECK_BOX` tall and
+/// twice as wide, with a square knob at its leading end while off and its trailing end while on, then the word On or
+/// Off. On fills the track and its edge with `text`, with a `field` knob and "On" in strong type. Off keeps a `muted`
+/// edge and knob on a `field` track, with "Off" `muted`. A setting on a settings page takes `setting_check` instead.
+/// The caller flips its state when the response is clicked. A screen reader hears a checkbox named "`name`, on" or
+/// "`name`, off". It paints its own disabled look: give the reason with `enabled_when`.
+pub fn switch(ui: &mut Ui, on: bool, name: &str) -> Response {
+    let p = Palette::of(ui);
+    let enabled = ui.is_enabled();
+    let (word, font, ink) = if on { ("On", Type::STRONG, p.text) } else { ("Off", Type::NOTE, p.muted) };
+    let ink = if enabled { ink } else { dimmed(ink) };
+    // Room for the wider word, so the switch keeps its width when it flips.
+    let words = line(ui, "On", Type::STRONG, ink, f32::INFINITY).size().x.max(line(ui, "Off", Type::NOTE, ink, f32::INFINITY).size().x);
+    let track_size = vec2(CHECK_BOX * 2.0, CHECK_BOX);
+    let (rect, mut response) = ui.allocate_exact_size(vec2(track_size.x + ITEM_GAP + words, MIN_HIT.max(CHECK_BOX)), Sense::click());
+    let track = Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - CHECK_BOX / 2.0), track_size);
+    // A press goes one step deeper than the hover, as a toggle's does.
+    let (fill, edge, knob) = match (on, pointer_over(&response), pressed(&response)) {
+        (true, _, true) => (p.muted, p.muted, p.field),
+        (true, _, false) => (p.text, p.text, p.field),
+        (false, _, true) => (p.line, p.muted, p.muted),
+        (false, true, false) => (p.raised, p.muted, p.muted),
+        (false, false, false) => (p.field, p.muted, p.muted),
+    };
+    let mut painter = ui.painter().clone();
+    if !enabled {
+        painter.multiply_opacity(DISABLED_OPACITY);
+    }
+    painter.rect(track, RADIUS_CARD, fill, Stroke::new(HAIRLINE, edge), StrokeKind::Inside);
+    // The knob keeps a hairline of track between it and the edge.
+    let inset = HAIRLINE * 2.0;
+    let side = CHECK_BOX - inset * 2.0;
+    let knob_left = if on { track.right() - inset - side } else { track.left() + inset };
+    painter.rect_filled(Rect::from_min_size(egui::pos2(knob_left, track.top() + inset), vec2(side, side)), RADIUS_STAMP, knob);
+    let galley = line(ui, word, font, ink, words);
+    paint_text(ui, egui::pos2(track.right() + ITEM_GAP, rect.center().y - galley.size().y / 2.0), galley, ink, Color32::TRANSPARENT);
+    interactive_part(ui, &response, track, RADIUS_CARD);
+    if response.clicked() {
+        response.mark_changed();
+    }
+    response.widget_info(|| WidgetInfo::selected(Role::CheckBox, enabled, on, format!("{name}, {}", if on { "on" } else { "off" })));
+    response
 }
 
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {

@@ -2794,6 +2794,10 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
                 fs::remove_dir_all(root.join("cv")).unwrap();
                 fs::write(root.join("cv"), b"").unwrap();
             }
+            Source::Portals => {
+                fs::remove_dir_all(root.join(".agents/skills")).unwrap();
+                fs::write(root.join(".agents/skills"), b"").unwrap();
+            }
             Source::Decisions => unreachable!("the tray reports its own file"),
         }
     }
@@ -2880,6 +2884,14 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             subtitle: "ai-job-search",
             alert: "Part of your profile could not be read.",
             shown: &["Everything else still works.", "Profile, could not be read"],
+            not_shown: &[],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Portals],
+            subtitle: "ai-job-search",
+            alert: "Your portals could not be read.",
+            shown: &["Everything else still works.", "Setup, could not be read"],
             not_shown: &[],
         },
         Case {

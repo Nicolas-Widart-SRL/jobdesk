@@ -7,12 +7,13 @@ use chrono::NaiveDate;
 use crate::discovery::application::{JobBoard, YourTerms};
 use crate::dossier::application::{ApplicationRef, ArchiveContents};
 use crate::insights::application::{SearchInsights, SkillGapView, WorkflowBand, search_insights, workflow_band};
+use crate::portals::application::PortalsView;
 use crate::profile::application::{CvShelf, ProfileView, topic_counts};
 use crate::runs::application::UsageReport;
 use crate::shared_kernel::{LoadError, Source};
 use crate::tracking::application::Pipeline;
 use crate::workspace::application::{WorkspaceView, workspace_view};
-use crate::{discovery, dossier, insights, profile, tracking, workspace};
+use crate::{discovery, dossier, insights, portals, profile, tracking, workspace};
 
 /// One consistent view of the workspace. Screens only ever read this.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -26,6 +27,8 @@ pub struct Snapshot {
     pub skill_gaps: Option<SkillGapView>,
     pub archives: HashMap<String, ArchiveContents>,
     pub workspace: WorkspaceView,
+    /// The installed portals and the search terms they share.
+    pub portals: PortalsView,
     pub profile: ProfileView,
     /// The CV documents of `cv/`, or that the folder could not be read.
     pub cv_documents: CvShelf,
@@ -56,10 +59,13 @@ impl Snapshot {
         let read_at = Some(Instant::now());
         let mut issues = Vec::new();
         let terms = discovery::load_terms(root);
-        let board = discovery::load_board(root, today, &terms.gates()).unwrap_or_else(|error| {
+        let board = discovery::load_board(root, today, &terms.gates());
+        let (portals, errors) = portals::load(root, board.as_ref().ok());
+        let board = board.unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Jobs, error });
             JobBoard::default()
         });
+        issues.extend(errors.into_iter().map(|error| Issue { source: Source::Portals, error }));
         let pipeline = tracking::load_pipeline(root, today).unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Applications, error });
             Pipeline::default()
@@ -87,7 +93,7 @@ impl Snapshot {
             issues.push(Issue { source: Source::CvDocuments, error });
             CvShelf::Unread
         });
-        let workspace = workspace_view(&workspace::inspect(root), &board, &profile);
+        let workspace = workspace_view(&workspace::inspect(root), &portals, &profile);
         let insights = search_insights(&pipeline);
         let counts = topic_counts(&profile);
         let band = workflow_band(&insights, &board, (counts.filled, counts.total, counts.hidden));
@@ -95,6 +101,7 @@ impl Snapshot {
         Self {
             archives,
             workspace,
+            portals,
             profile,
             cv_documents,
             insights,
@@ -167,5 +174,28 @@ mod tests {
         let issues: Vec<(Source, &str)> =
             snapshot.issues.iter().filter(|issue| issue.source == Source::CvDocuments).map(|i| (i.source, i.error.source.as_str())).collect();
         assert_eq!(issues, [(Source::CvDocuments, "cv/")]);
+    }
+
+    #[test]
+    fn load_reads_the_portals_of_the_sample() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample_workspace");
+        let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        let portals: Vec<(&str, bool, Option<usize>)> =
+            snapshot.portals.portals.iter().map(|portal| (portal.folder.as_str(), portal.on, portal.jobs.map(|(count, _)| count))).collect();
+        assert_eq!(portals, [("jobnet-search", false, Some(0)), ("linkedin-search", true, Some(6))]);
+        assert!(snapshot.portals.installed_read && snapshot.portals.plan_read);
+    }
+
+    /// A `.agents/skills` that is no folder is one issue, and the view says the portals are unread, not none.
+    #[test]
+    fn a_portals_folder_that_cannot_be_read_is_one_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".agents")).unwrap();
+        std::fs::write(dir.path().join(".agents/skills"), b"").unwrap();
+        let snapshot = Snapshot::load(dir.path(), NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        let issues: Vec<(Source, &str)> =
+            snapshot.issues.iter().filter(|issue| issue.source == Source::Portals).map(|i| (i.source, i.error.source.as_str())).collect();
+        assert_eq!(issues, [(Source::Portals, ".agents/skills")]);
+        assert!(!snapshot.portals.installed_read);
     }
 }

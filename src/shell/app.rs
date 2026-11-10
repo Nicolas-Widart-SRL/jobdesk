@@ -1607,6 +1607,8 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
         Source::Profile | Source::CvDocuments => (Some(Screen::Profile), false),
+        // Setup lists the portals until they have a screen of their own.
+        Source::Portals => (Some(Screen::Workspace), false),
         Source::Decisions => (None, false),
     }
 }
@@ -1623,6 +1625,7 @@ fn failed_words(source: Source) -> (&'static str, &'static str) {
         Source::SkillGaps => ("Your skill gap reports could not be read.", "Everything else still works."),
         Source::Profile => ("Part of your profile could not be read.", "Everything else still works."),
         Source::CvDocuments => ("Your CV folder could not be read.", "Your profile topics still show, and every task still runs."),
+        Source::Portals => ("Your portals could not be read.", "Everything else still works."),
         Source::Decisions => ("Your decisions could not be saved or read.", "Today still works, but what you decide may be gone after Jobdesk closes."),
     }
 }

@@ -2,6 +2,7 @@ pub mod discovery;
 pub mod dossier;
 pub mod insights;
 pub mod intray;
+pub mod portals;
 pub mod profile;
 pub mod runs;
 pub mod settings;

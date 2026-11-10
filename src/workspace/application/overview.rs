@@ -1,4 +1,4 @@
-use crate::discovery::application::JobBoard;
+use crate::portals::application::PortalsView;
 use crate::profile::application::{ProfileView, TopicCounts, topic_counts};
 use crate::shared_kernel::{KeySource, key_source};
 use crate::workspace::domain::{SyncState, TemplateState, ToolCheck, WorkspaceStatus};
@@ -20,11 +20,13 @@ pub struct WorkspaceView {
     pub has_salary_data: bool,
 }
 
-pub fn workspace_view(status: &WorkspaceStatus, board: &JobBoard, profile: &ProfileView) -> WorkspaceView {
-    let portals = status
+/// Setup names each portal by its folder, as before the Portals screen. A portal's jobs count as none while the saved
+/// jobs cannot be read, and Setup hides them then.
+pub fn workspace_view(status: &WorkspaceStatus, portals: &PortalsView, profile: &ProfileView) -> WorkspaceView {
+    let portals = portals
         .portals
         .iter()
-        .map(|portal| PortalRow { name: portal.name.clone(), enabled: portal.enabled, jobs_seen: board.seen_on_portal(&portal.name) })
+        .map(|portal| PortalRow { name: portal.folder.clone(), enabled: portal.on, jobs_seen: portal.jobs.map_or(0, |(count, _)| count) })
         .collect();
     WorkspaceView {
         topics: topic_counts(profile),
@@ -141,7 +143,7 @@ mod tests {
     #[test]
     fn the_view_counts_the_profile_topics() {
         let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
-        let view = workspace_view(&WorkspaceStatus::default(), &JobBoard::default(), &profile);
+        let view = workspace_view(&WorkspaceStatus::default(), &PortalsView::default(), &profile);
         assert_eq!(view.topics, TopicCounts { filled: 0, total: 11, hidden: 0, any_found: false });
     }
 

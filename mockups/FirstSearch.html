@@ -10,7 +10,8 @@
 /* The app right after onboarding. Choose with ?state=today|launcher|jobs&theme=light|dark.
    today: Today suggests the first search. launcher: Y opened New task on /scrape, and the user presses Run there.
    jobs: the search finished, Jobs shows the new jobs and suggests scoring them. No card action starts a run.
-   No spend, estimate or cap shows: tasks use the user's Claude subscription by default, and Usage stays in Settings.
+   Today's offer and the Jobs note show no spend or estimate: tasks use the user's Claude subscription by default, and Usage stays in Settings.
+   The launcher is unchanged: it keeps its Model and Spend at most fields side by side, as src/runs/ui/launcher.rs draws them.
    Grid.html's scoped styles, copied and scoped to .fs, so app.css and the other canvases are unchanged. Fictional data. */
 body { margin: 0; }
 .fs {
@@ -83,6 +84,9 @@ body { margin: 0; }
 .fs .lslip label { font-size: 13px; color: var(--muted); }
 .fs .fld { height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
 .fs .code2 { padding: 9px 11px; border-radius: 2px; background: var(--field); font: 400 13.5px var(--type); }
+/* Model and Spend at most in two columns, as the launcher's columns_const draws them. */
+.fs .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fs .row2 > div { display: flex; flex-direction: column; gap: 6px; }
 /* NEW, from_note: a short note at the top of the launcher's side slip, naming the suggestion that opened it. */
 .fs .from { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; padding: 8px 10px; border-radius: 3px; background: var(--card); font-size: 13px; color: var(--muted); }
 .fs .from b { color: var(--text); }
@@ -179,7 +183,8 @@ function launcher() {
         <div class="from"><b>Your first search, from Today.</b>Leave the box below empty to search for all your job titles.</div>
         <span class="muted">Find new postings on installed portals</span>
         <label>Focus area, broad, or health</label><span class="fld"></span>
-        <label>Model</label><span class="fld" style="color: var(--text); justify-content: space-between">Claude default <span>▾</span></span>
+        <div class="row2"><div><label>Model</label><span class="fld" style="color: var(--text); justify-content: space-between">Claude default <span>▾</span></span></div>
+          <div><label>Spend at most, USD</label><span class="fld" style="color: var(--text)">2.00</span></div></div>
         <label>Claude will run</label><span class="code2">/scrape</span>
         <span class="muted">Runs in your job search folder.</span>
         <span><button class="btn pri" type="button">Run <span class="keys" style="color: inherit">Cmd Enter</span></button></span>

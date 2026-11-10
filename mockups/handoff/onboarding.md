@@ -1,14 +1,14 @@
 # Onboarding
 
-First run for a non-technical job seeker who has Claude Code installed and signed in, no API key, and never opens a terminal. Jobdesk makes the folder, downloads ai-job-search, installs its helpers, builds the profile from the user's documents with the unchanged `/setup`, then hands over to Today for the first search. The user picked option B, the compact card wizard, and B2 for the question sheet. Round 3 fits B to that pick: one field per question answered on the user's own time, a checkbox per proposed change, and no spend shown anywhere.
+First run for a non-technical job seeker who has Claude Code installed and signed in, no API key, and never opens a terminal. Jobdesk makes the folder, downloads ai-job-search, installs its helpers, builds the profile from the user's documents with the unchanged `/setup`, then hands over to Today for the first search. The design is a compact card wizard in a small window that grows once, at the Profile chapter. Claude's questions open in a sheet with one field per question, answered on the user's own time, and proposed changes open in a review card with a checkbox each.
 
 ## Contents
 
 - [Canvases](#canvases)
-- [Rules and why](#rules-and-why): window, words, no spend, foot, folder, download, helpers, quitting midway, documents, the profile run, question sheet, review card, CV check, choice card, failure, recap, first search
+- [Rules and why](#rules-and-why): window, words, spend, foot, folder, download, helpers, quitting midway, documents, the profile run, question sheet, review card, CV check, choice card, failure, recap, first search
 - [New widgets](#new-widgets)
 - [Doc changes](#doc-changes)
-- [Open](#open)
+- [Build questions](#build-questions)
 
 ## Canvases
 
@@ -46,7 +46,7 @@ First run for a non-technical job seeker who has Claude Code installed and signe
 | State | PNG | What it shows |
 | --- | --- | --- |
 | `today` | `FirstSearch-today.png` | Today with nothing to decide: the clear-state offer panel in first-search words, Find new jobs… with Y, and a Your profile slip |
-| `launcher` | `FirstSearch-launcher.png` | New task on `/scrape`, with a note naming the first search and no Spend at most field. The user presses Run |
+| `launcher` | `FirstSearch-launcher.png` | New task on `/scrape` as built, with Model and Spend at most side by side, and a note naming the first search. The user presses Run |
 | `jobs` | `FirstSearch-jobs.png` | Jobs after the search: 14 new jobs, not scored, and a note with Score 14 new jobs… |
 
 ## Rules and why
@@ -56,13 +56,13 @@ First run for a non-technical job seeker who has Claude Code installed and signe
 - The first window is small, 720x560: welcome, resume, Folder and Computer. These steps hold a few lines each, and a small window reads as an installer, not an app to learn.
 - The window grows once, when the Profile chapter opens, to 1280x820, the app's own default size, and keeps that size through the recap and into the app. Why: a 13-question batch at the reading measure (`DOC_MEASURE`) plus an answer field per question needs about 1100 by 700 points. The app's minimum, 1040x640, would fit but grows a second time at the recap; one grow is calmer than two.
 - On a screen smaller than 1280x820, the window takes the screen's work area, never below the app's minimum.
-- The Profile card keeps B's look: centred, `step_dots` above it, the setup stamp in its head, one primary in its foot. It widens to 1120 and splits into a main column and a 340 side column (`SPLIT_SIDE_BASIS`, `SPLIT_GAP`).
+- The Profile card keeps the wizard's look: centred, `step_dots` above it, the setup stamp in its head, one primary in its foot. It widens to 1120 and splits into a main column and a 340 side column (`SPLIT_SIDE_BASIS`, `SPLIT_GAP`).
 - No menu and no tabs until the recap: nothing else is usable yet. The status strip on the welcome keeps Settings, so the theme can change.
 - Choosing I already have an ai-job-search folder opens the folder picker, then the app as today, at its usual size.
 
 ### Words
 
-The copy never says repo, clone, CLI, scrape, workspace, slash command, terminal, install path, hash, checksum, byte counts, tokens or cost.
+The onboarding copy never says repo, clone, CLI, scrape, workspace, slash command, terminal, install path, hash, checksum, byte counts, tokens or cost.
 
 | Instead of | It says |
 | --- | --- |
@@ -77,10 +77,11 @@ The copy never says repo, clone, CLI, scrape, workspace, slash command, terminal
 
 ai-job-search keeps its name, as the user may already know it.
 
-### No spend
+### Spend
 
-- No spend figure, estimate or cap shows during onboarding or the first search: no "About $N so far", no price on the welcome or the recap, no estimate on Today's offer or the Jobs note, and no Spend at most field in the launcher the first search opens.
-- Why: tasks use the user's Claude subscription by default, so a dollar figure means nothing to this user and reads as a bill. Usage stays in Settings, and still counts every onboarding run and the first search.
+- No spend figure or estimate shows on an onboarding screen, or in the first-search suggestions on Today and Jobs: no "About $N so far", no price on the welcome or the recap, no estimate in Today's offer or the Jobs note.
+- Why: tasks use the user's Claude subscription by default, so a dollar figure there means nothing to this user and reads as a bill. Usage stays in Settings, and still counts every onboarding run and the first search.
+- The launcher is unchanged. Opened from the first-search note, it keeps its Model and Spend at most fields, as it shows them for any task.
 - The foot's muted line keeps the time, Elapsed, or says nothing. No plan note replaces the spend.
 
 ### The foot
@@ -109,7 +110,7 @@ ai-job-search keeps its name, as the user may already know it.
 
 - Three lines, in this order: Keeps your tracker (Python), Searches job sites (Bun), Makes your CV and cover letter PDFs (LaTeX). The purpose is the headline, so the names never need explaining.
 - All three install in the user's home folder, with no administrator password: a standalone Python build, Bun in its own home folder, and TinyTeX for LaTeX. Each file is checked against a hash Jobdesk pins. The note under the lines says they install for this user only and nothing else on the computer changes. No password note appears anywhere.
-- A missing helper's line names its size and time in plain words: Python "about 40 MB" and Bun "about 30 MB", each under a minute, and LaTeX "about 250 MB, the slow one: 5 to 15 minutes". The lead says LaTeX is the slow one and the user can step away.
+- A missing helper's line names its size and time in plain words: Python "about 40 MB" and Bun "about 30 MB", each under a minute, and LaTeX "about 250 MB, the slow one: 5 to 15 minutes". The lead says LaTeX is the slow one and the user can step away. The figures are placeholders until measured.
 - Each line ends in one tag: Checking… (`Plain`), Already here or Installed (`Hired`), Installing… (`Active`) with a bar and the time left, or Could not install (`Closed`) with the reason under the name. A helper not reached yet says Next in `muted`.
 - Jobdesk checks first, and installs only after Install what is missing.
 - When LaTeX fails: Try again is the primary, Continue without PDFs the quiet link. The paragraph says what still works and that Setup can install it later. Setup goes on to the Profile chapter; the CV check is skipped, since no PDF can be made.
@@ -160,7 +161,7 @@ Claude's message renders as Markdown with no image loading and no links that ope
 - **Sub-items.** Lettered sub-items (a, b) under a numbered question render inside that question, above its one field. The user answers them in that one field.
 - **Finding the questions.** Jobdesk reads only ordered list items, numbered across the whole message.
 
-Why a field per question (the user's pick, B2): each answer sits under its own question, so the user never loses count across 13 items and two scrolls, an optional question is marked where it is asked, and the numbered reply is built for them. The real user wrote one numbered reply of about 900 characters; the sheet builds exactly that reply.
+Why a field per question: each answer sits under its own question, so the user never loses count across 13 items and two scrolls, an optional question is marked where it is asked, and the numbered reply is built for them. A real setup session's answer was one numbered reply of about 900 characters; the sheet builds exactly that shape of reply.
 
 **Fallback (`sheet-fallback`).** When the message has no numbered items, or the numbers do not run in order, the sheet shows the message at the left with its own scroll and one large field at the right, unnumbered. The title says "Claude has a few questions", since there is nothing to count. The help under the field says the answer is one reply this time. Send answer sends the field as it is.
 
@@ -182,7 +183,7 @@ All sheets share:
 - Why checkboxes: Claude's proposal ends "Reply yes to apply all, or list the numbers to skip." The checkboxes build exactly that reply, so the user never types numbers.
 - With every change unticked, Apply these changes is disabled, and the muted line says "Tick a change, or use Change something."
 - Change something opens a field under the document with Send and Cancel, in place of the two buttons, and sends the user's words as the reply. The ticks are not sent with it.
-- Jobdesk tells a proposal from a question batch by Claude's numbered items and its closing request to confirm. When it cannot tell, the message opens in the question sheet, which still reaches the user.
+- When Jobdesk cannot tell a proposal from a question batch, the message opens in the question sheet, which still reaches the user.
 
 ### CV check
 
@@ -191,7 +192,7 @@ All sheets share:
 
 ### Choice card
 
-- When Claude asks with `AskUserQuestion`, the card in stamp ink from round 1 shows instead of the sheet: the question, each choice as a radio row with its label and description, Or write your own answer, Send answer and Decline, as in Tasks. The question always reaches the user.
+- When Claude asks with `AskUserQuestion`, the card in stamp ink shows instead of the sheet: the question, each choice as a radio row with its label and description, Or write your own answer, Send answer and Decline, as in Tasks. The question always reaches the user.
 - It is a secondary state: the real `/setup` never used it, but another run might.
 - A permission prompt, with Settings › Permissions on, shows in the same place as in Tasks.
 
@@ -212,7 +213,7 @@ All sheets share:
 ### First search
 
 - Today with nothing dealt shows the clear-state offer panel in its first-search words, with Find new jobs… as the primary with Y. Its steps give the time only: "It takes about 5 minutes." Y only opens the launcher on `/scrape`, with a `from_note`: "Your first search, from Today." The user presses Run.
-- The launcher opened from that note shows Model and no Spend at most field.
+- The launcher opened from that note is the launcher as built: Model and Spend at most side by side, the command, and Run. Only the `from_note` is new.
 - When the search ends, Jobs opens by itself only while that run is still open in Tasks. Otherwise the Today offer turns into Score N new jobs….
 - Jobs shows the New view with each job Not scored, and a note with Score N new jobs… as the primary, which only opens the launcher on `/rank`. The note gives the time only.
 - Card actions never start a run, in every state drawn here.
@@ -243,21 +244,19 @@ In dark, `panel` and `card` are the same color, so a slip, alert or `ahead` knot
 ## Doc changes
 
 - `ARCHITECTURE.md`: a feature for first run (or a part of `workspace`): the progress record, download and check the ai-job-search release against the feed's pinned SHA-256, install the helpers into the home folder against pinned hashes, copy the documents, and start `/setup` through runs' application layer. Add it to the Features table and to `FEATURES` in `tests/architecture.rs`. The runtime note for the small first window, the one grow at the Profile chapter, and its sizes.
-- `docs/guide.md`: a First run section before Today, which Get help opens. It covers the documents to add, how to save a LinkedIn profile as a PDF, the question sheet answered on your own time, ticking proposed changes, quitting and resuming, Continue without PDFs, and Add a job site you use…. It says onboarding and the first search show no spend, and Settings › Usage holds it. Today's sentence on the welcome with three steps is replaced.
+- `docs/guide.md`: a First run section before Today, which Get help opens. It covers the documents to add, how to save a LinkedIn profile as a PDF, the question sheet answered on your own time, ticking proposed changes, quitting and resuming, Continue without PDFs, and Add a job site you use…. It says the onboarding screens and Today's and Jobs' first-search suggestions show no spend, the launcher keeps Spend at most, and Settings › Usage holds the spend. Today's sentence on the welcome with three steps is replaced.
 - `docs/architecture/trust.md`: the release zip checked against the feed's pinned SHA-256; each helper checked against a pinned hash; unpacking that stays inside the chosen folder; a non-empty folder refused; the setup messages, proposals and file names as untrusted text; the progress record and its draft answers in the data folder.
 - `docs/architecture/runs.md`: the onboarding run: the fixed first reply that picks Path A, the fixed progress phrases, the joined numbered reply with "Skipped" for an empty field, the review card's built reply ("Yes, apply these changes." or "Apply all except N and M."), the fixed "The CV looks good.", resuming from the progress record, and answers sent on the same session.
 - `AGENTS.md`, Logs: the progress record in the data folder holds the user's draft answers, read only when asked.
 - `docs/architecture/ui-kit.md`: the new widgets above.
 
-## Open
+## Build questions
 
-Picked so far: option B; B2, a field per question (round 2's question 1); no spend shown during onboarding or the first search, so round 2's questions on setup's spending cap and the first search's figures are closed; and the lead's recommendations on the download check, home-folder installs, quitting midway, a non-empty folder, Continue without PDFs, Get help and Jobs opening only while the run is open. To settle:
+The build's planner settles each of these before the step that needs it.
 
-1. **Finding the numbered items.** The sheet needs Claude's questions as one ordered list numbered across the message, with sub-items lettered under them. Check this against a few real `/setup` transcripts' shapes.
-2. **Telling a proposal from a question batch** for the review card. A check on Claude's closing words is fragile. Proposed: a message whose numbered items hold no question mark and that ends by asking to confirm opens the review card; any other message opens the sheet.
-3. **Sizes and times.** The 40 MB, 30 MB and 250 MB and the LaTeX time are placeholders, to be measured with the chosen standalone Python, Bun and TinyTeX builds and the LaTeX packages the CV templates need.
-4. **Word files.** Whether `/setup` reads a `.docx` as is, or Jobdesk turns it into PDF or text first.
-5. **The launcher's button** stays Run, its built name.
-6. **The Your profile slip on Today**, with Open Profile, is new: keep it until the profile is full, or drop it.
-7. **No git in the folder.** A zip download has no `.git`. `/setup` skips its public-fork check without a remote, and updating ai-job-search later (out of scope here) can no longer use git.
-8. **Spend at most in the launcher.** Drawn hidden only when the launcher opens from the first-search note; everywhere else it keeps the field. Whether a user on the Claude subscription should see it anywhere in the launcher is still to decide.
+1. **Numbered items and sub-items**: how Jobdesk finds Claude's questions as one ordered list numbered across the message, with lettered sub-items under them; check against the shapes of a few `/setup` transcripts.
+2. **Proposal or question batch**: how Jobdesk tells a proposal from a question batch; a check on Claude's closing words is fragile, and one proposed test is numbered items with no question mark plus a closing request to confirm.
+3. **Helper sizes and times**: measure the 40 MB, 30 MB and 250 MB and the LaTeX time with the chosen standalone Python, Bun and TinyTeX builds and the LaTeX packages the CV templates need.
+4. **Word files**: whether `/setup` reads a `.docx` as is, or Jobdesk turns it into PDF or text first.
+5. **No git in the folder**: a zip download has no `.git`, so `/setup` skips its public-fork check without a remote, and a later ai-job-search update cannot use git.
+6. **Your profile slip on Today**: whether the new slip, with Open Profile, stays until the profile is full, or is dropped.

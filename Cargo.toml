@@ -59,6 +59,8 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Pure Rust xz, to unpack the TeX Live packages first-run setup adds to TinyTeX.
+lzma-rs = { version = "0.3", default-features = false }
 tar = { version = "0.4", default-features = false }
 
 [dev-dependencies]

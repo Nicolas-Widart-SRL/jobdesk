@@ -21,7 +21,8 @@ pub enum Phase {
     Unpacking,
 }
 
-/// Why setting up the folder stopped. Each leaves the folder empty, and no server text is kept.
+/// Why setting up the folder, or installing a helper, stopped. Each leaves the folder empty and the helper's place as
+/// it was, and no server text is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
     /// No internet, a timeout, or a download or a read of the feed cut short.
@@ -31,17 +32,20 @@ pub enum Failure {
     Refused(u16),
     /// Jobdesk's release feed vouches for no ai-job-search release now, or what it sent does not read.
     NoPin,
-    /// The download grew past `MAX_ZIP`.
+    /// The download grew past `MAX_ZIP`, or past the size a helper's file is pinned at.
     TooLarge,
-    /// The download is not the release the feed pins. It is deleted.
+    /// The download is not the release the feed pins, or not the helper file Jobdesk pins. It is deleted.
     Mismatch,
     /// The archive holds an entry that could lead outside the folder, a link, two names one disk would take for the
     /// same name, or more than the limits allow. Nothing of it is unpacked.
     BadArchive,
-    /// The folder holds files now, so nothing was put in it.
+    /// The folder holds files now, so nothing was put in it. For a helper, a folder that holds anything already takes
+    /// its place, and it is left alone.
     NotEmpty,
     /// A file could not be written or read on this computer.
     Disk,
+    /// The helper is in its place, but its programs do not run.
+    DoesNotRun,
     /// The user pressed Cancel.
     Cancelled,
 }

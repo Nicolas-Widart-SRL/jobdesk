@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -9,17 +10,38 @@ const MARKER: &str = "__JOBDESK_PATH__";
 /// What a program's file name may end in on Windows, in the order Jobdesk tries them.
 const WINDOWS_EXTENSIONS: [&str; 3] = ["exe", "cmd", "bat"];
 
-/// An app opened from the Finder has none of the PATH set in shell profiles, so `claude`,
-/// `bun` and `lualatex` would all look missing. Ask the login shell.
+/// The folders, under the home folder, that hold the programs of the helpers first-run setup installs on macOS: a
+/// standalone Python, Bun and TinyTeX, in that order.
+pub const HELPER_BINS: [&[&str]; 3] = [&[".jobdesk", "python", "bin"], &[".bun", "bin"], &["Library", "TinyTeX", "bin", "universal-darwin"]];
+
+/// On macOS these programs in `/usr/bin` only hand over to the real one in Xcode or its Command Line Tools. With
+/// neither installed, running one opens a dialog that offers to install them.
+const DEVELOPER_STUBS: [&str; 2] = ["python3", "git"];
+
+/// An app opened from the Finder has none of the PATH set in shell profiles, so `claude`, `bun` and `lualatex` would
+/// all look missing. Ask the login shell. The helper folders come first, so runs, the tool check and Runtime status
+/// find the helpers first-run setup installed. They are listed even before an install, because the lookup runs once.
 pub fn resolved_path() -> &'static str {
     static RESOLVED: OnceLock<String> = OnceLock::new();
     RESOLVED.get_or_init(|| {
-        let inherited = env::var("PATH").unwrap_or_default();
-        match login_shell_path() {
-            Some(login) if !login.is_empty() => format!("{login}{}{inherited}", if cfg!(windows) { ';' } else { ':' }),
-            _ => inherited,
-        }
+        let helpers = helper_bins(env::var_os("HOME").as_deref(), cfg!(target_os = "macos"));
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        joined(&helpers, login_shell_path(), &env::var("PATH").unwrap_or_default(), separator)
     })
+}
+
+/// The helper folders under `home`, on macOS only, whether or not they exist yet. An empty `home` is no folder.
+pub fn helper_bins(home: Option<&OsStr>, macos: bool) -> Vec<PathBuf> {
+    let Some(home) = home.filter(|home| macos && !home.is_empty()) else { return Vec::new() };
+    HELPER_BINS.iter().map(|parts| parts.iter().fold(PathBuf::from(home), |path, part| path.join(part))).collect()
+}
+
+/// `first`, then the login shell's `PATH`, then the inherited one. A folder that a `PATH` cannot hold, because it is
+/// not text or holds the separator, is left out, and so is an empty part, which would name the current folder.
+fn joined(first: &[PathBuf], login: Option<String>, inherited: &str, separator: char) -> String {
+    let first = first.iter().filter_map(|folder| folder.to_str()).filter(|folder| !folder.contains(separator));
+    let rest = login.into_iter().chain([inherited.to_owned()]);
+    first.map(str::to_owned).chain(rest).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(&separator.to_string())
 }
 
 #[cfg(unix)]
@@ -72,12 +94,39 @@ fn usual_folders(home: Option<&OsStr>, userprofile: Option<&OsStr>, appdata: Opt
     folders
 }
 
-/// Looks through `path`, then the folders the Claude installer and npm use.
+/// Looks through `path`, then the folders the Claude installer and npm use. On macOS a `/usr/bin` stub with no
+/// developer tools behind it is not a program: running it would open a dialog, so the search goes on past it.
 pub fn find_executable(path: &str, name: &str) -> Option<PathBuf> {
     let windows = cfg!(windows);
     let usual = usual_folders(env::var_os("HOME").as_deref(), env::var_os("USERPROFILE").as_deref(), env::var_os("APPDATA").as_deref(), windows);
     let extensions: &[&str] = if windows { &WINDOWS_EXTENSIONS } else { &[] };
-    env::split_paths(path).chain(usual).flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file())
+    let dead = |candidate: &Path| cfg!(target_os = "macos") && is_dead_stub(candidate, Path::new("/usr/bin"), &developer_dirs);
+    env::split_paths(path).chain(usual).flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file() && !dead(candidate))
+}
+
+/// Whether `candidate` is one of the developer stubs in `usr_bin` with no program behind it in any of the folders
+/// `developer_dirs` gives, which it asks only for a stub.
+fn is_dead_stub(candidate: &Path, usr_bin: &Path, developer_dirs: &dyn Fn() -> Vec<PathBuf>) -> bool {
+    let Some(name) = candidate.file_name().and_then(OsStr::to_str) else { return false };
+    if candidate.parent() != Some(usr_bin) || !DEVELOPER_STUBS.contains(&name) {
+        return false;
+    }
+    // A folder may be named down to `Contents/Developer`, or as the Xcode app itself.
+    !developer_dirs()
+        .iter()
+        .any(|dir| [dir.to_path_buf(), dir.join("Contents").join("Developer")].iter().any(|dir| dir.join("usr").join("bin").join(name).is_file()))
+}
+
+/// Where the stubs look for the real programs: `DEVELOPER_DIR`, else the folder `xcode-select` chose, else Xcode's and
+/// the Command Line Tools' usual places.
+fn developer_dirs() -> Vec<PathBuf> {
+    if let Some(dir) = env::var_os("DEVELOPER_DIR").filter(|dir| !dir.is_empty()) {
+        return vec![PathBuf::from(dir)];
+    }
+    if let Ok(chosen) = fs::read_link("/var/db/xcode_select_link") {
+        return vec![Path::new("/var/db").join(chosen)];
+    }
+    vec![PathBuf::from("/Applications/Xcode.app/Contents/Developer"), PathBuf::from("/Library/Developer/CommandLineTools")]
 }
 
 /// A program that ships with Windows, by its full path under `system_root`, which is `%SystemRoot%`.
@@ -126,6 +175,59 @@ mod tests {
         let expected = [home.join(".local").join("bin"), home.join(".claude").join("local")];
         assert_eq!(texts(&usual_folders(os("/home/ada"), os("/profile"), os("/appdata"), false)), texts(&expected));
         assert!(usual_folders(os(""), None, os("/appdata"), false).is_empty(), "an empty HOME is no folder");
+    }
+
+    #[test]
+    fn helper_folders_are_listed_on_macos_only_and_in_order() {
+        let home = Path::new("/Users/ada");
+        let expected = [
+            home.join(".jobdesk").join("python").join("bin"),
+            home.join(".bun").join("bin"),
+            home.join("Library").join("TinyTeX").join("bin").join("universal-darwin"),
+        ];
+        assert_eq!(texts(&helper_bins(os("/Users/ada"), true)), texts(&expected), "listed whether or not they exist");
+        assert!(helper_bins(os("/Users/ada"), false).is_empty());
+        assert!(helper_bins(os(""), true).is_empty(), "an empty HOME is no folder");
+        assert!(helper_bins(None, true).is_empty());
+    }
+
+    #[test]
+    fn the_helper_folders_come_before_the_login_shell_and_the_inherited_path() {
+        let helpers = [PathBuf::from("/h/python/bin"), PathBuf::from("/h/.bun/bin")];
+        assert_eq!(
+            joined(&helpers, Some("/opt/homebrew/bin:/usr/bin".into()), "/usr/bin:/bin", ':'),
+            "/h/python/bin:/h/.bun/bin:/opt/homebrew/bin:/usr/bin:/usr/bin:/bin"
+        );
+        assert_eq!(joined(&helpers, None, "/usr/bin", ':'), "/h/python/bin:/h/.bun/bin:/usr/bin");
+        assert_eq!(joined(&[], Some(String::new()), "/usr/bin", ':'), "/usr/bin", "an empty login path adds nothing");
+        assert_eq!(joined(&helpers, Some("/a".into()), "", ':'), "/h/python/bin:/h/.bun/bin:/a", "no empty part, which would be the current folder");
+        let odd = [PathBuf::from("/h/a:b/bin"), PathBuf::from("/h/ok")];
+        assert_eq!(joined(&odd, None, "/usr/bin", ':'), "/h/ok:/usr/bin", "a folder holding the separator is left out");
+    }
+
+    #[test]
+    fn a_developer_stub_with_no_tools_behind_it_counts_as_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let usr_bin = root.path().join("usr").join("bin");
+        let tools = root.path().join("CommandLineTools");
+        let xcode = root.path().join("Xcode.app");
+        fs::create_dir_all(&usr_bin).unwrap();
+        for name in ["python3", "git", "ls"] {
+            fs::write(usr_bin.join(name), "").unwrap();
+        }
+        let none = || vec![tools.clone()];
+        assert!(is_dead_stub(&usr_bin.join("python3"), &usr_bin, &none), "no Command Line Tools: the stub would open a dialog");
+        assert!(is_dead_stub(&usr_bin.join("git"), &usr_bin, &none));
+        assert!(!is_dead_stub(&usr_bin.join("ls"), &usr_bin, &none), "only the developer stubs are checked");
+        assert!(!is_dead_stub(&tools.join("python3"), &usr_bin, &none), "a python3 elsewhere is a program");
+        fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
+        fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
+        assert!(!is_dead_stub(&usr_bin.join("python3"), &usr_bin, &none), "the tools are there");
+        assert!(is_dead_stub(&usr_bin.join("git"), &usr_bin, &none), "each stub needs its own program");
+        let app = xcode.join("Contents").join("Developer").join("usr").join("bin");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("git"), "").unwrap();
+        assert!(!is_dead_stub(&usr_bin.join("git"), &usr_bin, &|| vec![xcode.clone()]), "a folder named as the Xcode app");
     }
 
     #[test]

@@ -96,16 +96,7 @@ impl Unpacker for ZipUnpacker {
     }
 
     fn clear_leftovers(&self, folder: &Path) {
-        let (Some(parent), Some(prefix)) = (folder.parent(), staging_prefix(folder)) else { return };
-        let Ok(entries) = fs::read_dir(parent) else { return };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(pid) = name.to_str().and_then(|name| name.strip_prefix(prefix.as_str())) else { continue };
-            if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) || in_use(&self.dir.join(pid)) {
-                continue;
-            }
-            remove(&entry.path());
-        }
+        clear_stagings(folder, &self.dir);
     }
 }
 
@@ -135,15 +126,30 @@ fn staging_prefix(folder: &Path) -> Option<String> {
 
 /// This Jobdesk's staging folder for `folder`: hidden, beside it, so the rename that puts it in place stays on one
 /// disk. `own` is this Jobdesk's folder of `onboarding/`, whose name is its pid.
-fn staging_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
+pub fn staging_of(folder: &Path, own: &Path) -> Result<PathBuf, Failure> {
     let (Some(parent), Some(prefix), Some(pid)) = (folder.parent(), staging_prefix(folder), own.file_name()) else { return Err(Failure::Disk) };
     let mut name = OsString::from(prefix);
     name.push(pid);
     Ok(parent.join(name))
 }
 
+/// Removes the staging folders, or files, beside `folder` that a Jobdesk which no longer runs left. `dir` is
+/// `<data>/onboarding`, whose `<pid>` folders say which Jobdesk still runs. Links are removed, never followed.
+pub fn clear_stagings(folder: &Path, dir: &Path) {
+    let (Some(parent), Some(prefix)) = (folder.parent(), staging_prefix(folder)) else { return };
+    let Ok(entries) = fs::read_dir(parent) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|name| name.strip_prefix(prefix.as_str())) else { continue };
+        if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) || in_use(&dir.join(pid)) {
+            continue;
+        }
+        remove(&entry.path());
+    }
+}
+
 /// Removes `path` and what it holds. A link is removed itself, never followed.
-fn remove(path: &Path) {
+pub fn remove(path: &Path) {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => {
             let _ = fs::remove_dir_all(path);
@@ -166,7 +172,7 @@ fn read_whole(zip: &Path) -> Result<Vec<u8>, Failure> {
 }
 
 /// 64 lowercase hex digits, as `sha256sum` writes them and the pin holds them.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -292,7 +298,7 @@ fn is_device_name(part: &str) -> bool {
 
 /// The mode a file gets: its own read and run bits, never set-id, sticky or group and other write, and always
 /// readable and writable by the user.
-fn file_mode(mode: Option<u32>) -> u32 {
+pub fn file_mode(mode: Option<u32>) -> u32 {
     mode.map_or(0o644, |mode| mode & 0o755) | 0o600
 }
 
@@ -347,7 +353,7 @@ fn write_all<R: Read + io::Seek>(
 
 /// Makes each folder of `relative` below `staging` that is missing. A folder already there must be a folder, not a
 /// link or a file.
-fn make_folders(staging: &Path, relative: &Path) -> Result<(), Failure> {
+pub fn make_folders(staging: &Path, relative: &Path) -> Result<(), Failure> {
     let mut at = staging.to_path_buf();
     for part in relative.components() {
         at.push(part);
@@ -385,8 +391,9 @@ fn put_in_place(staging: &Path, folder: &Path) -> Result<(), Failure> {
     placed
 }
 
-/// Renames `staging` onto the empty `folder`.
-fn rename_into(staging: &Path, folder: &Path) -> Result<(), Failure> {
+/// Renames `staging` onto the empty `folder`, or a file onto a file. A folder that holds anything, or a place of the
+/// other kind, is `NotEmpty`.
+pub fn rename_into(staging: &Path, folder: &Path) -> Result<(), Failure> {
     // Windows renames a folder only onto a free name: the empty folder goes first, and only while it is empty.
     #[cfg(windows)]
     if fs::symlink_metadata(folder).is_ok() && fs::remove_dir(folder).is_err() {

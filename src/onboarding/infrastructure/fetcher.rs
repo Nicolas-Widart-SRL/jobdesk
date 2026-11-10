@@ -11,7 +11,8 @@ use crate::shared_kernel::own_folder::{claim, clear_unclaimed, new_private_file}
 /// Progress is reported at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
-/// Downloads the release zip over the one https client into `onboarding/<pid>/` of the data folder.
+/// Downloads the release zip, and the helpers' files, over the one https client into `onboarding/<pid>/` of the data
+/// folder.
 pub struct HttpsFetcher {
     transport: Arc<dyn Transport>,
     /// `<data>/onboarding`.
@@ -23,7 +24,20 @@ impl HttpsFetcher {
         Self { transport, dir }
     }
 
-    fn download(&self, url: &str, part: &Path, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<(), Failure> {
+    /// Downloads `url` as `fetch` does, but fails with `TooLarge` once more than `limit` bytes arrive.
+    pub fn fetch_at_most(&self, url: &str, name: &str, limit: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, Failure> {
+        let own = claim(&self.dir).map_err(|_| Failure::Disk)?;
+        let part = own.join(format!("{name}.part"));
+        match self.download(url, &part, limit, cancelled, progress) {
+            Ok(()) => Ok(part),
+            Err(failure) => {
+                let _ = fs::remove_file(&part);
+                Err(failure)
+            }
+        }
+    }
+
+    fn download(&self, url: &str, part: &Path, limit: u64, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<(), Failure> {
         let mut file = new_private_file(part).map_err(|_| Failure::Disk)?;
         let mut body = self.transport.open(url, Fetch::Download).map_err(failure_of)?;
         let mut buffer = vec![0; 64 * 1024];
@@ -40,7 +54,7 @@ impl HttpsFetcher {
                 Err(error) => return Err(failure_of(read_failure(&error))),
             };
             received += read as u64;
-            if received > MAX_ZIP {
+            if received > limit {
                 return Err(Failure::TooLarge);
             }
             file.write_all(&buffer[..read]).map_err(|_| Failure::Disk)?;
@@ -57,15 +71,7 @@ impl HttpsFetcher {
 
 impl SourceFetcher for HttpsFetcher {
     fn fetch(&self, url: &str, name: &str, cancelled: &dyn Fn() -> bool, progress: &mut dyn FnMut(u64)) -> Result<PathBuf, Failure> {
-        let own = claim(&self.dir).map_err(|_| Failure::Disk)?;
-        let part = own.join(format!("{name}.part"));
-        match self.download(url, &part, cancelled, progress) {
-            Ok(()) => Ok(part),
-            Err(failure) => {
-                let _ = fs::remove_file(&part);
-                Err(failure)
-            }
-        }
+        self.fetch_at_most(url, name, MAX_ZIP, cancelled, progress)
     }
 
     fn clear_leftovers(&self) {
@@ -135,6 +141,16 @@ mod tests {
             assert_eq!(fetcher.fetch(URL, "ai-job-search-v1.7.5.zip", &|| cancelled, &mut |_| {}), Err(failure));
             assert!(files(&dir).is_empty(), "{failure:?}");
         }
+    }
+
+    #[test]
+    fn a_download_past_its_limit_stops_and_leaves_nothing() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("onboarding");
+        let fetcher = HttpsFetcher::new(Arc::new(Serves(Ok(b"four".to_vec()))), dir.clone());
+        assert_eq!(fetcher.fetch_at_most(URL, "bun.zip", 3, &|| false, &mut |_| {}), Err(Failure::TooLarge));
+        assert!(files(&dir).is_empty());
+        assert!(fetcher.fetch_at_most(URL, "bun.zip", 4, &|| false, &mut |_| {}).is_ok(), "the limit itself is allowed");
     }
 
     #[test]

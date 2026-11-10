@@ -8,11 +8,12 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
-Everything else Jobdesk writes stays in its data folder, with three exceptions:
+Everything else Jobdesk writes stays in its data folder, with four exceptions:
 
 - Restart to update replaces Jobdesk itself.
 - On macOS, a copy that runs from a `.app` bundle writes beside the bundle at each launch. A build with an update key makes and removes a `.Jobdesk.app.probe-<pid>` folder there, to learn whether an update may apply. Every build deletes the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders that a Jobdesk which no longer runs left there. See [Where an update may apply](docs/architecture/trust.md#where-an-update-may-apply).
 - First-run setup makes the job search folder the user chose, only when it is missing or empty. A folder that holds only Finder's `.DS_Store` file, and on macOS its `.localized` file, counts as empty, and setup deletes those files. It unpacks the ai-job-search release into a hidden `.<name>.jobdesk-<pid>` folder beside it, after the zip matches the SHA-256 the signed feed pins, gives that folder the empty folder's permissions, and renames it over the empty one. When setup opens, it deletes such folders that a Jobdesk which no longer runs left, but only beside the folder `onboarding.json` records, not beside other folders setup used before. The shell does not open setup yet.
+- On macOS, first-run setup installs a missing helper in the home folder: a standalone Python in `~/.jobdesk/python`, Bun's program as `~/.bun/bin/bun`, and TinyTeX with the TeX Live packages the CV and cover letter templates need in `~/Library/TinyTeX`. `onboarding/domain/helpers.rs` pins each file by version, SHA-256 and size, at an address built from a fixed host and the version. Every file of a helper must match before any is unpacked. They are unpacked into a hidden `.<name>.jobdesk-<pid>` staging folder, or file for Bun, beside the helper's place, and renamed onto it. A place already taken by a folder that holds anything is left alone, while a Bun program that does not run is replaced. The next open deletes the staging folders a Jobdesk which no longer runs left. Nothing needs an administrator password. The shell does not open this step yet.
 
 How Save works is in [profile](docs/architecture/profile.md#save).
 
@@ -26,7 +27,7 @@ Each feature is a bounded context with its own language.
 | `tracking` | application, status, bucket, follow-up, outcome | `job_search_tracker.csv`; `documents/applications/*/outcome.md` |
 | `insights` | search report, funnel, skill gap, study order | tracking's and discovery's application layers; the profile's topic counts; `upskill/report-*.md` |
 | `intray` | card, decision, skip reason, queue | discovery's, tracking's, dossier's and runs' application layers; settings' application layer, for the queue rules; its own decisions file |
-| `onboarding` | progress record, step, folder place, release download, download phase, staging folder | its own `onboarding.json` and `onboarding/` in the data folder; the chosen folder; the ai-job-search release zip from GitHub; updates' application layer, for the source pin; workspace's check for an ai-job-search folder, wired in its `mod.rs` |
+| `onboarding` | progress record, step, folder place, release download, download phase, staging folder, helper, artifact, install phase, outcome | its own `onboarding.json` and `onboarding/` in the data folder; the chosen folder; the ai-job-search release zip from GitHub; the pinned helper files from GitHub and the TeX Live historic archive; the helpers' places in the home folder; updates' application layer, for the source pin; workspace's check for an ai-job-search folder and its tool check, wired in its `mod.rs` |
 | `runs` | run, activity, prompt, decision, step rail, stop point, quick reply, step phrase, command catalog, usage (tasks only, from run logs) | the `claude` CLI stream; its own run logs; settings' application layer, for the run defaults and the cap; the saved API key, through the shell's key reader |
 | `dossier` | archive, document, findings, page | `documents/applications/*`; compiled PDFs; `company_research/`; tracking's and runs' application layers |
 | `profile` | topic, block, placeholder, draft, conflict, updated mark, CV document, staleness | the profile files that `TOPICS` in `profile/domain/topic.rs` names; the `## Candidate Profile` part of `CLAUDE.md`; the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists; dossier's application layer, for the page cache; settings' application layer, for ages and sizes |
@@ -39,7 +40,7 @@ Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, 
 Three modules are not features:
 
 - `shared_kernel` holds the few value types every feature agrees on, such as `ModelChoice`, and these shared helpers:
-  - the host `PATH` lookup that `runs` and `workspace` both need, with `system_program` for the programs that ship with Windows;
+  - the host `PATH` lookup that `runs` and `workspace` both need, with the helper folders first and macOS's developer stubs skipped (see [runs](docs/architecture/runs.md#the-path)), and `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
   - `own_folder`, the `<pid>` folder each running Jobdesk claims and locks in `updates/` and `onboarding/`, and the cleanup that leaves another running Jobdesk's folder alone;

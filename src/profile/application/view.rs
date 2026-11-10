@@ -197,8 +197,9 @@ pub fn topic_counts(view: &ProfileView) -> TopicCounts {
 }
 
 /// The user's country: the text after the last comma of the Identity `**Location:**` line, such as Belgium for
-/// `- **Location:** Namur, Belgium (hybrid within 1h15)`, before any bracket. A line that still holds a setup token,
-/// such as `[CITY], [COUNTRY]`, gives `None`, and so does a line with no country.
+/// `- **Location:** Namur, Belgium (hybrid within 1h15)`, before any bracket. Two letters after a comma are a state or
+/// province, as in `Los Angeles, CA`, so they give `None`: two letters count only as the whole Location, such as `DK`.
+/// A line that still holds a setup token, such as `[CITY], [COUNTRY]`, gives `None`, and so does a line with no country.
 pub fn home_country(view: &ProfileView) -> Option<String> {
     let identity = view.topics.iter().find(|topic| topic.id == TopicId::Identity)?;
     let blocks = identity.sections.iter().flat_map(|section| std::iter::once(&section.block).chain(&section.children));
@@ -207,9 +208,11 @@ pub fn home_country(view: &ProfileView) -> Option<String> {
         return None;
     }
     let place = line.split(['(', '[']).next().unwrap_or_default();
-    let country: String = visible_chars(place.rsplit(',').next().unwrap_or_default()).collect();
+    let (after_comma, last) = place.rsplit_once(',').map_or((false, place), |(_, last)| (true, last));
+    let country: String = visible_chars(last).collect();
     let country = country.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!country.is_empty()).then_some(country)
+    let state = after_comma && country.len() == 2 && country.bytes().all(|b| b.is_ascii_alphabetic());
+    (!country.is_empty() && !state).then_some(country)
 }
 
 #[cfg(test)]
@@ -384,6 +387,10 @@ mod tests {
         assert_eq!(country("- **Location:** Namur, Belgium (hybrid within 1h15, or fully remote)").as_deref(), Some("Belgium"));
         assert_eq!(country("**Location:**  Lisbon,  Portugal\u{200B} ").as_deref(), Some("Portugal"));
         assert_eq!(country("- **Location:** Denmark").as_deref(), Some("Denmark"), "a country alone");
+        assert_eq!(country("- **Location:** DK").as_deref(), Some("DK"), "a code alone");
+        for state in ["Los Angeles, CA", "Atlanta, GA", "Chicago, IL", "Dover, DE", "Boston, MA", "Denver, CO"] {
+            assert_eq!(country(&format!("- **Location:** {state}")), None, "{state} names a state, not a country");
+        }
         assert_eq!(country("- **Location:** [CITY], [COUNTRY]"), None);
         assert_eq!(country("- **Location:** Namur, [COUNTRY]"), None);
         assert_eq!(country("- **Location:** "), None);

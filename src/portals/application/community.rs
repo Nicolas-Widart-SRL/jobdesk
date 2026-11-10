@@ -166,10 +166,12 @@ impl Community {
     }
 }
 
-/// Whether the user's `market` names this country, by its name or its code, in any case.
+/// Whether the user's `market` names this country: by its name in any case, or, when `market` is two letters, by its
+/// code. `home_country` gives two letters only when they are the whole Location, never a state after a city.
 fn is_market(market: &str, country: &str, code: &str) -> bool {
     let market = market.trim();
-    market.eq_ignore_ascii_case(country) || market.eq_ignore_ascii_case(code)
+    let is_code = market.len() == 2 && market.bytes().all(|b| b.is_ascii_alphabetic());
+    market.eq_ignore_ascii_case(country) || is_code && market.eq_ignore_ascii_case(code)
 }
 
 #[cfg(test)]
@@ -222,6 +224,31 @@ mod tests {
         assert_eq!(countries(&community.view(&[], Some(" DK "), ""))[0], ("Denmark", true), "a market by its code");
         assert_eq!(countries(&community.view(&[], None, ""))[0], ("Worldwide", false));
         assert_eq!(countries(&community.view(&[], Some("Atlantis"), "")).len(), 4, "a market with no portal adds no group");
+    }
+
+    /// The Location of a profile whose Identity holds only that line.
+    fn market_of(location: &str) -> Option<String> {
+        let text = format!("## Identity\n- **Location:** {location}\n");
+        let file = crate::profile::application::ProfileFile::Candidate;
+        let (view, _) = crate::profile::application::profile_view(&|read| Ok((read == file).then(|| text.clone())));
+        crate::profile::application::home_country(&view)
+    }
+
+    #[test]
+    fn a_state_after_the_city_is_no_market() {
+        let codes = ["ca", "ga", "il", "de", "ma", "co", "dk"];
+        let portals = codes.iter().map(|code| portal(code, &format!("{code}-search"), "Board", "Jobs.")).collect();
+        let community = community(Some(CommunityList { portals, ..list(now()) }), vec![]);
+        let marked = |location: &str| -> Vec<String> {
+            let market = market_of(location);
+            community.view(&[], market.as_deref(), "").groups.into_iter().filter(|group| group.your_market).map(|group| group.country).collect()
+        };
+        for location in ["Los Angeles, CA", "Atlanta, GA", "Chicago, IL", "Dover, DE", "Boston, MA", "Denver, CO", "Copenhagen, DK"] {
+            assert!(marked(location).is_empty(), "{location}");
+        }
+        assert_eq!(marked("Copenhagen, denmark"), ["Denmark"], "by name, in any case");
+        assert_eq!(marked("DK"), ["Denmark"], "a code alone is the whole Location");
+        assert_eq!(marked("Lyon, Canada"), ["Canada"]);
     }
 
     #[test]

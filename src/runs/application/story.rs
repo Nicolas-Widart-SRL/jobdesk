@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::runs::application::{closing_question, command_word, first_filled_line, first_line, last_line, stop_point, wants_reply};
+use crate::runs::application::{closing_question, command_word, first_filled_line, first_line, last_line, run_name, stop_point, wants_reply};
 use crate::runs::domain::{ActivityKind, Prompt, PromptKind, Quiet, Run, RunStatus, ToolState, phrases_for, quiet, stop_points};
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -206,13 +206,11 @@ fn say(value: &str, note: &str, tone: BandTone) -> BandText {
     BandText { value: value.to_owned(), note: note.to_owned(), tone }
 }
 
-/// "2 Draft" with an optional ending, or the command word when the command has no rail.
-/// A task in plain words has no command, so it reads "Task" rather than its first word.
+/// "2 Draft" with an optional ending, or the run's name when the command has no rail: its command word, or "Task".
 fn where_value(run: &Run, ending: &str) -> String {
     match run.steps.as_ref().and_then(|rail| rail.labels.get(rail.current).map(|label| (rail.current, label))) {
         Some((at, label)) => format!("{at} {label}{ending}"),
-        None if run.line.trim_start().starts_with('/') => command_word(&run.line),
-        None => "Task".to_owned(),
+        None => run_name(&run.line),
     }
 }
 

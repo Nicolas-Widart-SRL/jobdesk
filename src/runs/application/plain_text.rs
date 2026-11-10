@@ -34,6 +34,12 @@ pub fn command_word(line: &str) -> String {
     first_line(line.split_whitespace().next().unwrap_or_default())
 }
 
+/// The name a run goes by on screen: its command word, or "Task" for a task in plain words, whose first word names nothing.
+pub fn run_name(line: &str) -> String {
+    let word = command_word(line);
+    if word.starts_with('/') { word } else { "Task".to_owned() }
+}
+
 /// Every line of a notice that holds something, each cleaned, with the last `NOTICE_LINES` of them shown.
 pub fn notice_text(text: &str) -> NoticeText {
     let lines: Vec<String> = lines(text).map(visible).filter(|line| !line.is_empty()).collect();
@@ -99,5 +105,12 @@ mod tests {
         assert_eq!(first_line("  /apply\u{202e} x \nignore"), "/apply x");
         assert_eq!(command_word("\u{200b}/apply https://x.example\nmore"), "/apply");
         assert_eq!(command_word(""), "");
+    }
+
+    #[test]
+    fn a_run_is_named_by_its_command_or_as_a_task() {
+        assert_eq!(run_name("\u{200b}/apply https://x.example"), "/apply");
+        assert_eq!(run_name("Copy the portal. Read its code."), "Task");
+        assert_eq!(run_name(""), "Task");
     }
 }

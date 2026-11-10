@@ -4,7 +4,7 @@ mod story;
 mod turn;
 mod usage;
 
-pub use plain_text::{command_word, first_filled_line, first_line, last_line, notice_text};
+pub use plain_text::{command_word, first_filled_line, first_line, last_line, notice_text, run_name};
 pub use run_desk::{Clock, RunDesk, StartError, StartOptions};
 pub use story::{
     Band, BandText, BandTone, StepLine, StepState, Sweep, action_noun, band, cost_note, cost_text, elapsed_text, short_path, step_lines, step_states,

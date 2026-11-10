@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use crate::discovery::application::{AD_ALONE, CheckRow, FreelanceGate, FreelanceGates, JobBoard, JobChecks, JobView, Lane, failed_gate, fit_band};
 use crate::dossier::application::ArchiveContents;
 use crate::intray::domain::{Action, Body, Card, CardKind, Due, Effect, GateRow, Subject};
-use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, command_word, cost_text, first_line, stop_point, wants_reply};
+use crate::runs::application::{Prompt, PromptKind, Question, Run, closing_question, cost_text, first_line, run_name, stop_point, wants_reply};
 use crate::shared_kernel::dates::days_from;
 use crate::tracking::application::{ApplicationCard, MAX_FOLLOW_UPS, Pipeline, Stage, StatusBucket};
 
@@ -73,10 +73,10 @@ struct RunWords {
     note: &'static str,
 }
 
-/// A card for a run: it has no default and leads to the run. `words` gets the command word.
+/// A card for a run: it has no default and leads to the run. `words` gets the run's name: its command word, or "Task".
 fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> RunWords) -> Card {
     let line = first_line(&run.line);
-    let command = command_word(&line);
+    let command = run_name(&line);
     let words = words(&command);
     Card {
         key,
@@ -803,6 +803,20 @@ mod tests {
         assert_eq!(card.subtitle, "/rank is waiting, $0.50 of $2.00 spent");
         assert_eq!(card.take, "Claude asked a question and waits for your reply.");
         assert_eq!(card.body, Body::Code { label: "Claude asks".into(), text: "Rank all postings, or only the shortlist?".into() });
+    }
+
+    /// A task in plain words has no command, so its cards call it a task rather than by its first word.
+    #[test]
+    fn a_task_in_plain_words_is_named_task() {
+        const WORDS: &str = "Copy the sample portal. Read its code and tell me what it does.";
+        let mut run = run_of("r3", WORDS);
+        says(&mut run, "Shall I install it?");
+        end_turn(&mut run, 0.5);
+        let card = turn_card_of(&run).unwrap();
+        assert_eq!((card.name.as_str(), card.title.as_str()), ("Task", "Task is waiting for your reply"));
+        let mut held = paused(PromptKind::Questions(vec![]));
+        held.line = WORDS.to_owned();
+        assert_eq!(turn_card_of(&held).map(|card| card.name), Some("Task".to_owned()));
     }
 
     #[test]

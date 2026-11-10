@@ -6,7 +6,7 @@ mod search_plan;
 
 pub use built_in::{BUILT_IN, Origin, origin};
 pub use community::{
-    BlobSha, COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, CountryCode, FolderName, ListedPortal, REFUSAL_WAIT, code_url,
+    COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, CountryCode, FolderName, GitSha, ListedPortal, REFUSAL_WAIT, code_url,
     install_prompt, parse_codeowners, parse_tree_path,
 };
 pub use countries::country_name;

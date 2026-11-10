@@ -7,68 +7,107 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
-use ureq::Agent;
+use ureq::typestate::WithoutBody;
+use ureq::{Agent, RequestBuilder};
 
 use crate::portals::domain::{
-    BlobSha, COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, ListedPortal, REFUSAL_WAIT, parse_codeowners, parse_tree_path,
+    COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, CountryCode, FolderName, GitSha, ListedPortal, REFUSAL_WAIT,
+    parse_codeowners, parse_tree_path,
 };
 use crate::portals::infrastructure::community_cache::CommunityCache;
 use crate::shared_kernel::https::{TimedBody, github_config};
 
-/// The most of the repository's file list that is read. A longer one is refused whole.
-pub const TREE_LIMIT: u64 = 1024 * 1024;
+/// The most of the answer naming the branch's latest commit that is read: 40 hex digits.
+pub const HEAD_LIMIT: u64 = 1024;
+/// The most of the repository's file list that is read, about 11 KiB a portal, so several hundred fit. A longer one
+/// is refused whole.
+pub const TREE_LIMIT: u64 = 8 * 1024 * 1024;
 /// The most of one `SKILL.md` or of `CODEOWNERS` that is read. A longer one is refused whole.
-pub const BLOB_LIMIT: u64 = 256 * 1024;
+pub const FILE_LIMIT: u64 = 256 * 1024;
 /// One request, redirects and body included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-/// GitHub's own type for its answers, and for a file's bytes as they are.
+/// GitHub's own type for its answers, the type that answers a commit with its name only, and a file's.
 const JSON: &str = "application/vnd.github+json";
-const RAW: &str = "application/vnd.github.raw+json";
+const SHA: &str = "application/vnd.github.sha";
+const TEXT: &str = "text/plain";
+const API_VERSION: &str = "2022-11-28";
+/// The host that serves a file of a commit as it is. Its requests are not counted against the REST API's 60 an hour.
+const RAW_ROOT: &str = "https://raw.githubusercontent.com/";
+const CODEOWNERS: &str = ".github/CODEOWNERS";
 /// The longest Jobdesk waits on a rate limit, whatever GitHub says: its limit resets every hour.
 const LONGEST_WAIT: TimeDelta = TimeDelta::hours(1);
 
-/// Every file of the repository's default branch, in one request.
-pub fn tree_url() -> String {
-    format!("https://api.github.com/repos/{COMMUNITY_REPOSITORY}/git/trees/main?recursive=1")
+/// The latest commit of the default branch, answered with its name only. One request of the REST API.
+pub fn head_url() -> String {
+    format!("https://api.github.com/repos/{COMMUNITY_REPOSITORY}/commits/main")
 }
 
-fn blob_url(sha: &BlobSha) -> String {
-    format!("https://api.github.com/repos/{COMMUNITY_REPOSITORY}/git/blobs/{}", sha.as_str())
+/// Every file of `commit`, in one request of the REST API.
+fn tree_url(commit: &GitSha) -> String {
+    format!("https://api.github.com/repos/{COMMUNITY_REPOSITORY}/git/trees/{}?recursive=1", commit.as_str())
 }
 
-/// GitHub's REST API, without sign-in. Tests put a fake in its place.
+/// A file of `commit` as it is, on the raw host. `path` is built only from validated parts.
+fn raw_url(commit: &GitSha, path: &str) -> String {
+    format!("{RAW_ROOT}{COMMUNITY_REPOSITORY}/{}/{path}", commit.as_str())
+}
+
+fn skill_path(country: &CountryCode, folder: &FolderName) -> String {
+    format!("portals/{}/{}/SKILL.md", country.as_str(), folder.as_str())
+}
+
+/// GitHub, without sign-in: its REST API and its raw host. Tests put a fake in its place.
 pub trait Api: Send + Sync {
     /// The body of `url` as `accept` asks for it, or why there is none. A body over `limit` bytes is `BadAnswer`.
     fn get(&self, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, CommunityFailure>;
 }
 
 /// GitHub as `github_config` reaches it, with no credential. A status is read here, so a rate limit tells its reset.
+/// The raw host follows no redirect, so a file never comes from another host.
 pub struct HttpsApi {
-    agent: Agent,
+    api: Agent,
+    raw: Agent,
 }
 
 impl HttpsApi {
     pub fn new(version: &str) -> Self {
-        Self { agent: github_config(version).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().new_agent() }
+        let agent = |redirects: u32| {
+            github_config(version).max_redirects(redirects).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().new_agent()
+        };
+        Self { api: agent(5), raw: agent(0) }
+    }
+
+    /// The request for `url`: on the raw host with no redirect, else on the REST API with its version.
+    fn request(&self, url: &str, accept: &str) -> RequestBuilder<WithoutBody> {
+        if url.starts_with(RAW_ROOT) {
+            self.raw.get(url).header("Accept", accept)
+        } else {
+            self.api.get(url).header("Accept", accept).header("X-GitHub-Api-Version", API_VERSION)
+        }
     }
 }
 
 impl Api for HttpsApi {
     fn get(&self, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, CommunityFailure> {
-        let response = self.agent.get(url).header("Accept", accept).header("X-GitHub-Api-Version", "2022-11-28").call().map_err(|error| failure_of(&error))?;
+        let response = self.request(url, accept).call().map_err(|error| failure_of(&error))?;
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
             let header = |name: &str| response.headers().get(name).and_then(|value| value.to_str().ok());
             let limit = RateHeaders { remaining: header("x-ratelimit-remaining"), reset: header("x-ratelimit-reset"), retry_after: header("retry-after") };
             return Err(status_failure(status, &limit, Utc::now()));
         }
-        let mut bytes = Vec::new();
-        TimedBody(response.into_body().into_reader()).take(limit + 1).read_to_end(&mut bytes).map_err(|error| read_failure(&error))?;
-        if bytes.len() as u64 > limit {
-            return Err(CommunityFailure::BadAnswer);
-        }
-        Ok(bytes)
+        read_capped(TimedBody(response.into_body().into_reader()), limit)
     }
+}
+
+/// The whole of `body`, read as it arrives, or `BadAnswer` as soon as it passes `limit` bytes.
+fn read_capped(body: impl Read, limit: u64) -> Result<Vec<u8>, CommunityFailure> {
+    let mut bytes = Vec::new();
+    body.take(limit + 1).read_to_end(&mut bytes).map_err(|error| read_failure(&error))?;
+    if bytes.len() as u64 > limit {
+        return Err(CommunityFailure::BadAnswer);
+    }
+    Ok(bytes)
 }
 
 /// The headers that tell GitHub's rate limit, as sent.
@@ -80,12 +119,13 @@ struct RateHeaders<'a> {
     retry_after: Option<&'a str>,
 }
 
-/// A 403 or 429 is the rate limit when no request is left or GitHub says how long to wait. It lasts until the reset
-/// time, or for the wait GitHub names, or a minute, and never over an hour. Any other status is refused with its code.
+/// A 403 or 429, from the REST API or the raw host, is the rate limit when no request is left or GitHub says how long
+/// to wait. It lasts until the reset time, or for the wait GitHub names, or a minute, and never over an hour. Any other
+/// status is refused with its code.
 fn status_failure(status: u16, headers: &RateHeaders, now: DateTime<Utc>) -> CommunityFailure {
     let used_up = headers.remaining.is_some_and(|remaining| remaining.trim() == "0");
     let wait = headers.retry_after.and_then(|seconds| seconds.trim().parse::<i64>().ok()).and_then(TimeDelta::try_seconds);
-    if !matches!(status, 403 | 429) || !used_up && wait.is_none() {
+    if !matches!(status, 403 | 429) || (!used_up && wait.is_none()) {
         return CommunityFailure::Refused(status);
     }
     let reset =
@@ -124,18 +164,21 @@ struct TreeItem {
     sha: String,
 }
 
-/// Reads the whole list: the file list, then each `SKILL.md` and `CODEOWNERS` whose blob changed since `saved`.
+/// Reads the whole list, pinned to one commit: its name and its file list from the REST API, two requests whatever the
+/// number of portals, then each `SKILL.md` and `CODEOWNERS` whose blob changed since `saved`, from the raw host.
 /// All or nothing: any failure ends it, and the saved list stays as it was.
 pub fn fetch_list(api: &dyn Api, saved: Option<&CommunityList>, now: DateTime<Utc>) -> Result<CommunityList, CommunityFailure> {
-    let tree: Tree = serde_json::from_slice(&api.get(&tree_url(), JSON, TREE_LIMIT)?).map_err(|_| CommunityFailure::BadAnswer)?;
+    let head = api.get(&head_url(), SHA, HEAD_LIMIT)?;
+    let commit = std::str::from_utf8(&head).ok().and_then(|text| GitSha::parse(text.trim())).ok_or(CommunityFailure::BadAnswer)?;
+    let tree: Tree = serde_json::from_slice(&api.get(&tree_url(&commit), JSON, TREE_LIMIT)?).map_err(|_| CommunityFailure::BadAnswer)?;
     if tree.truncated {
         return Err(CommunityFailure::BadAnswer);
     }
     let mut portals = Vec::new();
     let mut codeowners_sha = None;
     for item in tree.tree.iter().filter(|item| item.kind == "blob") {
-        let sha = || BlobSha::parse(&item.sha).ok_or(CommunityFailure::BadAnswer);
-        if item.path == ".github/CODEOWNERS" {
+        let sha = || GitSha::parse(&item.sha).ok_or(CommunityFailure::BadAnswer);
+        if item.path == CODEOWNERS {
             codeowners_sha = Some(sha()?);
             continue;
         }
@@ -144,19 +187,22 @@ pub fn fetch_list(api: &dyn Api, saved: Option<&CommunityList>, now: DateTime<Ut
         let kept = saved.and_then(|saved| saved.portals.iter().find(|portal| portal.country == country && portal.folder == folder && portal.sha == sha));
         portals.push(match kept {
             Some(portal) => portal.clone(),
-            None => ListedPortal::from_manifest(country, folder, sha.clone(), &blob_text(api, &sha)?),
+            None => {
+                let text = file_text(api, &commit, &skill_path(&country, &folder))?;
+                ListedPortal::from_manifest(country, folder, sha, &text)
+            }
         });
     }
     let codeowners = match (&codeowners_sha, saved) {
         (None, _) => Codeowners::default(),
         (Some(sha), Some(saved)) if saved.codeowners_sha.as_ref() == Some(sha) => saved.codeowners.clone(),
-        (Some(sha), _) => parse_codeowners(&blob_text(api, sha)?),
+        (Some(_), _) => parse_codeowners(&file_text(api, &commit, CODEOWNERS)?),
     };
     Ok(CommunityList { saved_at: now, portals, codeowners, codeowners_sha })
 }
 
-fn blob_text(api: &dyn Api, sha: &BlobSha) -> Result<String, CommunityFailure> {
-    Ok(String::from_utf8_lossy(&api.get(&blob_url(sha), RAW, BLOB_LIMIT)?).into_owned())
+fn file_text(api: &dyn Api, commit: &GitSha, path: &str) -> Result<String, CommunityFailure> {
+    Ok(String::from_utf8_lossy(&api.get(&raw_url(commit, path), TEXT, FILE_LIMIT)?).into_owned())
 }
 
 /// The community list on GitHub. Each read runs on a thread of its own, saves the list it read in the data folder,
@@ -221,6 +267,7 @@ impl CommunitySource for ScriptedCommunity {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
@@ -228,65 +275,80 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::portals::domain::{CountryCode, FolderName};
 
+    const COMMIT: &str = "c0ffee0000000000000000000000000000000001";
     const JOBNET_SHA: &str = "1111111111111111111111111111111111111111";
     const NORTHFIELD_SHA: &str = "2222222222222222222222222222222222222222";
     const OWNERS_SHA: &str = "3333333333333333333333333333333333333333";
+    const API_ROOT: &str = "https://api.github.com/";
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 10, 9, 0, 0).unwrap()
     }
 
-    /// A fake GitHub: the file list and blobs it holds, the requests it saw, and a failure for any blob it lacks.
+    fn commit() -> GitSha {
+        GitSha::parse(COMMIT).unwrap()
+    }
+
+    /// A fake GitHub at one commit: its file list, each file's text by path, and the requests it saw. A file it lacks
+    /// answers 404. It applies each limit as the real one does.
     struct Fake {
+        head: String,
         tree: String,
-        blobs: Vec<(&'static str, String)>,
-        seen: Mutex<Vec<(String, String)>>,
+        files: Vec<(String, String)>,
+        seen: Mutex<Vec<String>>,
     }
 
     impl Fake {
-        fn new(entries: &[(&str, &str)]) -> Self {
+        /// `entries` holds each file's path, blob name and text.
+        fn new(entries: &[(&str, &str, &str)]) -> Self {
             let items: Vec<String> =
-                entries.iter().map(|(path, sha)| format!(r#"{{"path": "{path}", "mode": "100644", "type": "blob", "sha": "{sha}"}}"#)).collect();
+                entries.iter().map(|(path, sha, _)| format!(r#"{{"path": "{path}", "mode": "100644", "type": "blob", "sha": "{sha}"}}"#)).collect();
             let tree = format!(
                 r#"{{"sha": "abc", "url": "https://attacker.example/", "tree": [{{"path": "portals", "type": "tree", "sha": "x"}}, {}], "truncated": false}}"#,
                 items.join(", ")
             );
-            let blobs = vec![
-                (JOBNET_SHA, "# Jobnet Search Skill\n\nDanish listings from Jobnet.dk.\n".to_owned()),
-                (NORTHFIELD_SHA, "# North\u{200B}field Search Skill\n\nBelgian\njobs. More.\n".to_owned()),
-                (OWNERS_SHA, "* @fallback-desk\n/portals/dk/jobnet-search/ @ada-quill # unmaintained since 2026-03\n".to_owned()),
-            ];
-            Self { tree, blobs, seen: Mutex::default() }
+            let files = entries.iter().map(|(path, _, text)| (path.to_string(), text.to_string())).collect();
+            Self { head: format!("{COMMIT}\n"), tree, files, seen: Mutex::default() }
         }
 
-        fn count(&self) -> usize {
-            self.seen.lock().unwrap().len()
+        /// The requests to the REST API, and to the raw host.
+        fn counts(&self) -> (usize, usize) {
+            let seen = self.seen.lock().unwrap();
+            (seen.iter().filter(|url| url.starts_with(API_ROOT)).count(), seen.iter().filter(|url| url.starts_with(RAW_ROOT)).count())
         }
     }
 
     impl Api for Fake {
         fn get(&self, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, CommunityFailure> {
-            self.seen.lock().unwrap().push((url.to_owned(), accept.to_owned()));
-            if url == tree_url() {
+            self.seen.lock().unwrap().push(url.to_owned());
+            let body = if url == head_url() {
+                assert_eq!((accept, limit), (SHA, HEAD_LIMIT));
+                self.head.clone()
+            } else if url == tree_url(&commit()) {
                 assert_eq!((accept, limit), (JSON, TREE_LIMIT));
-                return Ok(self.tree.clone().into_bytes());
-            }
-            assert_eq!((accept, limit), (RAW, BLOB_LIMIT));
-            let sha = url.strip_prefix("https://api.github.com/repos/ai-job-search-dev/community-portals/git/blobs/").expect(url);
-            self.blobs.iter().find(|(known, _)| *known == sha).map(|(_, text)| text.clone().into_bytes()).ok_or(CommunityFailure::Refused(404))
+                self.tree.clone()
+            } else {
+                assert_eq!((accept, limit), (TEXT, FILE_LIMIT));
+                let path = url.strip_prefix(&format!("{RAW_ROOT}ai-job-search-dev/community-portals/{COMMIT}/")).expect(url);
+                self.files.iter().find(|(known, _)| known == path).map(|(_, text)| text.clone()).ok_or(CommunityFailure::Refused(404))?
+            };
+            read_capped(Cursor::new(body.into_bytes()), limit)
         }
     }
 
+    const OWNERS: &str = "* @fallback-desk\n/portals/dk/jobnet-search/ @ada-quill # unmaintained since 2026-03\n";
+    const JOBNET: &str = "# Jobnet Search Skill\n\nDanish listings from Jobnet.dk.\n";
+    const NORTHFIELD: &str = "# North\u{200B}field Search Skill\n\nBelgian\njobs. More.\n";
+
     fn full() -> Fake {
         Fake::new(&[
-            (".github/CODEOWNERS", OWNERS_SHA),
-            ("README.md", "4444444444444444444444444444444444444444"),
-            ("portals/be/northfield-search/SKILL.md", NORTHFIELD_SHA),
-            ("portals/be/northfield-search/cli/SKILL.md", "5555555555555555555555555555555555555555"),
-            ("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA),
-            ("portals/dk/../SKILL.md", "6666666666666666666666666666666666666666"),
+            (".github/CODEOWNERS", OWNERS_SHA, OWNERS),
+            ("README.md", "4444444444444444444444444444444444444444", "# Read me"),
+            ("portals/be/northfield-search/SKILL.md", NORTHFIELD_SHA, NORTHFIELD),
+            ("portals/be/northfield-search/cli/SKILL.md", "5555555555555555555555555555555555555555", "# Nested"),
+            ("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA, JOBNET),
+            ("portals/dk/../SKILL.md", "6666666666666666666666666666666666666666", "# Climbs"),
         ])
     }
 
@@ -301,30 +363,47 @@ mod tests {
         let ownership = list.codeowners.ownership(&dk, &FolderName::parse("jobnet-search").unwrap());
         assert_eq!(ownership.owners, ["@ada-quill"]);
         assert_eq!(list.saved_at, now());
-        assert_eq!(fake.count(), 4, "the list, two SKILL.md files and CODEOWNERS");
+        assert_eq!(fake.counts(), (2, 3), "the commit and its file list, then two SKILL.md files and CODEOWNERS");
     }
 
     #[test]
-    fn a_second_read_with_the_same_blobs_makes_one_request() {
+    fn a_cold_read_of_a_hundred_portals_makes_two_api_requests() {
+        let files: Vec<(String, String)> = (0..100).map(|n| (format!("portals/dk/board-{n}-search/SKILL.md"), format!("{n:040x}"))).collect();
+        let mut entries: Vec<(&str, &str, &str)> = files.iter().map(|(path, sha)| (path.as_str(), sha.as_str(), JOBNET)).collect();
+        entries.push((".github/CODEOWNERS", OWNERS_SHA, OWNERS));
+        let fake = Fake::new(&entries);
+        let list = fetch_list(&fake, None, now()).unwrap();
+        assert_eq!(list.portals.len(), 100);
+        assert_eq!(fake.counts(), (2, 101), "every file from the raw host, outside the REST API's 60 an hour");
+    }
+
+    #[test]
+    fn a_second_read_with_the_same_blobs_reads_no_file() {
         let fake = full();
         let first = fetch_list(&fake, None, now()).unwrap();
         let second = fetch_list(&fake, Some(&first), now() + TimeDelta::hours(2)).unwrap();
-        assert_eq!(fake.count(), 5);
+        assert_eq!(fake.counts(), (4, 3));
         assert_eq!((second.portals.clone(), second.codeowners.clone()), (first.portals.clone(), first.codeowners.clone()));
-        let changed = Fake::new(&[(".github/CODEOWNERS", OWNERS_SHA), ("portals/dk/jobnet-search/SKILL.md", NORTHFIELD_SHA)]);
+        let changed = Fake::new(&[(".github/CODEOWNERS", OWNERS_SHA, OWNERS), ("portals/dk/jobnet-search/SKILL.md", NORTHFIELD_SHA, NORTHFIELD)]);
         let third = fetch_list(&changed, Some(&first), now()).unwrap();
-        assert_eq!(changed.count(), 2, "only the changed SKILL.md is read again");
+        assert_eq!(changed.counts(), (2, 1), "only the changed SKILL.md is read again");
         assert_eq!(third.portals[0].name, "Northfield");
     }
 
     #[test]
-    fn a_missing_blob_or_a_bad_answer_fails_the_whole_read() {
-        let fake =
-            Fake::new(&[("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA), ("portals/dk/gone-search/SKILL.md", "7777777777777777777777777777777777777777")]);
-        assert_eq!(fetch_list(&fake, None, now()), Err(CommunityFailure::Refused(404)));
-        let bad_sha = Fake::new(&[("portals/dk/jobnet-search/SKILL.md", "../../../../users/x")]);
+    fn a_missing_file_or_a_bad_answer_fails_the_whole_read() {
+        let mut gone = Fake::new(&[("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA, JOBNET)]);
+        gone.files.clear();
+        assert_eq!(fetch_list(&gone, None, now()), Err(CommunityFailure::Refused(404)));
+        let bad_sha = Fake::new(&[("portals/dk/jobnet-search/SKILL.md", "../../../../users/x", JOBNET)]);
         assert_eq!(fetch_list(&bad_sha, None, now()), Err(CommunityFailure::BadAnswer));
-        assert_eq!(bad_sha.count(), 1, "a bad blob name is never requested");
+        assert_eq!(bad_sha.counts(), (2, 0), "a bad blob name reads no file");
+        for head in ["main", "../../x", "", "C0FFEE0000000000000000000000000000000001"] {
+            let mut bad_head = full();
+            bad_head.head = head.to_owned();
+            assert_eq!(fetch_list(&bad_head, None, now()), Err(CommunityFailure::BadAnswer), "{head}");
+            assert_eq!(bad_head.counts(), (1, 0), "no file list for a commit that is not one");
+        }
         let mut truncated = full();
         truncated.tree = truncated.tree.replace(r#""truncated": false"#, r#""truncated": true"#);
         assert_eq!(fetch_list(&truncated, None, now()), Err(CommunityFailure::BadAnswer));
@@ -334,8 +413,66 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_over_its_limit_fails_the_whole_read() {
+        let mut long_file = full();
+        long_file.files[2].1 = format!("# Northfield Search Skill\n\n{}", "a".repeat(FILE_LIMIT as usize));
+        assert_eq!(fetch_list(&long_file, None, now()), Err(CommunityFailure::BadAnswer));
+        let mut long_head = full();
+        long_head.head = format!("{COMMIT}{}", " ".repeat(HEAD_LIMIT as usize));
+        assert_eq!(fetch_list(&long_head, None, now()), Err(CommunityFailure::BadAnswer));
+    }
+
+    #[test]
+    fn a_body_is_read_up_to_its_limit_and_no_further() {
+        assert_eq!(read_capped(Cursor::new(vec![7; 10]), 10), Ok(vec![7; 10]));
+        assert_eq!(read_capped(Cursor::new(vec![7; 11]), 10), Err(CommunityFailure::BadAnswer));
+        /// Never ends: a body that is not capped would be read forever.
+        struct Endless;
+        impl Read for Endless {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                buf.fill(b'a');
+                Ok(buf.len())
+            }
+        }
+        assert_eq!(read_capped(Endless, 1024), Err(CommunityFailure::BadAnswer));
+        struct Slow;
+        impl Read for Slow {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::TimedOut, "slow"))
+            }
+        }
+        assert_eq!(read_capped(Slow, 10), Err(CommunityFailure::TimedOut));
+    }
+
+    #[test]
+    fn the_api_gets_its_type_and_version_and_the_raw_host_no_redirect() {
+        let https = HttpsApi::new("0.1.0");
+        let api = https.request(&head_url(), SHA);
+        let headers = api.headers_ref().unwrap();
+        assert_eq!(headers.get("Accept").unwrap(), SHA);
+        assert_eq!(headers.get("X-GitHub-Api-Version").unwrap(), API_VERSION);
+        let raw = https.request(&raw_url(&commit(), CODEOWNERS), TEXT);
+        let headers = raw.headers_ref().unwrap();
+        assert_eq!(headers.get("Accept").unwrap(), TEXT);
+        assert!(headers.get("X-GitHub-Api-Version").is_none());
+        assert_eq!((https.api.config().max_redirects(), https.raw.config().max_redirects()), (5, 0));
+        assert!(https.api.config().https_only() && https.raw.config().https_only());
+    }
+
+    #[test]
+    fn addresses_are_built_from_validated_parts() {
+        assert_eq!(head_url(), "https://api.github.com/repos/ai-job-search-dev/community-portals/commits/main");
+        assert_eq!(tree_url(&commit()), format!("https://api.github.com/repos/ai-job-search-dev/community-portals/git/trees/{COMMIT}?recursive=1"));
+        let path = skill_path(&CountryCode::parse("dk").unwrap(), &FolderName::parse("jobnet-search").unwrap());
+        assert_eq!(
+            raw_url(&commit(), &path),
+            format!("https://raw.githubusercontent.com/ai-job-search-dev/community-portals/{COMMIT}/portals/dk/jobnet-search/SKILL.md")
+        );
+    }
+
+    #[test]
     fn a_repository_with_no_codeowners_lists_no_owners() {
-        let fake = Fake::new(&[("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA)]);
+        let fake = Fake::new(&[("portals/dk/jobnet-search/SKILL.md", JOBNET_SHA, JOBNET)]);
         let list = fetch_list(&fake, None, now()).unwrap();
         assert_eq!((list.codeowners, list.codeowners_sha), (Codeowners::default(), None));
     }
@@ -353,6 +490,8 @@ mod tests {
         assert_eq!(limited(500), CommunityFailure::Refused(500), "only 403 and 429 are a limit");
         let retry = status_failure(429, &headers(Some("12"), Some(&reset), Some("90")), now());
         assert_eq!(retry, CommunityFailure::Limited { until: now() + TimeDelta::seconds(90) }, "a secondary limit names its wait");
+        let raw = status_failure(429, &headers(None, None, Some("30")), now());
+        assert_eq!(raw, CommunityFailure::Limited { until: now() + TimeDelta::seconds(30) }, "a 429 that names only its wait");
         let no_time = status_failure(403, &headers(Some("0"), Some("soon"), None), now());
         assert_eq!(no_time, CommunityFailure::Limited { until: now() + TimeDelta::minutes(1) });
         let far = (now() + TimeDelta::days(30)).timestamp().to_string();
@@ -364,8 +503,9 @@ mod tests {
     #[test]
     fn a_refusal_that_is_no_limit_keeps_only_its_code() {
         assert_eq!(status_failure(403, &headers(Some("59"), None, None), now()), CommunityFailure::Refused(403));
-        assert_eq!(status_failure(403, &headers(None, None, None), now()), CommunityFailure::Refused(403));
+        assert_eq!(status_failure(429, &headers(None, None, None), now()), CommunityFailure::Refused(429));
         assert_eq!(status_failure(404, &headers(Some("0"), Some("1"), Some("5")), now()), CommunityFailure::Refused(404));
+        assert_eq!(status_failure(301, &headers(None, None, None), now()), CommunityFailure::Refused(301), "a redirect the raw host does not follow");
         assert_eq!(failure_of(&ureq::Error::HostNotFound), CommunityFailure::Unreachable);
         assert_eq!(failure_of(&ureq::Error::Timeout(ureq::Timeout::Global)), CommunityFailure::TimedOut);
         assert_eq!(failure_of(&ureq::Error::Io(io::Error::new(io::ErrorKind::TimedOut, "slow"))), CommunityFailure::TimedOut);

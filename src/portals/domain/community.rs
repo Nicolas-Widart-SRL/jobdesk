@@ -43,11 +43,11 @@ impl FolderName {
     }
 }
 
-/// A git object name: 40 lower-case hex digits. It goes into a blob's address.
+/// A git object name, of a commit or a file: 40 lower-case hex digits. It goes into an address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BlobSha(String);
+pub struct GitSha(String);
 
-impl BlobSha {
+impl GitSha {
     pub fn parse(text: &str) -> Option<Self> {
         (text.len() == 40 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then(|| Self(text.to_owned()))
     }
@@ -88,19 +88,19 @@ pub struct ListedPortal {
     /// One line of plain text, at most 200 characters.
     pub sentence: Option<String>,
     /// The `SKILL.md` blob it was read from, so an unchanged file is not fetched again.
-    pub sha: BlobSha,
+    pub sha: GitSha,
 }
 
 impl ListedPortal {
     /// Reads the name and sentence from a fetched `SKILL.md`, by the rules of installed portals.
-    pub fn from_manifest(country: CountryCode, folder: FolderName, sha: BlobSha, text: &str) -> Self {
+    pub fn from_manifest(country: CountryCode, folder: FolderName, sha: GitSha, text: &str) -> Self {
         let manifest = parse_manifest(text, folder.as_str());
         let name = Some(one_line(&manifest.name, NAME_CHARS)).filter(|name| !name.is_empty()).unwrap_or_else(|| folder.as_str().to_owned());
         Self { country, folder, name, sentence: clean_sentence(manifest.sentence.as_deref()), sha }
     }
 
     /// A portal from saved words, cleaned again: `None` when no name is left.
-    pub fn from_parts(country: CountryCode, folder: FolderName, sha: BlobSha, name: &str, sentence: Option<&str>) -> Option<Self> {
+    pub fn from_parts(country: CountryCode, folder: FolderName, sha: GitSha, name: &str, sentence: Option<&str>) -> Option<Self> {
         let name = one_line(name, NAME_CHARS);
         (!name.is_empty()).then(|| Self { country, folder, name, sentence: clean_sentence(sentence), sha })
     }
@@ -232,7 +232,7 @@ pub struct CommunityList {
     pub portals: Vec<ListedPortal>,
     pub codeowners: Codeowners,
     /// The `CODEOWNERS` blob it was read from, if the repository has one.
-    pub codeowners_sha: Option<BlobSha>,
+    pub codeowners_sha: Option<GitSha>,
 }
 
 /// How long Jobdesk waits after GitHub refuses with 403 or 429 and names no time, as its documentation advises.
@@ -304,9 +304,9 @@ mod tests {
 
     #[test]
     fn a_blob_name_is_forty_lower_case_hex_digits() {
-        assert!(BlobSha::parse("fee7eb5d913f1d5b584b84032d9f16a7b2d14757").is_some());
+        assert!(GitSha::parse("fee7eb5d913f1d5b584b84032d9f16a7b2d14757").is_some());
         for bad in ["FEE7EB5D913F1D5B584B84032D9F16A7B2D14757", "fee7eb5d", "../../../../x", "fee7eb5d913f1d5b584b84032d9f16a7b2d1475g"] {
-            assert!(BlobSha::parse(bad).is_none(), "{bad}");
+            assert!(GitSha::parse(bad).is_none(), "{bad}");
         }
     }
 
@@ -375,7 +375,7 @@ portals/be/northfield-search @lena-vos # no longer looked after
 
     #[test]
     fn a_name_with_hidden_characters_and_breaks_becomes_one_clean_line() {
-        let sha = BlobSha::parse(&"a".repeat(40)).unwrap();
+        let sha = GitSha::parse(&"a".repeat(40)).unwrap();
         let text = "# North\u{200B}field\u{202E} Search Skill\n\nFinds   jobs\u{1b}[31m in\nBelgium. More text.\n";
         let portal = ListedPortal::from_manifest(dk(), folder("northfield-search"), sha.clone(), text);
         assert_eq!(portal.name, "Northfield");
@@ -389,7 +389,7 @@ portals/be/northfield-search @lena-vos # no longer looked after
 
     #[test]
     fn variation_selectors_are_dropped_from_names_and_sentences() {
-        let sha = BlobSha::parse(&"a".repeat(40)).unwrap();
+        let sha = GitSha::parse(&"a".repeat(40)).unwrap();
         let name = "North\u{FE0F}field\u{E0100}";
         let portal = ListedPortal::from_parts(dk(), folder("x"), sha, name, Some("Finds\u{FE00} jobs\u{E01EF}.")).unwrap();
         assert_eq!((portal.name.as_str(), portal.sentence.as_deref()), ("Northfield", Some("Finds jobs.")));

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::portals::domain::{BlobSha, CommunityList, CountryCode, FolderName, ListedPortal, parse_codeowners};
+use crate::portals::domain::{CommunityList, CountryCode, FolderName, GitSha, ListedPortal, parse_codeowners};
 use crate::shared_kernel::replace_file::rename_over;
 
 /// The most of the saved file that is read. A longer one reads as no saved list.
@@ -103,13 +103,13 @@ fn list_from(record: Record) -> Option<CommunityList> {
         .portals
         .into_iter()
         .map(|portal| {
-            let (country, folder, sha) = (CountryCode::parse(&portal.country)?, FolderName::parse(&portal.folder)?, BlobSha::parse(&portal.sha)?);
+            let (country, folder, sha) = (CountryCode::parse(&portal.country)?, FolderName::parse(&portal.folder)?, GitSha::parse(&portal.sha)?);
             ListedPortal::from_parts(country, folder, sha, &portal.name, portal.sentence.as_deref())
         })
         .collect::<Option<Vec<_>>>()?;
     let (codeowners, codeowners_sha) = match record.codeowners {
         None => Default::default(),
-        Some(owners) => (parse_codeowners(&owners.lines), Some(BlobSha::parse(&owners.sha)?)),
+        Some(owners) => (parse_codeowners(&owners.lines), Some(GitSha::parse(&owners.sha)?)),
     };
     Some(CommunityList { saved_at, portals, codeowners, codeowners_sha })
 }
@@ -122,14 +122,14 @@ mod tests {
 
     fn list() -> CommunityList {
         let part = |country: &str, folder: &str, sha: char, name: &str, sentence: Option<&str>| {
-            let sha = BlobSha::parse(&sha.to_string().repeat(40)).unwrap();
+            let sha = GitSha::parse(&sha.to_string().repeat(40)).unwrap();
             ListedPortal::from_parts(CountryCode::parse(country).unwrap(), FolderName::parse(folder).unwrap(), sha, name, sentence).unwrap()
         };
         CommunityList {
             saved_at: Utc.with_ymd_and_hms(2026, 11, 10, 8, 48, 0).unwrap(),
             portals: vec![part("be", "northfield-search", '1', "Northfield", Some("Belgian jobs.")), part("global", "alder-search", '2', "Alder", None)],
             codeowners: parse_codeowners("* @fallback-desk\n/portals/be/northfield-search/ @lena-vos # unmaintained since 2025-07\n"),
-            codeowners_sha: BlobSha::parse(&"3".repeat(40)),
+            codeowners_sha: GitSha::parse(&"3".repeat(40)),
         }
     }
 

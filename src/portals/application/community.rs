@@ -185,7 +185,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::portals::domain::{BlobSha, CountryCode, FolderName, parse_codeowners};
+    use crate::portals::domain::{CountryCode, FolderName, GitSha, parse_codeowners};
     use crate::portals::infrastructure::ScriptedCommunity;
 
     fn now() -> DateTime<Utc> {
@@ -194,7 +194,7 @@ mod tests {
 
     fn portal(country: &str, folder: &str, name: &str, sentence: &str) -> ListedPortal {
         let (country, folder) = (CountryCode::parse(country).unwrap(), FolderName::parse(folder).unwrap());
-        ListedPortal::from_parts(country, folder, BlobSha::parse(&"a".repeat(40)).unwrap(), name, Some(sentence)).unwrap()
+        ListedPortal::from_parts(country, folder, GitSha::parse(&"a".repeat(40)).unwrap(), name, Some(sentence)).unwrap()
     }
 
     fn list(saved_at: DateTime<Utc>) -> CommunityList {

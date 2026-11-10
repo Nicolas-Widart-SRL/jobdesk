@@ -2808,6 +2808,7 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
 
 const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
 const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+const PORTALS_HIDDEN: &str = "Your portals are hidden while their folder cannot be read.";
 
 /// Each screen a failed source reaches draws its head, then the alert, then hides what the source feeds instead of calling it empty.
 /// A screen that forgot its alert would still pass every snapshot, so this walks them all.
@@ -2891,8 +2892,8 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Portals],
             subtitle: "ai-job-search",
             alert: "Your portals could not be read.",
-            shown: &["Everything else still works.", "Setup, could not be read"],
-            not_shown: &[],
+            shown: &["Everything else still works.", "Setup, could not be read", PORTALS_HIDDEN],
+            not_shown: &["No portals installed.", "jobnet-search"],
         },
         Case {
             screen: Screen::Insights,

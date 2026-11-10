@@ -251,9 +251,13 @@ fn actions_line(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
+const PORTALS_HIDDEN: &str = "Your portals are hidden while their folder cannot be read.";
+
 /// Runtime status's portals: the table flush on the page, then its actions.
 fn portal_rows(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
-    if view.portals.is_empty() {
+    if view.portals_unread {
+        flush_row(ui, true, |ui| hidden_note(ui, PORTALS_HIDDEN));
+    } else if view.portals.is_empty() {
         flush_row(ui, true, |ui| muted(ui, "No portals installed."));
     } else {
         portal_table(ui, &view.portals, !jobs_failed);
@@ -369,11 +373,17 @@ fn portal_table(ui: &mut Ui, portals: &[PortalRow], counted: bool) {
     });
 }
 
-/// The jobs seen on each portal come from the saved jobs, so they hide while those cannot be read.
+/// The jobs seen on each portal come from the saved jobs, so they hide while those cannot be read. The portals hide
+/// while their folder cannot be read, so the panel never calls them none.
 fn portals(ui: &mut Ui, view: &WorkspaceView, jobs_failed: bool) {
     panel(ui, |ui| {
         panel_header(ui, "Portals", Some(".agents/skills"));
-        if view.portals.is_empty() {
+        if view.portals_unread {
+            panel_body(ui, |ui| {
+                ui.set_width(ui.available_width());
+                hidden_note(ui, PORTALS_HIDDEN);
+            });
+        } else if view.portals.is_empty() {
             panel_body(ui, |ui| {
                 ui.set_width(ui.available_width());
                 muted(ui, "No portals installed.");

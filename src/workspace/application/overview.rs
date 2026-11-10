@@ -14,23 +14,29 @@ pub struct PortalRow {
 pub struct WorkspaceView {
     /// How many profile topics are filled, for Setup's one-line summary.
     pub topics: TopicCounts,
+    /// Sorted by folder name, as Setup shows them.
     pub portals: Vec<PortalRow>,
+    /// `.agents/skills` could not be read, so `portals` is not known to be empty and Setup hides it.
+    pub portals_unread: bool,
     pub templates: TemplateState,
     pub sync: SyncState,
     pub has_salary_data: bool,
 }
 
-/// Setup names each portal by its folder, as before the Portals screen. A portal's jobs count as none while the saved
-/// jobs cannot be read, and Setup hides them then.
+/// Setup names each portal by its folder, as before the Portals screen, and lists them in that order. A portal's jobs
+/// count as none while the saved jobs cannot be read, and Setup hides them then.
 pub fn workspace_view(status: &WorkspaceStatus, portals: &PortalsView, profile: &ProfileView) -> WorkspaceView {
-    let portals = portals
+    let portals_unread = !portals.installed_read;
+    let mut portals: Vec<PortalRow> = portals
         .portals
         .iter()
         .map(|portal| PortalRow { name: portal.folder.clone(), enabled: portal.on, jobs_seen: portal.jobs.map_or(0, |(count, _)| count) })
         .collect();
+    portals.sort_by(|a, b| a.name.cmp(&b.name));
     WorkspaceView {
         topics: topic_counts(profile),
         portals,
+        portals_unread,
         templates: status.templates.clone(),
         sync: status.sync.clone(),
         has_salary_data: status.has_salary_data,
@@ -82,6 +88,7 @@ pub fn readiness(view: &WorkspaceView, tools: Option<&[ToolCheck]>) -> Readiness
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portals::application::{Origin, PortalView, Quotes};
     use crate::workspace::domain::TOOLS;
 
     /// Every tool answers except those named.
@@ -138,6 +145,40 @@ mod tests {
     fn no_profile_leaves_every_topic_to_fill() {
         let view = WorkspaceView { topics: TopicCounts { filled: 0, total: 11, hidden: 0, any_found: false }, ..WorkspaceView::default() };
         assert_eq!(readiness(&view, Some(&tools_without(&[]))).to_fill, 11);
+    }
+
+    fn portal(folder: &str, name: &str) -> PortalView {
+        PortalView {
+            folder: folder.into(),
+            name: name.into(),
+            country: None,
+            sentence: None,
+            on: true,
+            origin: Origin::MadeByYou,
+            badges: vec![],
+            jobs: Some((1, None)),
+            quotes: Quotes::Unknown,
+            safe_name: true,
+        }
+    }
+
+    /// Setup shows folder names, so it lists them in that order, whatever the titles say.
+    #[test]
+    fn setup_lists_portals_by_the_folder_it_shows() {
+        let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
+        let portals = PortalsView { portals: vec![portal("zz-search", "Alpha"), portal("aa-search", "Zulu")], installed_read: true, ..PortalsView::default() };
+        let view = workspace_view(&WorkspaceStatus::default(), &portals, &profile);
+        let names: Vec<&str> = view.portals.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["aa-search", "zz-search"]);
+        assert!(!view.portals_unread);
+    }
+
+    #[test]
+    fn portals_that_could_not_be_read_are_marked_unread() {
+        let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
+        let view = workspace_view(&WorkspaceStatus::default(), &PortalsView { installed_read: false, ..PortalsView::default() }, &profile);
+        assert!(view.portals_unread);
+        assert!(view.portals.is_empty());
     }
 
     #[test]

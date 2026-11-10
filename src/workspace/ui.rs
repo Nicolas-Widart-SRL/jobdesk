@@ -337,10 +337,13 @@ fn portals_line(ui: &mut Ui, view: &WorkspaceView, rows: Rows) -> Option<Workspa
                         muted(ui, "No portals installed.");
                         return;
                     }
+                    // The dot stands alone, so the room on each side of it is the same.
+                    ui.spacing_mut().item_spacing.x = ITEM_GAP;
                     lead_line(ui, &format!("{} of {}", summary.on, summary.total), "portals on");
+                    muted(ui, "·");
                     match summary.jobs_found {
-                        Some(jobs) => muted(ui, format!("· {jobs} {}", if jobs == 1 { "job found" } else { "jobs found" })),
-                        None => muted(ui, "· Jobs found are hidden while your saved jobs cannot be read."),
+                        Some(jobs) => muted(ui, format!("{jobs} {}", if jobs == 1 { "job found" } else { "jobs found" })),
+                        None => hidden_note(ui, "Jobs found are hidden while your saved jobs cannot be read."),
                     };
                 });
             });

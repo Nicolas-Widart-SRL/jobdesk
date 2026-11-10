@@ -2809,7 +2809,7 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
 const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
 const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
 const PORTALS_HIDDEN: &str = "Your portals are hidden while their folder cannot be read.";
-const SETUP_JOBS_HIDDEN: &str = "· Jobs found are hidden while your saved jobs cannot be read.";
+const SETUP_JOBS_HIDDEN: &str = "Jobs found are hidden while your saved jobs cannot be read.";
 
 /// Each screen a failed source reaches draws its head, then the alert, then hides what the source feeds instead of calling it empty.
 /// A screen that forgot its alert would still pass every snapshot, so this walks them all.
@@ -2869,7 +2869,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Applications],
             subtitle: "ai-job-search",
             alert: "Your applications could not be read.",
-            shown: &["· 10 jobs found"],
+            shown: &["10 jobs found"],
             not_shown: &[SETUP_JOBS_HIDDEN],
         },
         Case {
@@ -2878,7 +2878,7 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             subtitle: "ai-job-search",
             alert: "Your saved jobs could not be read.",
             shown: &[SETUP_JOBS_HIDDEN, "4 of 6 portals on"],
-            not_shown: &["· 10 jobs found", "· 0 jobs found"],
+            not_shown: &["10 jobs found", "0 jobs found"],
         },
         Case {
             screen: Screen::Portals,
@@ -7231,7 +7231,10 @@ fn setup_sums_up_the_portals_and_opens_them() {
     let mut harness = tray_harness(probed(shell(Screen::Workspace, "setup_portals_line"), FixedTools));
     settle(&mut harness);
     assert!(is_shown(&harness, "4 of 6 portals on"));
-    assert!(is_shown(&harness, "· 10 jobs found"));
+    assert!(is_shown(&harness, "10 jobs found"));
+    // The dot between the count and the jobs has the same room on each side.
+    let (count, dot, jobs) = (harness.get_by_label("4 of 6 portals on").rect(), harness.get_by_label("·").rect(), harness.get_by_label("10 jobs found").rect());
+    assert!(((dot.left() - count.right()) - (jobs.left() - dot.right())).abs() < 1.0, "{count:?} {dot:?} {jobs:?}");
     for gone in ["Jobs seen", "linkedin-search", "Check portal health", "Add portal"] {
         assert!(harness.query_by_label(gone).is_none(), "Setup still shows {gone}");
     }

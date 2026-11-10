@@ -2,7 +2,8 @@
 //! this Jobdesk's own folder of `onboarding/`, and is compared with its pinned SHA-256 and size. Only once all of them
 //! match is anything unpacked, into a hidden staging folder beside the helper's place, which then takes that place in
 //! one rename. A working install already there stays, and one that does not work is renamed aside first, so neither
-//! is ever half removed. Nothing in the home folder outside `~/.jobdesk` is written, replaced or removed.
+//! is ever half removed. Nothing in the home folder outside `~/.jobdesk` is written, replaced or removed, and nothing at
+//! all while `~/.jobdesk` is a link or anything but a real folder.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Write};
@@ -91,6 +92,8 @@ impl HomeInstaller {
 
 impl HelperInstaller for HomeInstaller {
     fn install(&self, helper: Helper, is_here: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), Failure> {
+        // Before the download, so a `~/.jobdesk` that leads elsewhere costs nothing. `make_own` looks again.
+        own_usable(&self.own())?;
         let artifacts = (self.pins)(helper);
         let files = self.fetch_checked(&artifacts, cancelled, phase)?;
         if cancelled() {
@@ -100,6 +103,7 @@ impl HelperInstaller for HomeInstaller {
         let (own, place) = (self.own(), self.place(helper));
         let mine = claim(&self.dir).map_err(|_| Failure::Disk)?;
         let (staging, aside) = (staging_of(&place, &mine)?, aside_of(&place, &mine)?);
+        // Before anything in it is removed or written.
         let made = make_own(&own)?;
         remove(&staging);
         let bin: PathBuf = helper.bin().iter().collect();
@@ -116,17 +120,33 @@ impl HelperInstaller for HomeInstaller {
 
     fn clear_leftovers(&self) {
         self.fetcher.clear_leftovers();
+        // A `~/.jobdesk` that links elsewhere is never looked through, so nothing there that looks like a half install goes.
+        if !fs::symlink_metadata(self.own()).is_ok_and(|meta| meta.is_dir()) {
+            return;
+        }
         for helper in HELPERS {
             clear_stagings(&self.place(helper), &self.dir);
         }
     }
 }
 
-/// Makes `own` when it is missing, and says whether it did, so an install that ends short can remove it again.
+/// Whether setup may work in `own`: when it is missing, or a real folder. A link, even to a folder, or anything else
+/// in its place is refused with `NotEmpty`, as something else that takes its place.
+fn own_usable(own: &Path) -> Result<(), Failure> {
+    match fs::symlink_metadata(own) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(Failure::NotEmpty),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(Failure::Disk),
+    }
+}
+
+/// Makes `own` when it is missing, and says whether it did, so an install that ends short can remove it again. One
+/// already there must be a real folder, not a link.
 fn make_own(own: &Path) -> Result<bool, Failure> {
     match fs::create_dir(own) {
         Ok(()) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => own_usable(own).map(|()| false),
         Err(_) => Err(Failure::Disk),
     }
 }
@@ -718,16 +738,47 @@ mod tests {
         assert_eq!(fixture.left(), ["/home/.jobdesk/python/bin/python3"], "this install's staging folder goes, and nothing else changed");
     }
 
-    #[test]
-    fn an_own_folder_that_links_elsewhere_is_never_cleared() {
-        let fixture = fixture(vec![python()]);
+    /// A folder elsewhere that `~/.jobdesk` links to, holding what looks like a working Python and a half install.
+    fn linked_own(fixture: &Fixture) -> PathBuf {
         let elsewhere = fixture.root.path().join("elsewhere");
         fs::create_dir_all(elsewhere.join("python")).unwrap();
         fs::write(elsewhere.join("python").join("keep"), "theirs").unwrap();
+        fs::create_dir_all(elsewhere.join(".python.jobdesk-1-old").join("bin")).unwrap();
         symlink(&elsewhere, fixture.own()).unwrap();
-        assert_eq!(fixture.install(Helper::Python), Err(Failure::NotEmpty));
+        elsewhere
+    }
+
+    #[test]
+    fn an_own_folder_that_links_elsewhere_is_never_installed_into() {
+        let fixture = fixture(vec![python()]);
+        let elsewhere = linked_own(&fixture);
+        let is_here = || -> bool { panic!("nothing is installed, so nothing is checked again") };
+        let mut heard = Vec::new();
+        assert_eq!(fixture.installer.install(Helper::Python, &is_here, &|| false, &mut |phase| heard.push(phase)), Err(Failure::NotEmpty));
+        assert!(heard.is_empty(), "nothing is even downloaded: {heard:?}");
+        let mut left = Vec::new();
+        walk(&elsewhere, &mut left);
+        assert_eq!(left, [elsewhere.join("python").join("keep").to_string_lossy()], "nothing written there");
+        assert!(elsewhere.join(".python.jobdesk-1-old").join("bin").is_dir(), "and nothing removed");
+    }
+
+    #[test]
+    fn an_own_folder_that_links_elsewhere_is_never_cleared() {
+        let fixture = fixture(vec![python()]);
+        let elsewhere = linked_own(&fixture);
+        fixture.installer.clear_leftovers();
+        assert!(elsewhere.join(".python.jobdesk-1-old").join("bin").is_dir(), "a folder that only looks like a half install, through a link, stays");
         assert_eq!(fs::read_to_string(elsewhere.join("python").join("keep")).unwrap(), "theirs");
-        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 1, "the staging folder is gone");
+        assert!(fs::symlink_metadata(fixture.own()).unwrap().is_symlink(), "and the link itself stays");
+    }
+
+    #[test]
+    fn an_own_folder_that_is_a_file_is_refused() {
+        let fixture = fixture(vec![python()]);
+        fs::write(fixture.own(), "theirs").unwrap();
+        assert_eq!(fixture.install(Helper::Python), Err(Failure::NotEmpty));
+        assert_eq!(fs::read_to_string(fixture.own()).unwrap(), "theirs");
+        assert_eq!(fixture.left(), ["/home/.jobdesk"]);
     }
 
     #[test]

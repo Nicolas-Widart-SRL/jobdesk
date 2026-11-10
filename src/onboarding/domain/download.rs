@@ -72,6 +72,9 @@ pub trait Unpacker: Send + Sync {
     /// arrive with it in the folder's `.jobdesk`, the base of a later update. `phase` hears Checking and Unpacking.
     /// `zip` is deleted whatever the end.
     fn unpack(&self, zip: &Path, source: &InstalledSource, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure>;
+    /// The version of the release kept in `folder`'s `.jobdesk`, such as `1.7.5`, when its record and zip read whole and
+    /// match each other.
+    fn installed(&self, folder: &Path) -> Option<String>;
     /// Removes the hidden staging folders beside `folder` that a Jobdesk which no longer runs left. Links are removed,
     /// never followed.
     fn clear_leftovers(&self, folder: &Path);

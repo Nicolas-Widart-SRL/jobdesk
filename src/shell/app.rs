@@ -331,6 +331,12 @@ impl Shell {
         self.first_run.as_mut().map(|first| &mut first.onboarding)
     }
 
+    /// Opens `path` as Choose folder and Settings › Change folder do once the picker gives it, for tests that act as
+    /// the picker would.
+    pub fn choose_folder_from(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.choose_folder_with(ctx, || Some(path));
+    }
+
     pub fn desk_slot(&mut self) -> &mut Option<RunDesk> {
         &mut self.desk
     }
@@ -570,6 +576,8 @@ impl Shell {
                 self.loaded = false;
                 self.workspace = Some(root);
                 self.folder_error = None;
+                // However the folder opened, first-run setup has nothing left to do.
+                self.leave_first_run();
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }
@@ -720,16 +728,22 @@ impl Shell {
         if let SetupStage::Finished { folder } = first.onboarding.stage() {
             let folder = folder.clone();
             self.open(ctx, &folder);
+            // A folder that failed to open leaves setup too, and shows on the welcome.
             self.leave_first_run();
         }
     }
 
-    /// First-run setup hands over to the app: Today, in the app's own window. A folder that failed to open shows on the
-    /// welcome.
+    /// First-run setup hands over to the app, whichever way a folder opened: its worker is stopped and waited for, the
+    /// window grows to the app's own with Today on show, and the tool check starts again, so what setup installed is
+    /// found. Nothing while setup does not show.
     fn leave_first_run(&mut self) {
-        self.first_run = None;
+        let Some(mut first) = self.first_run.take() else { return };
+        first.onboarding.stop();
         self.window = Some(WindowSize::App);
         (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+        if let Some(environment) = &mut self.environment {
+            environment.restart();
+        }
     }
 
     /// First-run setup's screen for where it stands, then what the user asked for there.
@@ -739,13 +753,8 @@ impl Shell {
         let Some(request) = first.screen.show(ui, &first.onboarding, today, refused) else { return };
         let onboarding = &mut first.onboarding;
         match request {
-            FirstRunRequest::HaveFolder => {
-                let ctx = ui.ctx().clone();
-                self.choose_folder(&ctx);
-                if self.workspace.is_some() {
-                    self.leave_first_run();
-                }
-            }
+            // A folder that opens leaves setup.
+            FirstRunRequest::HaveFolder => self.choose_folder(&ui.ctx().clone()),
             FirstRunRequest::ChangeFolder => {
                 if let Some(folder) = rfd::FileDialog::new().set_title("Choose where your job search lives").pick_folder() {
                     onboarding.choose(folder);
@@ -1157,10 +1166,12 @@ impl Shell {
             } else if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let ready = environment.version_of("claude").is_some();
                 // Before a folder is open, the line also says how tasks sign in: Claude Code's own sign-in, or a key saved in Settings.
-                let text = match (ready, self.workspace.is_some()) {
-                    (true, true) => "Claude is ready",
-                    (true, false) => "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.",
-                    (false, _) => "Claude Code is not installed",
+                // First-run setup's screens leave the key out: the check finds Claude Code installed, not signed in.
+                let text = match (ready, self.workspace.is_some(), self.first_run.is_some()) {
+                    (true, true, _) => "Claude is ready",
+                    (true, false, true) => "Claude Code is installed. Jobdesk uses it for every task.",
+                    (true, false, false) => "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.",
+                    (false, _, _) => "Claude Code is not installed",
                 };
                 status_line(ui, ready, text);
             }
@@ -1649,17 +1660,17 @@ fn prune_run_logs(data: &std::path::Path, retention: Retention, now: NaiveDateTi
     runs::prune_logs(&data.join("runs"), SystemTime::from(keep_after))
 }
 
-/// First-run setup over the data folder `data`, and the home folder it works in, unless setup has got past the Computer
-/// step. macOS only, and only with a home folder and a processor setup has helper files for.
+/// First-run setup over the data folder `data`, and the home folder it works in. Its record is cleared once setup gets
+/// past the Computer step, and a remembered folder skips setup before this. macOS only, and only with a home folder and
+/// a processor setup has helper files for.
 #[cfg(target_os = "macos")]
 fn first_run(ctx: &egui::Context, data: &Path) -> Option<(Onboarding, PathBuf)> {
-    use crate::onboarding::application::Step;
     let home = std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute())?;
     let helpers = crate::onboarding::helper_setup(data, env!("CARGO_PKG_VERSION"), home.clone())?;
     let repaint = ctx.clone();
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || repaint.request_repaint());
     let setup = crate::onboarding::first_run(data, env!("CARGO_PKG_VERSION"), home.join("Documents"), helpers, wake);
-    (!setup.progress().is_done(Step::Computer)).then_some((setup, home))
+    Some((setup, home))
 }
 
 /// Windows shows the welcome and the folder picker, as before first-run setup.

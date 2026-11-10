@@ -30,7 +30,7 @@ On Windows the profile folder is `USERPROFILE`, with `HOME` only when it is unse
 
 A task's process, Test connection, the tool check and Runtime status all get one `PATH`, looked up once per launch by `host_path::resolved_path`. It holds, in this order:
 
-1. on macOS, the folders of the helpers first-run setup installs, all in Jobdesk's own `~/.jobdesk`: `~/.jobdesk/python/bin`, `~/.jobdesk/bun/bin` and `~/.jobdesk/TinyTeX/bin/universal-darwin`. They are listed whether or not they exist yet, so a helper installed after the lookup is still found. They come before every other copy, newer ones and the login shell's own included, such as a Homebrew Bun or a MacTeX: setup installs a helper only when no copy works with ai-job-search, and then only its pinned one is known to work with the templates and tools, so once installed it shadows the others;
+1. on macOS, the folders of the helpers first-run setup installs, all in Jobdesk's own `~/.jobdesk`: `~/.jobdesk/python/bin`, `~/.jobdesk/bun/bin` and `~/.jobdesk/TinyTeX/bin/universal-darwin`. They are listed whether or not they exist yet, so a helper installed after the lookup is still found. When first-run setup hands over, the tool check runs again, so Setup and Runtime status find what it installed. They come before every other copy, newer ones and the login shell's own included, such as a Homebrew Bun or a MacTeX: setup installs a helper only when no copy works with ai-job-search, and then only its pinned one is known to work with the templates and tools, so once installed it shadows the others;
 2. the `PATH` the login shell sets, since an app opened from the Finder gets none of the shell profiles' `PATH`;
 3. the `PATH` Jobdesk inherited.
 

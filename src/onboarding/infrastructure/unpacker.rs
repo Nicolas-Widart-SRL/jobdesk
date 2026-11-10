@@ -104,6 +104,10 @@ impl Unpacker for ZipUnpacker {
         unpacked
     }
 
+    fn installed(&self, folder: &Path) -> Option<String> {
+        installed_source::read(folder).map(|(source, _)| source.version)
+    }
+
     fn clear_leftovers(&self, folder: &Path) {
         clear_stagings(folder, &self.dir);
     }
@@ -608,9 +612,11 @@ mod tests {
     fn the_release_is_kept_in_the_folder_as_its_update_base() {
         let setup = setup();
         let bytes = release();
+        assert_eq!(setup.unpacker.installed(&setup.folder), None, "nothing is kept before the release is in");
         assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Ok(()));
         assert_eq!(fs::read(setup.folder.join(".jobdesk/source.zip")).unwrap(), bytes, "the exact bytes that matched");
         assert_eq!(installed_source::read(&setup.folder), Some((pinned(&sha256_hex(&bytes)), bytes)));
+        assert_eq!(setup.unpacker.installed(&setup.folder).as_deref(), Some("1.7.5"));
     }
 
     #[test]

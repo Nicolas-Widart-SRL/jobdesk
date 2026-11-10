@@ -136,12 +136,14 @@ On macOS, the `onboarding` feature makes the job search folder, fills it with th
 - A helper archive is refused whole for a path with `..` or a root, a path through a link, a link that leaves its folder, a hard link, a device, an entry written twice, or more than 20,000 entries or 512 MiB.
 - The helpers install for this user only, in `~/.jobdesk`, the one folder of the home folder that Jobdesk owns: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. Nothing needs an administrator password.
 - Setup never writes, replaces or removes anything elsewhere in the home folder, such as `~/.bun` or `~/Library/TinyTeX`, and never changes another copy of a helper. In `~/.jobdesk` it touches only the helpers' places and their staging folders. How it puts an install in place, and replaces an earlier install of its own that does not work, is in [ARCHITECTURE](../../ARCHITECTURE.md).
+- A `~/.jobdesk` that is a link, even to a folder, or anything but a real folder, is refused before any download, install, replace or cleanup: the install fails as something else taking its place, and setup writes nothing there, removes nothing there and never looks through it.
 - The helpers' folders come first on the `PATH` of every task, Test connection, the tool check and Runtime status, before every other copy, as [runs](runs.md#the-path) says. So once setup installs a helper, tasks use its copy, not one the user had.
 
 ### The progress record
 
-- Setup keeps `onboarding.json` in the data folder, readable only by the user. It holds the chosen folder, the steps done, the `ai-job-search` version unpacked, the day of the last change, and whether the user chose Continue without PDFs. A record larger than 64 KiB, or one Jobdesk did not write, reads as no record.
+- Setup keeps `onboarding.json` in the data folder, readable only by the user. It holds the chosen folder, the steps done, the `ai-job-search` version being set up, and the day of the last change. A record larger than 64 KiB, or one Jobdesk did not write, reads as no record.
 - Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
+- The download's worker records the version once the feed pins it, and the folder as made once the release has taken the folder's place, before the window hears. When setup opens on a record that lacks the folder made, but whose folder is an `ai-job-search` folder with a `.jobdesk/` that reads whole for the recorded version, the folder counts as made. A record that cannot be written costs only that resume: setup goes on with what it holds in memory, and says nothing more.
 - The record is removed when the Computer step ends.
 - Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. It removes links and never follows them.
 

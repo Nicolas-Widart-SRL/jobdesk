@@ -22,8 +22,6 @@ struct Record {
     version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stopped: Option<String>,
-    #[serde(default)]
-    without_pdfs: bool,
 }
 
 /// The progress record, `onboarding.json` in the app's data folder, readable only by the user.
@@ -94,7 +92,6 @@ fn record_from(progress: &Progress) -> Record {
         done: progress.done.iter().filter_map(|step| STEPS.iter().find(|(known, _)| known == step)).map(|(_, word)| (*word).to_owned()).collect(),
         version: progress.version.clone(),
         stopped: progress.stopped.map(|day| day.to_string()),
-        without_pdfs: progress.without_pdfs,
     }
 }
 
@@ -105,7 +102,6 @@ fn progress_from(record: Record) -> Progress {
         done: record.done.iter().filter_map(|word| STEPS.iter().find(|(_, known)| known == word)).map(|(step, _)| *step).collect(),
         version: record.version,
         stopped: record.stopped.as_deref().and_then(parse_iso_date),
-        without_pdfs: record.without_pdfs,
     }
 }
 
@@ -121,7 +117,6 @@ mod tests {
             done: [Step::Folder, Step::Computer].into(),
             version: Some("1.7.5".into()),
             stopped: NaiveDate::from_ymd_opt(2026, 11, 10),
-            without_pdfs: true,
         }
     }
 

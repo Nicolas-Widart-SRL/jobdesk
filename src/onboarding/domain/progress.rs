@@ -27,8 +27,6 @@ pub struct Progress {
     pub version: Option<String>,
     /// The day of the last change, which the next open names as the day the user stopped.
     pub stopped: Option<NaiveDate>,
-    /// The user chose Continue without PDFs, so LaTeX is not installed.
-    pub without_pdfs: bool,
 }
 
 impl Progress {
@@ -39,7 +37,7 @@ impl Progress {
 
 /// Where the progress record is kept.
 pub trait ProgressStore: Send + Sync {
-    /// `None` when no setup has started, or the last one finished.
+    /// `None` when no setup has started, or the last one got past the Computer step.
     fn load(&self) -> Result<Option<Progress>, LoadError>;
     fn save(&self, progress: &Progress) -> Result<(), LoadError>;
     /// Forgets the record, once setup is finished.

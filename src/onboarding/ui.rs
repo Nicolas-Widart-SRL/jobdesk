@@ -160,17 +160,13 @@ impl FirstRunScreen {
         }
     }
 
+    /// The welcome back, with the Folder step done. The record is cleared once the Computer step is, so setup always
+    /// picks up there.
     fn welcome_back(&self, ui: &mut Ui, progress: &Progress, asked: &Asked) {
-        let computer = progress.is_done(Step::Computer);
-        let at = if computer { 2 } else { 1 };
-        let lead =
-            if computer { "Your folder and tools are ready. Let's finish your profile." } else { "Your folder is ready. Let's get this computer ready." };
+        let at = 1;
+        let lead = "Your folder is ready. Let's get this computer ready.";
         let folder = progress.folder.as_deref().map(|folder| self.shown(folder)).unwrap_or_default();
-        let tools = match (computer, progress.without_pdfs) {
-            (false, _) => "Jobdesk checks Python, Bun and LaTeX, and installs what is missing.",
-            (true, false) => "Python, Bun and LaTeX are ready.",
-            (true, true) => "Python and Bun are ready. LaTeX is not installed yet.",
-        };
+        let tools = "Jobdesk checks Python, Bun and LaTeX, and installs what is missing.";
         let unders = [folder.as_str(), tools, "Claude builds it from your CV and your answers.", ""];
         let why = progress.stopped.map(|day| format!("You stopped on {}.", day.format("%A %-d %B"))).unwrap_or_default();
         on_desk(

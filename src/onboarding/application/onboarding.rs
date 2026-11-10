@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use chrono::NaiveDate;
 
@@ -80,6 +80,7 @@ enum Event {
 struct Attempt {
     id: u64,
     cancelled: Arc<AtomicBool>,
+    worker: JoinHandle<()>,
 }
 
 /// The ports one attempt needs on its worker thread. `pins` is `None` in a build that can vouch for no release.
@@ -109,8 +110,10 @@ pub struct Onboarding {
 
 impl Onboarding {
     /// Reads the progress record and removes what a setup that stopped midway left: part files in the data folder,
-    /// and staging folders beside the chosen folder. `pins` is `None` in a build with no update key, which offers only
-    /// a folder the user already has. `documents` is the user's Documents folder.
+    /// and staging folders beside the chosen folder. A folder the record does not have as made, but which holds the
+    /// release of the version it records, is made: setup stopped after the release took its place, before the record
+    /// said so. `pins` is `None` in a build with no update key, which offers only a folder the user already has.
+    /// `documents` is the user's Documents folder.
     pub fn new(
         store: Arc<dyn ProgressStore>,
         pins: Option<Arc<dyn SourcePinReader>>,
@@ -121,10 +124,16 @@ impl Onboarding {
         repaint: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         // A record that cannot be read is a setup that has not started: nothing of the user's depends on it.
-        let progress = store.load().ok().flatten().unwrap_or_default();
+        let mut progress = store.load().ok().flatten().unwrap_or_default();
         fetcher.clear_leftovers();
         if let Some(folder) = &progress.folder {
             unpacker.clear_leftovers(folder);
+            let kept = || progress.version.is_some() && unpacker.installed(folder) == progress.version;
+            if !progress.is_done(Step::Folder) && unpacker.look(folder) == Contents::AiJobSearch && kept() {
+                progress.done.insert(Step::Folder);
+                // One that cannot be written is found again at the next open.
+                let _ = store.save(&progress);
+            }
         }
         let (sender, events) = mpsc::channel();
         let ports = Ports { pins, fetcher, unpacker, helpers };
@@ -153,8 +162,8 @@ impl Onboarding {
         }
     }
 
-    /// Continue setup, on the welcome back: the first step not done. A folder that no longer holds ai-job-search
-    /// starts the Folder step again on it.
+    /// Continue setup, on the welcome back: the Computer step, as the record is cleared once it is done. A folder that
+    /// no longer holds ai-job-search starts the Folder step again on it.
     pub fn resume(&mut self) {
         if self.stage != Stage::Welcome {
             return;
@@ -164,11 +173,7 @@ impl Onboarding {
             self.progress.done.clear();
             return self.look_at(folder);
         }
-        if self.progress.is_done(Step::Computer) {
-            self.stage = Stage::Finished { folder };
-        } else {
-            self.check_helpers(folder);
-        }
+        self.check_helpers(folder);
     }
 
     /// Back: from Save location to the welcome, from a failed download to Save location, and from the helper check
@@ -274,7 +279,8 @@ impl Onboarding {
     }
 
     /// Continue, once every helper works: the Computer step is done. Continue without PDFs, when only LaTeX does not
-    /// work, ends it too, with LaTeX left out. For now the record is then cleared, as nothing follows these steps yet.
+    /// work, ends it too, with LaTeX left out, which the tool check then finds missing. For now the record is then
+    /// cleared, as nothing follows these steps yet.
     pub fn finish(&mut self, without_pdfs: bool) {
         let Stage::Computer { folder, lines, work: Work::Idle } = &self.stage else { return };
         let ready = |helper: Helper| HELPERS.into_iter().zip(lines).any(|(each, line)| each == helper && line.ready());
@@ -283,11 +289,18 @@ impl Onboarding {
             return;
         }
         let folder = folder.clone();
-        self.progress.without_pdfs = without_pdfs;
-        self.progress.done.insert(Step::Computer);
-        // A record that cannot be removed costs only a welcome back at the next open, which opens this folder again.
+        // A record that cannot be removed costs only a welcome back at the next open, which checks the helpers again.
         let _ = self.store.clear();
         self.stage = Stage::Finished { folder };
+    }
+
+    /// Stops the worker, if one runs, and waits until it has, so nothing setup does outlives it: the download, the
+    /// unpacking or an install ends short and cleans up as Cancel does. The window then leaves setup.
+    pub fn stop(&mut self) {
+        if let Some(attempt) = self.attempt.take() {
+            attempt.cancelled.store(true, Ordering::SeqCst);
+            let _ = attempt.worker.join();
+        }
     }
 
     /// Takes what the worker said since the last call. Call it every frame.
@@ -341,7 +354,8 @@ impl Onboarding {
         self.stage = Stage::Place { folder, place };
     }
 
-    /// Keeps the record. One that cannot be written costs only the resume at the next open, so setup goes on.
+    /// Keeps the record. One that cannot be written costs only the resume at the next open, so setup goes on with what
+    /// it holds in memory.
     fn save(&mut self, today: NaiveDate) {
         self.progress.stopped = Some(today);
         let _ = self.store.save(&self.progress);
@@ -352,22 +366,24 @@ impl Onboarding {
         let id = self.next_id;
         self.next_id += 1;
         let cancelled = Arc::new(AtomicBool::new(false));
-        self.attempt = Some(Attempt { id, cancelled: Arc::clone(&cancelled) });
-        let (sender, repaint) = (self.sender.clone(), Arc::clone(&self.repaint));
-        thread::spawn(move || {
+        let (sender, repaint, stop) = (self.sender.clone(), Arc::clone(&self.repaint), Arc::clone(&cancelled));
+        let worker = thread::spawn(move || {
             let tell = |event: Event| {
                 let _ = sender.send((id, event));
                 repaint();
             };
-            work(&|| cancelled.load(Ordering::SeqCst), &tell);
+            work(&|| stop.load(Ordering::SeqCst), &tell);
         });
+        self.attempt = Some(Attempt { id, cancelled, worker });
     }
 
+    /// Makes the folder and fills it on a worker, which keeps the record as it goes: the version once the feed has
+    /// pinned it, and the folder made once the release has taken its place, before the window hears of it.
     fn start_download(&mut self, folder: PathBuf) {
         self.stage = Stage::Download { folder: folder.clone(), version: None, phase: Phase::Made, cancelling: false };
-        let ports = self.ports.clone();
+        let (ports, store, progress) = (self.ports.clone(), Arc::clone(&self.store), self.progress.clone());
         self.spawn(move |cancelled, tell| {
-            let end = set_up(&ports, &folder, cancelled, tell);
+            let end = set_up(&ports, &Recorder { store, progress }, &folder, cancelled, tell);
             tell(Event::Ended(end));
         });
     }
@@ -376,8 +392,11 @@ impl Onboarding {
     fn check_helpers(&mut self, folder: PathBuf) {
         self.stage = Stage::Computer { folder, lines: [HelperLine::Next; 3], work: Work::Checking };
         let helpers = self.ports.helpers.clone();
-        self.spawn(move |_, tell| {
+        self.spawn(move |cancelled, tell| {
             for helper in HELPERS {
+                if cancelled() {
+                    break;
+                }
                 tell(Event::Helper(helper, HelperLine::Checking));
                 let line = if helpers.is_here(helper) { HelperLine::Here } else { HelperLine::Missing };
                 tell(Event::Helper(helper, line));
@@ -387,8 +406,27 @@ impl Onboarding {
     }
 }
 
+/// The record as the worker keeps it, from the one the window held when the download started.
+struct Recorder {
+    store: Arc<dyn ProgressStore>,
+    progress: Progress,
+}
+
+impl Recorder {
+    /// Records `version`, and the folder as made when `made`. One that cannot be written costs only the resume at the
+    /// next open, as the window holds the same in memory once it hears.
+    fn record(&self, version: &str, made: bool) {
+        let mut progress = self.progress.clone();
+        progress.version = Some(version.to_owned());
+        if made {
+            progress.done.insert(Step::Folder);
+        }
+        let _ = self.store.save(&progress);
+    }
+}
+
 /// Makes the folder, reads the pin, downloads the release, checks it and unpacks it. Gives the version unpacked.
-fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn Fn(Event)) -> Result<String, Failure> {
+fn set_up(ports: &Ports, recorder: &Recorder, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn Fn(Event)) -> Result<String, Failure> {
     ports.unpacker.make(folder)?;
     tell(Event::Phase(Phase::Made));
     let pin = match ports.pins.as_ref().map(|pins| pins.read()) {
@@ -398,6 +436,8 @@ fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn
         Some(Err(failure)) => return Err(pin_failure(failure)),
     };
     let version = pin.version.to_string();
+    // So the next open knows which release a folder filled before the window heard is.
+    recorder.record(&version, false);
     tell(Event::Version(version.clone()));
     if cancelled() {
         return Err(Failure::Cancelled);
@@ -408,6 +448,8 @@ fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn
     })?;
     let source = InstalledSource { version: version.clone(), sha256: pin.sha256 };
     ports.unpacker.unpack(&zip, &source, folder, cancelled, &mut |phase| tell(Event::Phase(phase)))?;
+    // The release has taken its place: quitting before the window hears must not leave the folder unfinished.
+    recorder.record(&version, true);
     Ok(version)
 }
 
@@ -470,6 +512,8 @@ mod tests {
     struct Fetcher {
         hold: bool,
         asked: Mutex<Vec<String>>,
+        /// Set once a fetch has returned.
+        ended: AtomicBool,
     }
 
     impl SourceFetcher for Fetcher {
@@ -479,6 +523,9 @@ mod tests {
             while self.hold && !cancelled() {
                 thread::sleep(Duration::from_millis(5));
             }
+            // A little later than the cancel, so a caller that does not wait for the worker sees it still running.
+            thread::sleep(Duration::from_millis(20));
+            self.ended.store(true, Ordering::SeqCst);
             if cancelled() {
                 return Err(Failure::Cancelled);
             }
@@ -487,16 +534,18 @@ mod tests {
         fn clear_leftovers(&self) {}
     }
 
-    /// Folders by what they hold, and the hash the release must have. An unpacked folder holds ai-job-search.
+    /// Folders by what they hold, and the hash the release must have. An unpacked folder holds ai-job-search, and
+    /// keeps the version unpacked.
     struct Folders {
         contents: Mutex<Contents>,
+        installed: Mutex<Option<String>>,
         cleared: Mutex<Vec<PathBuf>>,
         unpacked: Mutex<Vec<String>>,
     }
 
     impl Folders {
         fn holding(contents: Contents) -> Self {
-            Folders { contents: Mutex::new(contents), cleared: Mutex::default(), unpacked: Mutex::default() }
+            Folders { contents: Mutex::new(contents), installed: Mutex::default(), cleared: Mutex::default(), unpacked: Mutex::default() }
         }
     }
 
@@ -526,7 +575,11 @@ mod tests {
             phase(Phase::Unpacking);
             self.unpacked.lock().unwrap().push(folder.display().to_string());
             *self.contents.lock().unwrap() = Contents::AiJobSearch;
+            *self.installed.lock().unwrap() = Some(source.version.clone());
             Ok(())
+        }
+        fn installed(&self, _folder: &Path) -> Option<String> {
+            self.installed.lock().unwrap().clone()
         }
         fn clear_leftovers(&self, folder: &Path) {
             self.cleared.lock().unwrap().push(folder.to_owned());
@@ -768,7 +821,6 @@ mod tests {
         onboarding.finish(false);
         assert_eq!(onboarding.stage(), &Stage::Finished { folder: PathBuf::from("/Users/sam/Documents/Job search") });
         assert_eq!(store.load().unwrap(), None, "the record is cleared");
-        assert!(onboarding.progress().is_done(Step::Computer));
     }
 
     #[test]
@@ -783,7 +835,6 @@ mod tests {
         assert!(matches!(onboarding.stage(), Stage::Computer { .. }));
         onboarding.finish(true);
         assert!(matches!(onboarding.stage(), Stage::Finished { .. }));
-        assert!(onboarding.progress().without_pdfs);
 
         let bun = installer(&[]);
         bun.fails.lock().unwrap().insert(Helper::Bun, Failure::Mismatch);
@@ -829,5 +880,107 @@ mod tests {
         onboarding.resume();
         assert_eq!(onboarding.stage(), &Stage::Place { folder, place: Place::New });
         assert!(!onboarding.progress().is_done(Step::Folder));
+    }
+
+    /// Polls the store, never the setup, until `seen` holds of the record, or fails the test after two seconds.
+    fn wait_for_record(store: &Memory, seen: impl Fn(&Progress) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !store.load().unwrap().is_some_and(|progress| seen(&progress)) {
+            assert!(Instant::now() < deadline, "never recorded: {:?}", store.load());
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn the_worker_records_the_folder_made_before_the_window_hears() {
+        let store = Arc::new(Memory::default());
+        let mut onboarding = onboarding(Arc::clone(&store), pinned(), Arc::default(), Arc::new(Folders::holding(Contents::Missing)));
+        onboarding.start_from_scratch();
+        onboarding.save_here(today());
+        wait_for_record(&store, |progress| progress.is_done(Step::Folder));
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.version.as_deref(), Some("1.7.5"));
+        assert_eq!(saved.folder, Some(PathBuf::from("/Users/sam/Documents/Job search")));
+        assert!(matches!(onboarding.stage(), Stage::Download { .. }), "not polled yet: {:?}", onboarding.stage());
+        settle(&mut onboarding);
+        assert!(matches!(onboarding.stage(), Stage::Done { .. }));
+    }
+
+    #[test]
+    fn a_setup_that_stopped_before_the_window_heard_picks_up_at_the_computer_step() {
+        let folder = PathBuf::from("/Users/sam/Job search");
+        // The record as the worker leaves it once the feed pinned 1.7.5, before the release took the folder's place.
+        let pinned_only = Progress { folder: Some(folder.clone()), version: Some("1.7.5".into()), stopped: Some(today()), ..Progress::default() };
+        let filled = |kept: Option<&str>, contents: Contents| {
+            let folders = Folders::holding(contents);
+            *folders.installed.lock().unwrap() = kept.map(str::to_owned);
+            Arc::new(folders)
+        };
+        let store = Arc::new(Memory(Mutex::new(Some(pinned_only.clone()))));
+        let mut resumed = with_helpers(Arc::clone(&store), pinned(), Arc::default(), filled(Some("1.7.5"), Contents::AiJobSearch), installer(&HELPERS));
+        assert!(resumed.progress().is_done(Step::Folder), "the release of the recorded version is in the folder");
+        assert!(store.load().unwrap().unwrap().is_done(Step::Folder), "and the record says so now");
+        resumed.resume();
+        settle(&mut resumed);
+        assert_eq!(lines(&resumed), [HelperLine::Here; 3], "on the Computer step");
+
+        let unmade = [
+            (Some(pinned_only.clone()), filled(Some("1.7.4"), Contents::AiJobSearch), "another version is kept"),
+            (Some(pinned_only.clone()), filled(None, Contents::AiJobSearch), "no release is kept"),
+            (Some(pinned_only.clone()), filled(Some("1.7.5"), Contents::Files), "the folder is not ai-job-search"),
+            (Some(Progress { version: None, ..pinned_only }), filled(Some("1.7.5"), Contents::AiJobSearch), "no version recorded"),
+        ];
+        for (record, folders, why) in unmade {
+            let mut onboarding = onboarding(Arc::new(Memory(Mutex::new(record))), pinned(), Arc::default(), folders);
+            assert!(!onboarding.progress().is_done(Step::Folder), "{why}");
+            onboarding.resume();
+            assert!(matches!(onboarding.stage(), Stage::Place { .. }), "{why}: {:?}", onboarding.stage());
+        }
+    }
+
+    /// A record that can be read but never written.
+    struct Unwritable;
+
+    impl ProgressStore for Unwritable {
+        fn load(&self) -> Result<Option<Progress>, LoadError> {
+            Ok(None)
+        }
+        fn save(&self, _: &Progress) -> Result<(), LoadError> {
+            Err(LoadError::new("onboarding.json", "read-only disk"))
+        }
+        fn clear(&self) -> Result<(), LoadError> {
+            Err(LoadError::new("onboarding.json", "read-only disk"))
+        }
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_written_keeps_setup_going_from_memory() {
+        let helpers = HelperSetup::new(Arc::new(Here::default()), installer(&[]));
+        let (folders, documents) = (Arc::new(Folders::holding(Contents::Missing)), PathBuf::from("/Users/sam/Documents"));
+        let mut onboarding =
+            Onboarding::new(Arc::new(Unwritable), Some(Arc::new(pinned())), Arc::new(Fetcher::default()), folders, helpers, documents, Arc::new(|| {}));
+        onboarding.start_from_scratch();
+        onboarding.save_here(today());
+        settle(&mut onboarding);
+        assert!(matches!(onboarding.stage(), Stage::Done { .. }), "{:?}", onboarding.stage());
+        assert!(onboarding.progress().is_done(Step::Folder));
+        assert_eq!(onboarding.progress().version.as_deref(), Some("1.7.5"));
+        onboarding.go_on();
+        assert!(matches!(onboarding.stage(), Stage::Computer { .. }));
+    }
+
+    #[test]
+    fn stop_cancels_the_worker_and_waits_for_it() {
+        let fetcher = Arc::new(Fetcher { hold: true, ..Fetcher::default() });
+        let folders = Arc::new(Folders::holding(Contents::Missing));
+        let mut onboarding = onboarding(Arc::default(), pinned(), Arc::clone(&fetcher), Arc::clone(&folders));
+        onboarding.start_from_scratch();
+        onboarding.save_here(today());
+        wait_for(&mut onboarding, |stage| matches!(stage, Stage::Download { phase: Phase::Downloading { .. }, .. }));
+        onboarding.stop();
+        assert!(fetcher.ended.load(Ordering::SeqCst), "the download has ended by the time stop returns");
+        assert!(!onboarding.is_working());
+        assert!(folders.unpacked.lock().unwrap().is_empty());
+        onboarding.stop();
     }
 }

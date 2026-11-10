@@ -31,9 +31,11 @@ Install what is missing installs the rest. Each line shows its download size and
 
 The helpers install only for you, in a hidden `.jobdesk` folder in your home folder: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. No administrator password is needed. Jobdesk changes nothing else on this computer, and leaves any other copy of Python, Bun or LaTeX you have as it is. Your tasks use Jobdesk's copies first.
 
-If a helper cannot install, its line says why, and Try again installs it again. When only LaTeX fails, Continue without PDFs goes on without it: Jobdesk still finds and scores jobs and writes your profile, but cannot make PDFs of your CV and cover letters. Python and Bun cannot be left out.
+If a helper cannot install, its line says why, and Try again installs it again. When only LaTeX fails, Continue without PDFs goes on without it: Jobdesk still finds and scores jobs and writes your profile, but cannot make PDFs of your CV and cover letters. Python and Bun cannot be left out. The Setup tab then stays in the menu, with LaTeX's lines missing, until LaTeX is installed.
 
-When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window. Profile then shows what is left to fill in about you.
+When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window, and checks the tools again so Setup finds the helpers. Profile then shows what is left to fill in about you.
+
+Settings stays at the bottom right through setup. Choosing a folder in Settings › Change folder ends setup: a download or an install still running stops, and that folder opens on Today in the full-size window.
 
 ### Quitting midway
 
@@ -120,7 +122,7 @@ CV documents, the one row of Built from your profile, stays pinned under the top
 
 ## Setup and the status bar
 
-Setup shows whether your profile, tools, portals, templates and sync are ready. Its Profile panel is one line: how many of the eleven topics are filled, how many are hidden if a file cannot be read, and Open Profile, which opens the Profile screen. With no profile file found, the panel, like the Profile screen, offers Set up your profile…, which opens `/setup` in the launcher. Writing style and cover letter templates no longer show there. Setup's tab stays in the menu only while a required item is not ready, so through your first setup too, and comes back if one goes missing later. A required item is your job search folder or a required tool. Your profile never keeps the tab. Optional tools never keep it either, and never count against the ready total. Settings › Runtime status always shows the same. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says "Claude is installed. Tasks use its sign-in, or an API key you save in Settings." The theme is set in Settings › Appearance.
+Setup shows whether your profile, tools, portals, templates and sync are ready. Its Profile panel is one line: how many of the eleven topics are filled, how many are hidden if a file cannot be read, and Open Profile, which opens the Profile screen. With no profile file found, the panel, like the Profile screen, offers Set up your profile…, which opens `/setup` in the launcher. Writing style and cover letter templates no longer show there. Setup's tab stays in the menu only while a required item is not ready, so through your first setup too, and comes back if one goes missing later. A required item is your job search folder or a required tool. Your profile never keeps the tab. Optional tools never keep it either, and never count against the ready total. Settings › Runtime status always shows the same. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.", and during [first run](#first-run) on a Mac "Claude Code is installed. Jobdesk uses it for every task." The theme is set in Settings › Appearance.
 
 When a new version of Jobdesk is out, the status bar shows it to the left of Settings, one state at a time:
 

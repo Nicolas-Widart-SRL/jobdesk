@@ -6889,6 +6889,9 @@ mod first_run {
             sample_workspace(folder);
             Ok(())
         }
+        fn installed(&self, _: &Path) -> Option<String> {
+            None
+        }
         fn clear_leftovers(&self, _: &Path) {}
     }
 
@@ -6904,6 +6907,22 @@ mod first_run {
                 std::thread::sleep(Duration::from_millis(5));
             }
             self.here.lock().unwrap().contains(&helper)
+        }
+    }
+
+    /// The tool check over the same helpers: `claude` and `pdftotext` always answer, and a helper's programs once it is
+    /// here.
+    struct HelperTools(Arc<Here>);
+
+    impl ToolProber for HelperTools {
+        fn probe(&self, tool: &ToolSpec) -> Option<String> {
+            let helper = match tool.name {
+                "python3" => Helper::Python,
+                "bun" => Helper::Bun,
+                "lualatex" | "xelatex" => Helper::Latex,
+                _ => return Some("1.0".to_owned()),
+            };
+            self.0.here.lock().unwrap().contains(&helper).then(|| "1.0".to_owned())
         }
     }
 
@@ -6960,12 +6979,13 @@ mod first_run {
         let feed = script.feed.unwrap_or_else(|| Ok(Some(SourcePin::parse("1.7.5", HASH).unwrap())));
         let probe = Arc::new(Here { here: Mutex::new(script.here.into_iter().collect()), held: script.hold_check });
         let installer = Installer { here: Arc::clone(&probe), fails: script.fails, held: script.hold_install };
+        let tools = HelperTools(Arc::clone(&probe));
         let helpers = HelperSetup::new(probe, Arc::new(installer));
         let (fetcher, folders) = (Fetcher { hold: script.hold_download }, Folders { mismatch: script.mismatch });
         let store = Arc::new(Record(Mutex::new(script.record)));
         let documents = home.join("Documents");
         let onboarding = Onboarding::new(store, Some(Arc::new(Pins(feed))), Arc::new(fetcher), Arc::new(folders), helpers, documents, Arc::new(|| {}));
-        (probed(Shell::without_workspace(today()), AllTools).with_first_run(onboarding, home.clone()), home)
+        (probed(Shell::without_workspace(today()), tools).with_first_run(onboarding, home.clone()), home)
     }
 
     /// A harness in the first window on `shell`, which renders where snapshots are compared.
@@ -7035,11 +7055,11 @@ mod first_run {
         render_first_run(Script::default(), Theme::Dark, "onboarding_welcome_dark", &[], "Welcome to Jobdesk");
     }
 
-    /// Folder and Computer done, as a setup that stopped at the Profile chapter leaves its record.
+    /// The Folder step done, as a setup that stopped before the Computer step leaves its record.
     #[test]
     fn onboarding_resume_light() {
         let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("onboarding_resume_light/home/Documents/Job search");
-        let record = Progress { folder: Some(folder), done: BTreeSet::from([Step::Folder, Step::Computer]), stopped: Some(today()), ..Progress::default() };
+        let record = Progress { folder: Some(folder), done: BTreeSet::from([Step::Folder]), stopped: Some(today()), ..Progress::default() };
         render_first_run(Script { record: Some(record), ..Script::default() }, Theme::Light, "onboarding_resume_light", &[], "Continue setup");
     }
 
@@ -7158,8 +7178,63 @@ mod first_run {
         click(&mut harness, "Continue without PDFs");
         until_shown(&mut harness, "New task");
         assert!(harness.query_by_label("Start setup").is_none(), "setup has handed over");
+        // LaTeX is still missing, so Setup stays and says so, while what was here reads as here.
+        click(&mut harness, "Setup");
+        until_shown(&mut harness, "CV: missing lualatex");
+        assert!(harness.query_by_label_contains("missing python3").is_none());
+        assert!(harness.query_by_label_contains("missing bun").is_none());
         drop(harness);
         assert!(shell.first_run_mut().is_none());
         assert!(home.join("Documents/Job search/CLAUDE.md").is_file());
+    }
+
+    /// Steps until `seen` holds of the harness, as the worker's news arrives.
+    fn until(harness: &mut Harness, seen: impl Fn(&Harness) -> bool, what: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !seen(harness) {
+            assert!(Instant::now() < deadline, "{what} never happened");
+            harness.run_steps(1);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// The tool check at launch finds no Python, Bun or LaTeX. Once setup has installed them and handed over, the
+    /// check runs again and finds them, so the Setup tab goes.
+    #[test]
+    fn the_helpers_setup_installed_are_found_once_it_hands_over() {
+        let (mut shell, _) = first_run_shell("helpers_found_after_handover", Script::default());
+        let mut harness = first_window_on(&mut shell);
+        for step in TO_INSTALL {
+            click(&mut harness, step);
+        }
+        click(&mut harness, "Continue");
+        until_shown(&mut harness, "New task");
+        assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0), "the window grew to the app's own");
+        until(&mut harness, |harness| harness.query_by_label("Setup").is_none(), "the Setup tab going");
+    }
+
+    /// Settings stays on the welcome of first-run setup, and its Change folder opens a folder the user already has.
+    /// That leaves setup at once, with its download stopped, and grows the window to the app's own.
+    #[test]
+    fn a_folder_opened_from_settings_leaves_first_run() {
+        let (mut shell, home) = first_run_shell("settings_folder_leaves_first_run", Script { hold_download: true, ..Script::default() });
+        {
+            let mut harness = first_window_on(&mut shell);
+            for step in TO_DOWNLOAD {
+                click(&mut harness, step);
+            }
+            until_shown(&mut harness, "The latest version, 1.7.5");
+        }
+        shell.open_settings(Page::General);
+        let theirs = home.join("Their search");
+        sample_workspace(&theirs);
+        // Change folder opens the system picker, so the folder it would give is chosen as the shell does once it answers.
+        shell.choose_folder_from(&egui::Context::default(), theirs);
+        assert!(shell.first_run_mut().is_none(), "setup has handed over");
+        assert!(fs::read_dir(home.join("Documents/Job search")).unwrap().next().is_none(), "the stopped download left the folder empty");
+        let mut harness = first_window_on(&mut shell);
+        harness.run_steps(3);
+        assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0), "the window grew to the app's own");
+        assert!(harness.query_by_label("Start setup").is_none());
     }
 }

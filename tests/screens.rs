@@ -3150,6 +3150,20 @@ fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
 const DATA_SIZES: DataSizes = DataSizes { run_logs: 211_800_000, decisions: 18_000 };
 
 /// A shell as Settings' snapshots show it: fictional folders and a fixed version, so no temporary path or release shows.
+/// Runtime status draws the portals too, so it hides them while their folder cannot be read and never says none are installed.
+#[test]
+fn runtime_status_hides_portals_it_cannot_read() {
+    let mut shell = probed(broken_shell(Screen::InTray, "runtime_portals_unread", &[Source::Portals]), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    assert!(harness.query_by_label_contains("Back to app").is_some(), "Settings is open on Runtime status");
+    assert!(harness.query_by_label_contains("Check portal health").is_some(), "the portals section is drawn");
+    assert!(is_shown(&harness, PORTALS_HIDDEN));
+    assert!(harness.query_by_label_contains("No portals installed.").is_none());
+    assert!(harness.query_by_label_contains("jobnet-search").is_none());
+}
+
 fn labelled(shell: Shell) -> Shell {
     shell.with_folder_label("~/Documents/ai-job-search").with_data_label("~/Library/Application Support/Jobdesk", DATA_SIZES).with_version_label("0.1.0")
 }

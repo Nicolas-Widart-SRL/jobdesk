@@ -34,7 +34,7 @@ const PLACE_TITLE: &str = "Where should your job search live?";
 const FOLDER_TITLE: &str = "Getting your folder ready";
 const COMPUTER_TITLE: &str = "Get this computer ready";
 const SAFE_HELPERS: &str = "They install in your own user folder, only for you. Nothing else on this computer changes.";
-const WITHOUT_LATEX: &str = "Without LaTeX, Jobdesk still finds and scores jobs and writes your profile, but it cannot make PDFs of your CV and cover letters yet. You can install it later from Setup.";
+const WITHOUT_LATEX: &str = "Without LaTeX, Jobdesk still finds and scores jobs and writes your profile, but it cannot make PDFs of your CV and cover letters yet. Setup keeps it on its list until LaTeX is installed. Get help shows how.";
 const NEEDS_BOTH: &str = "Jobdesk needs Python and Bun for its tasks. Check that this computer is online, then try again.";
 
 /// What the user asked for on a first-run screen. The shell follows it.

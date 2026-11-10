@@ -135,7 +135,7 @@ Browse community on the Portals screen reads the list of community portals from 
 
 ### Accepted residuals
 
-1. The portal's code is text Claude reads during the Install… task, so it could steer Claude past the request to ask first, like injected posting text. Then `python3 tools/install_portal_clis.py`, or another command, runs with no question. Nothing makes the question a condition of running the installer, and `RunDesk` allows the tool request itself by default. Once a portal is installed, `/scrape` runs its CLI under the same approvals anyway. Settings › Permissions makes every tool request reach the user.
+1. The portal's code is text Claude reads during the Install… task, so it could steer Claude past the request to ask first, like injected posting text. Then `python3 tools/install_portal_clis.py`, or another command, runs with no question. Nothing makes the question a condition of running the installer, and `RunDesk` allows the tool request itself by default. Once a portal is installed, `/scrape` runs its CLI under the same approvals anyway. Settings › Permissions shows the permission prompts Claude sends, but an allow rule in Claude Code's settings can approve a tool request before Claude sends one.
 
 ## Updates
 

@@ -7685,6 +7685,16 @@ fn build_it_waits_for_a_web_address() {
     assert!(is_shown(&harness, "This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be."));
 }
 
+/// A screen reader hears each field of Add a portal by the words above it, Optional included.
+#[test]
+fn add_a_portal_names_its_fields() {
+    let mut harness = tray_harness(browse_shell("portals_add_names", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    let names: Vec<String> =
+        harness.get_all_by_role(egui::accesskit::Role::TextInput).map(|field| field.accesskit_node().label().unwrap_or_default()).collect();
+    assert_eq!(names, ["The job board’s website", "Country Optional", "Language of its job ads Optional", "One job title to test with Optional"]);
+}
+
 /// A website with a space makes no line, so nothing after the space reaches `/add-portal`, and the form says why.
 #[test]
 fn build_it_refuses_a_website_with_a_space() {

@@ -1,4 +1,4 @@
-use egui::{Align, Frame, Label, Layout, Margin, ScrollArea, Ui, vec2};
+use egui::{Align, Frame, Label, Layout, Margin, Response, ScrollArea, Ui, vec2};
 
 use crate::portals::application::{AddError, AddField, add_portal_line};
 use crate::ui_kit::tokens::{ITEM_GAP, KNOT_SIZE, ROW_ITEM_GAP, SCREEN_GAP, Type};
@@ -67,8 +67,9 @@ fn fields(ui: &mut Ui, form: &mut AddForm) {
     let typed = add_portal_line(&form.website, &form.country, &form.language, &form.title);
     let line = typed.as_deref().map_err(|error| *error);
     let full = ui.available_width();
-    field(ui, "The job board’s website", false, |ui| {
-        text_field(ui, &mut form.website, full, "Such as https://jobs.example.be", WEBSITE_CHARS);
+    field(ui, "The job board’s website", false, |ui, name| {
+        let input = text_field(ui, &mut form.website, full, "Such as https://jobs.example.be", WEBSITE_CHARS);
+        name.tie(&input);
         match line {
             Err(AddError::NotWebAddress) => {
                 desk_label(ui, NOT_AN_ADDRESS, Type::TABLE_HEAD, Tone::Closed);
@@ -86,14 +87,14 @@ fn fields(ui: &mut Ui, form: &mut AddForm) {
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = FIELD_GAP;
         ui.allocate_ui_with_layout(vec2(half, 0.0), Layout::top_down(Align::Min), |ui| {
-            field(ui, "Country", true, |ui| answer(ui, &mut form.country, half, "Such as Belgium", AddField::Country, line))
+            field(ui, "Country", true, |ui, name| answer(ui, name, &mut form.country, half, "Such as Belgium", AddField::Country, line))
         });
         ui.allocate_ui_with_layout(vec2(half, 0.0), Layout::top_down(Align::Min), |ui| {
-            field(ui, "Language of its job ads", true, |ui| answer(ui, &mut form.language, half, "Such as French", AddField::Language, line))
+            field(ui, "Language of its job ads", true, |ui, name| answer(ui, name, &mut form.language, half, "Such as French", AddField::Language, line))
         });
     });
-    field(ui, "One job title to test with", true, |ui| {
-        answer(ui, &mut form.title, full, "Such as Lead Backend Engineer", AddField::TestTitle, line);
+    field(ui, "One job title to test with", true, |ui, name| {
+        answer(ui, name, &mut form.title, full, "Such as Lead Backend Engineer", AddField::TestTitle, line);
         wrapped(
             ui,
             "Claude searches the board for it, to check the new portal finds real jobs. Leave a field empty and Claude asks you in the task.",
@@ -124,24 +125,41 @@ fn fields(ui: &mut Ui, form: &mut AddForm) {
     wrapped(ui, "This is a task, so it costs like any other and shows in Usage. Nothing runs until you start it.", Type::NOTE);
 }
 
-/// A field's label, with Optional after it when it may stay empty, over what `add` puts under it.
-fn field(ui: &mut Ui, label: &str, optional: bool, add: impl FnOnce(&mut Ui)) {
+/// The words above a field: its label, and Optional when it may stay empty.
+struct FieldName {
+    words: Vec<egui::Id>,
+}
+
+impl FieldName {
+    /// Ties `input` to the words above it, so a screen reader names it as the screen does, such as "Country Optional".
+    fn tie(&self, input: &Response) {
+        for words in &self.words {
+            let _ = input.clone().labelled_by(*words);
+        }
+    }
+}
+
+/// A field's label, with Optional after it when it may stay empty, over what `add` puts under it. `add` takes the
+/// field's name, to tie its input to the label.
+fn field(ui: &mut Ui, label: &str, optional: bool, add: impl FnOnce(&mut Ui, &FieldName)) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
-        ui.horizontal(|ui| {
+        let words = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = ITEM_GAP;
-            desk_label(ui, label, Type::TABLE_HEAD, Ink::Text);
+            let mut words = vec![desk_label(ui, label, Type::TABLE_HEAD, Ink::Text).id];
             if optional {
-                desk_label(ui, "Optional", Type::SMALL, Ink::Muted);
+                words.push(desk_label(ui, "Optional", Type::SMALL, Ink::Muted).id);
             }
+            words
         });
-        add(ui);
+        add(ui, &FieldName { words: words.inner });
     });
 }
 
 /// An optional answer's field, and why it waits when it holds a character that shows nothing.
-fn answer(ui: &mut Ui, text: &mut String, width: f32, hint: &str, which: AddField, line: Result<&str, AddError>) {
-    text_field(ui, text, width, hint, ANSWER_CHARS);
+fn answer(ui: &mut Ui, name: &FieldName, text: &mut String, width: f32, hint: &str, which: AddField, line: Result<&str, AddError>) {
+    let input = text_field(ui, text, width, hint, ANSWER_CHARS);
+    name.tie(&input);
     if line == Err(AddError::Hidden(which)) {
         desk_label(ui, hidden_words(which), Type::TABLE_HEAD, Tone::Closed);
     }

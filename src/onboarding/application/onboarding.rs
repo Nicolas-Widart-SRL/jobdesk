@@ -545,7 +545,7 @@ mod tests {
         contents: Mutex<Contents>,
         installed: Mutex<Option<String>>,
         cleared: Mutex<Vec<PathBuf>>,
-        unpacked: Mutex<Vec<String>>,
+        unpacked: Mutex<Vec<PathBuf>>,
     }
 
     impl Folders {
@@ -578,7 +578,7 @@ mod tests {
                 return Err(Failure::Mismatch);
             }
             phase(Phase::Unpacking);
-            self.unpacked.lock().unwrap().push(folder.display().to_string());
+            self.unpacked.lock().unwrap().push(folder.to_owned());
             *self.contents.lock().unwrap() = Contents::AiJobSearch;
             *self.installed.lock().unwrap() = Some(source.version.clone());
             Ok(())
@@ -678,7 +678,7 @@ mod tests {
             *fetcher.asked.lock().unwrap(),
             ["https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/v1.7.5 ai-job-search-v1.7.5.zip"]
         );
-        assert_eq!(*folders.unpacked.lock().unwrap(), ["/Users/sam/Documents/Job search"]);
+        assert_eq!(*folders.unpacked.lock().unwrap(), std::slice::from_ref(&folder));
         let saved = store.load().unwrap().unwrap();
         assert_eq!(saved.folder, Some(folder));
         assert!(saved.is_done(Step::Folder));

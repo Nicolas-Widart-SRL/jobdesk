@@ -1353,9 +1353,10 @@ impl Shell {
         }
     }
 
-    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works, which the changes
-    /// check again. What it wrote is read back at once, and the snapshot worker is asked to read again.
-    fn change_portals(&mut self, request: PortalsRequest) {
+    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works, which the shell
+    /// checks again here, whatever the screen showed. What it wrote is read back at once, and the snapshot worker is
+    /// asked to read again. The Portals screen asks for it; tests ask directly.
+    pub fn change_portals(&mut self, request: PortalsRequest) {
         let Some(changes) = &self.portal_changes else { return };
         let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         let result = match &request {

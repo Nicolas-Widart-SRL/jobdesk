@@ -7338,3 +7338,49 @@ fn portals_failed_light() {
     let mut harness = render_portals(broken_shell(Screen::Portals, name, &[Source::Portals]), None, Theme::Light);
     compare(&mut harness, name);
 }
+
+/// A snapshot whose read began before a switch never undoes it on screen: the portals read back after the switch stay
+/// until a snapshot read after it arrives.
+#[test]
+fn a_snapshot_read_before_a_switch_keeps_the_switch() {
+    let name = "portals_stale_snapshot";
+    let mut shell = probed(shell(Screen::Portals, name), FixedTools);
+    let feed = shell.snapshot_feed();
+    let root = copied_root(name);
+    let day = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+    let stale = Snapshot { usage_read: true, ..Snapshot::load(&root, day) };
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Northfield Jobs, on").click();
+    harness.run_steps(3);
+    assert!(manifest_in(&root, "northfield-search").contains("enabled: false"));
+
+    feed.send(stale).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. 3 of 6 on."), "the stale read leaves the switch");
+    assert!(harness.query_all_by_label("Northfield Jobs, on").next().is_none());
+
+    // A read that begins after the switch is taken as it is.
+    let freehire = root.join(".agents/skills/freehire-search/SKILL.md");
+    fs::write(&freehire, fs::read_to_string(&freehire).unwrap().replace("enabled: true", "enabled: false")).unwrap();
+    feed.send(Snapshot { usage_read: true, ..Snapshot::load(&root, day) }).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. 2 of 6 on."));
+}
+
+/// The shell checks for a working run again at the write, so a request that gets past the waiting controls still
+/// writes nothing.
+#[test]
+fn a_change_asked_for_while_a_run_works_writes_nothing() {
+    use jobdesk::portals::application::Origin;
+    use jobdesk::portals::ui::PortalsRequest;
+
+    let (mut shell, calls) = faked_portals("portals_busy_request");
+    *shell.desk_slot() = Some(apply_run_ending([]));
+    let (mut harness, shell) = shared_harness(shell);
+    pick_portal(&mut harness, "Northfield Jobs");
+    shell.borrow_mut().change_portals(PortalsRequest::Switch { folder: "northfield-search".into(), on: false });
+    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into(), origin: Origin::MadeByYou });
+    harness.run_steps(3);
+    assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
+    assert!(harness.query_all_by_label(PORTALS_BUSY).count() > 0, "the detail says why");
+}

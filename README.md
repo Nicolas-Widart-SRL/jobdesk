@@ -22,7 +22,7 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 - **Portals** shows the job boards Claude searches, turns one on or off, moves one you no longer want to the Trash (the Recycle Bin on Windows), lists the community's portals to install, and has Claude build one for a board you name.
 - **Application dossiers** gather the PDFs, verification, keyword coverage, evaluation, prep packs and follow-ups of each application.
 - **Settings** shows what your tasks cost and the terms Jobs checks against. It sets the theme, the Today queue, the Jobs view filters, how tasks sign in, run defaults, a monthly cap, tool permissions and how long run logs stay.
-- **Nothing runs until you start it**, and Jobdesk changes your checkout only when you save a Profile edit, switch a portal on or off, or move one to the Trash (the Recycle Bin on Windows).
+- **Nothing runs until you start it**, and apart from first-run setup, which fills only a new or empty folder, Jobdesk changes your checkout only when you save a Profile edit, switch a portal on or off, or move one to the Trash (the Recycle Bin on Windows).
 
 <p align="center">
   <img src="tests/snapshots/intray_light.png" alt="The Today screen in the light theme, with one decision card, Done today and the Coming up deadlines." width="800">

@@ -10,6 +10,7 @@ mod surfaces;
 mod text;
 pub mod tokens;
 mod tray;
+mod wizard;
 
 pub use controls::*;
 pub use fonts::{Face, install_fonts};
@@ -20,3 +21,4 @@ pub use surfaces::*;
 pub use text::*;
 pub use tokens::Type;
 pub use tray::*;
+pub use wizard::*;

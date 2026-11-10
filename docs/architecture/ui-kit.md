@@ -57,7 +57,21 @@ With motion reduced, `Working` and `Quiet` become a solid rule in their ink. The
 
 `estimate_note` is the one muted line under a figure's bar while the figure is an estimate, such as a live run's Cost.
 
+## The first-run wizard
+
+The first run shows one step at a time on a card. Its parts live in `wizard.rs`.
+
+- `wizard_card` draws `step_dots`, then a centred card under them that takes the height left. Its head holds the setup stamp beside the title and the lead. The body scrolls over a foot pinned under a hairline.
+- The foot follows the deal footer. The one primary comes first, then a plain button or a `link` for a quiet action. One muted line sits at the right.
+- `step_dots` draws one `STATUS_DOT` square per step, with its name under it, joined by a hairline. Done steps are in `text`. The open one is ringed, and the rest are unlit.
+- `setup_stamp` is `day_stamp` with one tick per step and "Step 2 of 4" inside. The welcome and the recap show the date in `day_stamp` instead.
+- `setup_line` is one line of a step on paper: a knot, a title over a line under it, and a tag or a note at the right. It can add a bar row under the words, and `live_sweep` along its bottom on the line that works now. A line still ahead reads in `muted`, and a failed one says why in `closed`.
+- `choice_card` is a pickable card with a radio, a title, an optional tag and a sentence. The whole card is one radio button, named by its title.
+- `alert_slip` is a failure on a slip, with a `closed` edge, and its words can be copied.
+- In dark, `panel` and the card are one colour. So on a wizard card, a slip, an alert and a knot still ahead take `sheet` (`folder_fill`).
+
 ## Gallery snapshots
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.
 The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.
+The wizard sheet, `ui_kit_gallery_wizard_{light,dark}`, shows three wizard cards with their lines, alert, slip and foot, then the step dots and setup stamps at each step, and the choice cards.

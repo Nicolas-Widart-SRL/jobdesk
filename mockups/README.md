@@ -4,7 +4,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 
 ## Building a canvas
 
-`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html`, `Settings.html` and `Update.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`, `.ud`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it with `scripts/render-canvas.sh`, as `.claude/agents/designer.md` step 5 says, at 1280x820.
+`Grid.html`, `RunLive.html`, `UiPass.html`, `Profile.html`, `ProfileCv.html`, `Settings.html`, `Update.html` and `Portals.html` load `app.css` and `support.js`, and scope their own rules in their `<style>` (`.gp`, `.rl`, `.up`, `.pf`, `.pc`, `.st`, `.ud`, `.po`). `Social.html` loads only `support.js` and scopes its rules to `.so`. `app.css` still carries pre-Postmark rules and token values, and `Grid.html`'s scoped styles override them. So start a new canvas from `Grid.html`'s scoped styles on top of `app.css`, with its own scope class. Render it with `scripts/render-canvas.sh`, as `.claude/agents/designer.md` step 5 says, at 1280x820.
 
 ## Canvases
 
@@ -17,6 +17,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `ProfileCv.html` | `?state=full\|source\|busy\|missing\|notex\|failed\|loading\|empty\|unread\|nocommand&theme=light\|dark` | 11 `ProfileCv-*.png` | [profile](handoff/profile.md) |
 | `Settings.html` | `?state=usage\|usage-empty\|loading\|providers\|key-entry\|key-saved\|key-failed\|terms\|terms-missing\|terms-failed\|general\|appearance\|queue\|jobs\|defaults\|cap\|perms\|runtime\|data\|about\|about-checking\|about-failed\|about-update\|about-ready-waits\|search\|nav&theme=light\|dark` | 29 `Settings-*.png` | [settings](handoff/settings.md), [update](handoff/update.md) |
 | `Update.html` | `?state=available\|notes\|notes-ready\|downloading\|ready\|ready-busy\|failed\|bad-signature&theme=light\|dark` | 10 `Update-*.png` | [update](handoff/update.md) |
+| `Portals.html` | `?screen=yours\|detail\|browse\|add&state=...&option=a\|b&portal=linkedin\|northfield&theme=light\|dark`, states in the handoff | 29 `Portals-*.png` | [portals](handoff/portals.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
 | `landing/Landing.html` | `?theme=light\|dark&motion=off`; phone through `landing/phone.html?theme=light&motion=off&h=1760&top=80` | 5 `landing/Landing-*.png`: `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900, `-phone` at 390x1760 and `-full` at 1440x5848 | [landing](handoff/landing.md) |
 
@@ -29,6 +30,7 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 - **Profile**: the Profile screen: topics and their files, Update with Claude…, the Updated mark, block editing, its states, Setup's Profile panel, the `profile` feature, and CV documents (the CV PDF preview: a list column beside the pages, its four tags, the `/build-cv <name>` launcher action, and the line that replaces it when the folder has no `/build-cv` command) → see [handoff/profile.md](handoff/profile.md). Open it when you change the Profile screen, how Jobdesk writes profile files, or how it shows CV PDFs.
 - **Settings**: what Settings still lacks: notifications, Reduce motion following the OS, and the licences link → see [handoff/settings.md](handoff/settings.md). Open it when you add one of them.
 - **Updates**: the update group in the status bar, the release notes popover and how the notes render, Restart while a Claude session is open, and Settings › About's Updates section → see [handoff/update.md](handoff/update.md). Open it when you change how Jobdesk updates itself or the right side of the status bar.
+- **Portals**: round 1 of the Portals screen, options A and B: Your portals, a portal's detail with the searches it will run, Browse community, Add a portal, the new `switch` widget, and what is still open → see [handoff/portals.md](handoff/portals.md). Open it when you build or change the Portals screen or Setup's portal table.
 - **Social preview**: the GitHub preview and README hero, its copy and its decisions → see [handoff/social-preview.md](handoff/social-preview.md). Open it when you redraw the preview or change the README hero.
 - **Landing page**: the GitHub Pages landing page: round 2's approved hero B (the journey drawn from the app's parts), the shorter API key section, the copy fixes, every place the key appears, the rules, and what a `site/` build needs → see [handoff/landing.md](handoff/landing.md). Open it when you change or build the landing page.
 

@@ -16,7 +16,8 @@ use zip::{CompressionMethod, ZipArchive};
 
 use crate::onboarding::domain::{Arch, Artifact, Failure, HELPERS, Helper, HelperInstaller, InstallPhase, Layout, OWN_FOLDER, SourceFetcher};
 use crate::onboarding::infrastructure::fetcher::HttpsFetcher;
-use crate::onboarding::infrastructure::unpacker::{aside_of, clear_stagings, file_mode, make_folders, remove, rename_into, sha256_hex, staging_of};
+use crate::onboarding::infrastructure::unpacker::{aside_of, clear_stagings, file_mode, make_folders, remove, rename_into, staging_of};
+use crate::shared_kernel::installed_source::sha256_hex;
 use crate::shared_kernel::own_folder::claim;
 
 /// The most one archive may unpack to, and the most entries it may hold. TinyTeX, the largest, unpacks to 227 MB in

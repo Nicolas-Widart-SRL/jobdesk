@@ -6,11 +6,11 @@ use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use icu_normalizer::DecomposingNormalizerBorrowed;
-use sha2::{Digest, Sha256};
 use zip::read::ZipFile;
 use zip::{CompressionMethod, ZipArchive};
 
 use crate::onboarding::domain::{Contents, Failure, MAX_ENTRIES, MAX_UNPACKED, MAX_ZIP, Phase, Unpacker};
+use crate::shared_kernel::installed_source::{self, InstalledSource, sha256_hex};
 use crate::shared_kernel::own_folder::{claim, in_use};
 
 /// The file type bits of a Unix mode, and the two types an archive may hold.
@@ -48,11 +48,18 @@ impl ZipUnpacker {
         Self { dir, is_ai_job_search }
     }
 
-    fn checked_unpack(&self, zip: &Path, sha256: &str, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure> {
+    fn checked_unpack(
+        &self,
+        zip: &Path,
+        source: &InstalledSource,
+        folder: &Path,
+        cancelled: &dyn Fn() -> bool,
+        phase: &mut dyn FnMut(Phase),
+    ) -> Result<(), Failure> {
         phase(Phase::Checking);
-        // Read once, so the bytes that are checked are the bytes that are unpacked.
+        // Read once, so the bytes that are checked are the bytes that are unpacked and kept.
         let bytes = read_whole(zip)?;
-        if sha256_hex(&bytes) != sha256 {
+        if sha256_hex(&bytes) != source.sha256 {
             return Err(Failure::Mismatch);
         }
         phase(Phase::Unpacking);
@@ -62,6 +69,8 @@ impl ZipUnpacker {
         remove(&staging);
         fs::create_dir(&staging).map_err(|_| Failure::Disk)?;
         let placed = write_all(&mut archive, &plan, &staging, MAX_UNPACKED, cancelled)
+            // The base of a later update goes in with the release, in the one rename.
+            .and_then(|()| installed_source::write_into(&staging, source, &bytes).map_err(|_| Failure::Disk))
             .and_then(|()| if cancelled() { Err(Failure::Cancelled) } else { put_in_place(&staging, folder) });
         if placed.is_err() {
             remove(&staging);
@@ -89,8 +98,8 @@ impl Unpacker for ZipUnpacker {
         if self.look(folder) == Contents::Empty { Ok(()) } else { Err(Failure::NotEmpty) }
     }
 
-    fn unpack(&self, zip: &Path, sha256: &str, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure> {
-        let unpacked = self.checked_unpack(zip, sha256, folder, cancelled, phase);
+    fn unpack(&self, zip: &Path, source: &InstalledSource, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure> {
+        let unpacked = self.checked_unpack(zip, source, folder, cancelled, phase);
         let _ = fs::remove_file(zip);
         unpacked
     }
@@ -184,14 +193,9 @@ fn read_whole(zip: &Path) -> Result<Vec<u8>, Failure> {
     Ok(bytes)
 }
 
-/// 64 lowercase hex digits, as `sha256sum` writes them and the pin holds them.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// Every entry of the archive, checked before anything is written. One entry that could lead outside the folder, a
-/// link or any other special file, an encrypted entry, two names one disk would take for the same name, or more than
-/// the limits allow refuses the whole archive.
+/// link or any other special file, an encrypted entry, two names one disk would take for the same name, an entry in a
+/// top `.jobdesk` folder, where the kept base goes, or more than the limits allow refuses the whole archive.
 fn plan<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<Vec<Planned>, Failure> {
     if archive.len() > MAX_ENTRIES {
         return Err(Failure::BadArchive);
@@ -221,6 +225,10 @@ fn plan<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Result<Vec<Planned>,
         let name = entry.name().map_err(|_| Failure::BadArchive)?;
         let (first, rest) = split_entry(&name, is_dir).ok_or(Failure::BadArchive)?;
         if top.get_or_insert_with(|| first.to_owned()) != first {
+            return Err(Failure::BadArchive);
+        }
+        // The kept base takes `.jobdesk`, spelled any way the disk takes for the same name.
+        if rest.as_deref().and_then(|path| path.iter().next()).is_some_and(|part| compared(Path::new(part)) == installed_source::DIR) {
             return Err(Failure::BadArchive);
         }
         // The size the archive claims. The bytes written are counted again in `write_all`.
@@ -519,6 +527,16 @@ mod tests {
         with_mode(bytes, "ai-job-search-1.7.5/scripts/run.sh", 0o106_777)
     }
 
+    /// The pinned release of `sha256`.
+    fn pinned(sha256: &str) -> InstalledSource {
+        InstalledSource { version: "1.7.5".to_owned(), sha256: sha256.to_owned() }
+    }
+
+    /// Whether a `.jobdesk` folder is in `folder`.
+    fn has_base(folder: &Path) -> bool {
+        fs::symlink_metadata(folder.join(installed_source::DIR)).is_ok()
+    }
+
     struct Setup {
         _temp: tempfile::TempDir,
         data: PathBuf,
@@ -550,7 +568,7 @@ mod tests {
             let zip = self.zip(bytes);
             self.unpacker.make(&self.folder).unwrap();
             let mut phases = Vec::new();
-            let end = self.unpacker.unpack(&zip, sha256, &self.folder, &|| false, &mut |phase| phases.push(phase));
+            let end = self.unpacker.unpack(&zip, &pinned(sha256), &self.folder, &|| false, &mut |phase| phases.push(phase));
             assert!(!zip.exists(), "the zip is deleted whatever the end");
             (end, phases)
         }
@@ -584,6 +602,15 @@ mod tests {
         assert_eq!(fs::read_to_string(setup.folder.join(".claude/commands/apply.md")).unwrap(), "apply");
         assert_eq!(setup.around(), ["Job search"], "no staging folder is left");
         assert_eq!(setup.unpacker.look(&setup.folder), Contents::AiJobSearch);
+    }
+
+    #[test]
+    fn the_release_is_kept_in_the_folder_as_its_update_base() {
+        let setup = setup();
+        let bytes = release();
+        assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Ok(()));
+        assert_eq!(fs::read(setup.folder.join(".jobdesk/source.zip")).unwrap(), bytes, "the exact bytes that matched");
+        assert_eq!(installed_source::read(&setup.folder), Some((pinned(&sha256_hex(&bytes)), bytes)));
     }
 
     #[test]
@@ -634,7 +661,7 @@ mod tests {
         let bytes = release();
         let zip = setup.zip(&bytes);
         setup.unpacker.make(&setup.folder).unwrap();
-        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &|| false, &mut |phase| {
             if phase == Phase::Unpacking {
                 fs::write(setup.folder.join("cv.pdf"), "mine").unwrap();
                 fs::set_permissions(&setup.folder, fs::Permissions::from_mode(0o500)).unwrap();
@@ -656,6 +683,7 @@ mod tests {
         assert_eq!(end, Err(Failure::Mismatch));
         assert_eq!(phases, [Phase::Checking], "nothing is unpacked once the check fails");
         assert!(setup.is_empty());
+        assert!(!has_base(&setup.folder));
         assert_eq!(setup.around(), ["Job search"]);
     }
 
@@ -683,6 +711,10 @@ mod tests {
                 with_mode(zip_of(&[Entry::Dir(TOP), Entry::Dir("ai-job-search-1.7.5/docs/")]), "ai-job-search-1.7.5/docs/", 0o100_644),
             ),
             ("an encrypted entry", encrypted()),
+            ("a file in the base's folder", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/.jobdesk/x", b"x")])),
+            ("the base's folder in capitals", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/.JOBDESK/x", b"x")])),
+            ("the base's folder alone", zip_of(&[Entry::Dir(TOP), good, Entry::Dir("ai-job-search-1.7.5/.jobdesk/")])),
+            ("a file named as the base's folder", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/.Jobdesk", b"x")])),
             ("a Windows device name", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/docs/aux.txt", b"x")])),
             ("a trailing dot", zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/notes.", b"x")])),
             ("a duplicate name", renamed(zip_of(&[Entry::Dir(TOP), good, Entry::File("ai-job-search-1.7.5/READMF.md", b"x")]), "READMF", "README")),
@@ -704,6 +736,7 @@ mod tests {
             let setup = setup();
             assert_eq!(setup.unpack(&bytes, &sha256_hex(&bytes)).0, Err(Failure::BadArchive), "{what}");
             assert!(setup.is_empty(), "{what}: nothing is written");
+            assert!(!has_base(&setup.folder), "{what}");
             assert_eq!(setup.around(), ["Job search"], "{what}");
         }
     }
@@ -810,7 +843,7 @@ mod tests {
         let bytes = release();
         let zip = setup.zip(&bytes);
         setup.unpacker.make(&setup.folder).unwrap();
-        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &|| false, &mut |phase| {
             if phase == Phase::Unpacking {
                 fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
             }
@@ -826,7 +859,7 @@ mod tests {
         let bytes = release();
         let zip = setup.zip(&bytes);
         setup.unpacker.make(&setup.folder).unwrap();
-        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| false, &mut |phase| {
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &|| false, &mut |phase| {
             if phase == Phase::Unpacking {
                 fs::write(setup.folder.join("cv.pdf"), "mine").unwrap();
                 fs::write(setup.folder.join(".DS_Store"), "view").unwrap();
@@ -853,7 +886,7 @@ mod tests {
             }
             false
         };
-        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &cancelled, &mut |_| {});
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &cancelled, &mut |_| {});
         assert_eq!(end, Err(Failure::Disk));
         assert!(asked.get() >= 2, "the staging folder went mid-unpack");
         assert!(setup.is_empty());
@@ -866,9 +899,25 @@ mod tests {
         let bytes = release();
         let zip = setup.zip(&bytes);
         setup.unpacker.make(&setup.folder).unwrap();
-        let end = setup.unpacker.unpack(&zip, &sha256_hex(&bytes), &setup.folder, &|| true, &mut |_| {});
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &|| true, &mut |_| {});
         assert_eq!(end, Err(Failure::Cancelled));
         assert!(setup.is_empty());
+        assert!(!has_base(&setup.folder));
+        assert_eq!(setup.around(), ["Job search"]);
+    }
+
+    #[test]
+    fn cancel_once_the_base_is_written_leaves_the_folder_empty() {
+        let setup = setup();
+        let bytes = release();
+        let zip = setup.zip(&bytes);
+        setup.unpacker.make(&setup.folder).unwrap();
+        let staging = setup.staging();
+        let cancelled = || has_base(&staging);
+        let end = setup.unpacker.unpack(&zip, &pinned(&sha256_hex(&bytes)), &setup.folder, &cancelled, &mut |_| {});
+        assert_eq!(end, Err(Failure::Cancelled));
+        assert!(setup.is_empty());
+        assert!(!has_base(&setup.folder));
         assert_eq!(setup.around(), ["Job search"]);
     }
 

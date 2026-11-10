@@ -143,6 +143,7 @@ The feed itself is not signed, so the release Jobdesk vouches for at first-run s
 - The Tag release workflow resolves the latest release of `ai-job-search-dev/ai-job-search`, downloads that tag's source zip from the fixed address, and hashes it. Its `sign` job signs the line `<sha256>  ai-job-search-v<version>.zip` and a line end, as `sha256sum` writes it, with a trusted comment that names `ai-job-search-v<version>.zip` alone. The publish job hashes the zip again, checks the signature like those of the builds, and publishes nothing when no release resolves or the hash changed.
 - Jobdesk rebuilds that line from the version and the hash in the feed, and checks the signature against it with the update key built into it. So a signature of another version, another hash or another key fails.
 - The version must be exactly three numbers, and the hash 64 lowercase hex digits.
+- Setup keeps the release zip that matched the pin in the folder's `.jobdesk/`, with its version and SHA-256. That kept base is checked against its recorded SHA-256 before use, and a link or an oversized file there is never read.
 - A pin that is missing, does not read or fails its check is dropped, and only the pin: the update check reads the same release either way. A build with no update key has no pin, and does not read the feed for one.
 
 ### Signature checks

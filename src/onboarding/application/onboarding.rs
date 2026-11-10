@@ -7,6 +7,7 @@ use std::thread;
 use chrono::NaiveDate;
 
 use crate::onboarding::domain::{Failure, Phase, Place, Progress, ProgressStore, SourceFetcher, Step, Unpacker, suggested_folder};
+use crate::shared_kernel::installed_source::InstalledSource;
 use crate::updates::application::{Failure as FeedFailure, SourcePinReader, source_zip_name, source_zip_url};
 
 /// Where first-run setup is, as the screens show it.
@@ -232,7 +233,8 @@ fn set_up(ports: &Ports, folder: &Path, cancelled: &dyn Fn() -> bool, tell: &dyn
     let zip = ports.fetcher.fetch(&source_zip_url(&pin.version), &source_zip_name(&pin.version), cancelled, &mut |received| {
         tell(Event::Phase(Phase::Downloading { received }));
     })?;
-    ports.unpacker.unpack(&zip, &pin.sha256, folder, cancelled, &mut |phase| tell(Event::Phase(phase)))?;
+    let source = InstalledSource { version: version.clone(), sha256: pin.sha256 };
+    ports.unpacker.unpack(&zip, &source, folder, cancelled, &mut |phase| tell(Event::Phase(phase)))?;
     Ok(version)
 }
 
@@ -334,9 +336,17 @@ mod tests {
                 _ => Err(Failure::NotEmpty),
             }
         }
-        fn unpack(&self, _zip: &Path, sha256: &str, folder: &Path, _cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure> {
+        fn unpack(
+            &self,
+            _zip: &Path,
+            source: &InstalledSource,
+            folder: &Path,
+            _cancelled: &dyn Fn() -> bool,
+            phase: &mut dyn FnMut(Phase),
+        ) -> Result<(), Failure> {
             phase(Phase::Checking);
-            if sha256 != HASH {
+            assert_eq!(source.version, "1.7.5", "the pinned version goes with its hash");
+            if source.sha256 != HASH {
                 return Err(Failure::Mismatch);
             }
             phase(Phase::Unpacking);

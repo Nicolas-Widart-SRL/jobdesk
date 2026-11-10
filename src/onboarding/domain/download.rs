@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::onboarding::domain::Contents;
+use crate::shared_kernel::installed_source::InstalledSource;
+/// The largest release zip setup downloads, which is also the largest kept one that reads.
+pub use crate::shared_kernel::installed_source::MAX_ZIP;
 
-/// The largest release zip setup downloads.
-pub const MAX_ZIP: u64 = 100 * 1024 * 1024;
 /// The most a release may hold once unpacked, and the most entries it may have. A larger one is refused whole.
 pub const MAX_UNPACKED: u64 = 100 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 20_000;
@@ -66,9 +67,11 @@ pub trait Unpacker: Send + Sync {
     fn look(&self, folder: &Path) -> Contents;
     /// Makes `folder` when it is missing. It fails with `NotEmpty` unless the folder is then empty.
     fn make(&self, folder: &Path) -> Result<(), Failure>;
-    /// Checks the whole of `zip` against `sha256` before anything is unpacked, then unpacks it into the empty
-    /// `folder` with its top folder stripped. `phase` hears Checking and Unpacking. `zip` is deleted whatever the end.
-    fn unpack(&self, zip: &Path, sha256: &str, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure>;
+    /// Checks the whole of `zip` against the SHA-256 of `source`, the release the feed pins, before anything is
+    /// unpacked, then unpacks it into the empty `folder` with its top folder stripped. The zip and the record of `source`
+    /// arrive with it in the folder's `.jobdesk`, the base of a later update. `phase` hears Checking and Unpacking.
+    /// `zip` is deleted whatever the end.
+    fn unpack(&self, zip: &Path, source: &InstalledSource, folder: &Path, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(Phase)) -> Result<(), Failure>;
     /// Removes the hidden staging folders beside `folder` that a Jobdesk which no longer runs left. Links are removed,
     /// never followed.
     fn clear_leftovers(&self, folder: &Path);

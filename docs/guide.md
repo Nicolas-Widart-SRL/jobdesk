@@ -35,6 +35,8 @@ If a helper cannot install, its line says why, and Try again installs it again. 
 
 When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window, and checks the tools again so Setup finds the helpers. Profile then shows what is left to fill in about you.
 
+If Jobdesk quits while a stopped download or install is still finishing, its partial files can stay: in `onboarding/<number>/` of the app's data folder, in a hidden staging folder beside your job search folder, and in staging folders in `~/.jobdesk`. They are safe to delete.
+
 Settings stays at the bottom right through setup. Choosing a folder in Settings › Change folder ends setup at once: a download or an install still running stops, and that folder opens on Today in the full-size window, behind Settings. Back to app or Esc shows it.
 
 ### Quitting midway

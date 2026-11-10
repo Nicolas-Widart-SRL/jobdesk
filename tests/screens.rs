@@ -6937,16 +6937,25 @@ mod first_run {
     }
 
     /// Installs a helper into `here` once it has said a third of it arrived, fails one in `fails`, and holds `held`
-    /// there until Cancel.
+    /// there until Cancel. While `stalled` is set, an install waits without looking at Cancel, then puts its helper in
+    /// place, as one past its last cancel check does.
     struct Installer {
         here: Arc<Here>,
         fails: BTreeMap<Helper, SetupFailure>,
         held: Option<Helper>,
+        stalled: Option<Arc<AtomicBool>>,
     }
 
     impl HelperInstaller for Installer {
         fn install(&self, helper: Helper, _: &dyn Fn() -> bool, cancelled: &dyn Fn() -> bool, phase: &mut dyn FnMut(InstallPhase)) -> Result<(), SetupFailure> {
             phase(InstallPhase::Downloading { received: 35, total: 100 });
+            if let Some(stalled) = &self.stalled {
+                while stalled.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                self.here.here.lock().unwrap().insert(helper);
+                return Ok(());
+            }
             while self.held == Some(helper) && !cancelled() {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -6973,6 +6982,7 @@ mod first_run {
         here: Vec<Helper>,
         hold_check: Option<Helper>,
         hold_install: Option<Helper>,
+        stall_install: Option<Arc<AtomicBool>>,
         fails: BTreeMap<Helper, SetupFailure>,
     }
 
@@ -6989,7 +6999,7 @@ mod first_run {
         let home = home(name);
         let feed = script.feed.unwrap_or_else(|| Ok(Some(SourcePin::parse("1.7.5", HASH).unwrap())));
         let probe = Arc::new(Here { here: Mutex::new(script.here.into_iter().collect()), held: script.hold_check });
-        let installer = Installer { here: Arc::clone(&probe), fails: script.fails, held: script.hold_install };
+        let installer = Installer { here: Arc::clone(&probe), fails: script.fails, held: script.hold_install, stalled: script.stall_install };
         let tools = HelperTools(Arc::clone(&probe));
         let helpers = HelperSetup::new(probe, Arc::new(installer));
         let (fetcher, folders) = (Fetcher { hold: script.hold_download, stalled: script.stall_download }, Folders { mismatch: script.mismatch });
@@ -7325,6 +7335,13 @@ mod first_run {
     #[test]
     fn a_folder_opened_from_settings_hands_over_while_a_read_is_stalled() {
         let stalled = Arc::new(AtomicBool::new(true));
+        // A hand-over that waited for the worker would wait forever, so the read returns after a while anyway, and
+        // the hand-over's time then fails the test instead of hanging it.
+        let unstall = Arc::clone(&stalled);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            unstall.store(false, Ordering::SeqCst);
+        });
         let (shell, home) = first_run_shell("settings_folder_while_stalled", Script { stall_download: Some(Arc::clone(&stalled)), ..Script::default() });
         let (mut harness, shell) = shared_first_window(shell);
         for step in TO_DOWNLOAD {
@@ -7345,6 +7362,34 @@ mod first_run {
         until(&mut harness, |_| !shell.borrow().setup_stopping(), "the worker being joined");
         assert_eq!(files(&theirs), before, "nothing of the folder opened changed");
         assert!(home.join("Documents/Job search/CLAUDE.md").is_file(), "the worker unpacked only into its own folder");
+    }
+
+    /// An install past its last cancel check still puts its helper in place after the hand-over, so the tool check
+    /// the hand-over started can miss it. Once the stopped worker is joined, the check runs again and finds it.
+    #[test]
+    fn a_helper_installed_after_the_hand_over_is_found_once_the_worker_ends() {
+        let stalled = Arc::new(AtomicBool::new(true));
+        let (shell, home) = first_run_shell("helper_after_handover", Script { stall_install: Some(Arc::clone(&stalled)), ..Script::default() });
+        let (mut harness, shell) = shared_first_window(shell);
+        for step in TO_INSTALL {
+            click(&mut harness, step);
+        }
+        until_shown(&mut harness, "Python");
+        shell.borrow_mut().open_settings(Page::General);
+        let theirs = home.join("Their search");
+        sample_workspace(&theirs);
+        shell.borrow_mut().choose_folder_from(&harness.ctx.clone(), theirs);
+        assert!(shell.borrow_mut().first_run_mut().is_none(), "setup has handed over");
+        let python = |shell: &Rc<RefCell<Shell>>| {
+            let mut shell = shell.borrow_mut();
+            let checks = shell.environment_slot().as_ref().unwrap();
+            (checks.is_running(), checks.version_of("python3").is_some())
+        };
+        until(&mut harness, |_| !python(&shell).0, "the hand-over's tool check");
+        assert!(!python(&shell).1, "the hand-over's check ran before the install ended");
+        stalled.store(false, Ordering::SeqCst);
+        until(&mut harness, |_| !shell.borrow().setup_stopping(), "the worker being joined");
+        until(&mut harness, |_| python(&shell) == (false, true), "the tool check finding Python");
     }
 
     /// A folder opened while Settings shows over first-run setup leaves setup, and the window keeps the app's size.

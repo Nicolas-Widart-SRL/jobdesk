@@ -756,13 +756,18 @@ impl Shell {
         }
     }
 
-    /// Joins first-run setup's worker once it has finished after setup handed over. Until then the window looks again
-    /// a few times a second, as the worker's last news can wake it just before the thread ends.
+    /// Joins first-run setup's worker once it has finished after setup handed over, and starts the tool check again,
+    /// since an install past its last cancel check may have put a helper in place after the hand-over's check. Until
+    /// then the window looks again a few times a second, as the worker's last news can wake it just before the thread
+    /// ends.
     fn join_stopped_setup(&mut self, ctx: &egui::Context) {
         match self.setup_stopping.take() {
             Some(worker) if worker.is_finished() => {
                 // A worker that panicked has nothing left to clean up, and the window goes on.
                 let _ = worker.join();
+                if let Some(environment) = &mut self.environment {
+                    environment.restart();
+                }
             }
             Some(worker) => {
                 self.setup_stopping = Some(worker);

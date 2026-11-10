@@ -13,14 +13,15 @@ use jobdesk::ui_kit::{
     agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box,
     command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal,
     deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure, figure_band,
-    figure_band_loading, fitted_pages, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, live_sweep,
-    measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button,
-    primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich, role_entry, row_tag,
-    ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check, setting_check_amount,
-    setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip,
-    slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle, solid_tag, split_paper, stamp, stamp_square,
-    stamped_head, status_action, status_button, status_divider, status_dot, status_frame, status_line, status_mark_button, status_progress, status_waits,
-    step_line, strong, switch, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, turn_band_live, undo_row,
+    figure_band_loading, fitted_pages, fitted_row_tag, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link,
+    list_row, live_sweep, measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
+    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich,
+    role_entry, row_tag, ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check,
+    setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
+    skeleton_lines, slip, slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle, solid_tag, split_paper,
+    stamp, stamp_square, stamped_head, status_action, status_button, status_divider, status_dot, status_frame, status_line, status_mark_button,
+    status_progress, status_waits, step_line, strong, switch, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, turn_band_live,
+    undo_row,
 };
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
@@ -1591,15 +1592,19 @@ fn ui_kit_gallery_light() {
     render(Theme::Light, "ui_kit_gallery_light");
 }
 
-/// The switch sheet's size: one row for each state, then the name lines, with the paper's foot in view.
-const SWITCH_SHEET: [f32; 2] = [520.0, 400.0];
+/// The switch sheet's size: one row for each state, then the name lines and the fitted row tags, with the paper's foot
+/// in view.
+const SWITCH_SHEET: [f32; 2] = [520.0, 470.0];
 /// A width too narrow for the name line's whole text, so it is cut.
 const CUT_NAME: f32 = 150.0;
+/// A width too narrow for the fitted row tag's whole tag, so its words are cut.
+const CUT_TAG: f32 = 120.0;
 /// A fictional portal for the switches.
 const SWITCH_NAME: &str = "Northwind Jobs";
 
 /// The switch on paper, as a portal row shows it: on, off, both disabled, and off with the focus ring. Then the name line a
-/// portal row leads with: a name and its note, a name alone, and one cut at the right.
+/// portal row leads with: a name and its note, a name alone, and one cut at the right. Then the fitted row tag of a
+/// community portal: whole where it fits, and its words cut where it does not.
 fn switches(ui: &mut Ui) {
     paper(ui, false, |ui| {
         egui::Frame::new().inner_margin(22).show(ui, |ui| {
@@ -1627,6 +1632,14 @@ fn switches(ui: &mut Ui) {
                 ui.end_row();
                 desk_label(ui, "Name line, cut", Type::NOTE, Ink::Muted);
                 ui.allocate_ui(egui::vec2(CUT_NAME, 24.0), |ui| name_line(ui, "Northwind Regional Jobs", Some("Belgium")));
+                ui.end_row();
+                desk_label(ui, "Fitted row tag", Type::NOTE, Ink::Muted);
+                fitted_row_tag(ui, "Unmaintained since 2026-05", Tone::Interview);
+                ui.end_row();
+                desk_label(ui, "Fitted row tag, cut", Type::NOTE, Ink::Muted);
+                ui.allocate_ui_with_layout(egui::vec2(CUT_TAG, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    fitted_row_tag(ui, "Unmaintained since 2026-05", Tone::Interview)
+                });
                 ui.end_row();
             });
         });

@@ -197,6 +197,18 @@ TruffleHog scans the whole git history for secrets in CI, and fails on a verifie
 - The Windows "not signed yet" lines, in the download panel and the Signing row, change once the installer is signed.
 - The design source is `mockups/landing/Landing.html`, with its notes in `mockups/handoff/landing.md`.
 
+## Agent team
+
+[AGENTS.md](AGENTS.md#team) describes the agent team. The main session runs as the `lead` agent in the main checkout only. Add the `agent` key to `.claude/settings.local.json` there, which git ignores, and keep whatever else the file holds:
+
+```json
+{ "agent": "lead" }
+```
+
+Never put it in `.claude/settings.json`. Every worktree holds that file, so a builder session started in a worktree would run as the lead, without the Edit tool.
+
+A branch cut before this setup still sets `agent` in its own `.claude/settings.json`, so a builder thread there still runs as the lead. Rebase that branch onto `origin/main` once this setup has merged, then start a new builder thread, because a running thread keeps the agent it started with.
+
 ## OpenSpec
 
 OpenSpec changes and specs live in `openspec/`. [AGENTS.md](AGENTS.md#team) says how they run through the team. OpenSpec 1.16.0 needs Node.js 22.12.0 or newer (its npm `engines` is `node >=22.12.0`). Install the CLI:

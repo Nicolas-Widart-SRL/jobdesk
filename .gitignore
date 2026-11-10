@@ -7,7 +7,8 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 
-# Lead plan files, agent worktrees and the planner's local memory stay local.
+# Lead plan files, the local agent setting, agent worktrees and the planner's local memory stay local.
 /.claude/plans/
+/.claude/settings.local.json
 /.claude/worktrees/
 /.claude/agent-memory-local/

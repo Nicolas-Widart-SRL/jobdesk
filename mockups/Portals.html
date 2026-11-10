@@ -9,11 +9,13 @@
 <style>
 /* Portals: the job boards Claude searches, in plain words. Four views under one head: Your portals, a portal's detail,
    Browse community and Add a portal.
-   Choose with ?screen=yours|detail|browse|add, ?state=..., ?option=a|b, ?portal=linkedin|northfield and ?theme=light|dark.
+   The list sits on a slip beside the picked portal's detail on paper, as Profile's rail sits beside its topic.
+   Choose with ?screen=yours|detail|browse|add, ?state=..., ?portal=linkedin|northfield and ?theme=light|dark.
    yours:  full | loading | nofolder | none | failed | busy
-   detail: full | remove | busy        (option a draws it beside the list, option b as its own view)
+   detail: full | remove | busy        (the list with the portal named by ?portal= picked)
    browse: cached | loading | offline | limited | nocache | tip
-   add:    empty | filled | invalid
+   add:    empty | filled | partial | invalid
+   Setup's Portals summary line is drawn in Profile.html?state=setup&portals=full|none|unread, the one canvas that draws Setup.
    Grid.html's scoped shell, copied under .po, so app.css and the other canvases are unchanged. Fictional data only. */
 body { margin: 0; }
 .po {
@@ -83,9 +85,8 @@ body { margin: 0; }
 .po .seg2 button .n { margin-left: 6px; }
 .po .seg2 button.dis { opacity: .55; }
 .po .bbody { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 0 32px 14px; }
-.po .back { flex: none; display: flex; align-items: center; gap: 10px; padding: 14px 32px 0; }
 
-/* Option A: the list as a slip of pickable rows, grouped On then Off. */
+/* The list as a slip of pickable rows, grouped On then Off. */
 .po .rail { flex: 0 0 430px; display: flex; flex-direction: column; min-height: 0; border-radius: 4px; background: var(--panel); position: relative; overflow: hidden; }
 .po .gt { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px 3px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .po .gt .m { font-weight: 400; }
@@ -139,27 +140,12 @@ body { margin: 0; }
 .po .code { display: flex; flex-direction: column; gap: 2px; max-width: 680px; margin-top: 8px; padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.45 var(--type); white-space: pre; overflow: hidden; }
 .po .offnote { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-top: 12px; border-radius: 4px; background: var(--panel); font-size: 13.5px; }
 
-/* Option B: the list as a table on paper. */
-.po .jt { width: 100%; border-collapse: collapse; }
-.po .jt th { text-align: left; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--text); white-space: nowrap; }
-.po .jt td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-.po .jt tr:last-child td { border-bottom: 0; }
-.po .jt tr.hov td { background: var(--raised); }
-.po .jt .nm b { font-weight: 600; }
-.po .jt .nm .ds { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 330px; }
-.po .jt tr.grp td { padding: 10px 12px 4px; font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); }
-.po .jt tr.grp td .m { font-weight: 400; }
-.po .jt tr.quiet td:not(:first-child) > * { opacity: .8; }
-.po .jt .go { color: var(--muted); font-size: 18px; text-align: right; }
+/* A slip beside the paper, for Add a portal's next steps. */
 .po .sidec { flex: 0 0 340px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .po .slip { border-radius: 4px; background: var(--panel); }
 .po .slip .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
 .po .slip .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
 .po .slip .sb { padding: 8px 14px 12px; }
-.po .slip .how { grid-template-columns: 112px minmax(0, 1fr); margin: 0; }
-.po .slip .how .v { font-size: 13.5px; }
-.po .fr { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
-.po .fr:first-child { border-top: 0; }
 
 /* Browse community. */
 .po .bwrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 0 32px 14px; }
@@ -196,7 +182,8 @@ body { margin: 0; }
 .po .caret { display: inline-block; width: 1.5px; height: 17px; margin-left: 1px; vertical-align: -3px; background: var(--text); }
 .po .fact { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line); }
 .po .fact .why { font-size: 13px; color: var(--muted); }
-.po .cbox { align-self: flex-start; padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.3 var(--type); }
+.po .cbox { align-self: stretch; padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.45 var(--type); white-space: normal; }
+.po .fl .opt { margin-left: 6px; font-size: 12.5px; font-weight: 400; color: var(--muted); }
 .po .steps .st { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .po .steps .st:first-child { border-top: 0; }
 .po .kn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 2px; background: var(--card); color: var(--muted); font-weight: 600; font-size: 12.5px; box-shadow: inset 0 0 0 1px var(--line); }
@@ -221,7 +208,6 @@ body { margin: 0; }
 <script>
 const P = new URLSearchParams(location.search);
 const SCREEN = (P.get('screen') || 'yours').toLowerCase();
-const OPTION = (P.get('option') || 'a').toLowerCase();
 const THEME = (P.get('theme') || 'light').toLowerCase();
 const PORTAL = (P.get('portal') || 'linkedin').toLowerCase();
 const STATE = (P.get('state') || '').toLowerCase();
@@ -294,7 +280,7 @@ function segs(on, o = {}) {
   return `<div class="seg2" role="tablist">${s.map(([k, t, n]) => `<button type="button" class="${k === on ? 'on' : ''}${o.dis ? ' dis' : ''}">${t}${n !== '' ? `<span class="n num">${n}</span>` : ''}</button>`).join('')}</div>`;
 }
 
-// Option A: the list as a slip of pickable rows.
+// The list as a slip of pickable rows.
 function railRow(p, sel, first, o = {}) {
   const jobs = p.on || p.jobs ? `<span class="num">${p.jobs} jobs</span><span>·</span><span>last new ${p.last}</span>` : '<span>No jobs yet</span>';
   const badges = [T(p.src)].concat(p.badges.map((b) => T(b, 'interview'))).join('');
@@ -311,7 +297,7 @@ function rail(sel, o = {}) {
     <span class="bar-y" style="height: 78%"></span>${o.tip || ''}</aside>`;
 }
 
-// The detail's sections, shared by both options.
+// The detail's sections.
 function howRows(id) { return HOW[id].map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join(''); }
 function searches(p) {
   const q = (t) => p.quotes && t.includes(' ') ? `"${t}"` : t;
@@ -349,55 +335,13 @@ function removePop(p) {
     <div class="row" style="gap: 6px">${B('Remove', 'sm bad')}${B('Keep it', 'sm" style="box-shadow: 0 0 0 2px var(--sheet), 0 0 0 4px var(--active)')}</div></div>`;
 }
 
-function detailPaperA(p, o = {}) {
+function detailPaper(p, o = {}) {
   const busyTip = o.busy && !o.noTip ? `<div class="tip" style="right: 22px; top: 50px; max-width: 240px">${BUSY_WHY}</div>${ARROW(700, 24)}` : '';
   return `<section class="sheetp" aria-label="${p.name}">
     <header class="dh"><div class="top"><div><h2>${p.name}</h2><p>${p.country}. ${p.desc}</p></div>${SW(p.on, o.busy ? 'dis' : '')}</div>
       ${facts(p)}${detailActions(p, o)}${o.remove ? removePop(p) : ''}${busyTip}</header>
     <div class="dscroll">${how(p)}${searches(p)}<span class="bar-y" style="right: 4px; height: 38%"></span></div>
     <footer class="dfoot"><span>Kept in <span class="path">.agents/skills/${p.folder}</span></span><span class="r">Search terms kept in <span class="path">job-scraper/search-queries.md</span></span></footer></section>`;
-}
-
-// Option B: the list as a table on paper. Each row opens the portal's own view.
-function tableB(o = {}) {
-  const row = (p, hov) => `<tr class="${p.on ? '' : 'quiet'}${hov ? ' hov' : ''}">
-    <td style="width: 84px; position: relative">${SW(p.on, o.busy ? 'dis' : '')}${o.busy && p.id === 'jobindex' ? `<div class="tip" style="left: 6px; top: 36px; width: 250px">${BUSY_WHY}</div>${ARROW(30, 18)}` : ''}</td>
-    <td class="nm"><b>${p.name}</b><div class="ds">${p.desc}</div></td>
-    <td>${p.country}</td>
-    <td class="num">${p.on || p.jobs ? p.jobs : '<span class="faint">None yet</span>'}</td>
-    <td class="num">${p.last || '<span class="faint">None yet</span>'}</td>
-    <td>${T(p.src, 'plain', false)}</td>
-    <td>${p.badges.map((b) => T(b, 'interview', false)).join(' ')}</td>
-    <td class="go" aria-hidden="true">›</td></tr>`;
-  const on = PORTALS.filter((p) => p.on), off = PORTALS.filter((p) => !p.on);
-  return `<div class="paperbox" style="flex: 1 1 auto"><table class="jt">
-    <thead><tr><th>On or off</th><th>Portal</th><th>Country</th><th>Jobs found</th><th>Last new job</th><th>Kind</th><th>Worth knowing</th><th></th></tr></thead>
-    <tbody>${on.map((p) => row(p, !o.busy && p.id === 'freehire')).join('')}
-      <tr class="grp"><td colspan="8">Off <span class="m">Claude skips these when it finds new jobs</span></td></tr>${off.map((p) => row(p)).join('')}</tbody></table>
-    ${!o.busy ? ARROW(560, 133) : ''}</div>`;
-}
-
-function detailB(p, o = {}) {
-  const d = o.busy ? ' dis' : '';
-  const busyTip = o.busy ? `<div class="tip" style="right: 0; top: 34px; width: 250px">${BUSY_WHY}</div>${ARROW(30, 10)}` : '';
-  const remove = p.src === 'Built-in' ? '' : B('Remove…', 'bad' + d + (o.remove ? '" style="box-shadow: 0 0 0 2px var(--sheet), 0 0 0 4px var(--active)' : ''));
-  return shell(`<div class="back"><span class="lk">‹ Your portals</span></div>
-    <header class="phead" style="padding-top: 4px; align-items: flex-end"><div><h1>${p.name}</h1><div class="sub">${p.country}. ${p.desc}</div>
-        <div class="row" style="gap: 6px; margin-top: 8px">${tagsOf(p)}</div></div>
-      <div class="acts" style="flex-direction: column; align-items: flex-end; gap: 12px; position: relative">
-        <span style="position: relative">${SW(p.on, d)}${busyTip}</span>
-        <div class="row" style="gap: 8px">${B('Check this portal…', d)}${B('Change search terms…', d)}${remove}</div>
-        ${o.remove ? removePop(p).replace('left: 300px; top: 146px', 'right: 0; top: 96px') : ''}</div></header>
-    <div class="bbody">
-      <section class="sheetp" aria-label="Searches it will run"><div class="dscroll" style="padding-top: 0">${searches(p)}<span class="bar-y" style="right: 4px; height: 52%"></span></div>
-        <footer class="dfoot"><span>Kept in <span class="path">.agents/skills/${p.folder}</span></span><span class="r">Search terms kept in <span class="path">job-scraper/search-queries.md</span></span></footer></section>
-      <aside class="sidec">
-        <section class="slip"><div class="sh">How it searches</div><div class="sb"><div class="how">${howRows(p.id)}</div></div></section>
-        <section class="slip"><div class="sh">So far</div><div class="sb">
-          <div class="fr"><span class="muted">Jobs found</span><span class="num">${p.jobs}</span></div>
-          <div class="fr"><span class="muted">Last new job</span><span>${p.last}</span></div></div></section>
-        ${p.src === 'Built-in' ? '<p class="muted" style="font-size: 13px">Built-in portals stay installed. Turn one off to skip it.</p>' : ''}
-      </aside></div>`, { busy: o.busy });
 }
 
 // Your portals, in each state.
@@ -423,22 +367,13 @@ function yours(st) {
     <div class="bbody"><section class="sheetp" style="flex: 0 1 640px; align-self: flex-start"><div class="empty">
       <h3>Your portals are hidden, not gone</h3>
       <p>They come back as soon as Jobdesk can read the folder. A task you start still searches them, because Claude reads the folder itself.</p></div></section></div>`, { failed: true });
-  if (OPTION === 'b') {
-    return shell(`${head({ busy })}${segs('yours')}<div class="bbody" style="flex-direction: column; gap: 8px">${tableB({ busy })}
-      <p class="muted" style="font-size: 13px">Open a portal to see the searches it runs. The switch decides whether Claude searches it next time.</p></div>`, { busy });
-  }
   const p = PORTALS.find((x) => x.id === 'linkedin');
   const tip = busy ? `<div class="tip" style="left: 190px; top: 46px; width: 240px">${BUSY_WHY}</div>${ARROW(388, 24)}` : '';
-  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail('linkedin', { busy, tip })}${detailPaperA(p, { busy, noTip: true })}</div>`, { busy });
+  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail('linkedin', { busy, tip })}${detailPaper(p, { busy, noTip: true })}</div>`, { busy });
 }
 
 function loading() {
   const sk = (w, extra = '') => `<span class="sk" style="width: ${w}px; ${extra}"></span>`;
-  if (OPTION === 'b') {
-    const rows = [150, 110, 190, 130, 100, 120].map((w) => `<tr><td style="width: 84px">${sk(36, 'height: 18px')}</td><td><div class="col" style="gap: 6px">${sk(w)}${sk(w + 120)}</div></td><td>${sk(70)}</td><td>${sk(30)}</td><td>${sk(70)}</td><td>${sk(60)}</td><td>${sk(80)}</td><td></td></tr>`).join('');
-    return shell(`${head({ sub: 'Reading your portals…', noActs: true })}${segs('yours', { count: '' })}<div class="bbody"><div class="paperbox"><table class="jt">
-      <thead><tr><th>On or off</th><th>Portal</th><th>Country</th><th>Jobs found</th><th>Last new job</th><th>Kind</th><th>Worth knowing</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
-  }
   const rows = [120, 90, 170, 130, 100, 110].map((w, i) => `<div class="pr${i === 0 ? ' first' : ''}"><span class="nm">${sk(w, 'height: 14px')}</span>${sk(36, 'height: 18px')}<span class="ds" style="padding-top: 6px">${sk(w + 140)}</span><span class="ft">${sk(140)}</span></div>`).join('');
   return shell(`${head({ sub: 'Reading your portals…', noActs: true })}${segs('yours', { count: '' })}<div class="bbody">
     <aside class="rail"><div class="gt">${sk(30)}</div>${rows}</aside>
@@ -449,8 +384,7 @@ function loading() {
 function detail(st) {
   const p = PORTALS.find((x) => x.id === PORTAL) || PORTALS[0];
   const busy = st === 'busy', remove = st === 'remove';
-  if (OPTION === 'b') return detailB(p, { busy, remove });
-  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail(p.id, { busy })}${detailPaperA(p, { busy, remove })}</div>`, { busy });
+  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail(p.id, { busy })}${detailPaper(p, { busy, remove })}</div>`, { busy });
 }
 
 // Browse community.
@@ -507,30 +441,40 @@ function browse(st) {
     ${alert}${warn}<div class="paperbox">${list}</div></div>`);
 }
 
-// Add a portal.
+// Add a portal. The answers go on the launcher line after the address, because /add-portal skips the questions its
+// arguments answer. An empty field stays off the line, and Claude asks for it in the task.
+const SITE = 'https://jobs.sample-board.example';
+const FIELDS = { filled: { country: 'Belgium', language: 'French', title: 'Lead Backend Engineer' }, partial: { country: 'Belgium' },
+  invalid: { country: 'Belgium', language: 'French', title: 'Lead Backend Engineer' } };
+function addLine(f) {
+  const parts = [['country', f.country], ['language', f.language], ['test title', f.title]].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
+  return `/add-portal ${SITE}${parts.length ? ' ' + parts.join(', ') : ''}`;
+}
 function add(st) {
-  const url = st === 'filled' ? '<span class="inp val">https://jobs.sample-board.example</span>'
+  const f = FIELDS[st] || {};
+  const ready = st === 'filled' || st === 'partial';
+  const url = ready ? `<span class="inp val">${SITE}</span>`
     : st === 'invalid' ? '<span class="inp val bad foc">jobs sample board<span class="caret"></span></span>'
       : '<span class="inp foc"><span class="caret" style="margin: 0 2px 0 0"></span>Such as https://jobs.example.be</span>';
-  const v = (on, val, hint) => `<span class="inp${on ? ' val' : ''}">${on ? val : hint}</span>`;
-  const f = st === 'filled' || st === 'invalid';
-  const go = st === 'filled'
+  const v = (val, hint) => `<span class="inp${val ? ' val' : ''}">${val || hint}</span>`;
+  const opt = '<span class="opt">Optional</span>';
+  const go = ready
     ? `${B('Build it with Claude…', 'pri')}<span class="lk">Hide the command</span>`
     : `${B('Build it with Claude…', 'pri dis')}<span class="why">${st === 'invalid' ? 'Type a web address first.' : 'Type the board’s website first.'}</span>`;
-  const cmd = st === 'filled' ? `<div class="cbox">/add-portal https://jobs.sample-board.example</div>` : '';
+  const cmd = ready ? `<div class="cbox" aria-label="The task's command">${addLine(f)}</div>` : '';
   return shell(`${head()}${segs('add')}<div class="bbody" style="gap: 28px">
     <section class="form" aria-label="Add a portal">
-      <div><h2>A job board Claude should search</h2><p class="muted" style="margin-top: 3px">Claude builds a small search tool for it, tests it with your job title, and asks you the rest in Tasks.</p></div>
+      <div><h2>A job board Claude should search</h2><p class="muted" style="margin-top: 3px">Claude builds a small search tool for it and tests it with your job title. What you fill in here, it does not ask again.</p></div>
       <div class="fl"><label>The job board’s website</label>${url}
         ${st === 'invalid' ? '<span class="err">This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be.</span>' : '<span class="help">The page where the board lists its jobs.</span>'}</div>
-      <div class="pair"><div class="fl"><label>Country</label>${v(f, 'Belgium', 'Such as Belgium')}</div><div class="fl"><label>Language of its job ads</label>${v(f, 'French', 'Such as French')}</div></div>
-      <div class="fl"><label>One job title to test with</label>${v(f, 'Lead Backend Engineer', 'Such as Lead Backend Engineer')}<span class="help">Claude searches the board for it, to check the new portal finds real jobs.</span></div>
+      <div class="pair"><div class="fl"><label>Country ${opt}</label>${v(f.country, 'Such as Belgium')}</div><div class="fl"><label>Language of its job ads ${opt}</label>${v(f.language, 'Such as French')}</div></div>
+      <div class="fl"><label>One job title to test with ${opt}</label>${v(f.title, 'Such as Lead Backend Engineer')}<span class="help">Claude searches the board for it, to check the new portal finds real jobs. Leave a field empty and Claude asks you in the task.</span></div>
       <div class="fact">${go}</div>${cmd}
       <p class="muted" style="font-size: 13px">This is a task, so it costs like any other and shows in Usage. Nothing runs until you start it.</p>
     </section>
     <aside class="sidec" style="flex-basis: 320px"><section class="slip"><div class="sh">What happens next</div><div class="sb steps">
-      <div class="st"><span class="kn">1</span><b>New task opens</b><span class="m">With the board’s address filled in. You start it there.</span></div>
-      <div class="st"><span class="kn">2</span><b>Claude builds and tests</b><span class="m">It reads the board, writes the portal, and searches it for your job title. It asks you in Tasks when it needs you.</span></div>
+      <div class="st"><span class="kn">1</span><b>New task opens</b><span class="m">With the board’s address and your answers filled in. You start it there.</span></div>
+      <div class="st"><span class="kn">2</span><b>Claude builds and tests</b><span class="m">It reads the board, writes the portal, and searches it for your job title. It asks you in Tasks only for what you left empty, or when it needs you.</span></div>
       <div class="st"><span class="kn">3</span><b>It joins Your portals</b><span class="m">Tagged Made by you. Turn it off there at any time.</span></div>
       <p class="muted" style="font-size: 13px; padding-top: 10px; border-top: 1px solid var(--line)">Boards that need a sign-in or a paid key work too. Claude tells you how to set them up.</p>
     </div></section></aside></div>`);

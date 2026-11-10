@@ -27,7 +27,7 @@ Brief: a new Profile tab, before Setup, where the user reads their profile by to
 | [Profile-loading.png](../Profile-loading.png) | Before the first read: "Reading your profile…", with the rail and paper in skeleton lines. |
 | [Profile-failed.png](../Profile-failed.png) | One profile file is unreadable: the alert under the head, its six topics Hidden, and "hidden, not gone" on paper. The tab carries the failed square. |
 | [Profile-updated.png](../Profile-updated.png) | After a task changed two topics: Identity and languages carries Updated on the rail. Experience is open, so its mark has cleared, and its head says what the task changed. |
-| [Profile-setup.png](../Profile-setup.png) | The Setup screen, with its Profile panel shrunk to one summary line and Open Profile. The other panels are as built. |
+| [Profile-setup.png](../Profile-setup.png) | The Setup screen, with its Profile panel shrunk to one summary line and Open Profile. Its Portals panel is the Portals handoff's summary line. The other panels are as built. |
 
 ## Layout
 

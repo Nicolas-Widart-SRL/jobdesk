@@ -1,35 +1,33 @@
 # Portals
 
-A new top-level Portals screen: the job boards Claude searches, in plain words for people who are not technical. Round 1 draws Your portals and a portal's detail in two layouts, A and B, with Browse community and Add a portal once.
+A new top-level Portals screen: the job boards Claude searches, in plain words for people who are not technical. Approved: the list on a slip beside the picked portal's detail on paper, as Profile's rail sits beside its topic, with Browse community and Add a portal as the other two views. Setup's portal table shrinks to one summary line with Open Portals.
 
 - [Canvas and states](#canvas-and-states)
+- [Decisions](#decisions)
 - [The screen](#the-screen)
 - [Your portals](#your-portals)
 - [A portal's detail](#a-portals-detail)
 - [Browse community](#browse-community)
 - [Add a portal](#add-a-portal)
+- [Setup's Portals panel](#setups-portals-panel)
 - [Rules and why](#rules-and-why)
 - [New widgets](#new-widgets)
 - [Doc changes](#doc-changes)
-- [Open](#open)
 
 ## Canvas and states
 
-`Portals.html`, scope `.po`, on Grid.html's shell. Query: `?screen=yours|detail|browse|add&state=...&option=a|b&portal=linkedin|northfield&theme=light|dark`.
+`Portals.html`, scope `.po`, on Grid.html's shell. Query: `?screen=yours|detail|browse|add&state=...&portal=linkedin|northfield&theme=light|dark`.
+
+Setup is drawn in one place only, `Profile.html?state=setup`, which already draws Setup for its Profile panel. Its `&portals=full|none|unread` picks the Portals line.
 
 | PNG | Query | Shows |
 | --- | --- | --- |
-| `Portals-a-yours.png`, `-a-yours-dark.png` | `screen=yours&option=a` | A: the list beside LinkedIn's detail, light and dark |
-| `Portals-a-northfield.png` | `screen=detail&portal=northfield&option=a` | A: a portal made by you, which ignores quotes and has Remove… |
-| `Portals-a-remove.png` | `screen=detail&portal=northfield&state=remove&option=a` | A: Remove… asks first |
-| `Portals-a-busy.png` | `screen=yours&state=busy&option=a` | A: a task runs, so the switches and the actions wait, with the reason on hover |
-| `Portals-a-detail-busy.png` | `screen=detail&state=busy&option=a` | A: the same, with the reason on the detail's switch |
-| `Portals-a-loading.png` | `screen=yours&state=loading&option=a` | A: reading the folder |
-| `Portals-b-yours.png`, `-b-yours-dark.png` | `screen=yours&option=b` | B: the full-width table, light and dark, a row under the pointer |
-| `Portals-b-busy.png` | `screen=yours&state=busy&option=b` | B: a task runs |
-| `Portals-b-loading.png` | `screen=yours&state=loading&option=b` | B: reading the folder |
-| `Portals-b-detail.png`, `-b-detail-dark.png` | `screen=detail&option=b` | B: LinkedIn as its own view, with a back link |
-| `Portals-b-northfield.png`, `-b-remove.png`, `-b-detail-busy.png` | `screen=detail&option=b&portal=northfield`, `&state=remove`, `&state=busy` | B: made by you, Remove… asking, a task running |
+| `Portals-yours.png`, `-yours-dark.png` | `screen=yours` | The list beside LinkedIn's detail, light and dark |
+| `Portals-northfield.png` | `screen=detail&portal=northfield` | A portal made by you, which ignores quotes and has Remove… |
+| `Portals-remove.png` | `screen=detail&portal=northfield&state=remove` | Remove… asks first |
+| `Portals-busy.png` | `screen=yours&state=busy` | A task runs, so the switches and the actions wait, with the reason on hover |
+| `Portals-detail-busy.png` | `screen=detail&state=busy` | The same, with the reason on the detail's switch |
+| `Portals-loading.png` | `screen=yours&state=loading` | Reading the folder |
 | `Portals-nofolder.png` | `screen=yours&state=nofolder` | No job search folder chosen |
 | `Portals-none.png` | `screen=yours&state=none` | A folder with no portal installed |
 | `Portals-failed.png` | `screen=yours&state=failed` | `.agents/skills` could not be read |
@@ -39,9 +37,22 @@ A new top-level Portals screen: the job boards Claude searches, in plain words f
 | `Portals-browse-limited.png` | `screen=browse&state=limited` | GitHub's rate limit, the saved list shown, Try again waits |
 | `Portals-browse-nocache.png` | `screen=browse&state=nocache` | GitHub unreachable and no saved list yet |
 | `Portals-browse-tip.png` | `screen=browse&state=tip` | What Install… does, on hover |
-| `Portals-add-empty.png`, `-add-filled.png`, `-add-invalid.png` | `screen=add&state=...` | The form empty, filled with the command shown, and with an address that is not one |
+| `Portals-add-empty.png` | `screen=add&state=empty` | The form empty, Build it with Claude… waiting for a website |
+| `Portals-add-filled.png` | `screen=add&state=filled` | Every field filled, with the command shown |
+| `Portals-add-partial.png` | `screen=add&state=partial` | Website and country only: the empty fields stay off the line |
+| `Portals-add-invalid.png` | `screen=add&state=invalid` | An address that is not one |
+| `Profile-setup.png` | `Profile.html?state=setup` | Setup: "4 of 8 portals on · 538 jobs found" and Open Portals |
+| `Profile-setup-noportals.png` | `Profile.html?state=setup&portals=none` | Setup: no portal installed |
+| `Profile-setup-unread.png` | `Profile.html?state=setup&portals=unread` | Setup: the saved jobs cannot be read, so jobs found hide |
 
-The no-folder, none, failed, Browse and Add states are the same in both options.
+## Decisions
+
+- **List and detail side by side.** The list stays in sight while the user reads a portal, and the screen matches Profile. Each row takes three lines because the list column is narrow.
+- **Setup keeps a summary, not the table.** The Portals screen now owns the portals, so Setup only says whether they are ready, as its Profile panel does.
+- **Remove moves the folder to the Trash, after Jobdesk asks.** The user can put it back, and nothing is lost by one click.
+- **Built-in portals have no Remove, only Off.** They ship with ai-job-search, and Off already makes Claude skip one.
+- **Add a portal puts its answers on the launcher line.** `/add-portal` skips the questions its arguments answer, so the user is not asked twice.
+- **A flipped switch keeps its row's place until the screen opens again.** Nothing jumps under the pointer.
 
 ## The screen
 
@@ -52,23 +63,21 @@ The no-folder, none, failed, Browse and Add states are the same in both options.
 
 ## Your portals
 
-- One row per portal under `.agents/skills/*-search/`. The name is the board's plain name, never the folder name. Then the country, one sentence on what it searches, the switch, jobs found, the day of the last new job, the source tag, and the badges that apply.
-- Two groups, On ("Claude searches these") then Off ("Claude skips these"). A row keeps its place when its switch flips, and moves to its group the next time the screen opens, so nothing jumps under the pointer.
+- The list is a `panel` slip of pickable rows (`pick_row`, the `PICK_EDGE` edge on the picked one) beside the picked portal's detail on paper. The first portal is picked when the screen opens.
+- One row per portal under `.agents/skills/*-search/`, three lines: the board's plain name (never the folder name) and its country with the switch at the right, one sentence on what it searches, then jobs found, the day of the last new job, the source tag and the badges that apply.
+- Two groups, On ("Claude searches these") then Off ("Claude skips these"). A row keeps its place when its switch flips, and moves to its group the next time the screen opens.
 - Off rows are quieter: their words at `FADED_OPACITY`, the switch at full ink.
 - Source tags, a `row_tag` in `Tone::Plain`: Built-in (shipped with ai-job-search), Community (installed from the community list), Made by you (made with `/add-portal`). Badges in `Tone::Interview`, the Jobs screen's "Worth knowing" ink: Needs API key, Personal use only.
-- Jobs found counts the entries in `job_scraper/seen_jobs.json` with that `portal`, and Last new job is the latest `first_seen` among them. With none: "No jobs yet" (A) or "None yet" in `faint` (B). If the jobs file cannot be read, both read as Setup's `hidden_note` says today.
-- **A**: the list is a `panel` slip of pickable rows (`pick_row`, the `PICK_EDGE` edge on the picked one) beside the detail on paper, as Profile's rail sits beside its topic. Each row is three lines: name and country with the switch, the sentence, then jobs, last new job and tags.
-- **B**: the list is a `pick_table` on paper over the full width: On or off, Portal (name over the sentence), Country, Jobs found, Last new job, Kind, Worth knowing, and a `›`. A click on a row, outside its switch, opens the detail view. A one-line footnote under the paper says what opening and the switch do.
+- Jobs found counts the entries in `job_scraper/seen_jobs.json` with that `portal`, and Last new job is the latest `first_seen` among them. With none: "No jobs yet". If the jobs file cannot be read, both hide behind a `hidden_note`, as Setup's does.
 
 ## A portal's detail
 
-- Head: the plain name in `Type::DEAL` (A) or `Type::H1` (B), the country and the sentence, the switch at the right, jobs found, the last new job and the tags.
+- One paper. Head: the plain name in `Type::DEAL`, the country and the sentence, the switch at the right, jobs found, the last new job and the tags.
 - Actions, each a `small_command_action` that opens the launcher: Check this portal… on `/scrape health <folder name>`, and Change search terms… on `/setup --section search`. Remove… only on Community and Made by you portals. A built-in portal shows instead: "Built-in portals stay installed. Turn one off to skip it."
 - How it searches: four rows in plain words, made from the portal's `Query syntax:` line and its search options. Exact phrases, Combine with OR, Location, and what each search finds. Each answer leads with a bold Yes, No or a short phrase, then one sentence.
 - Searches it will run: the shared search terms, grouped by priority (a `panel` chip "Priority N", then the category's name), each term as this portal receives it. A portal that honours quotes shows multi-word terms in quotes, and one that ignores them shows them bare. The right column says it in words: These words together, These words in any order, One word. The lead says plainly that the terms are shared by every portal. The count says how many searches that makes.
 - If it fails: the `site:` lines from the search file that name this portal's site, in a `code_box` (Courier, as typed syntax), with one line saying where they come from. With none, one sentence says so.
 - Footnote: the portal's folder and the search file, as `path_label`.
-- **A** puts all of it on one paper. **B** gives the head to the page, puts the searches on paper and How it searches and So far (jobs found, last new job) on slips beside it, under a `link` "‹ Your portals" that Esc also follows (`back_pressed`).
 
 ## Browse community
 
@@ -81,11 +90,24 @@ The no-folder, none, failed, Browse and Add states are the same in both options.
 
 ## Add a portal
 
-- A short form on paper: the job board's website, Country and Language of its job ads side by side, and One job title to test with. Hints start with "Such as", so an empty field never reads as filled.
-- Build it with Claude… is the primary, a `primary_command_action` on `/add-portal <website>`. It waits for a website, with the reason beside it, and for one that is a web address. A typed address without a scheme gets `https://`.
-- "Hide the command" shows the line in a code box, as `reveal_command` does.
+- A short form on paper: the job board's website, then Country and Language of its job ads side by side, then One job title to test with. The last three are marked Optional in `muted` `Type::NOTE`. Hints start with "Such as", so an empty field never reads as filled.
+- Build it with Claude… is the primary, a `primary_command_action`. It waits for a website, with the reason beside it, and for one that is a web address. A typed address without a scheme gets `https://`.
+- The command is `/add-portal <website>`, then the filled fields after it as `country: …`, `language: …`, `test title: …`, joined by ", " in that order. A field left empty stays off the line. Such as `/add-portal https://jobs.sample-board.example country: Belgium, language: French, test title: Lead Backend Engineer`, or `/add-portal https://jobs.sample-board.example country: Belgium` with only the country filled.
+- Each field is trimmed and its line breaks removed, so the command stays one line.
+- "Hide the command" shows the line in a code box that wraps, as `reveal_command` does.
+- The lead says what is filled in here is not asked again. The test title's help says Claude asks in the task for any field left empty.
 - One line: it is a task, so it costs like any other and shows in Usage, and nothing runs until the user starts it.
-- A `slip` beside it: What happens next, three numbered steps (`knot`), and one line on boards that need a sign-in or a key.
+- A `slip` beside it: What happens next, three numbered steps (`knot`): the task opens with the address and the answers filled in, Claude builds and tests and asks only for what was left empty, and the portal joins Your portals tagged Made by you. Then one line on boards that need a sign-in or a key.
+
+## Setup's Portals panel
+
+- The panel keeps its header and `.agents/skills` path note. The table and its Check portal health and Add portal buttons go: both live only on the Portals screen.
+- One line remains, as the Profile panel's: `lead_line` "4 of 8 portals on", then "· 538 jobs found" in `muted`, and `small_button` Open Portals at the right, which switches to the Portals tab. Open Portals opens no launcher, so it has no "…".
+- Jobs found is the sum over all installed portals, on or off.
+- No portal installed: the line reads "No portals installed." in `muted`, and Open Portals stays, so Browse community and Add a portal are one click away.
+- The saved jobs cannot be read: the count of portals on stays, and "· Jobs found are hidden while your saved jobs cannot be read." replaces the jobs, as a `hidden_note`.
+- On the canvas the Profile and Portals panels stack in the main column beside the Environment slip, each as tall as its line.
+- Settings › Runtime status shows the same line in its Portals section, because it always shows what Setup shows.
 
 ## Rules and why
 
@@ -100,22 +122,13 @@ The no-folder, none, failed, Browse and Add states are the same in both options.
 ## New widgets
 
 - **`switch`**: on or off in one click, for a setting that acts at once, with its word after it. A track `CHECK_BOX` tall and twice as wide at `RADIUS_CARD`, a square knob at `RADIUS_STAMP` inside a `HAIRLINE` edge. On: track and edge `text`, knob `field`, word in `Type::STRONG`. Off: edge and knob `muted`, track `field`, word `muted` in `Type::NOTE`. Disabled at `DISABLED_OPACITY` with `enabled_when`'s reason. Focus ring as every kit widget. A screen reader hears a switch named by its row, on or off. A `setting_check` would also work, but a checkbox reads as a form waiting to be saved, and this acts at once.
-- **Portal row** (A only): `pick_row` with three lines and the switch at the top right.
+- **Portal row**: `pick_row` with three lines and the switch at the top right.
 - **Community row**: a `list_row` with four columns: name over sentence, owners, the tag, the actions.
 
 ## Doc changes
 
 - `ARCHITECTURE.md`: the `workspace` feature gains the community list (fetch, cache, GitHub's rate limit), the switch's write to `SKILL.md` frontmatter and the move of a portal folder to the Trash. Or a new `portals` feature, joined to `FEATURES`, if the lead prefers. Add Portals to the screen names. Add the GitHub API to the network calls, next to the update feed.
-- `docs/guide.md`: a Portals section, screen by screen, after Profile. Setup's portal table links to it (see Open).
+- `docs/guide.md`: a Portals section, screen by screen, after Profile. Remove is a move to the Trash after Jobdesk asks, built-in portals have only Off, and Add a portal's answers go on the task's line. In "Setup and the status bar": the Portals panel is one line, how many portals are on and the jobs they found, with Open Portals, which opens the Portals screen. With no portal installed it says so, and with the saved jobs unreadable the jobs found hide. Check portal health and Add portal move to the Portals screen.
 - `docs/architecture/trust.md`: a row in Rendering untrusted text for community portal names, descriptions and owners, and for the names and sentences read from installed `SKILL.md` files.
-- `AGENTS.md` hard rules: the switch and Remove are the two writes Jobdesk makes outside Profile, and both wait while a run works. The community list is not a run.
+- `AGENTS.md` hard rules: the switch and Remove are the two writes Jobdesk makes outside Profile, and both wait while a run works. Remove moves the folder to the Trash, never deletes it. The community list is not a run.
 - `docs/architecture/ui-kit.md`: the `switch` widget, and when to use it rather than `setting_check`.
-
-## Open
-
-- **Option A or B.** A keeps the list in sight and matches Profile, but the list column is narrow, so each row takes three lines. B shows every fact in one row and gives the searches the full width, at the cost of a click and a back link.
-- **Setup's portal table.** Suggest it stays as a summary and gains Open Portals, as its Profile panel has Open Profile. Check portal health and Add portal move to the Portals screen.
-- **Remove.** Drawn as Jobdesk moving the folder to the Trash. Should it rather open a task?
-- **Built-in portals.** Drawn with no Remove, only Off. Keep that?
-- **Add a portal's fields.** `/add-portal` takes only the website. Do country, language and the test title go into the launcher line after it, or only into the first reply?
-- **Where the switch's change shows.** Drawn as a row keeping its place until the screen opens again. Moving it at once is the other choice.

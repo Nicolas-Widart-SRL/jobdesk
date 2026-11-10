@@ -61,29 +61,22 @@ pub trait Api: Send + Sync {
     /// The body of `url` as `accept` asks for it, or why there is none. A body over `limit` bytes is `BadAnswer`.
     fn get(&self, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, CommunityFailure>;
 }
-
 /// GitHub as `github_config` reaches it, with no credential. A status is read here, so a rate limit tells its reset.
-/// The raw host follows no redirect, so a file never comes from another host.
+/// No redirect is followed, so no request goes on to another host: a 3xx reads as refused.
 pub struct HttpsApi {
-    api: Agent,
-    raw: Agent,
+    agent: Agent,
 }
 
 impl HttpsApi {
     pub fn new(version: &str) -> Self {
-        let agent = |redirects: u32| {
-            github_config(version).max_redirects(redirects).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().new_agent()
-        };
-        Self { api: agent(5), raw: agent(0) }
+        let config = github_config(version).max_redirects(0).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT));
+        Self { agent: config.build().new_agent() }
     }
 
-    /// The request for `url`: on the raw host with no redirect, else on the REST API with its version.
+    /// The request for `url`: the raw host gets only the type, the REST API its version too.
     fn request(&self, url: &str, accept: &str) -> RequestBuilder<WithoutBody> {
-        if url.starts_with(RAW_ROOT) {
-            self.raw.get(url).header("Accept", accept)
-        } else {
-            self.api.get(url).header("Accept", accept).header("X-GitHub-Api-Version", API_VERSION)
-        }
+        let request = self.agent.get(url).header("Accept", accept);
+        if url.starts_with(RAW_ROOT) { request } else { request.header("X-GitHub-Api-Version", API_VERSION) }
     }
 }
 
@@ -445,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn the_api_gets_its_type_and_version_and_the_raw_host_no_redirect() {
+    fn the_api_gets_its_type_and_version_and_no_host_a_redirect() {
         let https = HttpsApi::new("0.1.0");
         let api = https.request(&head_url(), SHA);
         let headers = api.headers_ref().unwrap();
@@ -455,8 +448,8 @@ mod tests {
         let headers = raw.headers_ref().unwrap();
         assert_eq!(headers.get("Accept").unwrap(), TEXT);
         assert!(headers.get("X-GitHub-Api-Version").is_none());
-        assert_eq!((https.api.config().max_redirects(), https.raw.config().max_redirects()), (5, 0));
-        assert!(https.api.config().https_only() && https.raw.config().https_only());
+        assert_eq!(https.agent.config().max_redirects(), 0, "no request goes on to another host");
+        assert!(https.agent.config().https_only());
     }
 
     #[test]
@@ -509,7 +502,7 @@ mod tests {
         assert_eq!(status_failure(403, &headers(Some("59"), None, None), now()), CommunityFailure::Refused(403));
         assert_eq!(status_failure(429, &headers(None, None, None), now()), CommunityFailure::Refused(429));
         assert_eq!(status_failure(404, &headers(Some("0"), Some("1"), Some("5")), now()), CommunityFailure::Refused(404));
-        assert_eq!(status_failure(301, &headers(None, None, None), now()), CommunityFailure::Refused(301), "a redirect the raw host does not follow");
+        assert_eq!(status_failure(301, &headers(None, None, None), now()), CommunityFailure::Refused(301), "a redirect, which is never followed");
         assert_eq!(failure_of(&ureq::Error::HostNotFound), CommunityFailure::Unreachable);
         assert_eq!(failure_of(&ureq::Error::Timeout(ureq::Timeout::Global)), CommunityFailure::TimedOut);
         assert_eq!(failure_of(&ureq::Error::Io(io::Error::new(io::ErrorKind::TimedOut, "slow"))), CommunityFailure::TimedOut);

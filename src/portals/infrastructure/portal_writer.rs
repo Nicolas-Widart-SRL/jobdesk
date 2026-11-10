@@ -6,7 +6,7 @@ use crate::portals::domain::{ChangeError, Edit, PortalStore, set_enabled};
 use crate::portals::infrastructure::portal_folder::SKILLS;
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::safe_save::{Refusals, refusal, replace_through_copy};
-use crate::shared_kernel::visible_text::visible_chars;
+use crate::shared_kernel::visible_text::all_visible;
 
 const MANIFEST: &str = "SKILL.md";
 /// A `SKILL.md` larger than this is not edited, so a huge file cannot stall the screen. A real one is a few KiB.
@@ -94,7 +94,7 @@ impl PortalStore for PortalWriter {
 fn is_folder_name(name: &str) -> bool {
     let mut parts = Path::new(name).components();
     let one_part = matches!((parts.next(), parts.next()), (Some(Component::Normal(part)), None) if part == name);
-    one_part && !name.starts_with('.') && !name.contains(['/', '\\', ':']) && visible_chars(name).eq(name.chars())
+    one_part && !name.starts_with('.') && !name.contains(['/', '\\', ':']) && all_visible(name)
 }
 
 /// The whole file, refused past `EDIT_LIMIT`.
@@ -223,7 +223,19 @@ mod tests {
     fn a_name_that_is_not_one_plain_folder_is_refused() {
         let (dir, writer) = workspace();
         portal(dir.path(), ".hidden-search", NORTHFIELD);
-        for name in ["..", ".", "", ".hidden-search", "../northfield-search", "northfield-search/", "a/b", "a\\b", "c:northfield", "north\u{200B}field"] {
+        for name in [
+            "..",
+            ".",
+            "",
+            ".hidden-search",
+            "../northfield-search",
+            "northfield-search/",
+            "a/b",
+            "a\\b",
+            "c:northfield",
+            "north\u{200B}field",
+            "northfield\u{FE00}-search",
+        ] {
             assert!(refused(writer.set_enabled(name, true)).contains("not a portal folder name"), "{name:?}");
             assert!(refused(writer.trash(name)).contains("not a portal folder name"), "{name:?}");
         }

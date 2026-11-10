@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::portals::domain::{Manifest, SearchPlan, parse_manifest, parse_search_plan};
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::visible_text::visible_chars;
+use crate::shared_kernel::visible_text::all_visible;
 
 pub(super) const SKILLS: &str = ".agents/skills";
 const SEARCH_FILE: &str = ".claude/skills/job-scraper/search-queries.md";
@@ -35,7 +35,7 @@ impl PortalFolder {
         let mut installed = Vec::new();
         for entry in entries.flatten() {
             let Ok(name) = entry.file_name().into_string() else { continue };
-            if name.starts_with('.') || !visible_chars(&name).eq(name.chars()) || !entry.path().is_dir() {
+            if name.starts_with('.') || !all_visible(&name) || !entry.path().is_dir() {
                 continue;
             }
             match read_manifest(&entry.path().join("SKILL.md")) {
@@ -93,6 +93,7 @@ mod tests {
         write(root, ".agents/skills/alder-search/SKILL.md", "# Alder Search Skill\n");
         write(root, ".agents/skills/.hidden-search/SKILL.md", "# Hidden Search Skill\n");
         write(root, ".agents/skills/zero\u{200B}width-search/SKILL.md", "# Zero Search Skill\n");
+        write(root, ".agents/skills/northfield\u{FE00}-search/SKILL.md", "# Selector Search Skill\n");
         write(root, ".agents/skills/empty-search/README.md", "no manifest\n");
         write(root, ".agents/skills/stray.md", "a file, not a folder\n");
 

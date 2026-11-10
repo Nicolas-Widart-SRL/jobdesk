@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
 use crate::portals::domain::manifest::{NAME_CHARS, SENTENCE_CHARS, parse_manifest};
-use crate::shared_kernel::visible_text::visible_chars;
+use crate::shared_kernel::visible_text::{variation_selector, visible_chars};
 
 /// The repository of community portals on GitHub, as `owner/name`.
 pub const COMMUNITY_REPOSITORY: &str = "ai-job-search-dev/community-portals";
@@ -116,11 +116,10 @@ fn clean_sentence(sentence: Option<&str>) -> Option<String> {
 }
 
 /// `text` on one line: a line break or other space becomes one space, then hidden characters and variation selectors
-/// go, and it keeps at most `limit` characters with no space at either end. A variation selector passes `visible_chars`,
-/// but after a letter it shows nothing and can carry a payload.
+/// go, as `all_visible` refuses them, and it keeps at most `limit` characters with no space at either end.
 fn one_line(text: &str, limit: usize) -> String {
     let spaced: String = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).collect();
-    let visible: String = visible_chars(&spaced).filter(|c| !matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')).collect();
+    let visible: String = visible_chars(&spaced).filter(|&c| !variation_selector(c)).collect();
     let joined = visible.split_whitespace().collect::<Vec<_>>().join(" ");
     joined.chars().take(limit).collect::<String>().trim_end().to_owned()
 }

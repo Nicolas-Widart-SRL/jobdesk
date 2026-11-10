@@ -1,3 +1,4 @@
+use crate::portals::domain::manifest::enabled_line;
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::file_text::BOM;
 
@@ -93,21 +94,6 @@ fn lines(text: &str) -> Vec<(&str, &str)> {
         rest = &rest[end..];
     }
     lines
-}
-
-/// A top-level `enabled` line, as `parse_manifest` finds one, split in three: the key, the colon and the space after it,
-/// then the value, then the space after the value and any comment. A `#` after a space or a tab opens a comment.
-fn enabled_line(line: &str) -> Option<(&str, &str, &str)> {
-    let colon = line.find(':')?;
-    if line[..colon].trim_end() != "enabled" {
-        return None;
-    }
-    let after = &line[colon + 1..];
-    let comment = after.char_indices().find(|&(at, c)| c == '#' && (at == 0 || after[..at].ends_with([' ', '\t'])));
-    let before_comment = &after[..comment.map_or(after.len(), |(at, _)| at)];
-    let value = before_comment.trim();
-    let start = colon + 1 + if value.is_empty() { before_comment.len() } else { before_comment.len() - before_comment.trim_start().len() };
-    Some((&line[..start], value, &line[start + value.len()..]))
 }
 
 #[cfg(test)]

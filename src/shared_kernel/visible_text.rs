@@ -19,11 +19,16 @@ pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
-/// Whether every character of `text` shows: `visible_chars` keeps them all, and none is a variation selector, which
-/// passes `visible_chars` but after a letter shows nothing and can carry a payload. A line break does not show.
+/// Whether every character of `text` shows: `visible_chars` keeps them all, and none is a variation selector. A line
+/// break does not show.
 pub fn all_visible(text: &str) -> bool {
-    let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}');
-    visible_chars(text).eq(text.chars()) && !text.chars().any(selector)
+    visible_chars(text).eq(text.chars()) && !text.chars().any(variation_selector)
+}
+
+/// Whether `c` is a variation selector. One passes `visible_chars`, because an emoji or a CJK character needs it, but
+/// after a letter it shows nothing and can carry a payload.
+pub fn variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
 fn hidden(c: char) -> bool {

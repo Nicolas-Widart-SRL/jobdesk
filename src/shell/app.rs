@@ -323,10 +323,14 @@ impl Shell {
         self.snapshot.portals.set_community(&hints);
     }
 
-    /// `now` in UTC, as the community list keeps its times.
+    /// Now in UTC, as the community list keeps its times: the system's clock, or a test's clock read as local time. The
+    /// wall clock is never turned back into UTC, because in the hour repeated when clocks go back it would read an hour
+    /// early, and a list just read would look as if it came from the future.
     fn now_utc(&self) -> DateTime<Utc> {
-        let now = self.now();
-        Local.from_local_datetime(&now).earliest().map_or_else(|| now.and_utc(), |local| local.to_utc())
+        match self.now {
+            Some(now) => Local.from_local_datetime(&now).earliest().map_or_else(|| now.and_utc(), |local| local.to_utc()),
+            None => Utc::now(),
+        }
     }
 
     /// The first run: no folder is open yet.
@@ -1869,6 +1873,18 @@ mod tests {
     use crate::runs::application::{AgentGateway, AgentSession, Decision, EventSink, Prompt, RunRequest, StartOptions};
     use crate::settings::application::{Preferences, ThemeChoice};
     use crate::workspace::application::{ToolProber, ToolSpec};
+
+    /// Without a test clock, the community list's times count from the system's UTC clock, never from the wall clock
+    /// turned back, which reads an hour early in the hour repeated when clocks go back. A test clock reads as local time.
+    #[test]
+    fn utc_now_is_the_systems_clock() {
+        let shell = Shell::without_workspace(NaiveDate::from_ymd_opt(2026, 10, 25).unwrap());
+        let (before, now, after) = (Utc::now(), shell.now_utc(), Utc::now());
+        assert!(before <= now && now <= after, "{before} {now} {after}");
+        let wall = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap().and_hms_opt(12, 0, 0).unwrap();
+        let fixed = Shell::without_workspace(wall.date()).with_now(wall);
+        assert_eq!(fixed.now_utc(), Local.from_local_datetime(&wall).single().unwrap().to_utc());
+    }
 
     /// Every tool answers, so launching asks no real program.
     struct AllTools;

@@ -7077,8 +7077,9 @@ fn the_portals_tab_sits_between_profile_and_setup() {
     let mut shell = probed(shell(Screen::Portals, "portals_tab_order"), FixedTools);
     let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     settle(&mut harness);
+    // The menu's tabs come first, then the screen's own three.
     let tabs: Vec<(String, f32)> =
-        harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| (tab.accesskit_node().label().unwrap_or_default(), tab.rect().left())).collect();
+        harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| (tab.accesskit_node().label().unwrap_or_default(), tab.rect().left())).take(8).collect();
     let names: Vec<&str> = tabs.iter().map(|(label, _)| label.split(',').next().unwrap_or_default()).collect();
     assert_eq!(names, ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Portals", "Setup"]);
     assert!(tabs.windows(2).all(|pair| pair[0].1 < pair[1].1), "{tabs:?}");
@@ -7274,7 +7275,10 @@ fn no_portal_installed_says_so() {
     assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. None installed."));
 }
 
+/// The sample on Portals as the canvas draws it: the community list saved 12 minutes ago, so the portal installed from
+/// it reads Community.
 fn render_portals(shell: Shell, pick: Option<&str>, theme: Theme) -> Harness<'static> {
+    let shell = listed(shell, Some(community_list(minutes_ago(12))), vec![]);
     let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
     if let Some(spoken) = pick {
         pick_portal(&mut harness, spoken);
@@ -7387,4 +7391,353 @@ fn a_change_asked_for_while_a_run_works_writes_nothing() {
     harness.run_steps(3);
     assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
     assert!(harness.query_all_by_label(PORTALS_BUSY).count() > 0, "the detail says why");
+}
+
+// Browse community and Add a portal.
+
+use jobdesk::portals::application::{CommunityFailure, CommunityList, CountryCode, FolderName, GitSha, ListedPortal, parse_codeowners};
+
+/// The wall clock Browse counts ages to.
+fn browse_now() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(15, 20, 0).unwrap()
+}
+
+/// `browse_now` in UTC, as the shell takes it, so every age and time on screen is the same wherever the tests run.
+fn browse_utc() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Local.from_local_datetime(&browse_now()).earliest().unwrap().to_utc()
+}
+
+fn minutes_ago(minutes: i64) -> chrono::DateTime<chrono::Utc> {
+    browse_utc() - chrono::TimeDelta::minutes(minutes)
+}
+
+fn listed_portal(country: &str, folder: &str, name: &str, sentence: &str) -> ListedPortal {
+    let sha = GitSha::parse(&"0".repeat(40)).unwrap();
+    ListedPortal::from_parts(CountryCode::parse(country).unwrap(), FolderName::parse(folder).unwrap(), sha, name, Some(sentence)).unwrap()
+}
+
+/// A fictional community list with made-up owners. Three of its portals are installed in the sample, and the sample's
+/// Location is in Belgium.
+fn community_list(saved_at: chrono::DateTime<chrono::Utc>) -> CommunityList {
+    CommunityList {
+        saved_at,
+        portals: vec![
+            listed_portal("be", "samplefreelance-search", "Sample Freelance Board", "Freelance missions posted by Belgian agencies."),
+            listed_portal("global", "freehire-search", "Freehire", "Gathers postings from many job sites into one search."),
+            listed_portal("global", "linkedin-search", "LinkedIn", "Public job listings on LinkedIn, in any country."),
+            listed_portal("global", "sampleremote-search", "Sample Remote Board", "Remote jobs from small companies, worldwide."),
+            listed_portal("dk", "jobindex-search", "Jobindex", "The largest Danish job board, every sector."),
+            listed_portal("dk", "jobnet-search", "Jobnet", "Listings from the Danish public job service."),
+            listed_portal("dk", "sampletechdk-search", "Sample Tech Jobs DK", "IT and engineering roles in Copenhagen and Aarhus."),
+        ],
+        codeowners: parse_codeowners(
+            "* @board-crew @portal-keeper\n/portals/be/samplefreelance-search/ @portal-keeper\n/portals/global/freehire-search/ @remote-scout\n/portals/global/sampleremote-search/ @remote-scout # unmaintained since 2026-05\n/portals/dk/sampletechdk-search/ @board-crew\n",
+        ),
+        codeowners_sha: None,
+    }
+}
+
+/// `shell` on the Browse clock, reading the community list from `saved`, then from `answers` one read at a time.
+fn listed(shell: Shell, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>) -> Shell {
+    shell.with_now(browse_now()).with_community(jobdesk::portals::scripted_community(saved, answers))
+}
+
+/// The sample on Portals with `saved` and `answers`, its tools checked.
+fn browse_shell(name: &str, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>) -> Shell {
+    listed(probed(shell(Screen::Portals, name), FixedTools), saved, answers)
+}
+
+fn open_segment(harness: &mut Harness, label: &str) {
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, label).click();
+    harness.run_steps(3);
+}
+
+const INSTALL_PROMPT: &str = "Copy https://github.com/ai-job-search-dev/community-portals/tree/main/portals/global/sampleremote-search into `.agents/skills/`. Read its code and tell me what it does. Then ask me before you run `python3 tools/install_portal_clis.py`.";
+const NO_LIST: &str = "The community list could not be read";
+const READING_LIST: &str = "Reading the list from GitHub…";
+
+/// A portal the community list holds reads Community, with the list's country. Without the list it reads Made by you.
+#[test]
+fn a_portal_from_the_community_list_reads_community() {
+    let mut harness = tray_harness(shell(Screen::Portals, "portals_community_tag_none"));
+    pick_portal(&mut harness, "Sample Freelance Board");
+    assert!(harness.query_all_by_label("Made by you").count() > 0);
+    assert!(harness.query_by_label("Community").is_none());
+
+    let mut harness = tray_harness(browse_shell("portals_community_tag", Some(community_list(minutes_ago(12))), vec![]));
+    pick_portal(&mut harness, "Sample Freelance Board, Belgium");
+    assert!(harness.query_all_by_label("Community").count() > 0);
+    assert!(harness.query_all_by_label("Made by you").count() > 0, "Northfield Jobs is not on the list");
+}
+
+/// The list groups by country, the user's market first, then Worldwide, then by name, and says what is installed.
+#[test]
+fn browse_puts_your_market_first_and_marks_what_is_installed() {
+    let mut harness = tray_harness(browse_shell("portals_browse_order", Some(community_list(minutes_ago(12))), vec![]));
+    open_segment(&mut harness, "Browse community");
+    let top = |label: &str| harness.get_by_label(label).rect().top();
+    assert!(top("Belgium") < top("Worldwide") && top("Worldwide") < top("Denmark"));
+    assert!(is_shown(&harness, "your market"));
+    assert!(is_shown(&harness, "From GitHub, updated 12 min ago"));
+    assert_eq!(harness.query_all_by_label("Installed").count(), 5);
+    assert_eq!(harness.query_all_by_label("Install…").count(), 2);
+    assert!(is_shown(&harness, "Unmaintained since 2026-05"));
+    assert!(harness.query_all_by_label("@board-crew, @portal-keeper").count() > 0, "owners are words");
+}
+
+/// The search keeps the portals whose name, country or sentence holds it.
+#[test]
+fn the_search_filters_the_community_list() {
+    let mut harness = tray_harness(browse_shell("portals_browse_search", Some(community_list(minutes_ago(12))), vec![]));
+    open_segment(&mut harness, "Browse community");
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("remote");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"));
+    for gone in ["Jobnet", "Sample Freelance Board", "Denmark"] {
+        assert!(harness.query_by_label(gone).is_none(), "{gone} is filtered out");
+    }
+}
+
+/// Install… opens the launcher on the task in plain words, built from the folder alone, and starts nothing.
+#[test]
+fn install_opens_the_plain_words_task_and_starts_nothing() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_install", Some(community_list(minutes_ago(12))), vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = tray_harness(shell);
+    open_segment(&mut harness, "Browse community");
+    harness.get_all_by_label("Install…").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "the launcher opens on a task in plain words");
+    assert!(is_shown(&harness, INSTALL_PROMPT));
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+}
+
+/// View code ↗ opens only on click, and only the address Jobdesk builds from the portal's country and folder, whatever
+/// the list's words say.
+#[test]
+fn view_code_opens_the_address_built_from_the_folder() {
+    let mut list = community_list(minutes_ago(12));
+    list.portals = vec![listed_portal("be", "samplefreelance-search", "Board https://tracker.example/x", "See https://tracker.example/y for more.")];
+    let mut shell = browse_shell("portals_view_code", Some(list), vec![]);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&opened);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| {
+        shell.show(ui);
+        let urls: Vec<String> = ui.ctx().output(|output| {
+            output.commands.iter().filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
+        });
+        seen.borrow_mut().extend(urls);
+    });
+    harness.run_steps(3);
+    open_segment(&mut harness, "Browse community");
+    harness.get_by_label("View code ↗").hover();
+    harness.run_steps(3);
+    assert!(opened.borrow().is_empty(), "nothing opens before a click");
+    harness.get_by_label("View code ↗").click();
+    harness.run_steps(3);
+    assert_eq!(*opened.borrow(), ["https://github.com/ai-job-search-dev/community-portals/tree/main/portals/be/samplefreelance-search"]);
+}
+
+/// Browse asks for the list once each time it comes on show, never on every frame: a read that failed stays failed until
+/// Try again, and opening Browse again reads once more.
+#[test]
+fn browse_reads_the_list_once_each_time_it_shows() {
+    let mut harness = tray_harness(browse_shell("portals_browse_once", None, vec![Err(CommunityFailure::Unreachable)]));
+    open_segment(&mut harness, "Browse community");
+    harness.run_steps(5);
+    assert!(is_shown(&harness, NO_LIST), "one read, which failed, and no other since");
+    assert!(!is_shown(&harness, READING_LIST));
+    open_segment(&mut harness, "Your portals  6");
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, READING_LIST), "shown again, it reads again");
+}
+
+/// GitHub's rate limit keeps the saved list, and Try again waits until its reset.
+#[test]
+fn a_rate_limit_holds_try_again_until_its_reset() {
+    let until = browse_utc() + chrono::TimeDelta::minutes(20);
+    let answers = vec![Err(CommunityFailure::Limited { until })];
+    let mut harness = tray_harness(browse_shell("portals_browse_limited", Some(community_list(minutes_ago(130))), answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, "GitHub asks Jobdesk to wait before it looks again."));
+    assert!(harness.query_by_label_contains("Try again after 15:40.").is_some());
+    assert!(harness.get_by_label("Try again").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "Sample Remote Board"), "the saved list stays");
+
+    let past = vec![Err(CommunityFailure::Limited { until: browse_utc() - chrono::TimeDelta::minutes(1) })];
+    let mut harness = tray_harness(browse_shell("portals_browse_limit_over", Some(community_list(minutes_ago(130))), past));
+    open_segment(&mut harness, "Browse community");
+    assert!(!harness.get_by_label("Try again").accesskit_node().is_disabled(), "the reset has passed");
+}
+
+/// A 403 or 429 without GitHub's limit still asks Jobdesk to wait, so Try again waits a minute.
+#[test]
+fn a_bare_refusal_holds_try_again_for_a_minute() {
+    let answers = vec![Err(CommunityFailure::Refused(429))];
+    let mut harness = tray_harness(browse_shell("portals_browse_refused", Some(community_list(minutes_ago(130))), answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(harness.get_by_label("Try again").accesskit_node().is_disabled());
+    assert!(harness.query_by_label_contains("Try again after 15:21.").is_some());
+}
+
+/// With no saved list and none read, the screen says so, with Try again and the list on GitHub.
+#[test]
+fn no_list_offers_try_again_and_github() {
+    let mut harness = tray_harness(browse_shell("portals_browse_none", None, vec![Err(CommunityFailure::TimedOut), Ok(community_list(browse_utc()))]));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, NO_LIST));
+    assert!(is_shown(&harness, "Open the list on GitHub ↗"));
+    harness.get_all_by_label("Try again").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "From GitHub, updated just now"));
+    assert!(is_shown(&harness, "Sample Remote Board"));
+}
+
+/// With no portal installed, Browse community and Add a portal open their views.
+#[test]
+fn no_portals_yet_leads_to_browse_and_add() {
+    let shell = portals_shell_with("portals_none_leads", |root| fs::remove_dir_all(root.join(".agents/skills")).unwrap());
+    let mut harness = tray_harness(listed(probed(shell, FixedTools), Some(community_list(minutes_ago(12))), vec![]));
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Browse community").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"));
+    assert!(harness.query_by_label("Installed").is_none(), "none is installed");
+    open_segment(&mut harness, "Your portals  0");
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Add a portal").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "A job board Claude should search"));
+}
+
+/// The four fields of Add a portal, in order: website, country, language and test title.
+fn type_answers(harness: &mut Harness, answers: [&str; 4]) {
+    for (at, answer) in answers.into_iter().enumerate() {
+        if answer.is_empty() {
+            continue;
+        }
+        let field = harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(at).unwrap();
+        field.focus();
+        field.type_text(answer);
+        harness.run_steps(2);
+    }
+    harness.run_steps(3);
+}
+
+const FILLED_LINE: &str = "/add-portal https://jobs.sample-board.example country: Belgium, language: French, test title: Lead Backend Engineer";
+
+/// Build it with Claude… waits for a web address, and says why beside it.
+#[test]
+fn build_it_waits_for_a_web_address() {
+    let mut harness = tray_harness(browse_shell("portals_add_waits", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    let build = |harness: &Harness| harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled();
+    assert!(build(&harness));
+    assert!(is_shown(&harness, "Type the board’s website first."));
+    type_answers(&mut harness, ["jobs sample board", "", "", ""]);
+    assert!(build(&harness));
+    assert!(is_shown(&harness, "Type a web address first."));
+    assert!(is_shown(&harness, "This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be."));
+}
+
+/// A field holding a character that shows nothing makes no line, and says which field.
+#[test]
+fn build_it_refuses_hidden_characters() {
+    let mut harness = tray_harness(browse_shell("portals_add_hidden", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.sample-board.example", "Bel\u{200B}gium", "", ""]);
+    assert!(harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled());
+    assert!(harness.query_all_by_label("The country holds characters that do not show. Type it again by hand.").count() > 0);
+}
+
+/// Build it with Claude… opens the launcher on `/add-portal` with the answers on its line, and starts nothing.
+#[test]
+fn build_it_opens_add_portal_with_the_answers() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_add_build", None, vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = tray_harness(shell);
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.sample-board.example", "Belgium", "French", "Lead Backend Engineer"]);
+    assert!(is_shown(&harness, FILLED_LINE), "the command shows");
+    harness.get_by_label("Build it with Claude…").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label(FILLED_LINE).count() > 0, "on the line the task runs");
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+}
+
+fn render_browse(name: &str, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>, theme: Theme) -> Harness<'static> {
+    let mut harness = probed_wgpu(browse_shell(name, saved, answers), theme);
+    open_segment(&mut harness, "Browse community");
+    harness
+}
+
+#[test]
+fn portals_browse_light() {
+    let name = "portals_browse_light";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_dark() {
+    let name = "portals_browse_dark";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Dark), name);
+}
+
+#[test]
+fn portals_browse_loading_light() {
+    let name = "portals_browse_loading_light";
+    compare(&mut render_browse(name, None, vec![], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_offline_light() {
+    let name = "portals_browse_offline_light";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(25 * 60 + 18))), vec![Err(CommunityFailure::Unreachable)], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_limited_light() {
+    let name = "portals_browse_limited_light";
+    let answers = vec![Err(CommunityFailure::Limited { until: browse_utc() + chrono::TimeDelta::minutes(20) })];
+    let mut harness = render_browse(name, Some(community_list(minutes_ago(12))), answers, Theme::Light);
+    harness.get_by_label("Refresh").click();
+    harness.run_steps(3);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_browse_nocache_light() {
+    let name = "portals_browse_nocache_light";
+    compare(&mut render_browse(name, None, vec![Err(CommunityFailure::Unreachable)], Theme::Light), name);
+}
+
+fn render_add(name: &str, answers: [&str; 4]) {
+    let mut harness = probed_wgpu(browse_shell(name, None, vec![]), Theme::Light);
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, answers);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_add_empty_light() {
+    render_add("portals_add_empty_light", ["", "", "", ""]);
+}
+
+#[test]
+fn portals_add_filled_light() {
+    render_add("portals_add_filled_light", ["https://jobs.sample-board.example", "Belgium", "French", "Lead Backend Engineer"]);
+}
+
+#[test]
+fn portals_add_partial_light() {
+    render_add("portals_add_partial_light", ["https://jobs.sample-board.example", "Belgium", "", ""]);
+}
+
+#[test]
+fn portals_add_invalid_light() {
+    render_add("portals_add_invalid_light", ["jobs sample board", "Belgium", "French", "Lead Backend Engineer"]);
 }

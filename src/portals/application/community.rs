@@ -95,12 +95,15 @@ impl Community {
     }
 
     /// Takes the answers that arrived by `now`. A failure keeps the saved list. A 403 or 429 that is not the rate limit
-    /// still means wait, so no read starts for a minute after it, as GitHub advises.
-    pub fn poll(&mut self, now: DateTime<Utc>) {
+    /// still means wait, so no read starts for a minute after it, as GitHub advises. Returns whether a new list came,
+    /// so the installed portals can be named from it again.
+    pub fn poll(&mut self, now: DateTime<Utc>) -> bool {
+        let mut listed = false;
         while let Some(answer) = self.source.poll() {
             self.reading = false;
             match answer {
                 Ok(list) => {
+                    listed = true;
                     self.list = Some(list);
                     self.failure = None;
                     self.wait_until = None;
@@ -115,6 +118,7 @@ impl Community {
                 }
             }
         }
+        listed
     }
 
     /// `installed` holds the installed portals' folder names. `market` is the user's country, such as Belgium, whose

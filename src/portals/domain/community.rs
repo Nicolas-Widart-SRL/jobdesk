@@ -69,6 +69,11 @@ pub fn code_url(country: &CountryCode, folder: &FolderName) -> String {
     format!("https://github.com/{COMMUNITY_REPOSITORY}/tree/main/portals/{}/{}", country.as_str(), folder.as_str())
 }
 
+/// The address of the community list's portals on GitHub, for when Jobdesk could not read it.
+pub fn list_url() -> String {
+    format!("https://github.com/{COMMUNITY_REPOSITORY}/tree/main/portals")
+}
+
 /// The task Install… opens in the launcher, in plain words on one line, built only from validated parts.
 /// Claude copies the folder, explains its code, and asks before it installs the portal's command-line tools.
 pub fn install_prompt(country: &CountryCode, folder: &FolderName) -> String {

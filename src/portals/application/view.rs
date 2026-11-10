@@ -75,25 +75,33 @@ impl PortalsView {
             jobs_found: self.portals.iter().map(|portal| portal.jobs.map(|(count, _)| count)).sum(),
         }
     }
+
+    /// Names each portal's origin and country again from `community`, the community list's folders, each with its
+    /// country, as `Community::installed_hints` gives them. The shell holds that list apart from the folder's snapshot,
+    /// so it names it on each snapshot it takes and each time the list changes.
+    pub fn set_community(&mut self, community: &[(String, String)]) {
+        for portal in &mut self.portals {
+            (portal.origin, portal.country) = origin(&portal.folder, community);
+        }
+    }
+
+    /// The installed portals' folder names, so the community list can say which of its portals are installed.
+    pub fn folders(&self) -> Vec<&str> {
+        self.portals.iter().map(|portal| portal.folder.as_str()).collect()
+    }
 }
 
-/// `installed` holds each portal's folder and manifest. `board` is `None` when the saved jobs could not be read.
-/// `community` holds the community list's folders, each with its country.
-pub fn portals_view(
-    installed: Result<Vec<(String, Manifest)>, LoadError>,
-    plan: Result<SearchPlan, LoadError>,
-    board: Option<&JobBoard>,
-    community: &[(String, String)],
-) -> PortalsView {
+/// `installed` holds each portal's folder and manifest. `board` is `None` when the saved jobs could not be read. No
+/// portal reads Community until `set_community` names the community list.
+pub fn portals_view(installed: Result<Vec<(String, Manifest)>, LoadError>, plan: Result<SearchPlan, LoadError>, board: Option<&JobBoard>) -> PortalsView {
     let (installed_read, plan_read) = (installed.is_ok(), plan.is_ok());
-    let mut portals: Vec<PortalView> =
-        installed.unwrap_or_default().into_iter().map(|(folder, manifest)| portal_view(folder, manifest, board, community)).collect();
+    let mut portals: Vec<PortalView> = installed.unwrap_or_default().into_iter().map(|(folder, manifest)| portal_view(folder, manifest, board)).collect();
     portals.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.folder.cmp(&b.folder)));
     PortalsView { portals, installed_read, plan: plan.unwrap_or_default(), plan_read }
 }
 
-fn portal_view(folder: String, manifest: Manifest, board: Option<&JobBoard>, community: &[(String, String)]) -> PortalView {
-    let (origin, country) = origin(&folder, community);
+fn portal_view(folder: String, manifest: Manifest, board: Option<&JobBoard>) -> PortalView {
+    let (origin, country) = origin(&folder, &[]);
     let badges = [(manifest.needs_key, Badge::NeedsKey), (manifest.personal_use, Badge::PersonalUse)];
     PortalView {
         name: manifest.name,
@@ -139,7 +147,7 @@ mod tests {
 
     #[test]
     fn portals_sort_by_name_and_carry_what_they_say() {
-        let view = portals_view(sample(), Ok(SearchPlan::default()), Some(&jobs_board()), &[]);
+        let view = portals_view(sample(), Ok(SearchPlan::default()), Some(&jobs_board()));
         let names: Vec<&str> = view.portals.iter().map(|portal| portal.name.as_str()).collect();
         assert_eq!(names, ["alder", "LinkedIn", "Northfield"]);
         let linkedin = &view.portals[1];
@@ -155,7 +163,7 @@ mod tests {
 
     #[test]
     fn only_plain_folder_names_are_safe() {
-        let view = portals_view(sample(), Ok(SearchPlan::default()), None, &[]);
+        let view = portals_view(sample(), Ok(SearchPlan::default()), None);
         let safe: Vec<(&str, bool)> = view.portals.iter().map(|portal| (portal.folder.as_str(), portal.safe_name)).collect();
         assert_eq!(safe, [("-odd name", false), ("linkedin-search", true), ("northfield-search", true)]);
         assert!(!safe_name("-search") && !safe_name("") && !safe_name("north;rm") && safe_name("north_2.v-search"));
@@ -163,7 +171,7 @@ mod tests {
 
     #[test]
     fn only_a_safe_folder_gets_its_own_check_line() {
-        let view = portals_view(sample(), Ok(SearchPlan::default()), None, &[]);
+        let view = portals_view(sample(), Ok(SearchPlan::default()), None);
         let lines: Vec<Option<String>> = view.portals.iter().map(PortalView::check_line).collect();
         assert_eq!(lines, [None, Some("/scrape health linkedin-search".into()), Some("/scrape health northfield-search".into())]);
     }
@@ -179,15 +187,17 @@ mod tests {
     #[test]
     fn community_hints_name_the_origin_and_country() {
         let community = [("northfield-search".to_owned(), "Belgium".to_owned())];
-        let view = portals_view(sample(), Ok(SearchPlan::default()), None, &community);
+        let mut view = portals_view(sample(), Ok(SearchPlan::default()), None);
+        assert_eq!(view.portals[2].origin, Origin::MadeByYou);
+        view.set_community(&community);
         assert_eq!((view.portals[2].origin, view.portals[2].country.as_deref()), (Origin::Community, Some("Belgium")));
     }
 
     #[test]
     fn the_summary_counts_portals_on_and_every_portals_jobs() {
-        let view = portals_view(sample(), Ok(SearchPlan::default()), Some(&jobs_board()), &[]);
+        let view = portals_view(sample(), Ok(SearchPlan::default()), Some(&jobs_board()));
         assert_eq!(view.summary(), PortalSummary { on: 2, total: 3, jobs_found: Some(3) }, "an off portal's jobs count too");
-        let unread = portals_view(sample(), Ok(SearchPlan::default()), None, &[]);
+        let unread = portals_view(sample(), Ok(SearchPlan::default()), None);
         assert_eq!(unread.summary().jobs_found, None);
         assert!(unread.portals.iter().all(|portal| portal.jobs.is_none()));
     }
@@ -195,7 +205,7 @@ mod tests {
     #[test]
     fn a_failed_read_is_not_an_empty_list() {
         let error = || LoadError::new(".agents/skills", "permission denied");
-        let view = portals_view(Err(error()), Err(error()), None, &[]);
+        let view = portals_view(Err(error()), Err(error()), None);
         assert!(view.portals.is_empty());
         assert!(!view.installed_read && !view.plan_read);
     }

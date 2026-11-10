@@ -1,3 +1,4 @@
+mod add_line;
 mod built_in;
 mod community;
 mod countries;
@@ -5,10 +6,11 @@ mod manifest;
 mod search_plan;
 mod switch;
 
+pub use add_line::{ADD_PORTAL, AddError, AddField, add_portal_line};
 pub use built_in::{BUILT_IN, Origin, origin};
 pub use community::{
     COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, CountryCode, FolderName, GitSha, ListedPortal, REFUSAL_WAIT, code_url,
-    install_prompt, parse_codeowners, parse_tree_path,
+    install_prompt, list_url, parse_codeowners, parse_tree_path,
 };
 pub use countries::country_name;
 pub use manifest::{Manifest, Quotes, parse_manifest};

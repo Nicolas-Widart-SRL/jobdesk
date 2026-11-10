@@ -7,7 +7,7 @@ pub use community::{Community, CommunityPortalView, CommunityState, CommunityVie
 pub use view::{Badge, CHECK_ALL_LINE, PortalSummary, PortalView, PortalsView, SEARCH_TERMS_LINE, portals_view};
 
 pub use crate::portals::domain::{
-    BUILT_IN, CommunityFailure, CommunityList, CountryCode, FolderName, GitSha, ListedPortal, Origin, Phrase, Priority, Quotes, SearchPlan, Term,
-    parse_codeowners, site_lines_for, term_as_sent,
+    ADD_PORTAL, AddError, AddField, BUILT_IN, CommunityFailure, CommunityList, CountryCode, FolderName, GitSha, ListedPortal, Origin, Phrase, Priority, Quotes,
+    SearchPlan, Term, add_portal_line, list_url, parse_codeowners, site_lines_for, term_as_sent,
 };
 pub use crate::portals::domain::{ChangeError, PortalStore};

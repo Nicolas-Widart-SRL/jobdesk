@@ -7,7 +7,7 @@ use crate::runs::application::{
     spec_for_line, start_values, task_start_values,
 };
 use crate::shared_kernel::ModelChoice;
-use crate::shared_kernel::visible_text::visible_chars;
+use crate::shared_kernel::visible_text::all_visible;
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, link, muted, page_body, page_head,
@@ -80,9 +80,7 @@ impl Launcher {
     pub fn prefill(&mut self, line: &str) -> bool {
         let line = line.trim();
         if !line.is_empty() && !line.starts_with('/') {
-            // Variation selectors pass `visible_chars`, but after a letter they show nothing and can carry a payload.
-            let selector = |c| matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}');
-            if !visible_chars(line).eq(line.chars()) || line.chars().any(selector) {
+            if !all_visible(line) {
                 return false;
             }
             *self = Self { words: Some(line.to_owned()), ..Self::default() };
@@ -116,7 +114,7 @@ impl Launcher {
     }
 
     /// What Run sends: the task in plain words, or the command line the form composes.
-    fn line(&self) -> String {
+    pub(crate) fn line(&self) -> String {
         match self.words() {
             Some(words) => words.to_owned(),
             None => compose_line(self.command, |field| self.value_of(field)),

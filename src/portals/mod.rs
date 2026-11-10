@@ -23,7 +23,7 @@ pub fn load(root: &Path, board: Option<&JobBoard>) -> (PortalsView, Option<LoadE
     let folder = PortalFolder::in_workspace(root);
     let installed = folder.installed();
     let error = installed.as_ref().err().cloned();
-    (portals_view(installed, folder.search_plan(), board, &[]), error)
+    (portals_view(installed, folder.search_plan(), board), error)
 }
 
 /// The community list from GitHub, without sign-in. `data` is the app's data folder: the list read last is saved in its

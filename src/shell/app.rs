@@ -5,7 +5,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use egui::{Align, Frame, Label, Layout, Margin, Panel, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::discovery::application::hidden_total;
@@ -18,8 +18,8 @@ use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
 use crate::portals;
-use crate::portals::application::PortalChanges;
-use crate::portals::ui::{PortalsRequest, PortalsScreen};
+use crate::portals::application::{Community, PortalChanges};
+use crate::portals::ui::{BrowseContext, PortalsRequest, PortalsScreen};
 use crate::profile;
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
@@ -181,6 +181,9 @@ pub struct Shell {
     portal_changes: Option<PortalChanges>,
     /// When the portals were last read back, after a switch or a removal, so a snapshot read before it cannot undo it on screen.
     portals_changed: Option<Instant>,
+    /// The community portal list from GitHub, with the copy saved in the data folder. Reading it is not a run: no Claude,
+    /// no run log, nothing counted in Usage. It names the installed portals that came from it, on every snapshot.
+    community: Community,
     /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
     /// take the focus.
     away: Option<(Pending, bool)>,
@@ -272,6 +275,8 @@ impl Shell {
             portals_screen: PortalsScreen::default(),
             portal_changes: None,
             portals_changed: None,
+            // A list that never answers, so a preview or a test never reaches the network.
+            community: portals::scripted_community(None, Vec::new()),
             away: None,
             quit_after: false,
             quit_agreed: false,
@@ -302,6 +307,26 @@ impl Shell {
     /// Switches portals and moves them to the Trash through `changes`, such as a fake store, for tests.
     pub fn with_portal_changes(self, changes: PortalChanges) -> Self {
         Self { portal_changes: Some(changes), ..self }
+    }
+
+    /// Reads the community list through `community`, such as a scripted one, for tests and snapshots. The installed
+    /// portals it holds read Community at once.
+    pub fn with_community(self, community: Community) -> Self {
+        let mut shell = Self { community, ..self };
+        shell.name_community_portals();
+        shell
+    }
+
+    /// Names the installed portals that came from the community list, with their country, on the snapshot shown.
+    fn name_community_portals(&mut self) {
+        let hints = self.community.installed_hints();
+        self.snapshot.portals.set_community(&hints);
+    }
+
+    /// `now` in UTC, as the community list keeps its times.
+    fn now_utc(&self) -> DateTime<Utc> {
+        let now = self.now();
+        Local.from_local_datetime(&now).earliest().map_or_else(|| now.and_utc(), |local| local.to_utc())
     }
 
     /// The first run: no folder is open yet.
@@ -444,11 +469,14 @@ impl Shell {
             Some(folder) => updates::github(&folder, env!("CARGO_PKG_VERSION"), updates::install_block(), auto, wake),
             None => updates::idle_updates(env!("CARGO_PKG_VERSION"), auto),
         };
-        Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates) }
+        let repaint = ctx.clone();
+        let make_community = move |data: &Path| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
+        Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) }
     }
 
-    /// `start` with the tool check, the providers and the updates given, so tests can launch without asking real tools,
-    /// the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
+    /// `start` with the tool check, the providers, the updates and the community list given, so tests can launch without
+    /// asking real tools, the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
+    /// `make_community` takes the data folder, where the list read last is saved.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
     fn launch(
         ctx: &egui::Context,
@@ -457,6 +485,7 @@ impl Shell {
         mut environment: EnvironmentChecks,
         providers: Providers,
         make_updates: impl FnOnce(bool) -> Updates,
+        make_community: impl FnOnce(&Path) -> Community,
     ) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
@@ -477,7 +506,9 @@ impl Shell {
         }
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
+        let community = data.as_deref().map_or_else(|| portals::scripted_community(None, Vec::new()), make_community);
         let mut shell = Self {
+            community,
             data,
             environment: Some(environment),
             settings,
@@ -643,6 +674,9 @@ impl Shell {
             environment.poll();
         }
         self.follow_updates(ui.ctx(), now);
+        if self.community.poll(self.now_utc()) {
+            self.name_community_portals();
+        }
         // Cmd + and Cmd − move the zoom on any screen, and the text size follows.
         settings::ui::follow_zoom(ui.ctx(), &mut self.settings);
         self.handle_shortcuts_and_quit(ui.ctx());
@@ -821,6 +855,7 @@ impl Shell {
         // A run that started before the folder was first read keeps the first snapshot as its start.
         let first = !self.loaded;
         self.snapshot = latest;
+        self.name_community_portals();
         self.loaded = true;
         if first && self.was_busy && self.run_ended.is_none() {
             self.marks.begin(&self.snapshot.profile);
@@ -1140,6 +1175,7 @@ impl Shell {
     /// and a screen whose source failed hides its content instead of showing it empty.
     fn content(&mut self, ui: &mut Ui, queue: &Queue) {
         let failures = self.failures();
+        let (now, now_utc) = (self.now(), self.now_utc());
         let open_setup = Cell::new(false);
         // The alert leads to the tools: Setup while its tab shows, else Settings' Runtime status. Setup has no button to itself.
         let setup_tab = self.setup_tab();
@@ -1292,7 +1328,9 @@ impl Shell {
             }
             Screen::Portals => {
                 let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
-                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, busy) {
+                let market = profile::application::home_country(&snapshot.profile);
+                let browse = BrowseContext { community: &mut self.community, market: market.as_deref(), now, now_utc };
+                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, busy, browse) {
                     self.change_portals(request);
                 }
             }
@@ -1375,7 +1413,8 @@ impl Shell {
     fn read_back_portals(&mut self) {
         let Some(root) = self.workspace.as_ref() else { return };
         let jobs_failed = self.snapshot.issues.iter().any(|issue| issue.source == Source::Jobs);
-        let (view, error) = portals::load(root.path(), (!jobs_failed).then_some(&self.snapshot.board));
+        let (mut view, error) = portals::load(root.path(), (!jobs_failed).then_some(&self.snapshot.board));
+        view.set_community(&self.community.installed_hints());
         self.snapshot.workspace.set_portals(&view);
         self.snapshot.portals = view;
         self.snapshot.issues.retain(|issue| issue.source != Source::Portals);
@@ -1848,7 +1887,15 @@ mod tests {
     fn launch_with(ctx: &egui::Context, path: Option<PathBuf>, data: &Path, key: Option<&str>) -> Shell {
         let providers = settings::open_providers(settings::memory_keychain(key), settings::idle_tester());
         let checks = EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {}));
-        Shell::launch(ctx, path, Some(data.to_owned()), checks, providers, |auto| updates::idle_updates("0.1.0", auto))
+        Shell::launch(
+            ctx,
+            path,
+            Some(data.to_owned()),
+            checks,
+            providers,
+            |auto| updates::idle_updates("0.1.0", auto),
+            |_| portals::scripted_community(None, Vec::new()),
+        )
     }
 
     const FAKE_KEY: &str = "sk-ant-api03-FAKE-not-a-real-key-0000-R2kd";

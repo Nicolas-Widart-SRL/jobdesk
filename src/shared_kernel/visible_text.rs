@@ -19,6 +19,13 @@ pub fn visible_chars(line: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
+/// Whether every character of `text` shows: `visible_chars` keeps them all, and none is a variation selector, which
+/// passes `visible_chars` but after a letter shows nothing and can carry a payload. A line break does not show.
+pub fn all_visible(text: &str) -> bool {
+    let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}');
+    visible_chars(text).eq(text.chars()) && !text.chars().any(selector)
+}
+
 fn hidden(c: char) -> bool {
     matches!(
         c,
@@ -113,5 +120,13 @@ mod tests {
     #[test]
     fn tabs_stay_and_other_controls_go() {
         assert_eq!(clean("a\tb\nc\rd"), "a\tbcd");
+    }
+
+    #[test]
+    fn all_visible_refuses_what_shows_nothing() {
+        assert!(all_visible("Côte d’Ivoire, 東京 \u{2764}"));
+        for hidden in ["a\nb", "a\u{200B}b", "a\u{E0041}b", "a\u{FE0F}", "\u{8FBB}\u{E0100}", "\u{1b}[31ma"] {
+            assert!(!all_visible(hidden), "{hidden:?}");
+        }
     }
 }

@@ -199,13 +199,15 @@ TruffleHog scans the whole git history for secrets in CI, and fails on a verifie
 
 ## Agent team
 
-[AGENTS.md](AGENTS.md#team) describes the agent team. The main session runs as the `lead` agent in the main checkout only. Set it there in `.claude/settings.local.json`, which git ignores:
+[AGENTS.md](AGENTS.md#team) describes the agent team. The main session runs as the `lead` agent in the main checkout only. Add the `agent` key to `.claude/settings.local.json` there, which git ignores, and keep whatever else the file holds:
 
 ```json
 { "agent": "lead" }
 ```
 
 Never put it in `.claude/settings.json`. Every worktree holds that file, so a builder session started in a worktree would run as the lead, without the Edit tool.
+
+A branch cut before the setting left `.claude/settings.json` still holds it there. Rebase that branch onto `main` before a builder works on it.
 
 ## OpenSpec
 

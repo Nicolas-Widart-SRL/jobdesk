@@ -60,12 +60,12 @@ impl Snapshot {
         let mut issues = Vec::new();
         let terms = discovery::load_terms(root);
         let board = discovery::load_board(root, today, &terms.gates());
-        let (portals, errors) = portals::load(root, board.as_ref().ok());
+        let (portals, portals_error) = portals::load(root, board.as_ref().ok());
         let board = board.unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Jobs, error });
             JobBoard::default()
         });
-        issues.extend(errors.into_iter().map(|error| Issue { source: Source::Portals, error }));
+        issues.extend(portals_error.map(|error| Issue { source: Source::Portals, error }));
         let pipeline = tracking::load_pipeline(root, today).unwrap_or_else(|error| {
             issues.push(Issue { source: Source::Applications, error });
             Pipeline::default()
@@ -197,5 +197,17 @@ mod tests {
             snapshot.issues.iter().filter(|issue| issue.source == Source::Portals).map(|i| (i.source, i.error.source.as_str())).collect();
         assert_eq!(issues, [(Source::Portals, ".agents/skills")]);
         assert!(!snapshot.portals.installed_read);
+    }
+
+    /// The profile already reports a search file it cannot read, and Setup never shows the search terms, so the
+    /// portals only mark their plan unread.
+    #[test]
+    fn a_search_file_that_cannot_be_read_is_no_portals_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude/skills/job-scraper/search-queries.md")).unwrap();
+        let snapshot = Snapshot::load(dir.path(), NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+        assert!(snapshot.issues.iter().all(|issue| issue.source != Source::Portals), "{:?}", snapshot.issues);
+        assert!(!snapshot.portals.plan_read);
+        assert!(snapshot.portals.installed_read);
     }
 }

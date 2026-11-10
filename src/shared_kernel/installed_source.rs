@@ -47,16 +47,36 @@ pub fn write_into(staging: &Path, source: &InstalledSource, bytes: &[u8]) -> io:
 }
 
 /// The release `folder` was set up from and its zip's bytes. `None` when either file is missing, a link, or larger than
-/// it may be, when `.jobdesk` is a link, when the record does not read, or when the zip's SHA-256 is not the one the
-/// record holds.
+/// it may be, when `.jobdesk` is a link, when the record does not read, when its version is not exactly three numbers
+/// or its hash not 64 lowercase hex digits, or when the zip's SHA-256 is not the one the record holds.
+///
+/// Links are refused when looked at, with a short window before the open, and only the file name is opened without
+/// following a link on Unix. The record sits beside the zip, so the hash check catches a damaged copy, not a change by
+/// something that can write the folder, such as a run's tools. A caller that needs to trust the base must check it
+/// against the signed pin.
 pub fn read(folder: &Path) -> Option<(InstalledSource, Vec<u8>)> {
     let dir = folder.join(DIR);
     if !fs::symlink_metadata(&dir).ok()?.is_dir() {
         return None;
     }
     let record: InstalledSource = serde_json::from_slice(&read_file(&dir.join(RECORD), MAX_RECORD)?).ok()?;
+    if !plain_version(&record.version) || !lowercase_sha256(&record.sha256) {
+        return None;
+    }
     let bytes = read_file(&dir.join(ZIP), MAX_ZIP)?;
     (sha256_hex(&bytes) == record.sha256).then_some((record, bytes))
+}
+
+/// Exactly three dot-separated whole numbers, such as `1.7.5`: the pin's rule for a version, without its `v` prefix,
+/// which setup never writes. Written here because the shared kernel does not reach into the `updates` feature.
+fn plain_version(version: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()) && part.parse::<u32>().is_ok())
+}
+
+/// 64 lowercase hex digits: the pin's rule for a hash.
+fn lowercase_sha256(sha256: &str) -> bool {
+    sha256.len() == 64 && sha256.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Writes a new file of `bytes` at `path`, readable only by the user. A file or link already there fails it.
@@ -147,6 +167,26 @@ mod tests {
         fs::remove_file(folder.path().join(DIR).join(RECORD)).unwrap();
         assert_eq!(read(folder.path()), None);
         assert_eq!(read(tempfile::tempdir().unwrap().path()), None, "a folder with no .jobdesk");
+    }
+
+    #[test]
+    fn a_record_that_breaks_the_pin_rule_reads_as_none() {
+        let bytes = b"fictional release zip";
+        let hash = sha256_hex(bytes);
+        let with = |version: &str, sha256: &str| {
+            let folder = written(bytes);
+            let record = serde_json::json!({"version": version, "sha256": sha256});
+            fs::write(folder.path().join(DIR).join(RECORD), record.to_string()).unwrap();
+            read(folder.path())
+        };
+        assert!(with("1.7.5", &hash).is_some(), "the rule itself lets a plain record through");
+        for version in ["1.7", "1.7.5.0", "v1.7.5", "1.7.5-beta", "1..5", "../1.7.5", "1.7.5\n", "1.\u{202e}7.5", "1.7.99999999999", ""] {
+            assert_eq!(with(version, &hash), None, "version {version:?}");
+        }
+        let upper = hash.to_uppercase();
+        for sha256 in [&hash[..63], upper.as_str(), &format!("{hash}0"), &format!("{}g", &hash[..63])] {
+            assert_eq!(with("1.7.5", sha256), None, "hash {sha256:?}");
+        }
     }
 
     #[test]

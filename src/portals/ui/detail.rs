@@ -189,7 +189,7 @@ fn exact_phrases(quotes: Quotes) -> (&'static str, &'static str) {
         Quotes::Phrase => ("Yes.", "A term of two or more words goes in quotes, so the words stay together."),
         Quotes::AllWords => ("No.", "A term of two or more words goes in quotes, so the board finds every word, in any order."),
         Quotes::Ignored => ("No.", "The board ignores quotes, so Claude leaves them out."),
-        Quotes::Unknown => ("Not stated.", "The portal does not say how it reads quotes, so its searches show here without them."),
+        Quotes::Unknown => ("Not stated.", "The portal does not say how it reads quotes, so each term shows here as written."),
     }
 }
 
@@ -221,6 +221,16 @@ fn phrase_word(phrase: Phrase) -> &'static str {
         Phrase::Together => "These words together",
         Phrase::AnyOrder => "These words, in any order",
     }
+}
+
+/// A term as the portal receives it, and how it reads it. A portal that does not say how it reads quotes gets each term
+/// as written, with no word on how it reads it.
+fn shown_term(text: &str, quotes: Quotes) -> (String, Option<&'static str>) {
+    if quotes == Quotes::Unknown {
+        return (text.trim().to_owned(), None);
+    }
+    let (sent, phrase) = term_as_sent(text, quotes);
+    (sent, Some(phrase_word(phrase)))
 }
 
 /// The shared search terms by priority, each as this portal receives it, then the Google lines that name its site.
@@ -265,11 +275,13 @@ fn priority_terms(ui: &mut Ui, priority: &Priority, quotes: Quotes) {
         return;
     }
     for term in &priority.terms {
-        let (sent, phrase) = term_as_sent(&term.text, quotes);
+        let (sent, word) = shown_term(&term.text, quotes);
         Frame::new().inner_margin(Margin::symmetric(0, 5)).show(ui, |ui| {
             let width = ui.available_width();
             ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::right_to_left(Align::Center), |ui| {
-                desk_label(ui, phrase_word(phrase), Type::NOTE, Ink::Muted);
+                if let Some(word) = word {
+                    desk_label(ui, word, Type::NOTE, Ink::Muted);
+                }
                 if term.placeholder {
                     row_tag(ui, "To fill", Tone::Interview).on_hover_text(TO_FILL);
                 }
@@ -340,6 +352,15 @@ mod tests {
             quotes: Quotes::Ignored,
             safe_name: true,
         }
+    }
+
+    #[test]
+    fn a_portal_that_does_not_say_how_it_reads_quotes_shows_each_term_as_written() {
+        assert_eq!(shown_term("Platform Lead", Quotes::Unknown), ("Platform Lead".to_owned(), None));
+        assert_eq!(shown_term("\"Platform Lead\"", Quotes::Unknown), ("\"Platform Lead\"".to_owned(), None));
+        assert_eq!(shown_term("Platform Lead", Quotes::Ignored), ("Platform Lead".to_owned(), Some("These words, in any order")));
+        assert_eq!(shown_term("Platform Lead", Quotes::Phrase), ("\"Platform Lead\"".to_owned(), Some("These words together")));
+        assert_eq!(shown_term("Rust", Quotes::Unknown).1, None, "one word gets no word either");
     }
 
     #[test]

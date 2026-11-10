@@ -140,9 +140,11 @@ fn first_sentence(body: &str) -> Option<String> {
             break;
         }
         if paragraph.is_empty() && !plain_start(line) {
-            // A quote, a list, a table or HTML: skip the whole block.
-            lines.by_ref().find(|rest| rest.trim().is_empty());
-            continue;
+            // A quote, a list, a table or HTML: skip the whole block, but never past a heading.
+            match lines.by_ref().map(str::trim).find(|rest| rest.is_empty() || rest.starts_with('#')) {
+                Some(rest) if rest.starts_with('#') => break,
+                _ => continue,
+            }
         }
         paragraph.push(line);
     }
@@ -239,7 +241,10 @@ mod tests {
     const FREEHIRE: &str = "---\nname: freehire-search\nenabled: true  # set to false to keep this portal installed\n---\n\n# freehire Search Skill\n\nSearch live job listings from the **[freehire.me](https://freehire.me)** job\naggregator — an open-source IT job board that normalizes postings into one schema. No authentication, no API key.\n\n## Commands\n\nQuery syntax: quotes require every quoted word (any order, not a contiguous phrase); `-word` excludes; uppercase `OR` matches any alternative.\n";
 
     /// Shaped as upstream's Danish demos: off by a commented line, and an exact phrase in quotes.
-    const JOBNET: &str = "---\nname: jobnet-search\ncontext: fork\nenabled: false  # Danish demo portal - ships opt-in; /setup enables it when your market is Denmark, or set true here yourself\n---\n\n# Jobnet-Search Skill\n\nAccess live Danish job listings from the Jobnet.dk public API. No authentication needed.\n\nQuery syntax: double quotes inside the argument make an exact phrase, word order included (e.g. `--query '\"product owner\"'`); single quotes are ignored; no OR.\n";
+    const JOBNET: &str = "---\nname: jobnet-search\ncontext: fork\nenabled: false  # Danish demo portal - ships opt-in; /setup enables it when your market is Denmark, or set true here yourself\n---\n\n# Jobnet-Search Skill\n\nAccess live Danish job listings from the Jobnet.dk public API. No authentication needed.\n\nQuery syntax: phrase quoting not honoured; no OR.\n";
+
+    /// Upstream `jobindex-search`'s query line.
+    const JOBINDEX_SYNTAX: &str = "Query syntax: double quotes inside the argument make an exact phrase, word order included (e.g. `--query '\"product owner\"'`); single quotes are ignored; no OR.";
 
     #[test]
     fn reads_linkedin() {
@@ -270,9 +275,11 @@ mod tests {
         assert!(!manifest.enabled, "a comment after `false` keeps it off");
         assert_eq!(manifest.name, "Jobnet");
         assert_eq!(manifest.sentence.as_deref(), Some("Access live Danish job listings from the Jobnet.dk public API."));
-        assert_eq!(manifest.quotes, Quotes::Phrase);
-        let jobindex = JOBNET.replace("# Jobnet-Search Skill", "# Jobindex Search Skill");
-        assert_eq!(parse_manifest(&jobindex, "jobindex-search").name, "Jobindex");
+        assert_eq!(manifest.quotes, Quotes::Ignored);
+        let jobindex =
+            JOBNET.replace("# Jobnet-Search Skill", "# Jobindex Search Skill").replace("Query syntax: phrase quoting not honoured; no OR.", JOBINDEX_SYNTAX);
+        let jobindex = parse_manifest(&jobindex, "jobindex-search");
+        assert_eq!((jobindex.name.as_str(), jobindex.quotes), ("Jobindex", Quotes::Phrase));
     }
 
     #[test]
@@ -331,6 +338,8 @@ mod tests {
         let text = "# Northfield Search Skill\n\n> A note.\n> More note.\n\n- a list\n\nSearch Northfield's *public* board. Twice.\n";
         assert_eq!(parse_manifest(text, "n").sentence.as_deref(), Some("Search Northfield's public board."));
         assert_eq!(parse_manifest("# Northfield Search Skill\n\n## Commands\n\nRun it.\n", "n").sentence, None);
+        assert_eq!(parse_manifest("# Northfield Search Skill\n\n> note\n## Commands\n\nRun it.\n", "n").sentence, None, "a skipped block stops at a heading");
+        assert_eq!(parse_manifest("# Northfield Search Skill\n\n- item\n### Usage\n\nRun it.\n", "n").sentence, None);
         assert_eq!(parse_manifest("# Northfield Search Skill\n\nSearch `jobs` and ask!\n", "n").sentence.as_deref(), Some("Search jobs and ask!"));
     }
 

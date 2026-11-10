@@ -42,8 +42,21 @@ pub fn helper_bins(home: Option<&OsStr>, macos: bool) -> Vec<PathBuf> {
 /// not text or holds the separator, is left out, and so is an empty part, which would name the current folder.
 fn joined(first: &[PathBuf], login: Option<String>, inherited: &str, separator: char) -> String {
     let first = first.iter().filter_map(|folder| folder.to_str()).filter(|folder| !folder.contains(separator));
-    let rest = login.into_iter().chain([inherited.to_owned()]);
-    first.map(str::to_owned).chain(rest).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(&separator.to_string())
+    let rest = login.iter().flat_map(|login| parts(login, separator)).chain(parts(inherited, separator));
+    first.chain(rest.filter(|part| !part.replace('"', "").is_empty())).collect::<Vec<_>>().join(&separator.to_string())
+}
+
+/// The parts of a `PATH` split on `separator`. With Windows' `;`, a part may be quoted to hold one, as in
+/// `"C:\a;b"`, so a `;` inside quotes does not split. Elsewhere a quote is part of a folder's name.
+fn parts(path: &str, separator: char) -> Vec<&str> {
+    let mut quoted = false;
+    path.split(|character| {
+        if separator == ';' && character == '"' {
+            quoted = !quoted;
+        }
+        character == separator && !quoted
+    })
+    .collect()
 }
 
 #[cfg(unix)]
@@ -206,6 +219,25 @@ mod tests {
         assert_eq!(joined(&helpers, Some("/a".into()), "", ':'), "/h/python/bin:/h/bun/bin:/a", "no empty part, which would be the current folder");
         let odd = [PathBuf::from("/h/a:b/bin"), PathBuf::from("/h/ok")];
         assert_eq!(joined(&odd, None, "/usr/bin", ':'), "/h/ok:/usr/bin", "a folder holding the separator is left out");
+    }
+
+    #[test]
+    fn empty_parts_inside_a_path_are_left_out() {
+        assert_eq!(joined(&[], Some("/a::/b:".into()), "", ':'), "/a:/b", "an empty part would be the current folder");
+        assert_eq!(joined(&[], Some(":/a".into()), ":/b", ':'), "/a:/b", "a leading separator is an empty part too");
+        assert_eq!(joined(&[], None, "/usr/bin::/bin:", ':'), "/usr/bin:/bin", "the inherited path is split as well");
+        let helpers = [PathBuf::from("/h/python/bin")];
+        assert_eq!(joined(&helpers, Some("::/a".into()), "/b::", ':'), "/h/python/bin:/a:/b", "the helpers stay first");
+        assert_eq!(joined(&[], None, "/a\"b:/c", ':'), "/a\"b:/c", "outside Windows a quote is part of a name");
+    }
+
+    #[test]
+    fn a_quoted_windows_part_keeps_its_separator() {
+        assert_eq!(
+            joined(&[], Some(String::new()), r#";C:\a;;"C:\b;c";"";C:\d;"#, ';'),
+            r#"C:\a;"C:\b;c";C:\d"#,
+            "a ; inside quotes does not split, and an empty or quoted empty part is left out"
+        );
     }
 
     #[test]

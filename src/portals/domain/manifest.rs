@@ -1,8 +1,9 @@
 use crate::shared_kernel::file_text::{with_lf, without_bom};
 use crate::shared_kernel::visible_text::visible_chars;
 
-const NAME_CHARS: usize = 60;
-const SENTENCE_CHARS: usize = 200;
+/// The most characters a portal name or its sentence keeps.
+pub const NAME_CHARS: usize = 60;
+pub const SENTENCE_CHARS: usize = 200;
 
 /// What a portal's `SKILL.md` says about it, in the words Jobdesk shows.
 #[derive(Debug, Clone, PartialEq, Eq)]

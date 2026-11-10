@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, reads the community portal list and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -16,6 +16,10 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A run's notices | Plain text, with hidden characters removed: see [Notices](#notices) |
 | Test connection's error | Plain text: see [Masking](#masking) |
 | PDFs, in the dossier and in CV documents | Page images only: see [CV files](#cv-files) |
+| A task in plain words in the launcher, which may hold a name from GitHub | Plain text, read only, sent to Claude exactly as shown. A task with any character that hidden-character removal would drop, line breaks included, or with any variation selector (U+FE00 to U+FE0F, U+E0100 to U+E01EF), which can show as nothing after a letter, opens no launcher, so the text shown and the text sent never differ. |
+| A community portal's name and sentence, from its `SKILL.md` on GitHub | Plain text on one line: line breaks and runs of space become one space, hidden characters and variation selectors are removed, a name keeps at most 60 characters and a sentence 200, and the screen cuts what does not fit with an ellipsis |
+| A community portal's owners, from `CODEOWNERS` | Plain words, never links: only GitHub handles such as `@name` or `@org/team` are kept, at most 10 a line, cut with an ellipsis |
+| An installed portal's name and sentence, from its own `SKILL.md` | Plain text on one line, with Markdown markup and hidden characters removed, cut with an ellipsis |
 | Release notes from the update feed | Markdown with no image loading and no links, through `release_markdown`. A link shows as its words in body ink and never opens, an image as its alt text, and raw HTML as its text. Headings render at the section size, and hidden characters are removed before parsing. |
 
 A link opens only on click, and only for `http` or `https`. Release notes have no link: their one way out is Open the release page, whose address Jobdesk builds itself.
@@ -115,6 +119,19 @@ This trades away the prompt as a check against injected posting text. Postings r
 Notices other than allowances, such as why a run failed or stopped or which action was denied, show inline in the story. They render as plain text with hidden characters removed, one row per non-blank line.
 
 The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover.
+
+## The community portal list
+
+Browse community on the Portals screen reads the list of community portals from GitHub. It is not a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics.
+
+- It reads when Browse comes on show and the saved list is missing or over an hour old, and when the user presses Refresh or Try again. Never on every frame, and never while GitHub asks Jobdesk to wait. After a failed read, Browse coming on show again reads nothing for a minute, so a read that keeps failing cannot spend GitHub's limit. Try again still reads at once.
+- The REST API names the latest commit of `ai-job-search-dev/community-portals` and its file list: 2 requests a read, of the 60 an hour GitHub allows without sign-in. Each `SKILL.md` and `CODEOWNERS` comes from `raw.githubusercontent.com` at that commit, and an unchanged file is not fetched again.
+- Requests go over https with the shared `github_config`, follow no redirect, send no cookie and no credential, and stop at fixed sizes and times. A failure shows in Jobdesk's own words. No text from the server reaches the screen.
+- GitHub's rate limit keeps the saved list on screen and holds Refresh until its reset time. A 403 or 429 that names no time holds it for a minute.
+- Only a path of the exact shape `portals/<country>/<folder>/SKILL.md` is read. The country is two lower-case letters or `global`, and the folder name holds only lower-case letters, digits and `-`.
+- View code ↗ opens `https://github.com/ai-job-search-dev/community-portals/tree/main/portals/<country>/<folder>`, built from those validated parts, and only on click. Install… opens the launcher on a task in plain words built from the same address: Claude copies the portal into `.agents/skills/`, explains its code and asks before it installs anything. Nothing from the list's text goes into an address or a task. A task the launcher would refuse leaves Install… disabled with its reason.
+- The list read last is saved in `portals/community.json` of the data folder, through a copy of its own. Every field is checked again when it is read back, as if it came from GitHub, and a file that fails a check reads as no saved list.
+- Add a portal builds `/add-portal <website> country: …, language: …, test title: …` from what the user typed. The website must be an `http` or `https` address with a dotted host and no space or line break anywhere, so nothing after a space can reach `/add-portal` as an option. It gets `https://` when it does not start with a scheme. A field holding a character that shows nothing makes no line, and the form says which field.
 
 ## Updates
 

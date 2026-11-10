@@ -19,9 +19,10 @@ Jobdesk is a native macOS and Windows app, built in Rust, over the [ai-job-searc
 - **Jobs, Applications and Insights** update live as commands change your files.
 - **Tasks** starts any slash command and shows its progress, Claude's questions, the cost and the history.
 - **Profile** shows what Claude reads about you, topic by topic, opens the setup task for one topic, lets you edit a block in place, and previews your CV PDFs with how fresh each is.
+- **Portals** shows the job boards Claude searches, turns one on or off, moves one you no longer want to the Trash (the Recycle Bin on Windows), lists the community's portals to install, and has Claude build one for a board you name.
 - **Application dossiers** gather the PDFs, verification, keyword coverage, evaluation, prep packs and follow-ups of each application.
 - **Settings** shows what your tasks cost and the terms Jobs checks against. It sets the theme, the Today queue, the Jobs view filters, how tasks sign in, run defaults, a monthly cap, tool permissions and how long run logs stay.
-- **Nothing runs until you start it**, and Jobdesk changes your checkout only when you save a Profile edit.
+- **Nothing runs until you start it**, and Jobdesk changes your checkout only when you save a Profile edit, switch a portal on or off, or move one to the Trash (the Recycle Bin on Windows).
 
 <p align="center">
   <img src="tests/snapshots/intray_light.png" alt="The Today screen in the light theme, with one decision card, Done today and the Coming up deadlines." width="800">
@@ -57,7 +58,7 @@ If Restart to update cannot put the signed release in place, download its instal
 
 ## Privacy and trust
 
-Slash commands write your checkout, and Jobdesk writes only the profile block you save. By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain. Jobdesk asks GitHub for its latest release when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About.
+Slash commands write your checkout, and Jobdesk writes only the profile block you save, a portal's on or off switch, and a portal you remove, which it moves to the Trash (the Recycle Bin on Windows). By default Jobdesk allows their tool permissions without asking and lists each one in the activity, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on. The workspace checks postings with `posting_guard` before scoring them. Run logs, which include the text of your runs, and your decisions stay in the app's data folder and are readable only by your user. Jobdesk uses Claude Code's sign-in and keeps no password of its own. The one exception is an optional Anthropic Console API key you save in Settings, which stays in the system keychain. Jobdesk asks GitHub for its latest release when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About. Portals › Browse community reads the community portal list from GitHub, also sending only its version, when you open it and the saved copy is over an hour old, or when you press Refresh.
 
 ## Authentication
 

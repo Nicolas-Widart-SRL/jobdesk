@@ -202,6 +202,7 @@ mod tests {
             url: None,
             portal: None,
             found_on: None,
+            first_seen: None,
             deadline: None,
             days_to_deadline: None,
             score: Some(80),

@@ -8,6 +8,11 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
+Two more changes come from the Portals screen, and neither happens while a run works:
+
+- a portal's switch writes the `enabled:` line in its `SKILL.md` frontmatter, the same way a profile save writes;
+- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash (the Recycle Bin on Windows). It never deletes one, and a built-in portal has no Remove.
+
 Everything else Jobdesk writes stays in its data folder, with two exceptions:
 
 - Restart to update replaces Jobdesk itself.
@@ -28,11 +33,12 @@ Each feature is a bounded context with its own language.
 | `runs` | run, activity, prompt, decision, step rail, stop point, quick reply, step phrase, command catalog, usage (tasks only, from run logs) | the `claude` CLI stream; its own run logs; settings' application layer, for the run defaults and the cap; the saved API key, through the shell's key reader |
 | `dossier` | archive, document, findings, page | `documents/applications/*`; compiled PDFs; `company_research/`; tracking's and runs' application layers |
 | `profile` | topic, block, placeholder, draft, conflict, updated mark, CV document, staleness | the profile files that `TOPICS` in `profile/domain/topic.rs` names; the `## Candidate Profile` part of `CLAUDE.md`; the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists; dossier's application layer, for the page cache; settings' application layer, for ages and sizes |
-| `workspace` | workspace root, portal, tool check | the checkout folder; installed tools; file changes; profile's application layer |
+| `portals` | portal, manifest, origin, badge, quotes, search plan, term, community list, owners, add line | each `.agents/skills/*/SKILL.md`; `.claude/skills/job-scraper/search-queries.md`; discovery's application layer, for the jobs each portal found; the community list on GitHub, without sign-in, through the REST API for the latest commit and the file list (2 requests a read, of GitHub's 60 an hour) and `raw.githubusercontent.com` for each `SKILL.md` and `CODEOWNERS` at that commit, with no redirect followed; the list read last, saved in `portals/community.json` of the data folder |
+| `workspace` | workspace root, tool check | the checkout folder; installed tools; file changes; profile's application layer; portals' application layer, for Setup's portals |
 | `settings` | preference, page, search hit, run default, command override, spend cap, retention, sign-in method, API key, connection test, Coming up range, Later length, skip reason list, Jobs view filter, update switch | its own `settings.json` in the data folder; the system keychain, through a port in `domain` and adapters in `infrastructure`; through the `Snapshot`: runs' and tracking's application layers and discovery's terms; through the shell: workspace's readiness, the count of jobs the Jobs view hides, the data folder's sizes, the tray decision count and, for About, the update view from updates' application layer |
 | `updates` | release, version, feed, download, signature, update key, install block, restart plan, apply failure | `latest.json` on the latest GitHub release, and the build the feed names for this computer; the update key built into the app; its own `updates/` folder in the data folder |
 
-Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
+Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `portals` is Portals, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
 
 Three modules are not features:
 
@@ -40,6 +46,8 @@ Three modules are not features:
   - the host `PATH` lookup that `runs` and `workspace` both need, with `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
+  - `safe_save::replace_through_copy`, which replaces a text file in the checkout through a synced copy beside it and one plain rename, never retried, and removes the copies an interrupted save left. A profile save and a portal switch both write this way;
+  - `https`, the one way Jobdesk reaches GitHub: `github_config`, https only with the system's certificates and the environment's proxy, and `TimedBody`, which ends a body that stalls. Only `infrastructure` uses it, for the update feed and builds and for the community portal list;
   - `file_text`, the helpers for a byte order mark and for CRLF and lone CR line endings;
   - `visible_text`, the filter that drops hidden characters from untrusted text;
   - `workspace_path::within_workspace`, the text check that keeps a path read from the checkout inside it, which `dossier` and `profile` share;
@@ -89,7 +97,7 @@ A feature that fails to load reports an issue, and the others keep working. Its 
 - Until the first snapshot arrives, every screen shows a loading view, not an empty one.
 - A screen whose source failed shows the alert and says its content is hidden, never that it is empty.
 
-Jobs, Applications, Insights, Profile, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs and Applications get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile hides a failed file's topics through its own `ProfileView`, and its CV documents through `CvShelf::Unread`. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
+Jobs, Applications, Insights, Profile, Portals, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs, Applications and Portals get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile hides a failed file's topics through its own `ProfileView`, and its CV documents through `CvShelf::Unread`. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
 
 Tasks, the launcher and Dossier take no `ScreenState`: the shell draws the alert above their head. For Dossier the shell also draws the loading view and, when the tracker failed, the note that the application is hidden.
 
@@ -120,5 +128,8 @@ Claude's replies and prep packs render as Markdown with no image loading.
 The API key goes only from the system keychain, read once per launch, until a read succeeds, and held in memory, into the environment of a `claude` process, and the whole key is masked in what that process prints.
 By default `RunDesk` allows tool permissions and records them in the activity, and Settings › Permissions turns prompts on.
 An update downloads only over https from addresses built from its version, and applies only when its signature checks against the key built into Jobdesk.
+The community portal list is read over https from GitHub, without sign-in, and its words render on one line with hidden characters removed. View code ↗ and Install… are built from a validated country and folder name, never from the list's text.
+
+Jobdesk itself makes two kinds of network request, both to GitHub and neither of them a run: the update feed and its builds, and the community portal list. Every other request comes from a `claude` process Jobdesk starts: a task's, which is a run, and Test connection's, which is not.
 
 Changing how untrusted text renders, a path check, the API key's path, tool permissions or updates: read [trust](docs/architecture/trust.md). It also lists the accepted residuals.

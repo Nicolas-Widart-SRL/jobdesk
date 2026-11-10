@@ -129,6 +129,8 @@ struct Calls {
     starts: usize,
     asked: Vec<(Option<String>, f64)>,
     sent: Vec<String>,
+    /// Each request a process started from, whose line and figures a run log's meta line holds.
+    requests: Vec<RunRequest>,
 }
 
 type SharedCalls = Arc<Mutex<Calls>>;
@@ -142,6 +144,7 @@ impl AgentGateway for RecordingGateway {
         let mut calls = self.1.lock().unwrap();
         calls.starts += 1;
         calls.asked.push((request.model.clone(), request.budget_usd));
+        calls.requests.push(request.clone());
         drop(calls);
         *self.0.lock().unwrap() = Some(sink);
         Box::new(RecordingSession(Arc::clone(&self.1)))
@@ -1123,7 +1126,7 @@ fn cmd_enter_runs_only_when_run_is_enabled() {
 #[test]
 fn cmd_enter_starts_nothing_outside_the_launcher() {
     let calls = SharedCalls::default();
-    for screen in [Screen::InTray, Screen::Jobs, Screen::Tracker, Screen::Insights, Screen::Runs, Screen::Workspace] {
+    for screen in [Screen::InTray, Screen::Jobs, Screen::Tracker, Screen::Insights, Screen::Runs, Screen::Portals, Screen::Workspace] {
         let mut harness = tray_harness(recording_shell(screen, "cmd_enter_elsewhere", &calls));
         cmd_enter(&mut harness);
         assert!(!is_shown(&harness, LAUNCHER), "{screen:?} stays");
@@ -1412,7 +1415,7 @@ fn the_launcher_shortcut_works_while_typing() {
 fn the_tabs_use_plain_names() {
     let mut harness = tray_harness(probed(shell(Screen::InTray, "plain_tabs"), FixedTools));
     settle(&mut harness);
-    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Setup"] {
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Portals", "Setup"] {
         harness.get_by_label_contains(name);
     }
     assert!(harness.query_by_label_contains("In-tray").is_none());
@@ -1851,7 +1854,7 @@ fn the_welcome_points_at_a_place_that_stays() {
     assert!(is_shown(&harness, "Profile shows each topic, what is filled in and what is missing."));
     assert!(is_shown(
         &harness,
-        "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer."
+        "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer."
     ));
 
     let mut harness = tray_harness(probed(shell(Screen::InTray, "welcome_step_reachable"), AllTools));
@@ -2791,6 +2794,10 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
                 fs::remove_dir_all(root.join("cv")).unwrap();
                 fs::write(root.join("cv"), b"").unwrap();
             }
+            Source::Portals => {
+                fs::remove_dir_all(root.join(".agents/skills")).unwrap();
+                fs::write(root.join(".agents/skills"), b"").unwrap();
+            }
             Source::Decisions => unreachable!("the tray reports its own file"),
         }
     }
@@ -2801,6 +2808,8 @@ fn broken_shell(screen: Screen, name: &str, broken: &[Source]) -> Shell {
 
 const TRACKER_HIDDEN: &str = "Hidden while the tracker cannot be read.";
 const JOBS_HIDDEN: &str = "Hidden while your saved jobs cannot be read.";
+const PORTALS_HIDDEN: &str = "Your portals are hidden while their folder cannot be read.";
+const SETUP_JOBS_HIDDEN: &str = "Jobs found are hidden while your saved jobs cannot be read.";
 
 /// Each screen a failed source reaches draws its head, then the alert, then hides what the source feeds instead of calling it empty.
 /// A screen that forgot its alert would still pass every snapshot, so this walks them all.
@@ -2860,16 +2869,24 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             broken: &[Source::Applications],
             subtitle: "ai-job-search",
             alert: "Your applications could not be read.",
-            shown: &["Jobs seen"],
-            not_shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
+            shown: &["10 jobs found"],
+            not_shown: &[SETUP_JOBS_HIDDEN],
         },
         Case {
             screen: Screen::Workspace,
             broken: &[Source::Jobs],
             subtitle: "ai-job-search",
             alert: "Your saved jobs could not be read.",
-            shown: &["Jobs seen are hidden while your saved jobs cannot be read."],
-            not_shown: &["Jobs seen"],
+            shown: &[SETUP_JOBS_HIDDEN, "4 of 6 portals on"],
+            not_shown: &["10 jobs found", "0 jobs found"],
+        },
+        Case {
+            screen: Screen::Portals,
+            broken: &[Source::Jobs],
+            subtitle: PORTALS_SUBTITLE,
+            alert: "Your saved jobs could not be read.",
+            shown: &["Jobs found are hidden while your saved jobs cannot be read."],
+            not_shown: &["No jobs yet", "4 jobs · last new Fri 30 Oct"],
         },
         Case {
             screen: Screen::Workspace,
@@ -2878,6 +2895,22 @@ fn every_failed_screen_shows_its_alert_under_its_head() {
             alert: "Part of your profile could not be read.",
             shown: &["Everything else still works.", "Profile, could not be read"],
             not_shown: &[],
+        },
+        Case {
+            screen: Screen::Workspace,
+            broken: &[Source::Portals],
+            subtitle: "ai-job-search",
+            alert: "Your portals could not be read.",
+            shown: &["Everything else still works.", "Portals, could not be read", PORTALS_HIDDEN, "Open Portals"],
+            not_shown: &["No portals installed.", "0 of 0 portals on"],
+        },
+        Case {
+            screen: Screen::Portals,
+            broken: &[Source::Portals],
+            subtitle: "The job boards Claude searches when you find new jobs.",
+            alert: "Your portals could not be read.",
+            shown: &["Everything else still works.", "Your portals are hidden, not gone", "Check all portals…"],
+            not_shown: &["No portals yet", "The job boards Claude searches when you find new jobs. None installed.", "Claude searches these"],
         },
         Case {
             screen: Screen::Insights,
@@ -3134,6 +3167,20 @@ fn probed_wgpu(mut shell: Shell, theme: Theme) -> Harness<'static> {
 const DATA_SIZES: DataSizes = DataSizes { run_logs: 211_800_000, decisions: 18_000 };
 
 /// A shell as Settings' snapshots show it: fictional folders and a fixed version, so no temporary path or release shows.
+/// Runtime status draws the portals too, so it hides them while their folder cannot be read and never says none are installed.
+#[test]
+fn runtime_status_hides_portals_it_cannot_read() {
+    let mut shell = probed(broken_shell(Screen::InTray, "runtime_portals_unread", &[Source::Portals]), FixedTools);
+    shell.open_settings(Page::Runtime);
+    let mut harness = tray_harness(shell);
+    settle(&mut harness);
+    assert!(harness.query_by_label_contains("Back to app").is_some(), "Settings is open on Runtime status");
+    assert!(harness.query_by_label_contains("Open Portals").is_some(), "the portals section is drawn");
+    assert!(is_shown(&harness, PORTALS_HIDDEN));
+    assert!(harness.query_by_label_contains("No portals installed.").is_none());
+    assert!(harness.query_by_label_contains("portals on").is_none());
+}
+
 fn labelled(shell: Shell) -> Shell {
     shell.with_folder_label("~/Documents/ai-job-search").with_data_label("~/Library/Application Support/Jobdesk", DATA_SIZES).with_version_label("0.1.0")
 }
@@ -3720,6 +3767,165 @@ fn launcher_cap_light() {
     compare(&mut harness, name);
 }
 
+/// A task in plain words, as a screen of Jobdesk writes one. The address is fictional.
+const WORDS: &str = "Copy https://github.example/sample/portals/tree/main/sample-board into `.agents/skills/`. Read its code and tell me what it does. Then ask me before you run `python3 tools/install_portal_clis.py`.";
+const WORDS_TITLE: &str = "Task in plain words";
+/// The launcher's subtitle on a task in plain words, which has no command to pick.
+const WORDS_LAUNCHER: &str = "Read the task. Nothing runs until you press Run.";
+
+/// Leaves `line` for the shell as a command action does, under the id `ui_kit` keeps for it, and lets the shell take it.
+fn request_line(harness: &mut Harness, line: &str) {
+    harness.ctx.data_mut(|data| data.insert_temp(egui::Id::NULL.with("requested_command"), line.to_owned()));
+    harness.run_steps(3);
+}
+
+/// A line in plain words opens the launcher on it and starts nothing. Run sends it as it stands, on the defaults for
+/// every task, and Usage counts it with no command.
+#[test]
+fn a_task_in_plain_words_opens_the_launcher_and_runs_as_written() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words", &calls));
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "the launcher opens, asking to read the task");
+    assert!(!is_shown(&harness, LAUNCHER));
+    assert!(is_shown(&harness, WORDS_TITLE));
+    assert!(is_shown(&harness, WORDS), "the task shows as Claude will get it");
+    assert!(harness.query_by_role(egui::accesskit::Role::MultilineTextInput).is_none(), "the task is read only");
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    let suggested = f64::from(jobdesk::runs::application::WORDS_BUDGET_USD);
+    assert_eq!(calls.lock().unwrap().asked, [(None, suggested)]);
+    let request = calls.lock().unwrap().requests[0].clone();
+    assert_eq!(request.line, WORDS, "the process gets the task as written");
+
+    // The meta line a run log opens with, as the gateway writes it from the request the process started from.
+    // Its line is all Usage reads to name the command.
+    let logs = tempfile::tempdir().unwrap();
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("launcher_words").join("ai-job-search");
+    let workspace = jobdesk::workspace::open(&root).unwrap();
+    let meta = serde_json::json!({
+        "type": "jobdesk_meta", "workspace": workspace.path().display().to_string(), "id": request.run_id, "line": request.line,
+        "model": request.model, "budget_usd": request.budget_usd, "started_at": request.started_at,
+    });
+    let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
+    fs::write(logs.path().join(format!("{}.jsonl", request.run_id)), format!("{meta}\n{result}\n")).unwrap();
+    let tasks = jobdesk::runs::usage_logs(logs.path().to_owned(), workspace.path()).tasks();
+    assert_eq!(tasks.iter().map(|task| task.command.clone()).collect::<Vec<_>>(), [None]);
+}
+
+/// One run at a time: while another run works, Run on a task in plain words waits and says why, and Cmd Enter
+/// starts nothing either.
+#[test]
+fn a_task_in_plain_words_waits_while_another_run_works() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::Insights, "launcher_words_busy", &calls);
+    shell.desk_slot().as_mut().unwrap().start("/rank", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
+    let mut harness = tray_harness(shell);
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    assert!(is_shown(&harness, "Another run is active. One run at a time keeps your files safe."));
+    let run = harness.get_by_label("Run");
+    assert!(run.accesskit_node().is_disabled());
+    run.click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "only the run already working");
+    assert!(is_shown(&harness, WORDS_TITLE), "the task stays to run later");
+}
+
+/// Run defaults for every task fill a task in plain words, and a command's own row does not.
+/// Picking a command clears the task, and Run then sends the command.
+#[test]
+fn a_picked_command_replaces_a_task_in_plain_words() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::Insights, "launcher_words_pick", &calls);
+    shell.settings_mut().set_model(ModelChoice::Opus);
+    shell.settings_mut().set_budget(Dollars::parse("4.00"));
+    command_row(shell.settings_mut(), "/rank", ModelChoice::Haiku, "1.00");
+    let (mut harness, shell) = shared_harness(shell);
+    request_line(&mut harness, WORDS);
+    assert_eq!((budget_field(&harness).value().as_deref(), model_box(&harness).value().as_deref()), (Some("4.00"), Some("Opus")));
+
+    pick_command(&mut harness, "/rank");
+    assert!(!is_shown(&harness, WORDS_TITLE));
+    assert!(!is_shown(&harness, WORDS));
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    let line = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].line.clone();
+    assert!(line.starts_with("/rank"), "{line}");
+    assert_eq!(calls.lock().unwrap().asked, [(Some("haiku".to_owned()), 1.0)]);
+}
+
+/// A `/` line the catalog does not hold leaves the form as it was.
+#[test]
+fn an_unknown_command_leaves_the_task_in_plain_words() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_unknown", &calls));
+    request_line(&mut harness, WORDS);
+    request_line(&mut harness, "/unknown now");
+    assert!(is_shown(&harness, WORDS));
+    assert!(!is_shown(&harness, "/unknown now"));
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
+/// A task in plain words lasts until it runs, or until the launcher opens with no line, as New task, Cmd K, the Tasks
+/// screen's New task and Settings' New task open it. The form is fresh then, so Cmd Enter never repeats the task.
+#[test]
+fn a_task_in_plain_words_is_dropped_once_it_runs_or_the_launcher_opens_bare() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_once", &calls));
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, WORDS_TITLE), "Esc leaves the launcher");
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "Cmd K opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "on a fresh form");
+    assert!(!is_shown(&harness, WORDS));
+
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    harness.get_by(|node| node.role() == egui::accesskit::Role::Button && node.label().as_deref() == Some("New task")).click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the New task button opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "on a fresh form");
+    assert!(!is_shown(&harness, WORDS));
+
+    request_line(&mut harness, WORDS);
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    assert_eq!(calls.lock().unwrap().starts, 1);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "Cmd K opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "the task that ran is gone");
+    assert!(!is_shown(&harness, WORDS));
+}
+
+/// A task in plain words that holds characters the screen would hide opens no launcher, so what shows is always
+/// what Claude reads.
+#[test]
+fn a_task_with_hidden_characters_opens_no_launcher() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_hidden", &SharedCalls::default()));
+    request_line(&mut harness, "Read the sample portal's code.\u{e0049}\u{e0067}\u{e006e} Then install it.");
+    assert!(!is_shown(&harness, LAUNCHER), "no launcher opens");
+    assert!(!is_shown(&harness, WORDS_TITLE));
+}
+
+/// The launcher on a task in plain words.
+#[test]
+fn launcher_words_light() {
+    let name = "launcher_words_light";
+    let mut shell = shell(Screen::Insights, name);
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
+    let mut harness = wgpu_tray(shell, Theme::Light);
+    request_line(&mut harness, WORDS);
+    compare(&mut harness, name);
+}
+
 /// A fictional decisions file in `folder`: `count` skips for the folder at `root`, and one for a folder elsewhere.
 fn decisions_file(folder: &Path, root: &Path, count: usize) {
     let record = |at: usize| serde_json::json!({ "key": format!("triage:fictional-{at}"), "name": "Kestrel Labs", "outcome": "skipped", "reason": null, "on": "2026-10-30" });
@@ -4261,14 +4467,22 @@ fn loading_on(screen: Screen, name: &str) -> Shell {
 /// Until the first read, no screen says it has nothing: each says it is reading, and its head actions stay.
 #[test]
 fn loading_screens_promise_nothing() {
-    let empty =
-        ["No jobs wait here.", "No jobs wait here", "No applications yet", "No applications sent yet.", "No skill gap report yet", "No portals installed."];
-    let cases: [(Screen, &str, &[&str]); 5] = [
+    let empty = [
+        "No jobs wait here.",
+        "No jobs wait here",
+        "No applications yet",
+        "No applications sent yet.",
+        "No skill gap report yet",
+        "No portals installed.",
+        "No portals yet",
+    ];
+    let cases: [(Screen, &str, &[&str]); 6] = [
         (Screen::Jobs, "Reading your saved jobs…", &["Find new jobs…", "Score", "Worth knowing"]),
         (Screen::Tracker, "Reading your applications…", &["Record a result…", "Check mail for replies…", "Not sent yet", "Applied", "Closed"]),
         (Screen::Insights, "Reading your jobs, applications and reports…", &["Find skill gaps…", "Rebuild dashboard…", "Result", "Funnel", "By sector"]),
-        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Environment", "Portals"]),
+        (Screen::Workspace, "Reading your profile, tools and portals…", &["Change folder", "Environment", ".agents/skills"]),
         (Screen::Profile, "Reading your profile…", &["Topics", "On your CV", "What guides Claude"]),
+        (Screen::Portals, "Reading your portals…", &[]),
     ];
     for (screen, subtitle, shown) in cases {
         let mut shell = loading_on(screen, &format!("loading_{screen:?}"));
@@ -4868,7 +5082,7 @@ fn the_menu_fits_the_smallest_window() {
     let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
     settle(&mut harness);
     let tabs: Vec<String> = harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| tab.accesskit_node().label().unwrap_or_default()).collect();
-    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Setup"] {
+    for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Portals", "Setup"] {
         assert!(tabs.iter().any(|tab| tab.starts_with(name)), "{name} is in {tabs:?}");
     }
     let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1040.0, 640.0));
@@ -6793,4 +7007,820 @@ fn the_ways_in_are_heard() {
     let cloud = harness.get_by_label("Cloud providers, Amazon Bedrock, Google Vertex AI, Later");
     assert!(cloud.accesskit_node().is_disabled());
     assert_eq!(cloud.accesskit_node().description().as_deref(), Some("Not available yet."));
+}
+
+// The Portals screen.
+
+const PORTALS_SUBTITLE: &str = "The job boards Claude searches when you find new jobs. 4 of 6 on.";
+const PORTALS_BUSY: &str = "A task is running. Turn portals on or off once it ends.";
+const BUILT_IN_STAYS: &str = "Built-in portals stay installed. Turn one off to skip it.";
+
+/// Where `shell(Screen::Portals, name)` copied the sample folder.
+fn copied_root(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(name).join("ai-job-search")
+}
+
+/// A portal folder's `SKILL.md` in the copy at `root`.
+fn manifest_in(root: &Path, folder: &str) -> String {
+    fs::read_to_string(root.join(".agents/skills").join(folder).join("SKILL.md")).unwrap()
+}
+
+/// The sample folder on Portals, with `change` made to it before it is read.
+fn portals_shell_with(name: &str, change: impl FnOnce(&Path)) -> Shell {
+    let root = copied_root(name);
+    let _ = fs::remove_dir_all(&root);
+    sample_workspace(&root);
+    change(&root);
+    let snapshot = Snapshot { usage_read: true, ..Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()) };
+    Shell::with_snapshot(Screen::Portals, jobdesk::workspace::open(&root).unwrap(), snapshot)
+}
+
+/// Records each write it is asked for, and writes nothing.
+#[derive(Default, Clone)]
+struct FakePortals {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl jobdesk::portals::application::PortalStore for FakePortals {
+    fn set_enabled(&self, folder: &str, on: bool) -> Result<(), jobdesk::portals::application::ChangeError> {
+        self.calls.lock().unwrap().push(format!("set {folder} {on}"));
+        Ok(())
+    }
+
+    fn trash(&self, folder: &str) -> Result<(), jobdesk::portals::application::ChangeError> {
+        self.calls.lock().unwrap().push(format!("trash {folder}"));
+        Ok(())
+    }
+}
+
+/// The sample on Portals, writing through a fake store whose calls come back.
+fn faked_portals(name: &str) -> (Shell, Arc<Mutex<Vec<String>>>) {
+    let fake = FakePortals::default();
+    let calls = Arc::clone(&fake.calls);
+    let changes = jobdesk::portals::application::PortalChanges::new(Box::new(fake));
+    (probed(shell(Screen::Portals, name), FixedTools).with_portal_changes(changes), calls)
+}
+
+/// A portal's row in the list, by what it says to a screen reader.
+fn portal_row<'a>(harness: &'a Harness<'static>, spoken: &'a str) -> egui_kittest::Node<'a> {
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, spoken)
+}
+
+fn pick_portal(harness: &mut Harness<'static>, spoken: &str) {
+    portal_row(harness, spoken).click();
+    harness.run_steps(3);
+}
+
+/// The Portals tab sits between Profile and Setup, and every tab fits the smallest window.
+#[test]
+fn the_portals_tab_sits_between_profile_and_setup() {
+    let mut shell = probed(shell(Screen::Portals, "portals_tab_order"), FixedTools);
+    let mut harness = Harness::builder().with_size([1040.0, 640.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+    settle(&mut harness);
+    // The menu's tabs come first, then the screen's own three.
+    let tabs: Vec<(String, f32)> =
+        harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| (tab.accesskit_node().label().unwrap_or_default(), tab.rect().left())).take(8).collect();
+    let names: Vec<&str> = tabs.iter().map(|(label, _)| label.split(',').next().unwrap_or_default()).collect();
+    assert_eq!(names, ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Portals", "Setup"]);
+    assert!(tabs.windows(2).all(|pair| pair[0].1 < pair[1].1), "{tabs:?}");
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1040.0, 640.0));
+    for tab in harness.get_all_by_role(egui::accesskit::Role::Tab) {
+        assert!(window.contains_rect(tab.rect()), "{:?} at {:?}", tab.accesskit_node().label(), tab.rect());
+    }
+    assert_in_window(&harness, [1040.0, 640.0], &["New task", "Check all portals…"]);
+}
+
+/// A switch writes the portal's `SKILL.md` in the folder at once. Its row keeps its place, so nothing moves under the
+/// pointer, and joins the Off group once the screen opens again.
+#[test]
+fn a_switch_writes_its_portal_and_the_row_moves_only_when_the_screen_opens_again() {
+    let name = "portals_switch";
+    let mut harness = tray_harness(probed(shell(Screen::Portals, name), FixedTools));
+    let root = copied_root(name);
+    assert!(is_shown(&harness, PORTALS_SUBTITLE));
+    let off_group = |harness: &Harness| harness.get_by_label("Claude skips these").rect().top();
+    let before = portal_row(&harness, "Northfield Jobs").rect().top();
+    assert!(before < off_group(&harness), "Northfield Jobs is on");
+
+    harness.get_by_label("Northfield Jobs, on").click();
+    harness.run_steps(3);
+
+    assert!(manifest_in(&root, "northfield-search").contains("enabled: false"), "the copy's SKILL.md is off");
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. 3 of 6 on."), "read back at once");
+    assert!(harness.query_all_by_label("Northfield Jobs, off").count() > 0);
+    assert_eq!(portal_row(&harness, "Northfield Jobs").rect().top(), before, "the row keeps its place");
+
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Jobs").click();
+    harness.run_steps(3);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Portals").click();
+    harness.run_steps(3);
+    assert!(portal_row(&harness, "Northfield Jobs").rect().top() > off_group(&harness), "it moves to Off once the screen opens again");
+
+    harness.get_all_by_label("Northfield Jobs, off").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(!manifest_in(&root, "northfield-search").contains("enabled: false"), "on again");
+}
+
+/// Remove… asks first, with Keep it as the safe choice: Keep it writes nothing, and Remove moves the folder through the
+/// portal store.
+#[test]
+fn remove_asks_first_and_keep_it_writes_nothing() {
+    let (shell, calls) = faked_portals("portals_remove");
+    let mut harness = tray_harness(shell);
+    pick_portal(&mut harness, "Northfield Jobs");
+    assert!(!is_shown(&harness, "Remove Northfield Jobs?"));
+
+    harness.get_by_label("Remove…").click();
+    harness.run_steps(3);
+    assert!(harness.query_all_by_label("Remove Northfield Jobs?").count() > 0, "the ask opens");
+    let trash = if cfg!(target_os = "macos") { "the Trash" } else { "the Recycle Bin" };
+    assert!(harness.query_by_label_contains(&format!(".agents/skills/northfield-search, to {trash}.")).is_some());
+    harness.get_by_label("Keep it").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Remove Northfield Jobs?"));
+    assert!(calls.lock().unwrap().is_empty(), "Keep it writes nothing");
+
+    harness.get_by_label("Remove…").click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    assert_eq!(*calls.lock().unwrap(), ["trash northfield-search"]);
+    assert!(!is_shown(&harness, "Remove Northfield Jobs?"));
+}
+
+/// A built-in portal is only switched off: it has no Remove…, and says why.
+#[test]
+fn a_built_in_portal_has_no_remove() {
+    let (shell, calls) = faked_portals("portals_built_in");
+    let mut harness = tray_harness(shell);
+    for spoken in ["Freehire, Worldwide", "LinkedIn, Worldwide", "Jobnet, Denmark"] {
+        pick_portal(&mut harness, spoken);
+        assert!(harness.query_by_label("Remove…").is_none(), "{spoken} has no Remove…");
+        assert!(is_shown(&harness, BUILT_IN_STAYS), "{spoken} says why");
+    }
+    pick_portal(&mut harness, "Sample Freelance Board");
+    assert!(harness.query_by_label("Remove…").is_some());
+    assert!(!is_shown(&harness, BUILT_IN_STAYS));
+    assert!(calls.lock().unwrap().is_empty());
+}
+
+/// While a run works, every switch and action waits and says why, and a click writes nothing. The rows still pick.
+#[test]
+fn a_running_task_holds_every_switch_and_action() {
+    let (mut shell, calls) = faked_portals("portals_busy");
+    *shell.desk_slot() = Some(apply_run_ending([]));
+    let mut harness = tray_harness(shell);
+    pick_portal(&mut harness, "Northfield Jobs");
+    for label in ["Check all portals…", "Check this portal…", "Change search terms…", "Remove…"] {
+        assert!(harness.get_by_label(label).accesskit_node().is_disabled(), "{label} waits");
+    }
+    for switch in harness.query_all_by_role(egui::accesskit::Role::CheckBox) {
+        assert!(switch.accesskit_node().is_disabled(), "{:?} waits", switch.accesskit_node().label());
+    }
+    let switch = harness.get_all_by_label("Northfield Jobs, on").next().unwrap();
+    switch.click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove…").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Remove Northfield Jobs?"));
+    assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
+    harness.get_all_by_label("Northfield Jobs, on").next().unwrap().hover();
+    harness.run_steps(8);
+    assert!(is_shown(&harness, PORTALS_BUSY), "the switch says why it waits");
+}
+
+/// Each action fills the launcher's line and starts nothing.
+#[test]
+fn the_portal_actions_fill_the_launcher_and_start_nothing() {
+    for (label, line) in [
+        ("Check all portals…", "/scrape health"),
+        ("Check this portal…", "/scrape health freehire-search"),
+        ("Change search terms…", "/setup --section search"),
+    ] {
+        let started = SharedSink::default();
+        let mut shell = shell(Screen::Portals, "portals_actions");
+        *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&started))));
+        let mut harness = tray_harness(shell);
+        harness.get_by_label(label).click();
+        harness.run_steps(3);
+        assert!(is_shown(&harness, LAUNCHER), "{label} opens the launcher");
+        assert!(harness.query_all_by_label(line).count() > 0, "{label} fills in {line}");
+        assert!(started.lock().unwrap().is_none(), "{label} starts no run");
+    }
+}
+
+/// The detail says how the picked portal reads the shared terms: in quotes for one that honours them, bare for one that
+/// ignores them, and the Google lines that name its site.
+#[test]
+fn the_detail_shows_each_term_as_the_portal_receives_it() {
+    let mut harness = tray_harness(shell(Screen::Portals, "portals_terms"));
+    pick_portal(&mut harness, "Sample Freelance Board");
+    assert!(is_shown(&harness, "\"Lead Backend Engineer\""));
+    assert!(harness.query_all_by_label("These words together").count() > 0);
+    assert!(is_shown(&harness, "7 searches"));
+    pick_portal(&mut harness, "LinkedIn, Worldwide");
+    assert!(is_shown(&harness, "Lead Backend Engineer"));
+    assert!(!is_shown(&harness, "\"Lead Backend Engineer\""));
+    assert!(is_shown(&harness, "site:linkedin.com/jobs \"Lead Backend Engineer\" Brussels"));
+    assert!(harness.query_by_label("site:jobs.example.com \"Platform Lead\" Brussels").is_none(), "only lines that name its site");
+    pick_portal(&mut harness, "Northfield Jobs");
+    assert!(is_shown(&harness, "None of your Google lines name this board, so Claude only notes that it failed."));
+}
+
+/// Setup's Portals panel is one line, and Open Portals opens the screen. Runtime status shows the same line.
+#[test]
+fn setup_sums_up_the_portals_and_opens_them() {
+    let mut harness = tray_harness(probed(shell(Screen::Workspace, "setup_portals_line"), FixedTools));
+    settle(&mut harness);
+    assert!(is_shown(&harness, "4 of 6 portals on"));
+    assert!(is_shown(&harness, "10 jobs found"));
+    // The dot between the count and the jobs has the same room on each side.
+    let (count, dot, jobs) = (harness.get_by_label("4 of 6 portals on").rect(), harness.get_by_label("·").rect(), harness.get_by_label("10 jobs found").rect());
+    assert!(((dot.left() - count.right()) - (jobs.left() - dot.right())).abs() < 1.0, "{count:?} {dot:?} {jobs:?}");
+    for gone in ["Jobs seen", "linkedin-search", "Check portal health", "Add portal"] {
+        assert!(harness.query_by_label(gone).is_none(), "Setup still shows {gone}");
+    }
+    harness.get_by_label("Open Portals").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, PORTALS_SUBTITLE), "Portals is on show");
+
+    let mut shell = shell(Screen::InTray, "runtime_portals_line");
+    shell.open_settings(Page::Runtime);
+    let shell = Rc::new(RefCell::new(probed(shell, FixedTools)));
+    let inner = Rc::clone(&shell);
+    // Tall enough that the Portals section is in view.
+    let mut harness = Harness::builder().with_size([1280.0, 1600.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+    settle(&mut harness);
+    assert!(is_shown(&harness, "4 of 6 portals on"));
+    harness.get_by_label("Open Portals").click();
+    harness.run_steps(3);
+    assert!(!shell.borrow().settings_open(), "Settings closes first");
+    assert!(is_shown(&harness, PORTALS_SUBTITLE));
+}
+
+/// With no portal installed, Setup says so and keeps Open Portals, and the screen offers to add one.
+#[test]
+fn no_portal_installed_says_so() {
+    let remove_all = |root: &Path| fs::remove_dir_all(root.join(".agents/skills")).unwrap();
+    let mut setup = portals_shell_with("portals_none_setup", remove_all);
+    setup = probed(setup, FixedTools);
+    let mut harness = tray_harness(setup);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Setup").click();
+    settle(&mut harness);
+    assert!(is_shown(&harness, "No portals installed."));
+    assert!(is_shown(&harness, "Open Portals"));
+    harness.get_by_label("Open Portals").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "No portals yet"));
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. None installed."));
+}
+
+/// The sample on Portals as the canvas draws it: the community list saved 12 minutes ago, so the portal installed from
+/// it reads Community.
+fn render_portals(shell: Shell, pick: Option<&str>, theme: Theme) -> Harness<'static> {
+    let shell = listed(shell, Some(community_list(minutes_ago(12))), vec![]);
+    let mut harness = probed_wgpu(probed(shell, FixedTools), theme);
+    if let Some(spoken) = pick {
+        pick_portal(&mut harness, spoken);
+    }
+    harness
+}
+
+#[test]
+fn portals_yours_light() {
+    let mut harness = render_portals(shell(Screen::Portals, "portals_yours_light"), None, Theme::Light);
+    compare(&mut harness, "portals_yours_light");
+}
+
+#[test]
+fn portals_yours_dark() {
+    let mut harness = render_portals(shell(Screen::Portals, "portals_yours_dark"), None, Theme::Dark);
+    compare(&mut harness, "portals_yours_dark");
+}
+
+#[test]
+fn portals_madebyyou_light() {
+    let name = "portals_madebyyou_light";
+    let mut harness = render_portals(shell(Screen::Portals, name), Some("Northfield Jobs"), Theme::Light);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_remove_light() {
+    let name = "portals_remove_light";
+    let mut harness = render_portals(shell(Screen::Portals, name), Some("Northfield Jobs"), Theme::Light);
+    harness.get_by_label("Remove…").click();
+    harness.run_steps(3);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_busy_light() {
+    let name = "portals_busy_light";
+    let mut shell = shell(Screen::Portals, name);
+    *shell.desk_slot() = Some(apply_run_ending([]));
+    let mut harness = render_portals(shell, None, Theme::Light);
+    harness.get_by_label("Northfield Jobs, on").hover();
+    harness.run_steps(8);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_loading_light() {
+    let name = "portals_loading_light";
+    let mut harness = render_portals(loading_on(Screen::Portals, name), None, Theme::Light);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_none_light() {
+    let name = "portals_none_light";
+    let shell = portals_shell_with(name, |root| fs::remove_dir_all(root.join(".agents/skills")).unwrap());
+    let mut harness = render_portals(shell, None, Theme::Light);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_failed_light() {
+    let name = "portals_failed_light";
+    let mut harness = render_portals(broken_shell(Screen::Portals, name, &[Source::Portals]), None, Theme::Light);
+    compare(&mut harness, name);
+}
+
+/// A snapshot whose read began before a switch never undoes it on screen: the portals read back after the switch stay
+/// until a snapshot read after it arrives.
+#[test]
+fn a_snapshot_read_before_a_switch_keeps_the_switch() {
+    let name = "portals_stale_snapshot";
+    let mut shell = probed(shell(Screen::Portals, name), FixedTools);
+    let feed = shell.snapshot_feed();
+    let root = copied_root(name);
+    let day = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+    let stale = Snapshot { usage_read: true, ..Snapshot::load(&root, day) };
+    let mut harness = tray_harness(shell);
+    harness.get_by_label("Northfield Jobs, on").click();
+    harness.run_steps(3);
+    assert!(manifest_in(&root, "northfield-search").contains("enabled: false"));
+
+    feed.send(stale).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. 3 of 6 on."), "the stale read leaves the switch");
+    assert!(harness.query_all_by_label("Northfield Jobs, on").next().is_none());
+
+    // A read that begins after the switch is taken as it is.
+    let freehire = root.join(".agents/skills/freehire-search/SKILL.md");
+    fs::write(&freehire, fs::read_to_string(&freehire).unwrap().replace("enabled: true", "enabled: false")).unwrap();
+    feed.send(Snapshot { usage_read: true, ..Snapshot::load(&root, day) }).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "The job boards Claude searches when you find new jobs. 2 of 6 on."));
+}
+
+/// The shell checks for a working run again at the write, so a request that gets past the waiting controls still
+/// writes nothing.
+#[test]
+fn a_change_asked_for_while_a_run_works_writes_nothing() {
+    use jobdesk::portals::application::Origin;
+    use jobdesk::portals::ui::PortalsRequest;
+
+    let (mut shell, calls) = faked_portals("portals_busy_request");
+    *shell.desk_slot() = Some(apply_run_ending([]));
+    let (mut harness, shell) = shared_harness(shell);
+    pick_portal(&mut harness, "Northfield Jobs");
+    shell.borrow_mut().change_portals(PortalsRequest::Switch { folder: "northfield-search".into(), on: false });
+    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into(), origin: Origin::MadeByYou });
+    harness.run_steps(3);
+    assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
+    assert!(harness.query_all_by_label(PORTALS_BUSY).count() > 0, "the detail says why");
+}
+
+// Browse community and Add a portal.
+
+use jobdesk::portals::application::{CommunityFailure, CommunityList, CountryCode, FolderName, GitSha, ListedPortal, parse_codeowners};
+
+/// The wall clock Browse counts ages to.
+fn browse_now() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 31).unwrap().and_hms_opt(15, 20, 0).unwrap()
+}
+
+/// `browse_now` in UTC, as the shell takes it, so every age and time on screen is the same wherever the tests run.
+fn browse_utc() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Local.from_local_datetime(&browse_now()).earliest().unwrap().to_utc()
+}
+
+fn minutes_ago(minutes: i64) -> chrono::DateTime<chrono::Utc> {
+    browse_utc() - chrono::TimeDelta::minutes(minutes)
+}
+
+fn listed_portal(country: &str, folder: &str, name: &str, sentence: &str) -> ListedPortal {
+    let sha = GitSha::parse(&"0".repeat(40)).unwrap();
+    ListedPortal::from_parts(CountryCode::parse(country).unwrap(), FolderName::parse(folder).unwrap(), sha, name, Some(sentence)).unwrap()
+}
+
+/// A fictional community list with made-up owners. Three of its portals are installed in the sample, and the sample's
+/// Location is in Belgium.
+fn community_list(saved_at: chrono::DateTime<chrono::Utc>) -> CommunityList {
+    CommunityList {
+        saved_at,
+        portals: vec![
+            listed_portal("be", "samplefreelance-search", "Sample Freelance Board", "Freelance missions posted by Belgian agencies."),
+            listed_portal("global", "freehire-search", "Freehire", "Gathers postings from many job sites into one search."),
+            listed_portal("global", "linkedin-search", "LinkedIn", "Public job listings on LinkedIn, in any country."),
+            listed_portal("global", "sampleremote-search", "Sample Remote Board", "Remote jobs from small companies, worldwide."),
+            listed_portal("dk", "jobindex-search", "Jobindex", "The largest Danish job board, every sector."),
+            listed_portal("dk", "jobnet-search", "Jobnet", "Listings from the Danish public job service."),
+            listed_portal("dk", "sampletechdk-search", "Sample Tech Jobs DK", "IT and engineering roles in Copenhagen and Aarhus."),
+        ],
+        codeowners: parse_codeowners(
+            "* @board-crew @portal-keeper\n/portals/be/samplefreelance-search/ @portal-keeper\n/portals/global/freehire-search/ @remote-scout\n/portals/global/sampleremote-search/ @remote-scout # unmaintained since 2026-05\n/portals/dk/sampletechdk-search/ @board-crew\n",
+        ),
+        codeowners_sha: None,
+    }
+}
+
+/// `shell` on the Browse clock, reading the community list from `saved`, then from `answers` one read at a time.
+fn listed(shell: Shell, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>) -> Shell {
+    shell.with_now(browse_now()).with_community(jobdesk::portals::scripted_community(saved, answers))
+}
+
+/// The sample on Portals with `saved` and `answers`, its tools checked.
+fn browse_shell(name: &str, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>) -> Shell {
+    listed(probed(shell(Screen::Portals, name), FixedTools), saved, answers)
+}
+
+fn open_segment(harness: &mut Harness, label: &str) {
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, label).click();
+    harness.run_steps(3);
+}
+
+const INSTALL_PROMPT: &str = "Copy https://github.com/ai-job-search-dev/community-portals/tree/main/portals/global/sampleremote-search into `.agents/skills/`. Read its code and tell me what it does. Then ask me before you run `python3 tools/install_portal_clis.py`.";
+const NO_LIST: &str = "The community list could not be read";
+const READING_LIST: &str = "Reading the list from GitHub…";
+
+/// A portal the community list holds reads Community, with the list's country. Without the list it reads Made by you.
+#[test]
+fn a_portal_from_the_community_list_reads_community() {
+    let mut harness = tray_harness(shell(Screen::Portals, "portals_community_tag_none"));
+    pick_portal(&mut harness, "Sample Freelance Board");
+    assert!(harness.query_all_by_label("Made by you").count() > 0);
+    assert!(harness.query_by_label("Community").is_none());
+
+    let mut harness = tray_harness(browse_shell("portals_community_tag", Some(community_list(minutes_ago(12))), vec![]));
+    pick_portal(&mut harness, "Sample Freelance Board, Belgium");
+    assert!(harness.query_all_by_label("Community").count() > 0);
+    assert!(harness.query_all_by_label("Made by you").count() > 0, "Northfield Jobs is not on the list");
+}
+
+/// The list groups by country, the user's market first, then Worldwide, then by name, and says what is installed.
+#[test]
+fn browse_puts_your_market_first_and_marks_what_is_installed() {
+    let mut harness = tray_harness(browse_shell("portals_browse_order", Some(community_list(minutes_ago(12))), vec![]));
+    open_segment(&mut harness, "Browse community");
+    let top = |label: &str| harness.get_by_label(label).rect().top();
+    assert!(top("Belgium") < top("Worldwide") && top("Worldwide") < top("Denmark"));
+    assert!(is_shown(&harness, "your market"));
+    assert!(is_shown(&harness, "From GitHub, updated 12 min ago"));
+    assert_eq!(harness.query_all_by_label("Installed").count(), 5);
+    assert_eq!(harness.query_all_by_label("Install…").count(), 2);
+    assert!(is_shown(&harness, "Unmaintained since 2026-05"));
+    assert!(harness.query_all_by_label("@board-crew, @portal-keeper").count() > 0, "owners are words");
+}
+
+/// The search keeps the portals whose name, country or sentence holds it.
+#[test]
+fn the_search_filters_the_community_list() {
+    let mut harness = tray_harness(browse_shell("portals_browse_search", Some(community_list(minutes_ago(12))), vec![]));
+    open_segment(&mut harness, "Browse community");
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("remote");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"));
+    for gone in ["Jobnet", "Sample Freelance Board", "Denmark"] {
+        assert!(harness.query_by_label(gone).is_none(), "{gone} is filtered out");
+    }
+}
+
+/// Install… opens the launcher on the task in plain words, built from the folder alone, and starts nothing.
+#[test]
+fn install_opens_the_plain_words_task_and_starts_nothing() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_install", Some(community_list(minutes_ago(12))), vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = tray_harness(shell);
+    open_segment(&mut harness, "Browse community");
+    harness.get_all_by_label("Install…").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "the launcher opens on a task in plain words");
+    assert!(is_shown(&harness, INSTALL_PROMPT));
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+}
+
+/// View code ↗ opens only on click, and only the address Jobdesk builds from the portal's country and folder, whatever
+/// the list's words say.
+#[test]
+fn view_code_opens_the_address_built_from_the_folder() {
+    let mut list = community_list(minutes_ago(12));
+    list.portals = vec![listed_portal("be", "samplefreelance-search", "Board https://tracker.example/x", "See https://tracker.example/y for more.")];
+    let mut shell = browse_shell("portals_view_code", Some(list), vec![]);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&opened);
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| {
+        shell.show(ui);
+        let urls: Vec<String> = ui.ctx().output(|output| {
+            output.commands.iter().filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None }).collect()
+        });
+        seen.borrow_mut().extend(urls);
+    });
+    harness.run_steps(3);
+    open_segment(&mut harness, "Browse community");
+    harness.get_by_label("View code ↗").hover();
+    harness.run_steps(3);
+    assert!(opened.borrow().is_empty(), "nothing opens before a click");
+    harness.get_by_label("View code ↗").click();
+    harness.run_steps(3);
+    assert_eq!(*opened.borrow(), ["https://github.com/ai-job-search-dev/community-portals/tree/main/portals/be/samplefreelance-search"]);
+}
+
+/// Browse asks for an old list once each time it comes on show, never on every frame. Here GitHub answers with a list
+/// already over an hour old, so each showing finds it old.
+#[test]
+fn browse_reads_the_list_once_each_time_it_shows() {
+    let mut harness = tray_harness(browse_shell("portals_browse_once", None, vec![Ok(community_list(minutes_ago(61)))]));
+    open_segment(&mut harness, "Browse community");
+    harness.run_steps(5);
+    assert!(is_shown(&harness, "Sample Remote Board"), "one read, and no other since");
+    assert!(!is_shown(&harness, READING_LIST));
+    open_segment(&mut harness, "Your portals  6");
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, READING_LIST), "shown again, it reads again");
+}
+
+/// After a failed read, showing Browse again reads nothing for a minute, so a read that keeps failing cannot spend
+/// GitHub's limit. Try again still reads at once.
+#[test]
+fn a_failed_read_is_not_tried_again_by_showing_browse() {
+    let answers = vec![Err(CommunityFailure::Unreachable), Ok(community_list(browse_utc()))];
+    let mut harness = tray_harness(browse_shell("portals_browse_failed_once", None, answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, NO_LIST));
+    for _ in 0..3 {
+        open_segment(&mut harness, "Your portals  6");
+        open_segment(&mut harness, "Browse community");
+        assert!(is_shown(&harness, NO_LIST), "no read when Browse shows again");
+    }
+    harness.get_all_by_label("Try again").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"), "Try again reads at once");
+}
+
+/// GitHub's rate limit keeps the saved list, and Try again waits until its reset.
+#[test]
+fn a_rate_limit_holds_try_again_until_its_reset() {
+    let until = browse_utc() + chrono::TimeDelta::minutes(20);
+    let answers = vec![Err(CommunityFailure::Limited { until })];
+    let mut harness = tray_harness(browse_shell("portals_browse_limited", Some(community_list(minutes_ago(130))), answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, "GitHub asks Jobdesk to wait before it looks again."));
+    assert!(harness.query_by_label_contains("Try again after 15:40.").is_some());
+    assert!(harness.get_by_label("Try again").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "Sample Remote Board"), "the saved list stays");
+
+    let past = vec![Err(CommunityFailure::Limited { until: browse_utc() - chrono::TimeDelta::minutes(1) })];
+    let mut harness = tray_harness(browse_shell("portals_browse_limit_over", Some(community_list(minutes_ago(130))), past));
+    open_segment(&mut harness, "Browse community");
+    assert!(!harness.get_by_label("Try again").accesskit_node().is_disabled(), "the reset has passed");
+}
+
+/// A 403 or 429 without GitHub's limit still asks Jobdesk to wait, so Try again waits a minute.
+#[test]
+fn a_bare_refusal_holds_try_again_for_a_minute() {
+    let answers = vec![Err(CommunityFailure::Refused(429))];
+    let mut harness = tray_harness(browse_shell("portals_browse_refused", Some(community_list(minutes_ago(130))), answers));
+    open_segment(&mut harness, "Browse community");
+    assert!(harness.get_by_label("Try again").accesskit_node().is_disabled());
+    assert!(harness.query_by_label_contains("Try again after 15:21.").is_some());
+}
+
+/// With no saved list and none read, the screen says so, with Try again and the list on GitHub.
+#[test]
+fn no_list_offers_try_again_and_github() {
+    let mut harness = tray_harness(browse_shell("portals_browse_none", None, vec![Err(CommunityFailure::TimedOut), Ok(community_list(browse_utc()))]));
+    open_segment(&mut harness, "Browse community");
+    assert!(is_shown(&harness, NO_LIST));
+    assert!(is_shown(&harness, "Open the list on GitHub ↗"));
+    harness.get_all_by_label("Try again").next().unwrap().click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "From GitHub, updated just now"));
+    assert!(is_shown(&harness, "Sample Remote Board"));
+}
+
+/// With no portal installed, Browse community and Add a portal open their views.
+#[test]
+fn no_portals_yet_leads_to_browse_and_add() {
+    let shell = portals_shell_with("portals_none_leads", |root| fs::remove_dir_all(root.join(".agents/skills")).unwrap());
+    let mut harness = tray_harness(listed(probed(shell, FixedTools), Some(community_list(minutes_ago(12))), vec![]));
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Browse community").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Sample Remote Board"));
+    assert!(harness.query_by_label("Installed").is_none(), "none is installed");
+    open_segment(&mut harness, "Your portals  0");
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Add a portal").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "A job board Claude should search"));
+}
+
+/// At a large text size the actions stay whole inside the paper: the owners and then the tag give up their width first.
+#[test]
+fn a_large_text_size_keeps_install_in_reach() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_browse_large_text", Some(community_list(minutes_ago(12))), vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+    harness.ctx.set_zoom_factor(1.5);
+    harness.run_steps(3);
+    open_segment(&mut harness, "Browse community");
+    let edge = harness.get_by_label("Refresh").rect().right();
+    let install = harness.get_all_by_label("Install…").next().unwrap().rect();
+    assert!(install.right() <= edge + 0.5, "Install… at {install:?} ends past the paper's edge at {edge}");
+    for code in harness.get_all_by_label("View code ↗") {
+        assert!(code.rect().right() <= edge + 0.5, "View code ↗ at {:?} ends past {edge}", code.rect());
+    }
+    // Through accesskit, because a pointer click lands where the node would be at the harness's first scale.
+    let install = harness.get_all_by_label("Install…").next().unwrap();
+    assert!(!install.accesskit_node().is_disabled());
+    install.click_accesskit();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "Install… is clickable");
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
+/// The four fields of Add a portal, in order: website, country, language and test title.
+fn type_answers(harness: &mut Harness, answers: [&str; 4]) {
+    for (at, answer) in answers.into_iter().enumerate() {
+        if answer.is_empty() {
+            continue;
+        }
+        let field = harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(at).unwrap();
+        field.focus();
+        field.type_text(answer);
+        harness.run_steps(2);
+    }
+    harness.run_steps(3);
+}
+
+const FILLED_LINE: &str = "/add-portal https://jobs.sample-board.example country: Belgium, language: French, test title: Lead Backend Engineer";
+
+/// Build it with Claude… waits for a web address, and says why beside it.
+#[test]
+fn build_it_waits_for_a_web_address() {
+    let mut harness = tray_harness(browse_shell("portals_add_waits", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    let build = |harness: &Harness| harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled();
+    assert!(build(&harness));
+    assert!(is_shown(&harness, "Type the board’s website first."));
+    type_answers(&mut harness, ["jobs sample board", "", "", ""]);
+    assert!(build(&harness));
+    assert!(is_shown(&harness, "Type a web address first."));
+    assert!(is_shown(&harness, "This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be."));
+}
+
+/// A screen reader hears each field of Add a portal by the words above it, Optional included.
+#[test]
+fn add_a_portal_names_its_fields() {
+    let mut harness = tray_harness(browse_shell("portals_add_names", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    let names: Vec<String> =
+        harness.get_all_by_role(egui::accesskit::Role::TextInput).map(|field| field.accesskit_node().label().unwrap_or_default()).collect();
+    assert_eq!(names, ["The job board’s website", "Country Optional", "Language of its job ads Optional", "One job title to test with Optional"]);
+}
+
+/// A website with a space makes no line, so nothing after the space reaches `/add-portal`, and the form says why.
+#[test]
+fn build_it_refuses_a_website_with_a_space() {
+    let mut harness = tray_harness(browse_shell("portals_add_space", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.example.be/x --list", "", "", ""]);
+    assert!(harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled());
+    assert!(is_shown(&harness, "Take the spaces out of the address first."));
+    assert!(is_shown(&harness, "A web address has no spaces. Type it as it shows in your browser, such as https://jobs.example.be/jobs."));
+}
+
+/// A field holding a character that shows nothing makes no line, and says which field.
+#[test]
+fn build_it_refuses_hidden_characters() {
+    let mut harness = tray_harness(browse_shell("portals_add_hidden", None, vec![]));
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.sample-board.example", "Bel\u{200B}gium", "", ""]);
+    assert!(harness.get_by_label("Build it with Claude…").accesskit_node().is_disabled());
+    assert!(harness.query_all_by_label("The country holds characters that do not show. Type it again by hand.").count() > 0);
+}
+
+/// Build it with Claude… opens the launcher on `/add-portal` with the answers on its line, and starts nothing.
+#[test]
+fn build_it_opens_add_portal_with_the_answers() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_add_build", None, vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = tray_harness(shell);
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, ["jobs.sample-board.example", "Belgium", "French", "Lead Backend Engineer"]);
+    assert!(is_shown(&harness, FILLED_LINE), "the command shows");
+    harness.get_by_label("Build it with Claude…").click();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher opens");
+    assert!(harness.query_all_by_label(FILLED_LINE).count() > 0, "on the line the task runs");
+    assert_eq!(calls.lock().unwrap().starts, 0, "nothing runs until Run");
+}
+
+fn render_browse(name: &str, saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>, theme: Theme) -> Harness<'static> {
+    let mut harness = probed_wgpu(browse_shell(name, saved, answers), theme);
+    open_segment(&mut harness, "Browse community");
+    harness
+}
+
+#[test]
+fn portals_browse_light() {
+    let name = "portals_browse_light";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_dark() {
+    let name = "portals_browse_dark";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Dark), name);
+}
+
+/// At 150% text size the actions stay whole, with the room the owners and the tag do not need given to the name. The
+/// search frames the rows that show Install… and an Unmaintained tag.
+#[test]
+fn portals_browse_large_light() {
+    let name = "portals_browse_large_light";
+    let mut harness = probed_wgpu(browse_shell(name, Some(community_list(minutes_ago(12))), vec![]), Theme::Light);
+    harness.ctx.set_zoom_factor(1.5);
+    harness.run_steps(3);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Browse community").click_accesskit();
+    harness.run_steps(3);
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("remote");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Unmaintained since 2026-05"));
+    assert_eq!(harness.query_all_by_label("Install…").count(), 1);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_browse_loading_light() {
+    let name = "portals_browse_loading_light";
+    compare(&mut render_browse(name, None, vec![], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_offline_light() {
+    let name = "portals_browse_offline_light";
+    compare(&mut render_browse(name, Some(community_list(minutes_ago(25 * 60 + 18))), vec![Err(CommunityFailure::Unreachable)], Theme::Light), name);
+}
+
+#[test]
+fn portals_browse_limited_light() {
+    let name = "portals_browse_limited_light";
+    let answers = vec![Err(CommunityFailure::Limited { until: browse_utc() + chrono::TimeDelta::minutes(20) })];
+    let mut harness = render_browse(name, Some(community_list(minutes_ago(12))), answers, Theme::Light);
+    harness.get_by_label("Refresh").click();
+    harness.run_steps(3);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_browse_nocache_light() {
+    let name = "portals_browse_nocache_light";
+    compare(&mut render_browse(name, None, vec![Err(CommunityFailure::Unreachable)], Theme::Light), name);
+}
+
+fn render_add(name: &str, answers: [&str; 4]) {
+    let mut harness = probed_wgpu(browse_shell(name, None, vec![]), Theme::Light);
+    open_segment(&mut harness, "Add a portal");
+    type_answers(&mut harness, answers);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn portals_add_empty_light() {
+    render_add("portals_add_empty_light", ["", "", "", ""]);
+}
+
+#[test]
+fn portals_add_filled_light() {
+    render_add("portals_add_filled_light", ["https://jobs.sample-board.example", "Belgium", "French", "Lead Backend Engineer"]);
+}
+
+#[test]
+fn portals_add_partial_light() {
+    render_add("portals_add_partial_light", ["https://jobs.sample-board.example", "Belgium", "", ""]);
+}
+
+#[test]
+fn portals_add_invalid_light() {
+    render_add("portals_add_invalid_light", ["jobs sample board", "Belgium", "French", "Lead Backend Engineer"]);
 }

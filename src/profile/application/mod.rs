@@ -6,7 +6,7 @@ mod view;
 pub use cv::{CvDocument, CvShelf, PageCount, RailWord, StateLine, cv_shelf, meta_words, rail_word, state_line};
 pub use editor::{ProfileEditor, SaveOutcome};
 pub use marks::{Mark, UpdatedMarks};
-pub use view::{BlockView, ProfileView, Role, SectionView, TopicCounts, TopicView, profile_view, topic_counts};
+pub use view::{BlockView, ProfileView, Role, SectionView, TopicCounts, TopicView, home_country, profile_view, topic_counts};
 
 /// Why Update with Claude… waits while a profile file it would write cannot be read. Settings › Your terms says the same.
 pub const UNREADABLE: &str = "Fix the file first, so Claude does not write over it.";

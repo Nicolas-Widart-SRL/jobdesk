@@ -9,7 +9,8 @@
 <style>
 /* Profile: the candidate's profile, read by topic and edited one block at a time. A topic rail beside one topic on paper.
    Choose with ?state=view|edit|busy|conflict|empty|loading|failed|updated|setup and ?theme=light|dark.
-   setup draws the Setup screen, to show its Profile panel shrunk to one summary line.
+   setup draws the Setup screen, to show its Profile and Portals panels shrunk to one summary line each.
+   With setup, ?portals=full|none|unread picks the Portals line: filled, no portal installed, or jobs that cannot be read.
    Grid.html's scoped shell, copied under .pf, so app.css and the other canvases are unchanged. Fictional data only. */
 body { margin: 0; }
 .pf {
@@ -172,6 +173,9 @@ body { margin: 0; }
 .pf .sum .tl i { display: block; width: 6px; height: 18px; background: var(--text); }
 .pf .sum .tl i.f { background: var(--interview); }
 .pf .sum .r { margin-left: auto; }
+.pf .sum .m { color: var(--muted); }
+.pf .sum b { font-weight: 600; }
+.pf .sum.tight { gap: 8px; }
 
 </style>
 </head>
@@ -180,6 +184,7 @@ body { margin: 0; }
 <script>
 const P = new URLSearchParams(location.search);
 const STATE = (P.get('state') || 'view').toLowerCase();
+const PORTALS = (P.get('portals') || 'full').toLowerCase();
 const THEME = (P.get('theme') || 'light').toLowerCase();
 const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
 const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
@@ -187,7 +192,7 @@ const B = (t, cls = '') => `<span class="b ${cls}">${t}</span>`;
 const blank = (hint) => `<span class="blank">${hint ? `to fill: ${hint}` : 'to fill'}</span>`;
 
 function shell(inner, o = {}) {
-  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', ''], ['Profile', ''], ['Setup', '']]
+  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', ''], ['Profile', ''], ...(o.tab === 'Setup' ? [['Portals', '']] : []), ['Setup', '']]
     .map(([t, c]) => `<a class="${t === (o.tab || 'Profile') ? 'on' : ''}" href="#"><span class="lbl">${t}</span>${c ? `<span class="chip num">${c}</span>` : ''}${t === 'Profile' && o.failed ? '<span class="failsq" title="Part of your profile could not be read"></span>' : ''}</a>`).join('');
   return `<div class="app pf" data-theme="${THEME}">
     <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
@@ -360,25 +365,30 @@ function a_updated() {
       updated: 'by the last task, 4 minutes ago. It changed one role: Lead Software Engineer.' })}</div>`);
 }
 
-// Setup, with its Profile panel shrunk to one summary line. The other panels are as built.
+// Setup, with its Profile and Portals panels shrunk to one summary line each. The other panels are as built.
+// The Portals line counts the portals on and the jobs they found, and Open Portals switches to the Portals tab.
 function a_setup() {
   const marks = topics().flatMap(([, list]) => list).map(([, s]) => `<i class="${s === 'filled' ? '' : 'f'}"></i>`).join('');
   const tool = (n, note, t, tone) => `<div class="lr"><span class="path">${n}</span><span class="r"><span class="m">${note}</span><span class="tag c-${tone}">${t}</span></span></div>`;
-  const portal = (n, seen, on) => `<div class="lr"><span>${n}</span><span class="r"><span class="m num">${seen}</span><span class="tag c-${on ? 'hired' : 'plain'}">${on ? 'Enabled' : 'Disabled'}</span></span></div>`;
+  const portals = {
+    full: '<span><b class="num">4 of 8</b> portals on</span><span class="m">·</span><span class="m"><span class="num">538</span> jobs found</span>',
+    none: '<span class="m">No portals installed.</span>',
+    unread: '<span><b class="num">4 of 8</b> portals on</span><span class="m">·</span><span class="m">Jobs found are hidden while your saved jobs cannot be read.</span>',
+  }[PORTALS] || '';
   return shell(`<header class="phead" style="align-items: center"><div><h1>Setup</h1><div class="sub path">ai-job-search</div></div>
       <div class="row" style="margin-left: auto; gap: 10px">${B('Look for more in your documents…')}${B('Change folder')}</div></header>
     <div class="promise">Jobdesk changes your folder only when you save an edit on the Profile screen. Everything else changes through a task you start, with Claude Code on this computer.</div>
     <div class="sbody">
+      <div class="col" style="gap: 16px; align-self: start">
       <section class="pnl" aria-label="Profile"><div class="ph2">Profile <span class="n path">.claude/skills/job-application-assistant</span></div>
         <div class="sum"><span class="tl" role="img" aria-label="8 of 11 topics filled">${marks}</span><span><b class="num">8 of 11</b> topics filled</span><span class="r">${B('Open Profile', 'sm')}</span></div></section>
-      <section class="slp" aria-label="Environment" style="grid-row: span 2"><div class="ph2">Environment <span class="n num">4 of 5 ready</span></div>
+      <section class="pnl" aria-label="Portals"><div class="ph2">Portals <span class="n path">.agents/skills</span></div>
+        <div class="sum tight" aria-label="Portals summary">${portals}<span class="r">${B('Open Portals', 'sm')}</span></div></section></div>
+      <section class="slp" aria-label="Environment"><div class="ph2">Environment <span class="n num">4 of 5 ready</span></div>
         ${tool('claude', '1.0', 'Ready', 'hired')}${tool('python3', 'State tools', 'Ready', 'hired')}
         <div class="lr"><span>Job site search: missing bun</span><span class="r"><span class="tag c-closed">Missing</span></span></div>
         ${tool('lualatex', 'CV', 'Ready', 'hired')}${tool('xelatex', 'Cover letter', 'Ready', 'hired')}${tool('pdftotext', 'Layout check', 'Optional', 'plain')}${tool('salary_data.json', 'Salary figures', 'Optional', 'plain')}
         <div style="padding: 10px 16px 14px">${B('Check again', 'sm onpanel')}</div></section>
-      <section class="pnl" aria-label="Portals"><div class="ph2">Portals <span class="n path">.agents/skills</span></div>
-        ${portal('LinkedIn', '412', true)}${portal('Freehire', '96', true)}${portal('Regional Jobs Board', '38', true)}${portal('Sample Tech Careers', '0', false)}
-        <div class="row" style="gap: 8px; padding: 10px 16px 14px">${B('Check portal health…', 'sm')}${B('Add portal…', 'sm')}</div></section>
     </div>`, { tab: 'Setup' });
 }
 

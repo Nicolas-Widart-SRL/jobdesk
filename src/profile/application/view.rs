@@ -4,6 +4,7 @@ use crate::profile::domain::{
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::file_text::with_lf;
 use crate::shared_kernel::placeholders::{Piece, heading_content, placeholder_count, shown_pieces};
+use crate::shared_kernel::visible_text::visible_chars;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProfileView {
@@ -195,6 +196,25 @@ pub fn topic_counts(view: &ProfileView) -> TopicCounts {
     TopicCounts { filled, total: view.topics.len(), hidden, any_found: view.any_found }
 }
 
+/// The user's country: the text after the last comma of the Identity `**Location:**` line, such as Belgium for
+/// `- **Location:** Namur, Belgium (hybrid within 1h15)`, before any bracket. Two letters after a comma are a state or
+/// province, as in `Los Angeles, CA`, so they give `None`: two letters count only as the whole Location, such as `DK`.
+/// A line that still holds a setup token, such as `[CITY], [COUNTRY]`, gives `None`, and so does a line with no country.
+pub fn home_country(view: &ProfileView) -> Option<String> {
+    let identity = view.topics.iter().find(|topic| topic.id == TopicId::Identity)?;
+    let blocks = identity.sections.iter().flat_map(|section| std::iter::once(&section.block).chain(&section.children));
+    let line = blocks.flat_map(|block| block.body.lines()).find_map(|line| line.split_once("**Location:**").map(|(_, place)| place))?;
+    if placeholder_count(line) > 0 {
+        return None;
+    }
+    let place = line.split(['(', '[']).next().unwrap_or_default();
+    let (after_comma, last) = place.rsplit_once(',').map_or((false, place), |(_, last)| (true, last));
+    let country: String = visible_chars(last).collect();
+    let country = country.split_whitespace().collect::<Vec<_>>().join(" ");
+    let state = after_comma && country.len() == 2 && country.bytes().all(|b| b.is_ascii_alphabetic());
+    (!country.is_empty() && !state).then_some(country)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +378,25 @@ mod tests {
         let child = &topic(&view, TopicId::Experience).sections[0].children[0];
         assert_eq!(child.role.as_ref().unwrap().title, [Piece::Blank("to fill: job title".to_owned())]);
         assert_eq!(child.placeholders, 1);
+    }
+
+    #[test]
+    fn the_home_country_follows_the_last_comma_of_the_location() {
+        let country = |identity: &str| home_country(&view_of(&[(ProfileFile::Candidate, &format!("## Identity\n- **Name:** Ada Quill\n{identity}\n"))]));
+        assert_eq!(country("- **Location:** Namur, Belgium").as_deref(), Some("Belgium"));
+        assert_eq!(country("- **Location:** Namur, Belgium (hybrid within 1h15, or fully remote)").as_deref(), Some("Belgium"));
+        assert_eq!(country("**Location:**  Lisbon,  Portugal\u{200B} ").as_deref(), Some("Portugal"));
+        assert_eq!(country("- **Location:** Denmark").as_deref(), Some("Denmark"), "a country alone");
+        assert_eq!(country("- **Location:** DK").as_deref(), Some("DK"), "a code alone");
+        for state in ["Los Angeles, CA", "Atlanta, GA", "Chicago, IL", "Dover, DE", "Boston, MA", "Denver, CO"] {
+            assert_eq!(country(&format!("- **Location:** {state}")), None, "{state} names a state, not a country");
+        }
+        assert_eq!(country("- **Location:** [CITY], [COUNTRY]"), None);
+        assert_eq!(country("- **Location:** Namur, [COUNTRY]"), None);
+        assert_eq!(country("- **Location:** "), None);
+        assert_eq!(country("- **City:** Namur, Belgium"), None);
+        let claude_md = "## Candidate Profile\n\n### Identity\n- **Location:** Ghent, Belgium\n";
+        assert_eq!(home_country(&view_of(&[(ProfileFile::ClaudeMd, claude_md)])).as_deref(), Some("Belgium"), "the lines of CLAUDE.md count too");
+        assert_eq!(home_country(&ProfileView::default()), None);
     }
 }

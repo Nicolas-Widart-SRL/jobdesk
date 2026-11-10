@@ -15,6 +15,8 @@ pub struct JobView {
     pub portal: Option<String>,
     /// The site the posting came from, in words: `linkedin-search` reads as LinkedIn.
     pub found_on: Option<String>,
+    /// The day `/scrape` first saw the posting.
+    pub first_seen: Option<NaiveDate>,
     pub deadline: Option<NaiveDate>,
     pub days_to_deadline: Option<i64>,
     pub score: Option<u8>,
@@ -51,8 +53,10 @@ impl JobBoard {
         self.lanes.iter().find(|view| view.lane == lane).map_or(&[], |view| &view.jobs)
     }
 
-    pub fn seen_on_portal(&self, portal: &str) -> usize {
-        self.lanes.iter().flat_map(|view| &view.jobs).filter(|job| job.portal.as_deref() == Some(portal)).count()
+    /// How many saved jobs came from `portal`, a folder name such as `linkedin-search`, and the latest day one of them was first seen.
+    pub fn portal_jobs(&self, portal: &str) -> (usize, Option<NaiveDate>) {
+        let jobs = self.lanes.iter().flat_map(|view| &view.jobs).filter(|job| job.portal.as_deref() == Some(portal));
+        jobs.fold((0, None), |(count, latest), job| (count + 1, latest.max(job.first_seen)))
     }
 
     pub fn count(&self, lane: Lane) -> usize {
@@ -96,6 +100,7 @@ fn view_of(job: &Job, today: NaiveDate, terms: &FreelanceTerms) -> JobView {
         url: job.url.clone(),
         portal: job.portal.clone(),
         found_on: job.portal.as_deref().map(portal_name).filter(|name| !name.is_empty()),
+        first_seen: job.first_seen,
         deadline: job.deadline,
         days_to_deadline: job.days_to_deadline(today),
         score: job.score(),
@@ -146,6 +151,18 @@ mod tests {
         assert_eq!(order, ["Top", "Urgent", "Calm"]);
         assert_eq!(board.total_seen, 3);
     }
+
+    #[test]
+    fn counts_a_portals_jobs_and_its_latest_first_seen() {
+        let day = |d| NaiveDate::from_ymd_opt(2026, 10, d);
+        let on = |portal: &str, first_seen| JobView { portal: Some(portal.into()), first_seen, ..fixtures::view(portal) };
+        let jobs = [on("north-search", day(28)), on("north-search", day(30)), on("north-search", None), on("south-search", day(31))];
+        let board = fixtures::board(vec![(Lane::Shortlist, jobs[..2].to_vec()), (Lane::New, jobs[2..].to_vec())]);
+
+        assert_eq!(board.portal_jobs("north-search"), (3, day(30)));
+        assert_eq!(board.portal_jobs("south-search"), (1, day(31)));
+        assert_eq!(board.portal_jobs("west-search"), (0, None));
+    }
 }
 
 /// Jobs and boards for tests, built in memory.
@@ -165,6 +182,7 @@ pub mod fixtures {
             url: None,
             portal: None,
             found_on: None,
+            first_seen: None,
             deadline: None,
             days_to_deadline: None,
             score: Some(80),

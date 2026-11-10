@@ -26,6 +26,15 @@ Labels are not selectable, so a click on a row's text picks the row. Only these 
 
 None of them sits inside something clickable.
 
+## Switch or checkbox
+
+- `switch` is for a state that takes effect at once on a thing in a list, such as a portal on or off. Its word, On or Off, follows the track, and a screen reader hears it as a checkbox named by its row, with its state.
+- `setting_check` is for a preference on a settings page. A checkbox reads as part of a form, so it stays on settings pages.
+
+## A tag in a column that gives way
+
+`fitted_row_tag` is a `row_tag` where it fits in the room left, and otherwise its words cut with an ellipsis in the tag's ink, whole on hover. Use it in a column that gives up its width before the actions beside it, such as the community list's Maintained column on Portals.
+
 ## The status bar and updates
 
 The right of the status bar is Jobdesk's own: the update group, a `status_divider`, then Settings. The group shows only while there is news of an update, and its words are cut first, so its action and Settings keep their width.
@@ -61,3 +70,4 @@ With motion reduced, `Working` and `Quiet` become a solid rule in their ink. The
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.
 The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.
+The switch sheet, `ui_kit_gallery_switch_{light,dark}`, shows a switch on, off, disabled both ways, and focused, then `name_line` with its note, alone, and cut at the right, then `fitted_row_tag` whole and with its words cut.

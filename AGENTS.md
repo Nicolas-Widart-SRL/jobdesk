@@ -1,6 +1,6 @@
 # Jobdesk
 
-Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` slash commands. It holds no workflow logic. Every action runs an unchanged slash command through the local `claude` CLI.
+Rust and egui desktop app for macOS and Windows: a GUI over the `ai-job-search` slash commands. It holds no workflow logic. Every task runs through the local `claude` CLI, nearly always as an unchanged slash command. Two things are not that: Install… on a community portal, whose plain-words task Jobdesk writes from validated parts, and the portal On/Off switch and Remove, which are Jobdesk's own writes, not tasks.
 
 ## Commands
 
@@ -20,8 +20,8 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 
 ## Logs
 
-- Run logs sit in the app's data folder: `~/Library/Application Support/Jobdesk/runs/` on macOS, `%APPDATA%\Jobdesk\data\runs\` on Windows. `intray/` beside `runs/` holds the tray decisions. `settings.json` beside them holds the preferences. `updates/` holds Jobdesk's own downloads, one folder for each Jobdesk that started a download, which a later launch removes once that Jobdesk has closed, and an `apply-failed` note that the next launch reads once.
-- `JOBDESK_DATA_DIR` set to an absolute path moves the whole data folder there, eframe's `app.ron` included, and the copy that Restart to update opens keeps it. An empty or relative value is ignored. Point it only at a fresh folder kept for Jobdesk, because Jobdesk empties its `updates/`, prunes its `runs/` and rewrites its `intray/decisions.json`. It does not move the API key's keychain entry or the `claude` CLI's own sign-in.
+- Run logs sit in the app's data folder: `~/Library/Application Support/Jobdesk/runs/` on macOS, `%APPDATA%\Jobdesk\data\runs\` on Windows. `intray/` beside `runs/` holds the tray decisions. `settings.json` beside them holds the preferences. `portals/community.json` holds the community portal list read last from GitHub. `updates/` holds Jobdesk's own downloads, one folder for each Jobdesk that started a download, which a later launch removes once that Jobdesk has closed, and an `apply-failed` note that the next launch reads once.
+- `JOBDESK_DATA_DIR` set to an absolute path moves the whole data folder there, eframe's `app.ron` included, and the copy that Restart to update opens keeps it. An empty or relative value is ignored. Point it only at a fresh folder kept for Jobdesk, because Jobdesk empties its `updates/`, prunes its `runs/` and rewrites its `intray/decisions.json` and `portals/community.json`. It does not move the API key's keychain entry or the `claude` CLI's own sign-in.
 - Each run has one `<run id>.jsonl`: a `jobdesk_meta` line, then the raw stream-json. A reopened run adds a `jobdesk_resume` line before its `jobdesk_user` line, and a stop adds a `jobdesk_stop` line. `ls -t` lists the newest first.
 - The app writes no log of its own. A panic prints only to the terminal that started the app.
 - These files hold the user's real job search. Read them only when asked, and never copy a value into a test, a memory or a commit.
@@ -41,6 +41,8 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - Card actions never start a run. Y opens the launcher, and the user starts the run there.
 - Tool permissions are allowed and noted in the activity by default, and Settings › Permissions turns prompts on. `AskUserQuestion` always reaches the user, and remembered rules stay session-scoped. See [Tool permissions](docs/architecture/trust.md#tool-permissions).
 - Authentication stays with the `claude` CLI, and Jobdesk offers no login. The one exception is an optional Anthropic Console API key the user pastes in Settings › Providers. It is stored only in the system keychain, read from it once per launch, until a read succeeds, and then held in process memory for the session, and passed only in the environment of the `claude` process, never when an inherited `ANTHROPIC_BASE_URL` is neither `https` nor `http` to this machine without a proxy variable. It never goes in a file, a log, a command line, a panic or a `Debug` impl, and a saved key is never on screen in full. Where the whole key shows up in what a task's process prints, the run log, the activity and the failure get its mask. The one exception is the key being typed, while the user presses Show.
+- Jobdesk writes the checkout only from Profile's Save and from the Portals screen: a portal's switch and Remove. All three wait while a task runs. Remove moves the portal's folder to the Trash (the Recycle Bin on Windows) after the user confirms, and never deletes it.
+- Reading the community portal list from GitHub is not a run: it starts no `claude`, writes no run log and is not counted in Usage. See [The community portal list](docs/architecture/trust.md#the-community-portal-list).
 - Test connection is not a run. It uses no tools, runs in an empty temporary folder, is capped at $0.01, writes no run log, is not counted in Usage, and is disabled while a task runs.
 - Postings, notes and reports are untrusted: render them as [Trust](docs/architecture/trust.md#rendering-untrusted-text) says.
 - The UI reads the `Snapshot`, never the disk.

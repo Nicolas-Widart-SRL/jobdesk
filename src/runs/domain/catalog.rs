@@ -62,6 +62,9 @@ const fn spec(
     CommandSpec { name, summary, writes, group, fields, budget_usd, destructive: false }
 }
 
+/// The suggested budget for a task in plain words, which no command in the catalog stands for.
+pub const WORDS_BUDGET_USD: u32 = 2;
+
 /// Forms only build the argument string. Each command's own spec stays the authority.
 pub const CATALOG: &[CommandSpec] = &[
     spec("/scrape", "Find new postings on installed portals", "seen_jobs.json", CommandGroup::Find, &[text("focus", "Focus area, broad, or health")], 2),

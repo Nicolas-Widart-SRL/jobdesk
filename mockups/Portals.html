@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Portals</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* Portals: the job boards Claude searches, in plain words. Four views under one head: Your portals, a portal's detail,
+   Browse community and Add a portal.
+   The list sits on a slip beside the picked portal's detail on paper, as Profile's rail sits beside its topic.
+   Choose with ?screen=yours|detail|browse|add, ?state=..., ?portal=linkedin|northfield and ?theme=light|dark.
+   yours:  full | loading | nofolder | none | failed | busy
+   detail: full | remove | busy        (the list with the portal named by ?portal= picked)
+   browse: cached | loading | offline | limited | nocache | tip
+   add:    empty | filled | partial | invalid
+   Setup's Portals summary line is drawn in Profile.html?state=setup&portals=full|none|unread, the one canvas that draws Setup.
+   Grid.html's scoped shell, copied under .po, so app.css and the other canvases are unchanged. Fictional data only. */
+body { margin: 0; }
+.po {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.po[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.po .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; position: relative; }
+.po .num { font-variant-numeric: tabular-nums; }
+
+/* Shell, as Grid.html and Settings.html draw it. Portals sits after Profile. */
+.po .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.po .menu .brand { margin-right: 0; }
+.po .menu .brand svg path:last-child { stroke: var(--sheet); }
+.po .tabs { display: flex; gap: 6px; }
+.po .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.po .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.po .tabs a.on { color: var(--text); font-weight: 600; }
+.po .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.po .tabs a.off { opacity: .55; }
+.po .chip { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.po .failsq { display: inline-block; width: 8px; height: 8px; background: var(--closed); }
+.po .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.po .newtask .keys { color: var(--muted); }
+.po .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.po .sbtn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: 3px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.po .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Controls, as UiPass.html and Profile.html draw them: opaque, disabled at half ink over the rest fill. */
+.po .b { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; white-space: nowrap; position: relative; }
+.po .b.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.po .b.pri { background: var(--pri); border-color: var(--pri); color: var(--on-pri); }
+.po .b.bad { color: var(--closed); border-color: var(--closed); }
+.po .b.dis { color: color-mix(in srgb, var(--text) 50%, var(--card)); border-color: color-mix(in srgb, var(--line) 50%, var(--card)); }
+.po .b.bad.dis { color: color-mix(in srgb, var(--closed) 50%, var(--card)); border-color: color-mix(in srgb, var(--closed) 50%, var(--card)); }
+.po .b.pri.dis { background: color-mix(in srgb, var(--pri) 50%, var(--card)); border-color: transparent; color: var(--card); }
+.po .b.onpanel { background: var(--panel); }
+.po .lk { display: inline-flex; align-items: center; gap: 4px; height: 24px; color: var(--active); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+.po .tip { position: absolute; z-index: 5; max-width: 280px; padding: 6px 9px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); color: var(--text); font-size: 13px; line-height: 1.4; white-space: normal; font-weight: 400; }
+.po .ptr { position: absolute; z-index: 6; width: 18px; height: 22px; pointer-events: none; }
+.po .path { font: 400 13px/1.3 var(--type); }
+.po .tag { height: 22px; }
+.po .tag.rt { height: 20px; padding: 0 6px; font-size: 12.5px; }
+
+/* NEW switch: a track twice CHECK_BOX wide and CHECK_BOX tall, its square knob at the leading end when off,
+   the word On or Off after it. On fills the track in text ink. Off keeps a muted edge, so the control still clears 3:1. */
+.po .sw { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font-size: 13px; color: var(--muted); position: relative; }
+.po .sw .trk { position: relative; width: 36px; height: 18px; border: 1px solid var(--muted); border-radius: 2px; background: var(--field); }
+.po .sw .trk::after { content: ""; position: absolute; top: 1px; left: 1px; width: 14px; height: 14px; border-radius: 1px; background: var(--muted); }
+.po .sw.on { color: var(--text); font-weight: 600; }
+.po .sw.on .trk { border-color: var(--text); background: var(--text); }
+.po .sw.on .trk::after { left: 19px; background: var(--field); }
+.po .sw.dis { opacity: .5; }
+.po .sw.foc .trk { outline: 2px solid var(--active); outline-offset: 1px; }
+
+/* Page head and the three views as segments, on the grid. */
+.po .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
+.po .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.po .phead .sub { margin-top: 2px; color: var(--muted); }
+.po .phead .acts { margin-left: auto; display: flex; gap: 8px; }
+.po .seg2 { flex: none; display: flex; gap: 3px; margin: 0 32px 12px; border-bottom: 1px solid var(--text); }
+.po .seg2 button { height: 34px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: none; color: var(--muted); font-weight: 500; }
+.po .seg2 button.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+.po .seg2 button .n { margin-left: 6px; }
+.po .seg2 button.dis { opacity: .55; }
+.po .bbody { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; padding: 0 32px 14px; }
+
+/* The list as a slip of pickable rows, grouped On then Off. */
+.po .rail { flex: 0 0 430px; display: flex; flex-direction: column; min-height: 0; border-radius: 4px; background: var(--panel); position: relative; overflow: hidden; }
+.po .gt { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px 3px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.po .gt .m { font-weight: 400; }
+.po .pr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 1px; margin: 0 6px; padding: 8px 8px 8px 11px; border-radius: 3px; border-top: 1px solid var(--line); }
+.po .pr.first { border-top: 0; }
+.po .pr.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); border-top-color: transparent; }
+.po .pr.on + .pr { border-top-color: transparent; }
+.po .pr .nm { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.po .pr .nm b { font-weight: 600; white-space: nowrap; }
+.po .pr .nm .c { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.po .pr .ds { grid-column: 1; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.po .pr .ft { grid-column: 1 / span 2; white-space: nowrap; display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.po .pr .ft .r { margin-left: auto; display: flex; gap: 6px; }
+.po .pr .sw { grid-row: 1 / span 2; grid-column: 2; align-self: start; }
+.po .quiet .nm b, .po .quiet .ds, .po .quiet .ft { opacity: .8; }
+.po .bar-y { position: absolute; top: 6px; right: 3px; width: 6px; height: 46%; border-radius: 3px; background: var(--line); }
+
+/* The detail on paper: head, a scrolling body, a footnote strip. */
+.po .sheetp { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.po .dh { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 16px 22px 14px; border-bottom: 1px solid var(--line); position: relative; }
+.po .dh .top { display: flex; align-items: flex-start; gap: 16px; }
+.po .dh h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.po .dh p { margin-top: 2px; color: var(--muted); }
+.po .dh .top .sw { margin-left: auto; margin-top: 6px; }
+.po .dh .acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; position: relative; }
+.po .dh .acts .m { margin-left: 8px; font-size: 13px; color: var(--muted); }
+.po .dh .facts { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--muted); }
+.po .dh .facts b { color: var(--text); font-weight: 600; }
+.po .dscroll { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; padding: 4px 22px 0; }
+.po .dfoot { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 22px 9px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); }
+.po .dfoot .path { font-size: 12.5px; }
+.po .dfoot .r { margin-left: auto; color: var(--muted); }
+
+/* Sections on the paper. */
+.po .sec { padding: 14px 0 6px; }
+.po .sec + .sec { border-top: 1px solid var(--line); }
+.po .sec h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 2px; font: 600 17px/1.3 var(--slab); }
+.po .sec h3 .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.po .sec .lead { max-width: 620px; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+.po .how { display: grid; grid-template-columns: 170px minmax(0, 1fr); max-width: 680px; margin-top: 6px; }
+.po .how > span { padding: 6px 0; border-top: 1px solid var(--line); }
+.po .how > span:nth-child(-n+2) { border-top: 0; }
+.po .how .k { color: var(--muted); font-size: 13px; padding-top: 7px; }
+.po .how .v b { font-weight: 600; }
+.po .tg { margin: 10px 0 2px; display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.po .tg .p { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 2px; background: var(--panel); color: var(--text); font-size: 12.5px; }
+.po .term { display: grid; grid-template-columns: minmax(0, 1fr) 180px; align-items: center; max-width: 680px; min-height: 30px; border-top: 1px solid var(--line); }
+.po .term:first-of-type { border-top: 0; }
+.po .term .q { font-size: 15px; }
+.po .term .w { font-size: 13px; color: var(--muted); }
+.po .code { display: flex; flex-direction: column; gap: 2px; max-width: 680px; margin-top: 8px; padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.45 var(--type); white-space: pre; overflow: hidden; }
+.po .offnote { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-top: 12px; border-radius: 4px; background: var(--panel); font-size: 13.5px; }
+
+/* A slip beside the paper, for Add a portal's next steps. */
+.po .sidec { flex: 0 0 340px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.po .slip { border-radius: 4px; background: var(--panel); }
+.po .slip .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.po .slip .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.po .slip .sb { padding: 8px 14px 12px; }
+
+/* Browse community. */
+.po .bwrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 0 32px 14px; }
+.po .btop { flex: none; display: flex; align-items: center; gap: 12px; }
+.po .sfield { display: flex; align-items: center; gap: 8px; width: 360px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
+.po .sfield svg { width: 14px; height: 14px; }
+.po .btop .when { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.po .note2 { flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 9px 14px; border-radius: 4px; background: var(--panel); font-size: 13.5px; line-height: 1.45; }
+.po .note2 .sq { margin-top: 6px; flex: none; }
+.po .paperbox { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.po .cg { display: flex; align-items: baseline; gap: 8px; padding: 10px 16px 4px; border-bottom: 1px solid var(--text); font: 600 17px/1.3 var(--slab); }
+.po .cg .m { font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.po .cr { display: grid; grid-template-columns: minmax(0, 1fr) 190px 240px 200px; align-items: center; column-gap: 16px; min-height: 52px; padding: 6px 16px; border-top: 1px solid var(--line); }
+.po .cg + .cr { border-top: 0; }
+.po .cr .nm b { font-weight: 600; }
+.po .cr .nm .ds { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.po .cr .own { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.po .cr .st { display: flex; gap: 6px; }
+.po .cr .ac { display: flex; align-items: center; justify-content: flex-end; gap: 12px; position: relative; }
+.po .cnone { padding: 10px 16px 12px; font-size: 13.5px; color: var(--muted); }
+
+/* Add a portal: the form on paper, what happens next on a slip beside it. */
+.po .form { flex: 0 1 640px; display: flex; flex-direction: column; gap: 14px; padding: 18px 22px 18px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); align-self: flex-start; }
+.po .form h2 { margin: 0; font: 600 19px/1.25 var(--slab); }
+.po .fl { display: flex; flex-direction: column; gap: 4px; }
+.po .fl label { font-size: 13px; font-weight: 600; }
+.po .fl .help { font-size: 13px; color: var(--muted); }
+.po .inp { display: flex; align-items: center; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
+.po .inp.val { color: var(--text); }
+.po .inp.foc { border-color: var(--text); outline: 2px solid var(--active); outline-offset: 1px; }
+.po .inp.bad { border-color: var(--closed); }
+.po .fl .err { font-size: 13px; color: var(--closed); font-weight: 600; }
+.po .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.po .caret { display: inline-block; width: 1.5px; height: 17px; margin-left: 1px; vertical-align: -3px; background: var(--text); }
+.po .fact { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line); }
+.po .fact .why { font-size: 13px; color: var(--muted); }
+.po .cbox { align-self: stretch; padding: 9px 11px; border-radius: 2px; background: var(--field); border: 1px solid var(--line); font: 400 13.5px/1.45 var(--type); white-space: normal; }
+.po .fl .opt { margin-left: 6px; font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.po .steps .st { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.po .steps .st:first-child { border-top: 0; }
+.po .kn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 2px; background: var(--card); color: var(--muted); font-weight: 600; font-size: 12.5px; box-shadow: inset 0 0 0 1px var(--line); }
+.po .steps .st b { font-weight: 600; }
+.po .steps .st .m { grid-column: 2; font-size: 13px; color: var(--muted); line-height: 1.4; }
+
+/* Shared states: grey lines while loading, the alert, the empty state, the confirm popover. */
+.po .sk { display: block; height: 12px; border-radius: 2px; background: var(--raised); }
+.po .alert { flex: none; display: flex; align-items: flex-start; gap: 16px; margin: 0 37px 12px 32px; padding: 12px 16px; border: 1px solid var(--closed); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--closed); }
+.po .alert .at { color: var(--closed); font-weight: 600; }
+.po .alert.warn { border-color: var(--interview); box-shadow: 5px 5px 0 var(--interview); }
+.po .alert.warn .at { color: var(--interview); }
+.po .empty { display: flex; flex-direction: column; gap: 12px; max-width: 560px; padding: 24px; }
+.po .empty h3 { margin: 0; font: 600 19px/1.25 var(--slab); }
+.po .empty p { color: var(--muted); line-height: 1.45; font-size: 15px; }
+.po .pop { position: absolute; z-index: 5; width: 340px; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--text); border-radius: 4px; background: var(--sheet); box-shadow: 6px 6px 0 var(--line); font-size: 13.5px; line-height: 1.45; }
+.po .pop b { font-weight: 600; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const SCREEN = (P.get('screen') || 'yours').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const PORTAL = (P.get('portal') || 'linkedin').toLowerCase();
+const STATE = (P.get('state') || '').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const ARROW = (x, y) => `<svg class="ptr" style="left:${x}px; top:${y}px" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16l4.2-4 2.8 6.3 2.4-1-2.7-6.2h5.8z" fill="var(--page)" stroke="var(--page-head)" stroke-width="1.1" stroke-linejoin="round"/></svg>`;
+const LOUPE = '<svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.4 9.4L13 13" stroke="currentColor" stroke-width="1.5"/></svg>';
+const B = (t, cls = '') => `<span class="b ${cls}">${t}</span>`;
+const T = (t, tone = 'plain', row = true) => `<span class="tag c-${tone}${row ? ' rt' : ''}">${t}</span>`;
+const SW = (on, cls = '') => `<span class="sw${on ? ' on' : ''} ${cls}" role="switch" aria-checked="${on}"><span class="trk"></span>${on ? 'On' : 'Off'}</span>`;
+const BUSY_WHY = 'A task is running. Turn portals on or off once it ends.';
+
+// Installed portals. Six ship with ai-job-search, plus one from the community and one the user made. Fictional counts.
+const PORTALS = [
+  { id: 'linkedin', name: 'LinkedIn', country: 'Worldwide', desc: 'Public job listings on LinkedIn, in any country.', on: true, jobs: 412, last: 'Mon 9 Nov', src: 'Built-in', badges: ['Personal use only'], folder: 'linkedin-search', site: 'linkedin.com/jobs', quotes: true },
+  { id: 'freehire', name: 'Freehire', country: 'Worldwide', desc: 'Gathers postings from many job sites into one search.', on: true, jobs: 96, last: 'Sun 8 Nov', src: 'Built-in', badges: [], folder: 'freehire-search' },
+  { id: 'sample', name: 'Sample Freelance Board', country: 'Belgium', desc: 'Freelance missions posted by Belgian agencies.', on: true, jobs: 23, last: 'Fri 6 Nov', src: 'Community', badges: ['Needs API key'], folder: 'samplefreelance-search' },
+  { id: 'northfield', name: 'Northfield Jobs', country: 'Belgium', desc: 'A regional board for jobs in Wallonia.', on: true, jobs: 7, last: 'Tue 27 Oct', src: 'Made by you', badges: [], folder: 'northfield-search', site: 'northfield-jobs.example', quotes: false },
+  { id: 'jobindex', name: 'Jobindex', country: 'Denmark', desc: 'The largest Danish job board, every sector.', on: false, jobs: 0, src: 'Built-in', badges: [], folder: 'jobindex-search' },
+  { id: 'jobbank', name: 'Jobbank', country: 'Denmark', desc: 'Jobs for graduates and academics in Denmark.', on: false, jobs: 0, src: 'Built-in', badges: [], folder: 'jobbank-search' },
+  { id: 'jobdanmark', name: 'Jobdanmark', country: 'Denmark', desc: 'Job ads from many Danish employers.', on: false, jobs: 0, src: 'Built-in', badges: [], folder: 'jobdanmark-search' },
+  { id: 'jobnet', name: 'Jobnet', country: 'Denmark', desc: 'Listings from the Danish public job service.', on: false, jobs: 0, src: 'Built-in', badges: [], folder: 'jobnet-search' },
+];
+const ON = PORTALS.filter((p) => p.on).length;
+
+// The shared search terms, by priority, as the sample folder's search file would hold them. Fictional.
+const TERMS = [
+  ['1', 'Platform and backend leadership', ['Lead Backend Engineer', 'Platform Lead', 'Responsable technique backend']],
+  ['2', 'Logistics software', ['Route planning engineer', 'Logistics software developer']],
+  ['3', 'Rust and systems', ['Rust developer', 'Systems engineer']],
+];
+const NTERMS = TERMS.reduce((n, [, , t]) => n + t.length, 0);
+
+// How each drawn portal searches, from the Query syntax line of its SKILL.md, in plain words.
+const HOW = {
+  linkedin: [['Exact phrases', '<b>Yes.</b> A term of two or more words goes in quotes, so the words stay together.'],
+    ['Combine with OR', '<b>No.</b> Each term is its own search.'],
+    ['Location', '<b>Its own filter.</b> Claude passes your places: Namur, Brussels and Liège.'],
+    ['Each search finds', 'About 20 jobs posted in the last 14 days.']],
+  northfield: [['Exact phrases', '<b>No.</b> The board ignores quotes, so Claude leaves them out.'],
+    ['Combine with OR', '<b>No.</b> Each term is its own search.'],
+    ['Location', '<b>Not needed.</b> The board lists jobs in Wallonia only.'],
+    ['Each search finds', 'About 20 jobs. The board cannot filter by date, so Claude drops jobs older than 14 days.']],
+};
+const GOOGLE = {
+  linkedin: ['site:linkedin.com/jobs "Lead Backend Engineer" Brussels', 'site:linkedin.com/jobs "Platform Lead" Namur'],
+  northfield: [],
+};
+
+function shell(inner, o = {}) {
+  const tabs = [['Today', '10'], ['Jobs', ''], ['Applications', ''], ['Insights', ''], ['Tasks', o.busy ? '' : ''], ['Profile', ''], ['Portals', ''], ['Setup', '']]
+    .map(([t, c]) => `<a class="${t === 'Portals' ? 'on' : ''}${o.off && t !== 'Portals' && t !== 'Today' ? ' off' : ''}" href="#"><span class="lbl">${t}</span>${c && !o.off ? `<span class="chip num">${c}</span>` : ''}${t === 'Portals' && o.failed ? '<span class="failsq" title="Your portals could not be read"></span>' : ''}</a>`).join('');
+  const status = o.busy
+    ? '<span><span class="sq" style="background: var(--active)"></span>A task is running: <span class="path">/scrape</span></span>'
+    : o.off ? '<span><span class="sq" style="background: var(--hired)"></span>Claude is installed. Tasks use its sign-in, or an API key you save in Settings.</span>'
+      : '<span><span class="sq" style="background: var(--hired)"></span>Claude is ready</span>';
+  return `<div class="app po" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav>
+      <span class="newtask"${o.off ? ' style="opacity: .55"' : ''}>New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar">${status}<span class="sbtn">Settings <span class="keys">Cmd ,</span></span></footer></div>`;
+}
+
+const SUB = `The job boards Claude searches when you find new jobs. ${ON} of ${PORTALS.length} on.`;
+function head(o = {}) {
+  const acts = o.noActs ? '' : `<div class="acts">${B('Check all portals…', o.busy ? 'dis' : '')}</div>`;
+  return `<header class="phead"><div><h1>Portals</h1><div class="sub">${o.sub || SUB}</div></div>${acts}</header>`;
+}
+function segs(on, o = {}) {
+  const s = [['yours', 'Your portals', o.count ?? PORTALS.length], ['browse', 'Browse community', ''], ['add', 'Add a portal', '']];
+  return `<div class="seg2" role="tablist">${s.map(([k, t, n]) => `<button type="button" class="${k === on ? 'on' : ''}${o.dis ? ' dis' : ''}">${t}${n !== '' ? `<span class="n num">${n}</span>` : ''}</button>`).join('')}</div>`;
+}
+
+// The list as a slip of pickable rows.
+function railRow(p, sel, first, o = {}) {
+  const jobs = p.on || p.jobs ? `<span class="num">${p.jobs} jobs</span><span>·</span><span>last new ${p.last}</span>` : '<span>No jobs yet</span>';
+  const badges = [T(p.src)].concat(p.badges.map((b) => T(b, 'interview'))).join('');
+  return `<div class="pr${p.id === sel ? ' on' : ''}${first ? ' first' : ''}${p.on ? '' : ' quiet'}" role="option" aria-selected="${p.id === sel}">
+    <span class="nm"><b>${p.name}</b><span class="c">${p.country}</span></span>${SW(p.on, o.busy ? 'dis' : '')}
+    <span class="ds">${p.desc}</span>
+    <span class="ft">${jobs}<span class="r">${badges}</span></span></div>`;
+}
+function rail(sel, o = {}) {
+  const on = PORTALS.filter((p) => p.on), off = PORTALS.filter((p) => !p.on);
+  return `<aside class="rail" aria-label="Your portals" role="listbox">
+    <div class="gt">On <span class="m">Claude searches these</span></div>${on.map((p, i) => railRow(p, sel, i === 0, o)).join('')}
+    <div class="gt" style="margin-top: 4px">Off <span class="m">Claude skips these</span></div>${off.map((p, i) => railRow(p, sel, i === 0, o)).join('')}
+    <span class="bar-y" style="height: 78%"></span>${o.tip || ''}</aside>`;
+}
+
+// The detail's sections.
+function howRows(id) { return HOW[id].map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join(''); }
+function searches(p) {
+  const q = (t) => p.quotes && t.includes(' ') ? `"${t}"` : t;
+  const w = (t) => !t.includes(' ') ? 'One word' : p.quotes ? 'These words together' : 'These words, in any order';
+  const groups = TERMS.map(([n, name, terms]) => `<div class="tg"><span class="p">Priority ${n}</span>${name}</div>
+    ${terms.map((t) => `<div class="term"><span class="q">${q(t)}</span><span class="w">${w(t)}</span></div>`).join('')}`).join('');
+  const g = GOOGLE[p.id];
+  const google = g.length
+    ? `<div class="tg" style="margin-top: 14px">If ${p.name} fails, Claude searches Google with</div><div class="code" aria-label="Google searches">${g.map((l) => `<span>${l}</span>`).join('')}</div>
+       <p class="muted" style="font-size: 13px; margin-top: 6px">These are the Google lines in your search terms that name ${p.site}.</p>`
+    : `<div class="tg" style="margin-top: 14px">If ${p.name} fails</div><p class="muted" style="font-size: 13.5px">None of your Google lines name this board, so Claude only notes that it failed.</p>`;
+  return `<section class="sec"><h3>Searches it will run <span class="n num">${NTERMS} searches</span></h3>
+    <p class="lead">Your search terms are shared by every portal. This is how ${p.name} receives them: one search per term${p.quotes ? ', with phrases in quotes' : ''}.</p>
+    ${groups}${google}</section>`;
+}
+function how(p) {
+  return `<section class="sec"><h3>How it searches</h3><div class="how">${howRows(p.id)}</div></section>`;
+}
+function detailActions(p, o = {}) {
+  const d = o.busy ? ' dis' : '';
+  const remove = p.src === 'Built-in'
+    ? '<span class="m">Built-in portals stay installed. Turn one off to skip it.</span>'
+    : B('Remove…', 'sm bad' + d + (o.remove ? '" style="box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--active)' : ''));
+  return `<div class="acts">${B('Check this portal…', 'sm' + d)}${B('Change search terms…', 'sm' + d)}${remove}${o.extra || ''}</div>`;
+}
+function tagsOf(p) { return [T(p.src, 'plain', false)].concat(p.badges.map((b) => T(b, 'interview', false))).join(''); }
+function facts(p) {
+  return `<div class="facts"><span><b class="num">${p.jobs}</b> jobs found</span><span>Last new job <b>${p.last}</b></span>${tagsOf(p)}</div>`;
+}
+function removePop(p) {
+  return `<div class="pop" role="dialog" aria-label="Remove ${p.name}?" style="left: 300px; top: 146px">
+    <b>Remove ${p.name}?</b>
+    <span>Jobdesk moves its folder, <span class="path">.agents/skills/${p.folder}</span>, to the Trash. The ${p.jobs} jobs it found stay in Jobs.</span>
+    <span class="muted" style="font-size: 13px">To use it again, put the folder back, or add it again.</span>
+    <div class="row" style="gap: 6px">${B('Remove', 'sm bad')}${B('Keep it', 'sm" style="box-shadow: 0 0 0 2px var(--sheet), 0 0 0 4px var(--active)')}</div></div>`;
+}
+
+function detailPaper(p, o = {}) {
+  const busyTip = o.busy && !o.noTip ? `<div class="tip" style="right: 22px; top: 50px; max-width: 240px">${BUSY_WHY}</div>${ARROW(700, 24)}` : '';
+  return `<section class="sheetp" aria-label="${p.name}">
+    <header class="dh"><div class="top"><div><h2>${p.name}</h2><p>${p.country}. ${p.desc}</p></div>${SW(p.on, o.busy ? 'dis' : '')}</div>
+      ${facts(p)}${detailActions(p, o)}${o.remove ? removePop(p) : ''}${busyTip}</header>
+    <div class="dscroll">${how(p)}${searches(p)}<span class="bar-y" style="right: 4px; height: 38%"></span></div>
+    <footer class="dfoot"><span>Kept in <span class="path">.agents/skills/${p.folder}</span></span><span class="r">Search terms kept in <span class="path">job-scraper/search-queries.md</span></span></footer></section>`;
+}
+
+// Your portals, in each state.
+function yours(st) {
+  const busy = st === 'busy';
+  if (st === 'loading') return loading();
+  if (st === 'nofolder') return shell(`${head({ sub: 'The job boards Claude searches when you find new jobs.', noActs: true })}${segs('yours', { count: '', dis: true })}
+    <div class="bbody"><section class="sheetp" style="flex: 0 1 640px; align-self: flex-start"><div class="empty">
+      <h3>Choose your job search folder first</h3>
+      <p>Your portals live in the ai-job-search folder you set up with Claude Code. Choose it, and the job boards Claude searches show here.</p>
+      <div class="row">${B('Choose folder…', 'pri')}</div></div></section></div>`, { off: true });
+  if (st === 'none') return shell(`${head({ sub: 'The job boards Claude searches when you find new jobs. None installed.' })}${segs('yours', { count: 0 })}
+    <div class="bbody"><section class="sheetp" style="flex: 0 1 640px; align-self: flex-start"><div class="empty">
+      <h3>No portals yet</h3>
+      <p>Claude has no job board to search, so finding new jobs falls back to Google alone. Install one from the community, or have Claude build one for a board you use.</p>
+      <div class="row">${B('Browse community', 'pri')}${B('Add a portal')}</div>
+      <p class="muted" style="font-size: 13px">Portals are folders in <span class="path">.agents/skills</span>. This one holds none.</p></div></section></div>`);
+  if (st === 'failed') return shell(`${head()}
+    <div class="alert" role="alert"><div><div class="at">Your portals could not be read.</div>
+      <div><span class="path">.agents/skills</span>: permission denied. Check that the folder can be opened, then Jobdesk reads it again by itself.</div>
+      <div class="muted">Nothing in the folder was changed. Browse community and Add a portal still work.</div></div></div>
+    ${segs('yours', { count: '' })}
+    <div class="bbody"><section class="sheetp" style="flex: 0 1 640px; align-self: flex-start"><div class="empty">
+      <h3>Your portals are hidden, not gone</h3>
+      <p>They come back as soon as Jobdesk can read the folder. A task you start still searches them, because Claude reads the folder itself.</p></div></section></div>`, { failed: true });
+  const p = PORTALS.find((x) => x.id === 'linkedin');
+  const tip = busy ? `<div class="tip" style="left: 190px; top: 46px; width: 240px">${BUSY_WHY}</div>${ARROW(388, 24)}` : '';
+  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail('linkedin', { busy, tip })}${detailPaper(p, { busy, noTip: true })}</div>`, { busy });
+}
+
+function loading() {
+  const sk = (w, extra = '') => `<span class="sk" style="width: ${w}px; ${extra}"></span>`;
+  const rows = [120, 90, 170, 130, 100, 110].map((w, i) => `<div class="pr${i === 0 ? ' first' : ''}"><span class="nm">${sk(w, 'height: 14px')}</span>${sk(36, 'height: 18px')}<span class="ds" style="padding-top: 6px">${sk(w + 140)}</span><span class="ft">${sk(140)}</span></div>`).join('');
+  return shell(`${head({ sub: 'Reading your portals…', noActs: true })}${segs('yours', { count: '' })}<div class="bbody">
+    <aside class="rail"><div class="gt">${sk(30)}</div>${rows}</aside>
+    <section class="sheetp"><header class="dh"><div style="display: flex; flex-direction: column; gap: 10px; padding-top: 6px">${sk(180, 'height: 22px')}${sk(360)}${sk(260)}</div></header>
+      <div class="dscroll"><div class="sec" style="display: flex; flex-direction: column; gap: 10px">${sk(160, 'height: 16px')}${sk(520)}${sk(480)}${sk(500)}${sk(440)}</div></div></section></div>`);
+}
+
+function detail(st) {
+  const p = PORTALS.find((x) => x.id === PORTAL) || PORTALS[0];
+  const busy = st === 'busy', remove = st === 'remove';
+  return shell(`${head({ busy })}${segs('yours')}<div class="bbody">${rail(p.id, { busy })}${detailPaper(p, { busy, remove })}</div>`, { busy });
+}
+
+// Browse community.
+const COMMUNITY = [
+  ['Belgium', 'your market', [
+    ['Sample Freelance Board', 'Freelance missions posted by Belgian agencies.', '@portal-keeper', 'Maintained', true],
+  ]],
+  ['Worldwide', '', [
+    ['Freehire', 'Gathers postings from many job sites into one search.', '@remote-scout', 'Maintained', true],
+    ['LinkedIn', 'Public job listings on LinkedIn, in any country.', '@board-crew, @portal-keeper', 'Maintained', true],
+    ['Sample Remote Board', 'Remote jobs from small companies, worldwide.', '@remote-scout', 'Unmaintained since 2026-05', false],
+  ]],
+  ['Denmark', '', [
+    ['Jobbank', 'Jobs for graduates and academics in Denmark.', '@board-crew, @portal-keeper', 'Maintained', true],
+    ['Jobdanmark', 'Job ads from many Danish employers.', '@board-crew, @portal-keeper', 'Maintained', true],
+    ['Jobindex', 'The largest Danish job board, every sector.', '@board-crew, @portal-keeper', 'Maintained', true],
+    ['Jobnet', 'Listings from the Danish public job service.', '@board-crew, @portal-keeper', 'Maintained', true],
+    ['Sample Tech Jobs DK', 'IT and engineering roles in Copenhagen and Aarhus.', '@board-crew', 'Maintained', false],
+  ]],
+];
+function browse(st) {
+  const sk = (w, extra = '') => `<span class="sk" style="width: ${w}px; ${extra}"></span>`;
+  const when = {
+    cached: `<span>From GitHub, updated 12 min ago</span>${B('Refresh', 'sm')}`,
+    tip: `<span>From GitHub, updated 12 min ago</span>${B('Refresh', 'sm')}`,
+    loading: '<span>Reading the list from GitHub…</span>',
+    offline: `<span>Saved list from Mon 9 Nov, 14:02</span>${B('Try again', 'sm')}`,
+    limited: `<span>Saved list from 12 min ago</span>${B('Try again', 'sm dis')}`,
+    nocache: B('Try again', 'sm'),
+  }[st] || '';
+  const alert = st === 'offline'
+    ? `<div class="alert warn" role="status" style="margin: 0 5px 0 0"><div><div class="at">Could not reach GitHub.</div><div>The list below is the one Jobdesk saved on Mon 9 Nov. Check your connection, then try again.</div></div></div>`
+    : st === 'limited'
+      ? `<div class="alert warn" role="status" style="margin: 0 5px 0 0"><div><div class="at">GitHub asks Jobdesk to wait before it looks again.</div><div>Try again after 15:40. Until then, the list below is the one saved 12 minutes ago.</div></div></div>`
+      : '';
+  const warn = `<div class="note2"><span class="sq" style="background: var(--interview)"></span><span><b style="font-weight: 600">Community portals are code other people wrote, and it runs next to your career data.</b> Install… opens a task: Claude reads the code and tells you what it does before anything is installed.</span></div>`;
+  let list;
+  if (st === 'loading') {
+    list = [1, 2, 3].map((g) => `<div class="cg">${sk(110, 'height: 14px; margin: 4px 0')}</div>${[1, 2].map(() => `<div class="cr"><div class="col" style="gap: 6px">${sk(150)}${sk(320)}</div>${sk(120)}${sk(90)}<span class="ac">${sk(100)}</span></div>`).join('')}`).join('');
+  } else if (st === 'nocache') {
+    list = `<div class="empty"><h3>The community list could not be read</h3>
+      <p>Jobdesk reads it from GitHub and has no saved copy yet. Check your connection, then try again. Your own portals are not affected.</p>
+      <div class="row">${B('Try again', 'pri')}<span class="lk">Open the list on GitHub ↗</span></div></div>`;
+  } else {
+    list = COMMUNITY.map(([c, m, rows]) => `<div class="cg">${c}${m ? `<span class="m">${m}</span>` : ''}<span class="m" style="margin-left: auto">${rows.length} ${rows.length === 1 ? 'portal' : 'portals'}</span></div>
+      ${rows.map(([n, d, own, st2, inst], i) => `<div class="cr"><div class="nm"><b>${n}</b><div class="ds">${d}</div></div>
+        <span class="own" title="Owners on GitHub">${own}</span>
+        <span class="st">${st2 === 'Maintained' ? T(st2) : T(st2, 'interview')}</span>
+        <span class="ac"><span class="lk">View code ↗</span>${inst ? T('Installed', 'hired', false) : B('Install…', 'sm')}${st === 'tip' && n === 'Sample Remote Board' ? `<div class="tip" style="right: 0; top: 36px; width: 300px">Opens a new task. Claude copies this portal, explains what its code does, then asks before it installs. Nothing runs until you start it.</div>${ARROW(170, 16)}` : ''}</span></div>`).join('')}`).join('')
+      + '<span class="bar-y" style="height: 40%"></span>';
+  }
+  return shell(`${head()}${segs('browse')}<div class="bwrap">
+    <div class="btop"><span class="sfield">${LOUPE}Search by name or country</span><span class="when">${when}</span></div>
+    ${alert}${warn}<div class="paperbox">${list}</div></div>`);
+}
+
+// Add a portal. The answers go on the launcher line after the address, because /add-portal skips the questions its
+// arguments answer. An empty field stays off the line, and Claude asks for it in the task.
+const SITE = 'https://jobs.sample-board.example';
+const FIELDS = { filled: { country: 'Belgium', language: 'French', title: 'Lead Backend Engineer' }, partial: { country: 'Belgium' },
+  invalid: { country: 'Belgium', language: 'French', title: 'Lead Backend Engineer' } };
+function addLine(f) {
+  const parts = [['country', f.country], ['language', f.language], ['test title', f.title]].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
+  return `/add-portal ${SITE}${parts.length ? ' ' + parts.join(', ') : ''}`;
+}
+function add(st) {
+  const f = FIELDS[st] || {};
+  const ready = st === 'filled' || st === 'partial';
+  const url = ready ? `<span class="inp val">${SITE}</span>`
+    : st === 'invalid' ? '<span class="inp val bad foc">jobs sample board<span class="caret"></span></span>'
+      : '<span class="inp foc"><span class="caret" style="margin: 0 2px 0 0"></span>Such as https://jobs.example.be</span>';
+  const v = (val, hint) => `<span class="inp${val ? ' val' : ''}">${val || hint}</span>`;
+  const opt = '<span class="opt">Optional</span>';
+  const go = ready
+    ? `${B('Build it with Claude…', 'pri')}<span class="lk">Hide the command</span>`
+    : `${B('Build it with Claude…', 'pri dis')}<span class="why">${st === 'invalid' ? 'Type a web address first.' : 'Type the board’s website first.'}</span>`;
+  const cmd = ready ? `<div class="cbox" aria-label="The task's command">${addLine(f)}</div>` : '';
+  return shell(`${head()}${segs('add')}<div class="bbody" style="gap: 28px">
+    <section class="form" aria-label="Add a portal">
+      <div><h2>A job board Claude should search</h2><p class="muted" style="margin-top: 3px">Claude builds a small search tool for it and tests it with your job title. What you fill in here, it does not ask again.</p></div>
+      <div class="fl"><label>The job board’s website</label>${url}
+        ${st === 'invalid' ? '<span class="err">This is not a web address. Type it as it shows in your browser, such as https://jobs.example.be.</span>' : '<span class="help">The page where the board lists its jobs.</span>'}</div>
+      <div class="pair"><div class="fl"><label>Country ${opt}</label>${v(f.country, 'Such as Belgium')}</div><div class="fl"><label>Language of its job ads ${opt}</label>${v(f.language, 'Such as French')}</div></div>
+      <div class="fl"><label>One job title to test with ${opt}</label>${v(f.title, 'Such as Lead Backend Engineer')}<span class="help">Claude searches the board for it, to check the new portal finds real jobs. Leave a field empty and Claude asks you in the task.</span></div>
+      <div class="fact">${go}</div>${cmd}
+      <p class="muted" style="font-size: 13px">This is a task, so it costs like any other and shows in Usage. Nothing runs until you start it.</p>
+    </section>
+    <aside class="sidec" style="flex-basis: 320px"><section class="slip"><div class="sh">What happens next</div><div class="sb steps">
+      <div class="st"><span class="kn">1</span><b>New task opens</b><span class="m">With the board’s address and your answers filled in. You start it there.</span></div>
+      <div class="st"><span class="kn">2</span><b>Claude builds and tests</b><span class="m">It reads the board, writes the portal, and searches it for your job title. It asks you in Tasks only for what you left empty, or when it needs you.</span></div>
+      <div class="st"><span class="kn">3</span><b>It joins Your portals</b><span class="m">Tagged Made by you. Turn it off there at any time.</span></div>
+      <p class="muted" style="font-size: 13px; padding-top: 10px; border-top: 1px solid var(--line)">Boards that need a sign-in or a paid key work too. Claude tells you how to set them up.</p>
+    </div></section></aside></div>`);
+}
+
+const S = { yours: () => yours(STATE || 'full'), detail: () => detail(STATE || 'full'), browse: () => browse(STATE || 'cached'), add: () => add(STATE || 'empty') };
+document.getElementById('root').innerHTML = (S[SCREEN] || S.yours)();
+</script>
+</body>
+</html>

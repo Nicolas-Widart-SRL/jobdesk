@@ -1,38 +1,52 @@
-use crate::discovery::application::JobBoard;
+use crate::portals::application::{PortalSummary, PortalsView};
 use crate::profile::application::{ProfileView, TopicCounts, topic_counts};
 use crate::shared_kernel::{KeySource, key_source};
 use crate::workspace::domain::{SyncState, TemplateState, ToolCheck, WorkspaceStatus};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PortalRow {
-    pub name: String,
-    pub enabled: bool,
-    pub jobs_seen: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkspaceView {
     /// How many profile topics are filled, for Setup's one-line summary.
     pub topics: TopicCounts,
-    pub portals: Vec<PortalRow>,
+    /// How many portals are on, and the jobs they found, for Setup's one-line summary.
+    pub portals: PortalSummary,
+    /// `.agents/skills`, or a `SKILL.md` in it, could not be read, so `portals` is not known and Setup hides it.
+    pub portals_unread: bool,
     pub templates: TemplateState,
     pub sync: SyncState,
     pub has_salary_data: bool,
 }
 
-pub fn workspace_view(status: &WorkspaceStatus, board: &JobBoard, profile: &ProfileView) -> WorkspaceView {
-    let portals = status
-        .portals
-        .iter()
-        .map(|portal| PortalRow { name: portal.name.clone(), enabled: portal.enabled, jobs_seen: board.seen_on_portal(&portal.name) })
-        .collect();
-    WorkspaceView {
+impl Default for WorkspaceView {
+    fn default() -> Self {
+        Self {
+            topics: TopicCounts::default(),
+            portals: PortalSummary { on: 0, total: 0, jobs_found: Some(0) },
+            portals_unread: false,
+            templates: TemplateState::default(),
+            sync: SyncState::default(),
+            has_salary_data: false,
+        }
+    }
+}
+
+impl WorkspaceView {
+    /// Takes Setup's portal line from `portals`, as read again after a switch or a removal.
+    pub fn set_portals(&mut self, portals: &PortalsView) {
+        self.portals = portals.summary();
+        self.portals_unread = !portals.installed_read;
+    }
+}
+
+pub fn workspace_view(status: &WorkspaceStatus, portals: &PortalsView, profile: &ProfileView) -> WorkspaceView {
+    let mut view = WorkspaceView {
         topics: topic_counts(profile),
-        portals,
         templates: status.templates.clone(),
         sync: status.sync.clone(),
         has_salary_data: status.has_salary_data,
-    }
+        ..WorkspaceView::default()
+    };
+    view.set_portals(portals);
+    view
 }
 
 /// How runs reach Claude, from the CLI's own `apiKeySource` field.
@@ -80,6 +94,7 @@ pub fn readiness(view: &WorkspaceView, tools: Option<&[ToolCheck]>) -> Readiness
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portals::application::{Origin, PortalView, Quotes};
     use crate::workspace::domain::TOOLS;
 
     /// Every tool answers except those named.
@@ -138,10 +153,43 @@ mod tests {
         assert_eq!(readiness(&view, Some(&tools_without(&[]))).to_fill, 11);
     }
 
+    fn portal(folder: &str, on: bool, jobs: Option<(usize, Option<chrono::NaiveDate>)>) -> PortalView {
+        PortalView {
+            folder: folder.into(),
+            name: folder.into(),
+            country: None,
+            sentence: None,
+            on,
+            origin: Origin::MadeByYou,
+            badges: vec![],
+            jobs,
+            quotes: Quotes::Unknown,
+            safe_name: true,
+        }
+    }
+
+    /// Setup sums the portals up in one line: how many are on, and the jobs every one found, off ones too.
+    #[test]
+    fn setup_sums_up_the_portals() {
+        let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
+        let portals = vec![portal("a-search", true, Some((3, None))), portal("b-search", false, Some((2, None)))];
+        let view = workspace_view(&WorkspaceStatus::default(), &PortalsView { portals, installed_read: true, ..PortalsView::default() }, &profile);
+        assert_eq!(view.portals, PortalSummary { on: 1, total: 2, jobs_found: Some(5) });
+        assert!(!view.portals_unread);
+    }
+
+    #[test]
+    fn portals_that_could_not_be_read_are_marked_unread() {
+        let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
+        let view = workspace_view(&WorkspaceStatus::default(), &PortalsView { installed_read: false, ..PortalsView::default() }, &profile);
+        assert!(view.portals_unread);
+        assert_eq!(view.portals.total, 0);
+    }
+
     #[test]
     fn the_view_counts_the_profile_topics() {
         let (profile, _) = crate::profile::application::profile_view(&|_| Ok(None));
-        let view = workspace_view(&WorkspaceStatus::default(), &JobBoard::default(), &profile);
+        let view = workspace_view(&WorkspaceStatus::default(), &PortalsView::default(), &profile);
         assert_eq!(view.topics, TopicCounts { filled: 0, total: 11, hidden: 0, any_found: false });
     }
 

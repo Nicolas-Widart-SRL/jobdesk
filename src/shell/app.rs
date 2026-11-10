@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -17,6 +18,8 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
+use crate::onboarding::application::{Onboarding, Stage as SetupStage};
+use crate::onboarding::ui::{FirstRunRequest, FirstRunScreen};
 use crate::portals;
 use crate::portals::application::{Community, PortalChanges};
 use crate::portals::ui::{BrowseContext, PortalsRequest, PortalsScreen};
@@ -68,6 +71,12 @@ const SETTINGS_KEYS: [&str; 2] = command_chord(",");
 const RUN_READ_WAIT: Duration = Duration::from_secs(5);
 /// How often Providers looks again while a task's start reads the keychain, perhaps behind its prompt.
 const KEYCHAIN_LOOK_AGAIN: Duration = Duration::from_millis(250);
+/// The window's size, and the smallest it may be, once the app shows.
+const WINDOW: egui::Vec2 = vec2(1280.0, 820.0);
+const SMALLEST_WINDOW: egui::Vec2 = vec2(1040.0, 640.0);
+/// The small first window, for the welcome and the Folder and Computer steps of first-run setup. It reads as an
+/// installer, not an app to learn.
+const FIRST_WINDOW: egui::Vec2 = vec2(720.0, 560.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -207,6 +216,15 @@ pub struct Shell {
     restart_slot: RestartSlot,
     /// The arguments Jobdesk started with, after the program's name.
     launch_args: Vec<OsString>,
+    /// First-run setup, while it shows in place of the welcome: on macOS, when no folder was asked for or remembered
+    /// and setup has not got past the Computer step.
+    first_run: Option<FirstRun>,
+    /// First-run setup's worker once setup has handed over, until it has seen the cancel and finished. The window
+    /// never waits on it: it is joined on the first frame after it has finished. Quitting does not wait on it either,
+    /// as for every other worker thread.
+    setup_stopping: Option<JoinHandle<()>>,
+    /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
+    window: Option<WindowSize>,
 }
 
 /// What Restart to update applies once the window has closed, and the arguments the new copy opens with. `run` reads it.
@@ -225,6 +243,21 @@ struct OpenDossier {
     folder: String,
     view: Option<Dossier>,
     run_activity: usize,
+}
+
+/// First-run setup and its screens.
+struct FirstRun {
+    onboarding: Onboarding,
+    screen: FirstRunScreen,
+}
+
+/// A size the window is asked to take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowSize {
+    /// `FIRST_WINDOW`, with the smallest size lowered to it, whatever size was saved.
+    FirstRun,
+    /// `WINDOW`, or the screen when it is smaller but never below `SMALLEST_WINDOW`, which is the smallest again.
+    App,
 }
 
 impl Shell {
@@ -288,6 +321,10 @@ impl Shell {
             close_dropped: false,
             restart_slot: RestartSlot::default(),
             launch_args: Vec::new(),
+            first_run: None,
+            setup_stopping: None,
+            // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
+            window: Some(WindowSize::App),
         }
     }
 
@@ -336,6 +373,28 @@ impl Shell {
     /// The first run: no folder is open yet.
     pub fn without_workspace(today: NaiveDate) -> Self {
         Self::empty(Screen::InTray, today)
+    }
+
+    /// Shows first-run setup through `onboarding` in place of the welcome, in the small first window. Paths under
+    /// `home` show from it.
+    pub fn with_first_run(self, onboarding: Onboarding, home: PathBuf) -> Self {
+        Self { first_run: Some(FirstRun { onboarding, screen: FirstRunScreen::new(home) }), window: None, ..self }
+    }
+
+    /// First-run setup while it shows, for tests that act as its folder picker would.
+    pub fn first_run_mut(&mut self) -> Option<&mut Onboarding> {
+        self.first_run.as_mut().map(|first| &mut first.onboarding)
+    }
+
+    /// Whether first-run setup's worker is still ending after setup handed over, for tests.
+    pub fn setup_stopping(&self) -> bool {
+        self.setup_stopping.is_some()
+    }
+
+    /// Opens `path` as Choose folder and Settings › Change folder do once the picker gives it, for tests that act as
+    /// the picker would.
+    pub fn choose_folder_from(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.choose_folder_with(ctx, || Some(path));
     }
 
     pub fn desk_slot(&mut self) -> &mut Option<RunDesk> {
@@ -475,7 +534,13 @@ impl Shell {
         };
         let repaint = ctx.clone();
         let make_community = move |data: Option<&Path>| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
-        Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) }
+        // Only a launch with no folder asked for or remembered may show first-run setup.
+        let first_run = if path.is_none() { data.as_deref().and_then(|data| first_run(ctx, data)) } else { None };
+        let shell = Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) };
+        match first_run {
+            Some((onboarding, home)) => shell.with_first_run(onboarding, home),
+            None => shell,
+        }
     }
 
     /// `start` with the tool check, the providers, the updates and the community list given, so tests can launch without
@@ -581,6 +646,8 @@ impl Shell {
                 self.loaded = false;
                 self.workspace = Some(root);
                 self.folder_error = None;
+                // However the folder opened, first-run setup has nothing left to do.
+                self.leave_first_run();
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }
@@ -656,6 +723,7 @@ impl Shell {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
+        self.follow_first_run(ui.ctx());
         self.take_snapshot();
         self.follow_permissions();
         // A test that ended may move tasks onto the key or off it, so the desk follows on the same frame.
@@ -705,6 +773,8 @@ impl Shell {
                     self.settings(ui);
                 } else if self.workspace.is_some() {
                     self.content(ui, &queue);
+                } else if self.first_run.is_some() {
+                    self.first_run_screen(ui);
                 } else {
                     self.welcome(ui);
                 }
@@ -719,7 +789,96 @@ impl Shell {
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
         }
+        // Last, so Settings opened or closed anywhere this frame sizes the window on it.
+        self.follow_window(ui.ctx());
         note_focus(ui.ctx());
+    }
+
+    /// Asks the window for the size what shows needs, once each time that changes: the small first window for
+    /// first-run setup, and the app's own for Settings over it, which needs the app's smallest, and once setup hands
+    /// over.
+    fn follow_window(&mut self, ctx: &egui::Context) {
+        let size = if self.first_run.is_some() && !self.settings_open { WindowSize::FirstRun } else { WindowSize::App };
+        if self.window != Some(size) {
+            self.window = Some(size);
+            resize(ctx, size);
+        }
+    }
+
+    /// Takes what first-run setup's worker said. Once the Folder and Computer steps are done, the folder opens as the
+    /// job search.
+    fn follow_first_run(&mut self, ctx: &egui::Context) {
+        self.join_stopped_setup(ctx);
+        let Some(first) = &mut self.first_run else { return };
+        first.onboarding.poll(self.snapshot.today);
+        if let SetupStage::Finished { folder } = first.onboarding.stage() {
+            let folder = folder.clone();
+            self.open(ctx, &folder);
+            // A folder that failed to open leaves setup too, and shows on the welcome.
+            self.leave_first_run();
+        }
+    }
+
+    /// Joins first-run setup's worker once it has finished after setup handed over, and starts the tool check again,
+    /// since an install past its last cancel check may have put a helper in place after the hand-over's check. Until
+    /// then the window looks again a few times a second, as the worker's last news can wake it just before the thread
+    /// ends.
+    fn join_stopped_setup(&mut self, ctx: &egui::Context) {
+        match self.setup_stopping.take() {
+            Some(worker) if worker.is_finished() => {
+                // A worker that panicked has nothing left to clean up, and the window goes on.
+                let _ = worker.join();
+                if let Some(environment) = &mut self.environment {
+                    environment.restart();
+                }
+            }
+            Some(worker) => {
+                self.setup_stopping = Some(worker);
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
+            None => {}
+        }
+    }
+
+    /// First-run setup hands over to the app at once, whichever way a folder opened: its worker is told to stop and
+    /// left to end on its own, the window grows to the app's own with Today on show, and the tool check starts again,
+    /// so what setup installed is found. Nothing while setup does not show.
+    fn leave_first_run(&mut self) {
+        let Some(mut first) = self.first_run.take() else { return };
+        self.setup_stopping = first.onboarding.stop();
+        (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+        if let Some(environment) = &mut self.environment {
+            environment.restart();
+        }
+    }
+
+    /// First-run setup's screen for where it stands, then what the user asked for there.
+    fn first_run_screen(&mut self, ui: &mut Ui) {
+        let (today, refused) = (self.snapshot.today, self.folder_error.is_some());
+        let Some(first) = &mut self.first_run else { return };
+        let Some(request) = first.screen.show(ui, &first.onboarding, today, refused) else { return };
+        let onboarding = &mut first.onboarding;
+        match request {
+            // A folder that opens leaves setup.
+            FirstRunRequest::HaveFolder => self.choose_folder(&ui.ctx().clone()),
+            FirstRunRequest::ChangeFolder => {
+                if let Some(folder) = rfd::FileDialog::new().set_title("Choose where your job search lives").pick_folder() {
+                    onboarding.choose(folder);
+                }
+            }
+            FirstRunRequest::StartFromScratch => onboarding.start_from_scratch(),
+            FirstRunRequest::Resume => onboarding.resume(),
+            FirstRunRequest::Back => onboarding.back(),
+            FirstRunRequest::UseSuggestion => onboarding.use_suggestion(),
+            FirstRunRequest::SaveHere => onboarding.save_here(today),
+            FirstRunRequest::Cancel => onboarding.cancel(),
+            FirstRunRequest::GoOn => onboarding.go_on(),
+            FirstRunRequest::Install => onboarding.install(),
+            FirstRunRequest::Finish => onboarding.finish(false),
+            FirstRunRequest::WithoutPdfs => onboarding.finish(true),
+        }
+        // The worker may already have news, and a finished setup opens its folder at once.
+        ui.ctx().request_repaint();
     }
 
     /// Hands a changed switch for the automatic check to the updates, then takes what they heard and starts a check that
@@ -1046,6 +1205,11 @@ impl Shell {
     /// Before a folder is open, only the lit Today tab answers: the rest have nothing to show yet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
+        // First-run setup has no menu: nothing else is usable yet.
+        if self.first_run.is_some() && self.workspace.is_none() {
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), NAV_TAB_HEIGHT), Layout::left_to_right(Align::Center), brand);
+            return;
+        }
         let open = self.workspace.is_some();
         let waiting = self.desk.as_ref().map_or(0, RunDesk::waiting_count);
         let lit = self.screen.tab();
@@ -1128,10 +1292,12 @@ impl Shell {
             } else if let Some(environment) = self.environment.as_ref().filter(|environment| environment.results().is_some()) {
                 let ready = environment.version_of("claude").is_some();
                 // Before a folder is open, the line also says how tasks sign in: Claude Code's own sign-in, or a key saved in Settings.
-                let text = match (ready, self.workspace.is_some()) {
-                    (true, true) => "Claude is ready",
-                    (true, false) => "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.",
-                    (false, _) => "Claude Code is not installed",
+                // First-run setup's screens leave the key out: the check finds Claude Code installed, not signed in.
+                let text = match (ready, self.workspace.is_some(), self.first_run.is_some()) {
+                    (true, true, _) => "Claude is ready",
+                    (true, false, true) => "Claude Code is installed. Jobdesk uses it for every task.",
+                    (true, false, false) => "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.",
+                    (false, _, _) => "Claude Code is not installed",
                 };
                 status_line(ui, ready, text);
             }
@@ -1665,6 +1831,54 @@ fn prune_run_logs(data: &std::path::Path, retention: Retention, now: NaiveDateTi
     runs::prune_logs(&data.join("runs"), SystemTime::from(keep_after))
 }
 
+/// First-run setup over the data folder `data`, and the home folder it works in. Its record is cleared once setup gets
+/// past the Computer step, and a remembered folder skips setup before this. macOS only, and only with a home folder and
+/// a processor setup has helper files for.
+#[cfg(target_os = "macos")]
+fn first_run(ctx: &egui::Context, data: &Path) -> Option<(Onboarding, PathBuf)> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_absolute())?;
+    let helpers = crate::onboarding::helper_setup(data, env!("CARGO_PKG_VERSION"), home.clone())?;
+    let repaint = ctx.clone();
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || repaint.request_repaint());
+    let setup = crate::onboarding::first_run(data, env!("CARGO_PKG_VERSION"), home.join("Documents"), helpers, wake);
+    Some((setup, home))
+}
+
+/// Windows shows the welcome and the folder picker, as before first-run setup.
+#[cfg(not(target_os = "macos"))]
+fn first_run(_: &egui::Context, _: &Path) -> Option<(Onboarding, PathBuf)> {
+    None
+}
+
+/// Asks the window to take `size`, keeping its centre where it was.
+fn resize(ctx: &egui::Context, size: WindowSize) {
+    let (monitor, outer, inner) = ctx.input(|input| (input.viewport().monitor_size, input.viewport().outer_rect, input.viewport().inner_rect));
+    for command in window_commands(size, monitor, outer, inner) {
+        ctx.send_viewport_cmd(command);
+    }
+}
+
+/// What the window is asked, in order, to take `size` on a screen of `monitor` points, from where `outer` stands
+/// round `inner`. The smallest size goes first for the small window, so the old one never holds it up, and last for the
+/// app's. Either way the window keeps its centre, title bar included, so growing and shrinking it again leaves it
+/// where it was.
+fn window_commands(size: WindowSize, monitor: Option<egui::Vec2>, outer: Option<Rect>, inner: Option<Rect>) -> Vec<egui::ViewportCommand> {
+    use egui::ViewportCommand::{InnerSize, MinInnerSize, OuterPosition};
+    let (to, mut commands) = match size {
+        WindowSize::FirstRun => (FIRST_WINDOW, vec![MinInnerSize(FIRST_WINDOW), InnerSize(FIRST_WINDOW)]),
+        WindowSize::App => {
+            let grown = monitor.map_or(WINDOW, |monitor| WINDOW.min(monitor)).max(SMALLEST_WINDOW);
+            (grown, vec![InnerSize(grown), MinInnerSize(SMALLEST_WINDOW)])
+        }
+    };
+    if let Some(outer) = outer {
+        // The title bar and borders round the inner rect, which the window keeps at either size.
+        let frame = inner.map_or(egui::Vec2::ZERO, |inner| ((inner.min - outer.min) + (outer.max - inner.max)).max(egui::Vec2::ZERO));
+        commands.push(OuterPosition(outer.center() - (to + frame) / 2.0));
+    }
+    commands
+}
+
 /// The welcome's stamp and title, its steps, then the folder promise. Returns whether Choose folder was pressed.
 fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
     ui.set_width(ui.available_width());
@@ -1827,7 +2041,9 @@ fn make_data_folder(data: &Path, moved: bool) -> std::io::Result<()> {
 /// eframe keeps the window's state in `app.ron` in the data folder, not in a place of its own.
 fn native_options(icon: egui::IconData, data: Option<&Path>) -> eframe::NativeOptions {
     eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 820.0]).with_min_inner_size([1040.0, 640.0]).with_title("Jobdesk").with_icon(icon),
+        // First-run setup asks for its small window on its first frame, whatever size eframe restored, and grows it to
+        // this size when it hands over.
+        viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW).with_min_inner_size(SMALLEST_WINDOW).with_title("Jobdesk").with_icon(icon),
         persistence_path: data.map(|data| data.join("app.ron")),
         ..Default::default()
     }
@@ -2786,5 +3002,49 @@ mod tests {
         let from_flag = vec![OsString::from("--workspace"), raw.clone()].into_iter();
         assert_eq!(requested_workspace_from(from_flag, None), Some(PathBuf::from(raw.clone())));
         assert_eq!(requested_workspace_from(os_args(&[]), Some(raw.clone())), Some(PathBuf::from(raw)));
+    }
+
+    /// The first window lowers the smallest size before it shrinks, so a saved large window never holds it up.
+    #[test]
+    fn first_run_asks_for_the_small_window_whatever_was_saved() {
+        use egui::ViewportCommand::{InnerSize, MinInnerSize};
+        let small = vec2(720.0, 560.0);
+        assert_eq!(window_commands(WindowSize::FirstRun, Some(vec2(1728.0, 1117.0)), None, None), [MinInnerSize(small), InnerSize(small)]);
+    }
+
+    /// A window at `min` whose title bar is 28 points tall over `inner`.
+    fn framed(min: egui::Pos2, inner: egui::Vec2) -> (Rect, Rect) {
+        (Rect::from_min_size(min, inner + vec2(0.0, 28.0)), Rect::from_min_size(min + vec2(0.0, 28.0), inner))
+    }
+
+    /// Handing over grows the window to the app's size round its old centre, title bar included, or to the screen when
+    /// that is smaller, but never below the app's smallest.
+    #[test]
+    fn handing_over_grows_the_window_to_the_app_on_the_screen() {
+        use egui::ViewportCommand::{InnerSize, MinInnerSize, OuterPosition};
+        let smallest = vec2(1040.0, 640.0);
+        let (outer, inner) = framed(pos2(400.0, 200.0), vec2(720.0, 560.0));
+        let grown = window_commands(WindowSize::App, Some(vec2(1728.0, 1117.0)), Some(outer), Some(inner));
+        assert_eq!(grown, [InnerSize(vec2(1280.0, 820.0)), MinInnerSize(smallest), OuterPosition(pos2(120.0, 70.0))]);
+        let laptop = window_commands(WindowSize::App, Some(vec2(1180.0, 700.0)), None, None);
+        assert_eq!(laptop, [InnerSize(vec2(1180.0, 700.0)), MinInnerSize(smallest)], "the screen, when smaller");
+        let tiny = window_commands(WindowSize::App, Some(vec2(800.0, 600.0)), None, None);
+        assert_eq!(tiny, [InnerSize(smallest), MinInnerSize(smallest)], "never below the smallest");
+    }
+
+    /// Growing the window for Settings and shrinking it again puts it back where it was, however often it is done.
+    #[test]
+    fn growing_and_shrinking_the_window_leaves_it_where_it_was() {
+        use egui::ViewportCommand::{InnerSize, OuterPosition};
+        let start = pos2(400.0, 200.0);
+        let (mut outer, mut inner) = framed(start, vec2(720.0, 560.0));
+        for size in [WindowSize::App, WindowSize::FirstRun, WindowSize::App, WindowSize::FirstRun] {
+            let sent = window_commands(size, Some(vec2(1728.0, 1117.0)), Some(outer), Some(inner));
+            let to = sent.iter().find_map(|command| if let InnerSize(to) = command { Some(*to) } else { None }).unwrap();
+            let Some(OuterPosition(at)) = sent.last() else { panic!("no position: {sent:?}") };
+            // The window takes what it was asked.
+            (outer, inner) = framed(*at, to);
+        }
+        assert_eq!(outer.min, start);
     }
 }

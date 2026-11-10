@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, reads the community portal list and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder and its helpers, reads the community portal list and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -120,13 +120,51 @@ Notices other than allowances, such as why a run failed or stopped or which acti
 
 The story keeps a notice's last 8 lines, because a stderr tail ends on its error, and shows the whole on hover.
 
+## First-run setup
+
+On macOS, the `onboarding` feature makes the job search folder, fills it with the `ai-job-search` release, and installs the helpers its commands call. None of it is a run: it starts no `claude`, writes no run log and is not counted in Usage statistics. Every download goes through `HttpsTransport`, under the rules of [Addresses and the network](#addresses-and-the-network).
+
+### The folder
+
+- Setup uses only a folder that is missing or empty. A folder that holds anything else is refused, and setup suggests a new `Job search` folder inside it. A folder that is already an `ai-job-search` folder is refused too: the welcome's other choice opens it as it is. A folder that holds only Finder's `.DS_Store`, and on macOS its `.localized`, counts as empty, and setup deletes those two files.
+- Setup looks at the folder again when Save here is pressed, and the rename that puts the release in place never replaces a folder that holds anything else. So a folder that filled meanwhile is never written over.
+- The release zip must match the SHA-256 of [the ai-job-search pin](#the-ai-job-search-pin) before anything is unpacked. A zip that does not match, or that is larger than a release should be, is thrown away, and the folder stays empty.
+- The whole archive is checked before anything is written. One entry that could lead outside the folder, a link or any other special file, an encrypted entry, two names one disk would take for the same name, or a top `.jobdesk` entry, spelled in any letter case or Unicode composition, refuses the whole archive.
+- Files are written into a hidden `.<name>.jobdesk-<pid>` staging folder beside the chosen one, which then takes its place in one rename and keeps the permissions the empty folder had. Unpacked files keep their read and run bits, drop their set-id bits and group and other write, and stay readable and writable by the user.
+- Setup writes the zip that matched and a record of its version and SHA-256 into the folder's `.jobdesk/`, as `source.zip` and `source.json`. What that record proves is in [the ai-job-search pin](#the-ai-job-search-pin).
+
+### The helpers
+
+- The helpers are Python, Bun and LaTeX. A copy already on the computer counts only when it works for `ai-job-search`: Python 3.10 or newer runs, Bun runs, and `lualatex` and `xelatex` run and the `kpsewhich` beside each finds every pinned TeX Live package. To learn this, setup runs the copies the `PATH` finds. A check that cannot tell, such as one that takes too long, counts as missing.
+- A missing helper installs only after the user chooses Install what is missing. `onboarding/domain/helpers.rs` pins each of its files by version, SHA-256 and size, at an address built from a fixed host and the version: GitHub's release downloads for Python, Bun and TinyTeX, and the TeX Live historic archive for the packages. Every file of a helper must match before any of it is unpacked.
+- A helper archive is refused whole for a path with `..` or a root, a path through a link, a link that leaves its folder, a hard link, a device, an entry written twice, or more than 20,000 entries or 512 MiB.
+- The helpers install for this user only, in `~/.jobdesk`, the one folder of the home folder that Jobdesk owns: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. Nothing needs an administrator password.
+- Setup never writes, replaces or removes anything elsewhere in the home folder, such as `~/.bun` or `~/Library/TinyTeX`, and never changes another copy of a helper. In `~/.jobdesk` it touches only the helpers' places and their staging folders. How it puts an install in place, and replaces an earlier install of its own that does not work, is in [ARCHITECTURE](../../ARCHITECTURE.md).
+- A `~/.jobdesk` that is a link, even to a folder, or anything but a real folder, is refused before any download, install, replace or cleanup: the install fails as something else taking its place, and setup writes nothing there, removes nothing there and never looks through it.
+- The helpers' folders come first on the `PATH` of every task, Test connection, the tool check and Runtime status, before every other copy, as [runs](runs.md#the-path) says. So once setup installs a helper, tasks use its copy, not one the user had.
+
+### The progress record
+
+- Setup keeps `onboarding.json` in the data folder, readable only by the user. It holds the chosen folder, the steps done, the `ai-job-search` version being set up, and the day of the last change. A record larger than 64 KiB, or one Jobdesk did not write, reads as no record.
+- Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
+- The download's worker records the version once the feed pins it, and the folder as made once the release has taken the folder's place, before the window hears. When setup opens on a record that lacks the folder made, but whose folder is an `ai-job-search` folder with a `.jobdesk/` that reads whole for the recorded version, the folder counts as made. A record that cannot be written costs only that resume: setup goes on with what it holds in memory, and says nothing more.
+- The record is removed when the Computer step ends.
+- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. It removes links and never follows them.
+
+### Accepted residuals
+
+1. The helper pins are built into Jobdesk, so whoever ships a Jobdesk build decides which Python, Bun and TeX Live files it installs.
+2. To check a copy the user already has, setup runs it. A program placed on the `PATH` runs with the user's rights, as it would in their terminal.
+3. Once installed, Jobdesk's helpers shadow the user's own copies for every task, newer ones included.
+4. The `~/.jobdesk` checks refuse a link they find when they look. A program running as the user that swaps `~/.jobdesk` for a link between the check and the write could send an install, a replace or a cleanup elsewhere. A program with the same access as Jobdesk can already change or delete those files directly. But macOS privacy permissions, such as access to Documents, can differ between processes of the same user. A program without that access that swaps `~/.jobdesk` for a link at the right moment could make Jobdesk write its pinned helper files, or remove folders named like its own staging folders, inside a protected folder. What Jobdesk writes there is only its own helper files, checked against their pinned hashes. Directory-relative operations would close this gap, and Jobdesk does not use them yet.
+
 ## The community portal list
 
 Browse community on the Portals screen reads the list of community portals from GitHub. It is not a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics.
 
 - It reads when Browse comes on show and the saved list is missing or over an hour old, and when the user presses Refresh or Try again. Never on every frame, and never while GitHub asks Jobdesk to wait. After a failed read, Browse coming on show again reads nothing for a minute, so a read that keeps failing cannot spend GitHub's limit. Try again still reads at once.
 - The REST API names the latest commit of `ai-job-search-dev/community-portals` and its file list: 2 requests a read, of the 60 an hour GitHub allows without sign-in. Each `SKILL.md` and `CODEOWNERS` comes from `raw.githubusercontent.com` at that commit, and an unchanged file is not fetched again.
-- Requests go over https with the shared `github_config`, follow no redirect, send no cookie and no credential, and stop at fixed sizes and times. A failure shows in Jobdesk's own words. No text from the server reaches the screen.
+- Requests go over https with the shared `https_config`, follow no redirect, send no cookie and no credential, and stop at fixed sizes and times. A failure shows in Jobdesk's own words. No text from the server reaches the screen.
 - GitHub's rate limit keeps the saved list on screen and holds Refresh until its reset time. A 403 or 429 that names no time holds it for a minute.
 - Only a path of the exact shape `portals/<country>/<folder>/SKILL.md` is read. The country is two lower-case letters or `global`, and the folder name holds only lower-case letters, digits and `-`.
 - View code ↗ opens `https://github.com/ai-job-search-dev/community-portals/tree/main/portals/<country>/<folder>`, built from those validated parts, and only on click. Install… opens the launcher on a task in plain words built from the same address: Claude copies the portal into `.agents/skills/`, explains its code and asks before it installs anything. Jobdesk does not enforce that question, see the residual below. Nothing from the list's text goes into an address or a task. A task the launcher would refuse leaves Install… disabled with its reason.
@@ -145,16 +183,27 @@ The `updates` feature reads the feed, downloads a build, checks its signature an
 
 - The feed is `latest.json` on the latest release, at the fixed address `FEED_URL`.
 - The download's address and the release page's address are built from `REPOSITORY` and the version tag, such as `v0.2.0`. No address is ever read from the feed or the notes.
-- `HttpsTransport` requests `https` only, after a redirect too, follows at most 5 redirects, checks certificates with the system's verifier and uses the proxy the environment names. It sends no cookie and no credential, only `Jobdesk/<version>` as its user agent.
+- The address of an `ai-job-search` source zip is built from `AI_JOB_SEARCH_REPOSITORY` and the pinned version's tag: GitHub's fixed address for the zip of that tag, such as `https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/v1.4.0`.
+- `https_config`, in `shared_kernel::https`, requests `https` only, after a redirect too, follows at most 5 redirects, checks certificates with the system's verifier and uses the proxy the environment names. It sends no cookie and no credential, only `Jobdesk/<version>` as its user agent. Every feature that reads the network starts from it, so the rules hold for each. The updates and first-run setup read through `HttpsTransport`, which adds fixed timeouts, and [the community portal list](#the-community-portal-list) follows no redirect at all.
 - A failure shows in Jobdesk's own words, such as "the connection timed out" or "GitHub answered with the error 404". No text from the server reaches the screen.
 
 ### The feed and its limits
 
-- The feed holds the version, the release date, the notes, and each build's signature and size. Any other field is never read.
+- The feed holds the version, the release date, the notes, each build's signature and size, and the `ai-job-search` pin. Any other field is never read.
 - A feed over 256 KiB is refused whole, and notes are cut at 64 KiB.
 - The version must be exactly three numbers, such as `0.2.0` or `v0.2.0`. Only a version newer than this copy is offered.
 - A download stops at the size the feed gives, and never goes past 200 MiB.
 - The feed request must end within 20 seconds. A download fails when its next bytes take over 30 seconds, when a minute brings under 16 KiB, or after an hour.
+
+### The ai-job-search pin
+
+The feed itself is not signed, so the release Jobdesk vouches for at first-run setup is pinned with a signature of its own. The `ai_job_search` field holds the version of an `ai-job-search` release, the SHA-256 of its source zip, and the update key's signature of the two.
+
+- The Tag release workflow resolves the latest release of `ai-job-search-dev/ai-job-search`, downloads that tag's source zip from the fixed address, and hashes it. Its `sign` job signs the line `<sha256>  ai-job-search-v<version>.zip` and a line end, as `sha256sum` writes it, with a trusted comment that names `ai-job-search-v<version>.zip` alone. The publish job hashes the zip again, checks the signature like those of the builds, and publishes nothing when no release resolves or the hash changed.
+- Jobdesk rebuilds that line from the version and the hash in the feed, and checks the signature against it with the update key built into it. So a signature of another version, another hash or another key fails.
+- The version must be exactly three numbers, and the hash 64 lowercase hex digits.
+- Setup keeps the release zip that matched the pin in the folder's `.jobdesk/`, with its version and SHA-256. That kept base is checked against its recorded SHA-256 before use. The record sits beside the zip, so the check catches a damaged copy, not a change by something that can write the folder, such as a run's tools: a use that needs to trust the base checks it against the signed pin. A record whose version is not exactly three numbers, or whose hash is not 64 lowercase hex digits, does not read. A link or an oversized file there is refused when looked at, with a short window before the file opens.
+- A pin that is missing, does not read or fails its check is dropped, and only the pin: the update check reads the same release either way. A build with no update key has no pin, and does not read the feed for one.
 
 ### Signature checks
 
@@ -178,6 +227,8 @@ Each copy checks a download against the update key built into it from `assets/up
 ### Accepted residuals
 
 1. The feed itself is not signed. Whoever can change `latest.json` on the latest release can show any version number and notes, or hide a release. They cannot get a file applied without a signature from the update key.
+   For the `ai-job-search` pin, they can drop it, or put back the signed pin of an earlier Jobdesk release, so first-run setup offers an older `ai-job-search` release that the update key once signed. They cannot pin a zip the key never signed.
 2. Whoever holds the update key and its password, and can publish a release in this repository, can ship a build every copy installs.
 3. A macOS build that is ad-hoc signed, one made from source or from the Actions tab, has no Developer ID, so macOS App Management may stop Jobdesk from replacing the bundle. Then the swap fails, the old copy opens again, and the next launch says the new copy could not be put in place. A release is signed with a Developer ID.
 4. The Windows setup, in its passive mode, closes every running `jobdesk.exe` without asking, so another Jobdesk window closes too, whatever it was doing. Restart to update waits only on the sessions of the window it runs in.
+5. The `ai-job-search` pin vouches for what GitHub served for the latest `ai-job-search` tag when the Jobdesk release ran, unread. Whoever could publish an `ai-job-search` release at that time decides what the pinned zip holds.

@@ -64,6 +64,22 @@ pub(in crate::ui_kit) fn surface() -> UiBuilder {
     UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(SURFACE))
 }
 
+/// Marks the `Ui` that holds a first-run wizard card.
+const WIZARD: &str = "jobdesk_wizard";
+
+/// A child `Ui` for a wizard card, tagged `WIZARD`, so the folder plane on it can take `folder_fill`.
+pub(in crate::ui_kit) fn wizard_scope() -> UiBuilder {
+    UiBuilder::new().ui_stack_info(UiStackInfo::default().with_tag(WIZARD))
+}
+
+/// The fill of the folder plane: a slip, an alert or a knot still ahead. It is `panel`, but on a wizard card in dark,
+/// where `panel` and the card are one colour, it takes the desk's base, `sheet`.
+pub(in crate::ui_kit) fn folder_fill(ui: &Ui) -> Color32 {
+    let p = Palette::of(ui);
+    let on_wizard = ui.stack().iter().any(|node| node.tags().contains(WIZARD));
+    if on_wizard && p.panel == p.card { p.sheet } else { p.panel }
+}
+
 /// Whether `ui` stands straight on the desk: inside `desk`, with no filled frame, such as paper or a slip, in between,
 /// and no `surface` either. Popups and windows stand on their own fill, so they are never on the desk.
 pub(in crate::ui_kit) fn on_desk(ui: &Ui) -> bool {
@@ -339,9 +355,9 @@ pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     paper(ui, false, |ui| stacked(ui, INSET, add))
 }
 
-/// A side slip: a section in the folder plane. Its content sits `INSET` in.
+/// A side slip: a section in the folder plane, filled with `folder_fill`. Its content sits `INSET` in.
 pub fn slip<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let fill = Palette::of(ui).panel;
+    let fill = folder_fill(ui);
     Frame::new().fill(fill).corner_radius(RADIUS_PANEL).show(ui, |ui| stacked(ui, INSET, add)).inner
 }
 
@@ -723,7 +739,7 @@ pub fn setting_row_lines(ui: &mut Ui, label: &str, help: &[(&str, Ink)], query: 
 
 /// What marks a setting that is picked: a checkbox, or a radio button's dot.
 #[derive(Clone, Copy)]
-enum Choice {
+pub(in crate::ui_kit) enum Choice {
     Check,
     Radio,
 }
@@ -739,7 +755,7 @@ impl Choice {
 
 /// Paints `choice` in `boxed` as egui paints its own checkbox and radio button, lit by `response`'s hover, press and
 /// focus, then the hand and the focus ring round it.
-fn paint_choice(ui: &Ui, response: &Response, choice: Choice, boxed: Rect, on: bool) {
+pub(in crate::ui_kit) fn paint_choice(ui: &Ui, response: &Response, choice: Choice, boxed: Rect, on: bool) {
     let visuals = *ui.style().interact(response);
     let mut painter = ui.painter().clone();
     if !ui.is_enabled() {

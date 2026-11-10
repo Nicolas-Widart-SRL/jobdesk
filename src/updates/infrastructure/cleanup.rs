@@ -1,79 +1,22 @@
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::{Mutex, PoisonError};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
+pub use crate::shared_kernel::own_folder::claim;
+use crate::shared_kernel::own_folder::clear_unclaimed;
 use crate::updates::domain::{ApplyFailed, ApplyFailure, Version};
 use crate::updates::infrastructure::download::{new_private_file, private_dir};
 
 /// The file in `updates/` that says why the last Restart to update did not apply. It outlives `clear` until it is read.
 pub const APPLY_FAILED: &str = "apply-failed";
-/// The file each running Jobdesk holds locked in its own folder of `updates/`, so another one leaves that folder alone.
-const LOCK: &str = ".lock";
-
-/// The folders this process has claimed, each with its open lock. Nothing is ever taken out, so each lock holds until
-/// the process exits, through Restart to update's `finish` after the window has closed.
-static CLAIMED: Mutex<Vec<(PathBuf, File)>> = Mutex::new(Vec::new());
-
-/// This process's own folder in `dir`, `updates/<pid>`, locked until the process exits. Each Jobdesk downloads only
-/// into its own folder, so a second window's `clear` never deletes the first one's build, even while the first one
-/// applies it after its window closed. Claiming the same folder again gives it back as it is.
-pub fn claim(dir: &Path) -> io::Result<PathBuf> {
-    let own = dir.join(process::id().to_string());
-    let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
-    if !claimed.iter().any(|(folder, _)| *folder == own) {
-        let lock = lock_folder(&own)?;
-        claimed.push((own.clone(), lock));
-    }
-    Ok(own)
-}
-
-/// Makes `folder` and locks it for as long as the returned file stays open.
-fn lock_folder(folder: &Path) -> io::Result<File> {
-    private_dir(folder)?;
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(folder.join(LOCK))?;
-    lock.try_lock().map_err(io::Error::from)?;
-    Ok(lock)
-}
-
-/// Whether a Jobdesk that runs now holds `folder`.
-fn in_use(folder: &Path) -> bool {
-    let lock = folder.join(LOCK);
-    if !fs::symlink_metadata(&lock).is_ok_and(|meta| meta.is_file()) {
-        return false;
-    }
-    File::open(&lock).is_ok_and(|file| matches!(file.try_lock(), Err(TryLockError::WouldBlock)))
-}
 
 /// Empties `dir`, the downloads folder, but for the note of a failed apply and the folders of Jobdesk windows that
-/// still run. Errors are ignored: what stays is tried again at the next launch. A link is removed and never followed,
-/// and so is `dir` itself when it is one.
+/// still run. Each Jobdesk downloads only into its own folder, which `claim` gives, so a second window's `clear` never
+/// deletes the first one's build, even while the first one applies it after its window closed. Errors are ignored:
+/// what stays is tried again at the next launch. A link is removed and never followed, and so is `dir` itself when it
+/// is one.
 pub fn clear(dir: &Path) {
-    let Ok(meta) = fs::symlink_metadata(dir) else { return };
-    if !meta.is_dir() {
-        let _ = fs::remove_file(dir);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        if entry.file_name() == APPLY_FAILED {
-            continue;
-        }
-        let path = entry.path();
-        // The type of the entry itself, not of what a link points to.
-        match entry.file_type() {
-            Ok(kind) if kind.is_dir() => {
-                if !in_use(&path) {
-                    let _ = fs::remove_dir_all(&path);
-                }
-            }
-            Ok(_) => {
-                let _ = fs::remove_file(&path);
-            }
-            Err(_) => {}
-        }
-    }
+    clear_unclaimed(dir, &[APPLY_FAILED]);
 }
 
 /// Notes in `dir` that the release did not apply, for the next launch to say. Only a plain version and a word are written.
@@ -112,7 +55,10 @@ fn from_word(word: &str) -> Option<ApplyFailure> {
 
 #[cfg(test)]
 mod tests {
+    use std::process;
+
     use super::*;
+    use crate::shared_kernel::own_folder::{LOCK, lock_folder};
 
     fn failed(failure: ApplyFailure) -> ApplyFailed {
         ApplyFailed { version: Version { major: 0, minor: 2, patch: 0 }, failure }

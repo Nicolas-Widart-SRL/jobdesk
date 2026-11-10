@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First search after onboarding</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* The app right after onboarding. Choose with ?state=today|launcher|jobs&theme=light|dark.
+   today: Today suggests the first search. launcher: Y opened New task on /scrape, and the user presses Run there.
+   jobs: the search finished, Jobs shows the new jobs and suggests scoring them. No card action starts a run.
+   Today's offer and the Jobs note show no spend or estimate: tasks use the user's Claude subscription by default, and Usage stays in Settings.
+   The launcher is unchanged: it keeps its Model and Spend at most fields side by side, as src/runs/ui/launcher.rs draws them.
+   Grid.html's scoped styles, copied and scoped to .fs, so app.css and the other canvases are unchanged. Fictional data. */
+body { margin: 0; }
+.fs {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.fs[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.fs .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.fs b { font-weight: 600; }
+.fs .lnk { color: var(--active); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Menu and status, as Grid.html. */
+.fs .menu { flex: none; display: flex; align-items: center; gap: 28px; padding: 14px 28px 4px; }
+.fs .menu .brand { margin-right: 0; }
+.fs .menu .brand svg path:last-child { stroke: var(--sheet); }
+.fs .tabs { display: flex; gap: 6px; }
+.fs .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.fs .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.fs .tabs a.on { color: var(--text); font-weight: 600; }
+.fs .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.fs .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.fs .newtask .keys { color: var(--muted); }
+.fs .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.fs .statusbar .r { margin-left: auto; }
+.fs .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+.fs .btn { background: var(--card); }
+.fs .btn.pri { background: var(--pri); }
+.fs .paperbox { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* Today, as Grid.html. */
+.fs .bhead { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 32px 14px; }
+.fs .bhead h1 { margin: 0; font: 600 44px/1.05 var(--slab); }
+.fs .bhead .sub { margin-top: 4px; font-size: 15px; color: var(--muted); }
+.fs .stampring { flex: none; width: 84px; height: 84px; }
+.fs .bbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 32px 14px; }
+.fs .split2 { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: stretch; }
+.fs .col-a { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.fs .col-b { flex: 0 0 292px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.fs .slip2 { border-radius: 4px; background: var(--panel); }
+.fs .slip2 .sh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); font: 600 17px/1.3 var(--slab); }
+.fs .slip2 .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.fs .slip2 .sb { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+/* The offer panel of a clear Today (OFFER_PADDING, OFFER_WIDTH, OFFER_GAP), in its first-search words. */
+.fs .offer { flex: 1 1 auto; display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.fs .offer .ob2 { display: flex; flex-direction: column; gap: 14px; padding: 32px; max-width: 560px; }
+.fs .offer h2 { margin: 0; font: 600 28px/1.15 var(--slab); }
+.fs .offer .take { font-size: 15px; }
+.fs .offer .steps { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.fs .offer .steps span { display: flex; gap: 10px; align-items: baseline; }
+.fs .offer .steps i { flex: none; font-style: normal; font-weight: 600; color: var(--text); width: 14px; }
+.fs .cfoot { margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 12px 22px 14px; border-top: 1px solid var(--line); }
+.fs .cfoot .why { margin-left: auto; text-align: right; font-size: 13px; color: var(--muted); line-height: 1.4; }
+
+/* The launcher, as built (tests/snapshots/launcher_light.png). */
+.fs .phead { flex: none; display: flex; align-items: flex-end; gap: 16px; padding: 16px 32px 12px; }
+.fs .phead h1 { margin: 0; font: 600 32px/1.15 var(--slab); }
+.fs .phead .sub { margin-top: 2px; color: var(--muted); }
+.fs .phead .acts { margin-left: auto; display: flex; gap: 8px; }
+.fs .cmds { overflow: hidden; }
+.fs .grp { padding: 10px 14px 6px; font: 600 17px/1.3 var(--slab); border-bottom: 1px solid var(--line); }
+.fs .cr { display: grid; grid-template-columns: 115px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.fs .cr .c { font: 400 13.5px var(--type); }
+.fs .cr .w { font: 400 13px var(--type); color: var(--muted); }
+.fs .cr.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); }
+.fs .lslip .sh2 { padding: 10px 16px 8px; border-bottom: 1px solid var(--line); font: 700 18px/1.3 var(--type); }
+.fs .lslip .sb2 { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 16px; }
+.fs .lslip label { font-size: 13px; color: var(--muted); }
+.fs .fld { height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
+.fs .code2 { padding: 9px 11px; border-radius: 2px; background: var(--field); font: 400 13.5px var(--type); }
+/* Model and Spend at most in two columns, as the launcher's columns_const draws them. */
+.fs .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fs .row2 > div { display: flex; flex-direction: column; gap: 6px; }
+/* NEW, from_note: a short note at the top of the launcher's side slip, naming the suggestion that opened it. */
+.fs .from { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; padding: 8px 10px; border-radius: 3px; background: var(--card); font-size: 13px; color: var(--muted); }
+.fs .from b { color: var(--text); }
+
+/* Jobs, as Grid.html. */
+.fs .seg2 { display: flex; gap: 3px; border-bottom: 1px solid var(--text); }
+.fs .seg2 button { height: 34px; padding: 0 12px; border: 0; border-radius: 4px 4px 0 0; background: none; color: var(--muted); font-weight: 500; }
+.fs .seg2 button.on { background: var(--text); color: var(--sheet); font-weight: 600; }
+.fs .seg2 button .n { margin-left: 6px; }
+.fs .jt { width: 100%; border-collapse: collapse; }
+.fs .jt th { text-align: left; padding: 9px 10px; font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--text); white-space: nowrap; }
+.fs .jt td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.fs .jt tr:last-child td { border-bottom: 0; }
+.fs .jt tr.sel td { background: var(--raised); }
+.fs .jt tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--text); }
+.fs .jt .role { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+.fs .jt .co { font-size: 13px; color: var(--muted); }
+.fs .note2 { flex: none; display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 4px; background: var(--panel); }
+.fs .note2 .t { display: flex; flex-direction: column; gap: 2px; }
+.fs .note2 .btn { margin-left: auto; }
+.fs .detail { flex: 0 0 330px; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; min-height: 0; overflow: hidden; }
+.fs .detail h2 { margin: 0; font: 600 19px/1.2 var(--slab); }
+.fs .crow { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
+.fs .crow .k { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const STATE = (P.get('state') || 'today').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+const kb = (k) => `<span class="kb">${k}</span>`;
+
+// The day stamp with nothing dealt: a quiet empty ring, as built.
+function stamp() {
+  const ticks = [];
+  for (let i = 0; i < 12; i++) {
+    const a = -Math.PI / 2 + (i + 0.5) * (2 * Math.PI / 12);
+    const c = (r) => [40 + r * Math.cos(a), 40 + r * Math.sin(a)].map((v) => v.toFixed(1));
+    const [x1, y1] = c(29.5), [x2, y2] = c(36);
+    ticks.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--off)" stroke-width="4.5"/>`);
+  }
+  return `<svg class="stampring" viewBox="0 0 80 80" role="img" aria-label="Tuesday 10 November. Nothing to decide yet.">
+    <circle cx="40" cy="40" r="38.5" fill="var(--sheet)"/>${ticks.join('')}
+    <circle cx="40" cy="40" r="38.5" fill="none" stroke="var(--line)"/><circle cx="40" cy="40" r="27" fill="none" stroke="var(--line)"/>
+    <text x="40" y="28" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Tue</text>
+    <text x="40" y="48.5" text-anchor="middle" font-size="24.8" font-weight="600" font-family="Zilla Slab, serif" fill="var(--text)">10</text>
+    <text x="40" y="61" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">Nov</text></svg>`;
+}
+
+function shell(on, inner) {
+  const tabs = ['Today', 'Jobs', 'Applications', 'Insights', 'Tasks', 'Profile']
+    .map((t) => `<a class="${t === on ? 'on' : ''}" href="#"><span class="lbl">${t}</span></a>`).join('');
+  return `<div class="app fs" data-theme="${THEME}">
+    <header class="menu"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav><span class="newtask">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main">${inner}</main>
+    <footer class="statusbar"><span><span class="sq" style="background: var(--hired)"></span>Claude is ready</span><span class="r">Settings <span class="keys">Cmd ,</span></span></footer></div>`;
+}
+
+function today() {
+  return shell('Today', `
+    <header class="bhead">${stamp()}<div><h1>Nothing to decide yet</h1><div class="sub">Your profile is ready. Find your first jobs, and Today deals them to you.</div></div></header>
+    <div class="bbody"><div class="split2">
+      <section class="col-a"><article class="offer">
+        <div class="ob2"><h2>Find your first jobs</h2>
+          <p class="take">Jobdesk searches LinkedIn and Freehire for the job titles you gave Claude, and lists every new job in Jobs.</p>
+          <div class="steps"><span><i>1</i>Find new jobs opens the search task.</span><span><i>2</i>Press Run there. It takes about 5 minutes.</span><span><i>3</i>When it is done, Jobs shows what it found, ready to score.</span></div></div>
+        <div class="cfoot"><button class="btn pri" type="button">Find new jobs… ${kb('Y')}</button>
+          <span class="why">Opens the search task. Nothing starts until you press Run.<br><a class="lnk" href="#">Show the command</a></span></div>
+      </article></section>
+      <aside class="col-b">
+        <section class="slip2"><div class="sh">Done today <span class="n">0</span></div><div class="sb"><p class="muted" style="font-size: 13px">Each decision lands here. U undoes the last one.</p></div></section>
+        <section class="slip2"><div class="sh">Coming up <span class="n">2 weeks</span></div><div class="sb"><p class="muted" style="font-size: 13px">No deadlines in the next two weeks.</p></div></section>
+        <section class="slip2"><div class="sh">Your profile <span class="n">9 of 11</span></div><div class="sb">
+          <span class="tally fat" role="img" aria-label="9 of 11 filled">${'<i></i>'.repeat(9)}${'<i class="off"></i>'.repeat(2)}</span>
+          <p class="muted" style="font-size: 13px">Two topics are still empty. Jobs scores better once they are filled.</p>
+          <span><button class="btn sm" type="button">Open Profile</button></span></div></section>
+      </aside></div></div>`);
+}
+
+function launcher() {
+  const row = (c, d, w, on) => `<div class="cr${on ? ' on' : ''}"><span class="c">${c}</span><span>${d}</span><span class="w">${w}</span></div>`;
+  return shell('Tasks', `
+    <header class="phead"><div><h1>New task</h1><div class="sub">Pick a command. Nothing runs until you press Run.</div></div></header>
+    <div class="bbody"><div class="split2">
+      <section class="col-a"><div class="paperbox cmds">
+        <div class="grp">Find</div>${row('/scrape', 'Find new postings on installed portals', 'seen_jobs.json', true)}${row('/rank', 'Score new postings and build a shortlist', 'seen_jobs.json')}
+        <div class="grp">Apply</div>${row('/apply', 'Evaluate a posting, then draft and review documents', 'cv, cover_letters, tracker')}${row('/interview', 'Build a prep pack for one application', 'interview_prep_&lt;stage&gt;.md')}${row('/outcome', 'Record progress, follow up, or sweep stale rows', 'tracker, outcome.md')}
+        <div class="grp">Analyse</div>${row('/upskill', 'Find skill gaps and build a learning plan', 'upskill/report-*.md')}${row('/html-report', 'Rebuild the portable HTML dashboard', 'reports/*.html')}
+      </div></section>
+      <aside class="col-b" style="flex-basis: 380px"><section class="slip2 lslip"><div class="sh2">/scrape</div><div class="sb2">
+        <div class="from"><b>Your first search, from Today.</b>Leave the box below empty to search for all your job titles.</div>
+        <span class="muted">Find new postings on installed portals</span>
+        <label>Focus area, broad, or health</label><span class="fld"></span>
+        <div class="row2"><div><label>Model</label><span class="fld" style="color: var(--text); justify-content: space-between">Claude default <span>▾</span></span></div>
+          <div><label>Spend at most, USD</label><span class="fld" style="color: var(--text)">2.00</span></div></div>
+        <label>Claude will run</label><span class="code2">/scrape</span>
+        <span class="muted">Runs in your job search folder.</span>
+        <span><button class="btn pri" type="button">Run <span class="keys" style="color: inherit">Cmd Enter</span></button></span>
+      </div></section></aside>
+    </div></div>`);
+}
+
+function jobs() {
+  const rows = [
+    ['Senior Product Designer', 'Kestrel Payments', 'Berlin, hybrid', 'Fri 20 Nov', 'LinkedIn', true],
+    ['UX Designer, Mobile Banking', 'Harbor Bank', 'Remote, EU', '<span class="faint">None</span>', 'Freehire'],
+    ['Service Designer', 'Federal Data Agency', 'Hamburg, on site', 'Mon 30 Nov', 'LinkedIn'],
+    ['Product Designer, Charging App', 'Brightwell Energy', 'Munich, hybrid', '<span class="faint">None</span>', 'Freehire'],
+    ['Design Lead, Rail Timetables', 'Meridian Rail Systems', 'Berlin, hybrid', 'Thu 26 Nov', 'LinkedIn'],
+    ['Interaction Designer', 'Tessel Group', 'Remote, Germany', '<span class="faint">None</span>', 'LinkedIn'],
+    ['UX Researcher and Designer', 'Lumen Telecom', 'Cologne, hybrid', 'Wed 2 Dec', 'Freehire'],
+  ].map(([role, co, loc, close, src, sel]) => `<tr class="${sel ? 'sel' : ''}"><td><span class="faint" style="font-size: 13px">Not scored</span></td>
+      <td><div class="role">${role}</div><div class="co">${co}</div></td><td>${loc}</td><td class="num">${close}</td><td>${src}</td></tr>`).join('');
+  return shell('Jobs', `
+    <header class="phead"><div><h1>Jobs</h1><div class="sub">Scored from the job ad alone. Drafting an application also checks the company.</div></div>
+      <div class="acts"><button class="btn" type="button">Find new jobs…</button></div></header>
+    <div class="bbody">
+      <div class="note2"><div class="t"><b>Your first search found 14 new jobs on 2 sites.</b><span class="muted">Scoring reads each ad against your profile and puts the best fits first. It takes about 5 minutes.</span></div>
+        <button class="btn pri" type="button">Score 14 new jobs…</button></div>
+      <div class="seg2"><button type="button">Shortlist<span class="n num">0</span></button><button class="on" type="button">New<span class="n num">14</span></button><button type="button">Low score<span class="n num">0</span></button><button type="button">Ruled out<span class="n num">0</span></button></div>
+      <div class="split2" style="gap: 16px">
+        <div class="col-a"><div class="paperbox" style="overflow: hidden"><table class="jt"><thead><tr><th>Score</th><th>Job</th><th>Where</th><th>Closes</th><th>Found on</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+        <aside class="detail paperbox">
+          <div class="col" style="gap: 1px"><span class="muted">Kestrel Payments</span><h2>Senior Product Designer</h2><span class="muted" style="font-size: 13px">Not scored yet. Scoring adds the checks and why it fits.</span></div>
+          <div><div class="crow"><span class="k">Where</span><span>Berlin, hybrid</span></div><div class="crow"><span class="k">Closes</span><span class="num">Fri 20 Nov</span></div><div class="crow"><span class="k">Found on</span><span>LinkedIn, today</span></div></div>
+          <div class="row" style="margin-top: auto"><button class="btn" type="button">Open job ad</button></div>
+        </aside></div></div>`);
+}
+
+const SCREENS = { today, launcher, jobs };
+document.getElementById('root').innerHTML = (SCREENS[STATE] || today)();
+</script>
+</body>
+</html>

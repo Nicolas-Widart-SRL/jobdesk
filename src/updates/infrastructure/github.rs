@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use crate::updates::domain::{DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, UpdateService};
+use crate::shared_kernel::https::Transport;
+use crate::updates::domain::{DownloadEnd, DownloadId, Failure, Platform, Release, ServiceEvent, SourcePin, SourcePinReader, UpdateService};
 use crate::updates::infrastructure::cleanup::claim;
 use crate::updates::infrastructure::download::Job;
-use crate::updates::infrastructure::feed::read_feed;
-use crate::updates::infrastructure::http::Transport;
+use crate::updates::infrastructure::feed::{read_feed, read_pin};
 use crate::updates::infrastructure::signature::UpdateKey;
 
 /// What every worker needs, shared with each thread it starts.
@@ -88,6 +88,27 @@ impl UpdateService for GithubUpdates {
     }
 }
 
+/// The `ai-job-search` release the feed on GitHub pins, checked against the update key. Like the update check, it
+/// starts no `claude` process, uses no API key and writes no run log.
+pub struct GithubSourcePins {
+    transport: Arc<dyn Transport>,
+    key: Option<UpdateKey>,
+}
+
+impl GithubSourcePins {
+    /// With no `key`, no pin can be checked, so none is ever read.
+    pub fn new(transport: Arc<dyn Transport>, key: Option<UpdateKey>) -> Self {
+        Self { transport, key }
+    }
+}
+
+impl SourcePinReader for GithubSourcePins {
+    fn read(&self) -> Result<Option<SourcePin>, Failure> {
+        let Some(key) = &self.key else { return Ok(None) };
+        read_pin(self.transport.as_ref(), key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -98,9 +119,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::shared_kernel::https::{Body, Fetch, HttpsFailure};
     use crate::updates::domain::{FEED_URL, Version};
     use crate::updates::infrastructure::download::tests::{Serves, WINDOWS, release, windows_build};
-    use crate::updates::infrastructure::http::{Body, Fetch};
+    use crate::updates::infrastructure::feed::tests::fixture_pin;
     use crate::updates::infrastructure::signature::tests::{fixture, fixture_key};
 
     /// Holds every request until the test lets it through.
@@ -110,7 +132,7 @@ mod tests {
     }
 
     impl Transport for Blocks {
-        fn open(&self, url: &str, _fetch: Fetch) -> Result<Body, Failure> {
+        fn open(&self, url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
             assert_eq!(url, FEED_URL);
             let _ = self.go.lock().unwrap().recv();
             Ok(Box::new(Cursor::new(self.feed.clone())))
@@ -126,7 +148,7 @@ mod tests {
     }
 
     impl Transport for FirstWaits {
-        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, Failure> {
+        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 self.arrived.lock().unwrap().send(()).unwrap();
                 let _ = self.go.lock().unwrap().recv();
@@ -248,5 +270,31 @@ mod tests {
         service.download(&release(10), DownloadId(1));
         assert_eq!(wait(&mut service), [ServiceEvent::Ended { id: DownloadId(1), end: DownloadEnd::Failed { percent: 0, failure: Failure::NoBuild } }]);
         assert!(!data.path().join("updates").exists());
+    }
+
+    /// Serves the fixture feed, as GitHub would.
+    struct Feed;
+
+    impl Transport for Feed {
+        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
+            assert_eq!((url, fetch), (FEED_URL, Fetch::Feed));
+            Ok(Box::new(Cursor::new(fs::read(fixture("latest.json")).unwrap())))
+        }
+    }
+
+    #[test]
+    fn the_pin_reads_from_the_feed_with_the_update_key() {
+        assert_eq!(GithubSourcePins::new(Arc::new(Feed), Some(fixture_key())).read(), Ok(Some(fixture_pin())));
+    }
+
+    #[test]
+    fn a_build_with_no_update_key_has_no_pin_and_reads_nothing() {
+        struct Never;
+        impl Transport for Never {
+            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
+                panic!("nothing is requested")
+            }
+        }
+        assert_eq!(GithubSourcePins::new(Arc::new(Never), None).read(), Ok(None));
     }
 }

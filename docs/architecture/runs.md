@@ -37,6 +37,18 @@ Usage counts such a task with no command, and the band's place reads "Task" in p
 
 On Windows the profile folder is `USERPROFILE`, with `HOME` only when it is unset, and each folder is tried for `claude.exe`, `claude.cmd` and `claude.bat`, in that order.
 
+## The `PATH`
+
+A task's process, Test connection, the tool check and Runtime status all get one `PATH`, looked up once per launch by `host_path::resolved_path`. It holds, in this order:
+
+1. on macOS, the folders of the helpers first-run setup installs, all in Jobdesk's own `~/.jobdesk`: `~/.jobdesk/python/bin`, `~/.jobdesk/bun/bin` and `~/.jobdesk/TinyTeX/bin/universal-darwin`. They are listed whether or not they exist yet, so a helper installed after the lookup is still found. When first-run setup hands over, the tool check runs again, so Setup and Runtime status find what it installed. They come before every other copy, newer ones and the login shell's own included, such as a Homebrew Bun or a MacTeX: setup installs a helper only when no copy works with ai-job-search, and then only its pinned one is known to work with the templates and tools, so once installed it shadows the others;
+2. the `PATH` the login shell sets, since an app opened from the Finder gets none of the shell profiles' `PATH`;
+3. the `PATH` Jobdesk inherited.
+
+An empty part is left out, as it would name the current folder.
+
+On macOS, `/usr/bin/python3` and `/usr/bin/git` only hand over to Xcode or its Command Line Tools. With neither installed, running one opens a dialog that offers to install them. Looking for a program skips such a stub, so the tool check counts Python as missing and runs nothing. The stub counts as backed when `DEVELOPER_DIR`, else the folder `xcode-select` chose, else Xcode's or the Command Line Tools' usual folder, holds the program.
+
 ## Stopping a run and Windows system programs
 
 On Windows a run stops with `taskkill /T /F`, which ends the tools it started too.

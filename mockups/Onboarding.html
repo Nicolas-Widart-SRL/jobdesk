@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First-run onboarding</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="app.css">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+/* First-run onboarding, round 3: the compact card wizard (B). Choose with
+   ?state=welcome|resume|place|notempty|download|offline|mismatch|checking|installing|toolfail      (small window, 720x560)
+          |docs|dropped|reading|sheet|sheet-fallback|review|review-skip|working|followup|cvcheck|choice|stopped
+                                                                                                     (Profile chapter, 1280x820)
+          |recap|recap-nopdf                                                                         (the app, 1280x820)
+   &theme=light|dark
+   One centred card per step under the step dots, the setup stamp in its head, one primary per screen.
+   The window grows once, at the Profile chapter, to the app's own size, and stays there through the recap.
+   No spend shows anywhere here: tasks use the user's Claude subscription by default, and Usage stays in Settings.
+   Grid.html's scoped styles, copied and scoped to .ob, so app.css and the other canvases are unchanged. Fictional data. */
+body { margin: 0; }
+.ob {
+  --turn: #f48cc0; --on-turn: #0d1a2b; --card: #1a2f49; --grid: #1e3554; --mark: #5c3057;
+  height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  background-color: var(--sheet);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 20px 20px; background-position: -1px -1px;
+}
+.ob[data-theme="light"] { --turn: #b0246a; --on-turn: #ffffff; --card: #ffffff; --grid: #d4dee9; --mark: #f4c2db; }
+.ob .main { background: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.ob .btn { background: var(--card); }
+.ob .btn.pri { background: var(--pri); }
+/* Disabled, as the kit paints it: the opaque rest fill, ink and border at DISABLED_OPACITY. */
+.ob .btn.off { color: color-mix(in srgb, var(--text) 50%, transparent); border-color: color-mix(in srgb, var(--line) 50%, transparent); cursor: default; }
+.ob .btn.pri.off { background: color-mix(in srgb, var(--pri) 50%, var(--card)); border-color: transparent; color: var(--on-pri); }
+.ob .btn.sm { height: 28px; padding: 0 8px; font-size: 13px; }
+.ob .note13 { font-size: 13px; }
+.ob .lnk { color: var(--active); text-decoration: underline; text-underline-offset: 2px; }
+/* A quiet action: a link_button in the foot, after the primary. */
+.ob .qlnk { padding: 0 6px; font-size: 14px; font-weight: 500; }
+.ob b, .ob strong { font-weight: 600; }
+.ob .slab { font-family: var(--slab); font-weight: 600; }
+.ob .num { font-variant-numeric: tabular-nums; }
+
+/* The window's top: the brand, and no menu until the app opens. */
+.ob .menu { flex: none; display: flex; align-items: center; gap: 16px; padding: 14px 28px 4px; min-height: 42px; }
+.ob .menu .brand { margin-right: 0; }
+.ob .menu .brand svg path:last-child { stroke: var(--sheet); }
+.ob .statusbar { flex: none; display: flex; align-items: center; gap: 18px; padding: 6px 28px; background: var(--sheet); box-shadow: inset 0 1px 0 var(--line); font-size: 13px; color: var(--muted); }
+.ob .statusbar .r { margin-left: auto; }
+.ob .sq { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+
+/* Knots, as built (knot): Done and Failed in a hairline, the others filled. */
+.ob .kn { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 2px; font-size: 12.5px; font-weight: 600; }
+.ob .kn.done { background: var(--sheet); color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.ob .kn.work, .ob .kn.next { background: var(--pri); color: var(--on-pri); }
+.ob .kn.wait { background: var(--turn); color: var(--on-turn); }
+.ob .kn.fail { background: var(--sheet); color: var(--closed); box-shadow: inset 0 0 0 1px var(--closed); }
+.ob .kn.ahead { background: var(--panel); color: var(--muted); }
+.ob .kn.add { background: var(--sheet); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* Paper, slips and the alert. In dark, panel and card are one color, so a slip on paper takes sheet there. */
+.ob .paper { border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ob .slip { border-radius: 4px; background: var(--panel); }
+.ob .alertbox { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-radius: 4px; background: var(--panel); box-shadow: inset 3px 0 0 var(--closed); }
+.ob .alertbox b { color: var(--closed); }
+.ob[data-theme="dark"] .ccard .slip, .ob[data-theme="dark"] .ccard .alertbox, .ob[data-theme="dark"] .kn.ahead { background: var(--sheet); }
+
+/* setup_line: a knot, the words and a line under them, a tag at the right. */
+.ob .lines { display: flex; flex-direction: column; }
+.ob .ln { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 1px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--line); }
+.ob .ln:first-child { border-top: 0; }
+.ob .ln .kn { grid-row: span 2; align-self: start; margin-top: 1px; }
+.ob .ln .w { min-width: 0; }
+.ob .ln .s { grid-column: 2; color: var(--muted); font-size: 13px; }
+.ob .ln .end { grid-row: 1 / span 2; grid-column: 3; display: flex; align-items: center; gap: 8px; }
+.ob .ln.dim .w { color: var(--muted); }
+.ob .ln .barline { grid-column: 2 / span 2; display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.ob .bar { flex: 1 1 auto; display: block; height: 8px; background: var(--off); }
+.ob .bar i { display: block; height: 100%; background: var(--text); }
+/* live_sweep, as on the run band, along the bottom of the line Claude works on. A still frame. */
+.ob .ln.live { position: relative; }
+.ob .ln.live::after { content: ""; position: absolute; left: 30%; width: 30%; bottom: -1px; height: 2px; background: var(--active); }
+.ob .tag { background: var(--card); }
+.ob .wide .ln { padding: 9px 14px; }
+
+/* choice_card: a pickable card with a radio, a title, an optional tag and a sentence. Picked takes the pick look. */
+.ob .choice { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px 12px; padding: 12px 14px; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+.ob .choice.on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--text); }
+.ob .choice .rd { grid-row: span 2; margin-top: 2px; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--text); background: var(--field); display: flex; align-items: center; justify-content: center; }
+.ob .choice.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+.ob .choice .t { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.ob .choice .d { color: var(--muted); font-size: 13.5px; }
+
+/* The folder row: the place in Courier, the parent in faint and the name in text (path_label). */
+.ob .place { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+.ob .fold { flex: none; width: 34px; height: 28px; color: var(--text); }
+
+/* drop_zone: paper with a dashed line edge (SWEEP_DASH), mini pages, the words and Choose files…. */
+.ob .drop { display: flex; align-items: center; gap: 20px; padding: 20px 22px; border-radius: 4px; background-color: var(--card);
+  background-image: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(0deg, var(--line) 0 6px, transparent 6px 10px), repeating-linear-gradient(0deg, var(--line) 0 6px, transparent 6px 10px);
+  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%; background-position: 0 0, 0 100%, 0 0, 100% 0; background-repeat: no-repeat; }
+.ob .drop .words { display: flex; flex-direction: column; gap: 4px; }
+.ob .drop .words .slab { font-size: 19px; }
+.ob .drop.slim { padding: 12px 16px; gap: 14px; }
+.ob .stack { position: relative; flex: none; width: 92px; height: 104px; }
+.ob .stack .mpage { position: absolute; }
+/* The mini page, as in CV documents. */
+.ob .mpage { flex: none; width: 66px; height: 92px; padding: 8px 7px; display: flex; flex-direction: column; gap: 4px; background: var(--page); border: 1px solid var(--line); border-radius: 1px; box-sizing: border-box; }
+.ob .mpage i { display: block; height: 3px; background: var(--page-line); }
+.ob .mpage i.h { height: 6px; width: 60%; background: var(--page-head); margin-bottom: 3px; }
+.ob .mpage i.s { width: 70%; }
+.ob .mpage.sm { width: 26px; height: 34px; padding: 4px 3px; gap: 2px; }
+.ob .mpage.sm i { height: 2px; }
+.ob .mpage.sm i.h { height: 3px; margin-bottom: 1px; }
+/* NEW, file_list: one row per added file: the mini page, the name as plain text, its pages, Remove. */
+.ob .files .fr { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto auto; align-items: center; column-gap: 12px; padding: 8px 14px; border-top: 1px solid var(--line); }
+.ob .files .fr:first-child { border-top: 0; }
+.ob .files .fr .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The question card (AskUserQuestion): prompt_box_tone in stamp ink, as the question bar in Tasks. */
+.ob .ask { display: flex; flex-direction: column; gap: 12px; margin-right: 5px; padding: 14px 16px 16px; border: 1px solid var(--turn); border-radius: 2px; background: var(--card); box-shadow: 5px 5px 0 var(--turn); }
+.ob .ask .who { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.ob .tagt { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 2px; background: var(--turn); color: var(--on-turn); font-size: 12.5px; font-weight: 600; }
+.ob .ask .q { font: 600 19px/1.25 var(--slab); }
+.ob .ask .opts { display: flex; flex-direction: column; gap: 6px; }
+.ob .ask .opt { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 1px 10px; padding: 7px 10px; border-radius: 3px; }
+.ob .ask .opt.on { background: var(--raised); box-shadow: inset 3px 0 0 var(--text); }
+.ob .ask .opt .rd { grid-row: span 2; margin-top: 2px; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--text); background: var(--field); display: flex; align-items: center; justify-content: center; }
+.ob .ask .opt.on .rd::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+.ob .ask .opt .d { color: var(--muted); font-size: 13px; }
+.ob .fld { min-height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); box-sizing: border-box; }
+.ob .fld.typed { color: var(--text); }
+.ob .fld.grow { display: block; padding: 6px 8px; line-height: 1.45; }
+.ob .fld.focus { border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
+.ob .caret { display: inline-block; width: 1px; height: 17px; margin-left: 1px; vertical-align: -3px; background: var(--text); }
+.ob .figs { display: flex; gap: 14px; color: var(--muted); font-size: 13px; }
+
+/* The foot of the open step: the primary first, then plain, then one muted line at the right, as the deal footer. */
+.ob .foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 18px 12px; border-top: 1px solid var(--line); }
+.ob .foot .why { margin-left: auto; text-align: right; font-size: 13px; color: var(--muted); line-height: 1.4; max-width: 52%; }
+
+/* ---------- The wizard ---------- */
+.ob .cw { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 4px 24px 18px; }
+/* step_dots: one STATUS_DOT square per step with its name under it, joined by a hairline. Done in text, the open
+   one ringed in text, the rest unlit in off. */
+.ob .sds { flex: none; display: flex; align-items: flex-start; }
+.ob .sd { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; width: 86px; font-size: 12.5px; color: var(--muted); }
+.ob .sd i { position: relative; z-index: 1; display: block; width: 8px; height: 8px; margin-top: 4px; background: var(--off); }
+.ob .sd.done i { background: var(--text); }
+.ob .sd.on i { background: var(--text); outline: 1px solid var(--text); outline-offset: 2px; }
+.ob .sd.on { color: var(--text); font-weight: 600; }
+.ob .sd::before { content: ""; position: absolute; top: 7px; left: -43px; width: 86px; height: 1px; background: var(--line); }
+.ob .sd.done::before, .ob .sd.on::before { background: var(--text); }
+.ob .sd:first-child::before { display: none; }
+.ob .sd span { padding: 0 4px; background: var(--sheet); }
+.ob .ccard { width: 100%; max-width: 640px; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--line); }
+.ob .ccard .body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 18px 22px 14px; overflow: hidden; }
+.ob .ccard .hd { flex: none; display: flex; align-items: center; gap: 16px; }
+.ob .ccard h1 { margin: 0; font: 600 26px/1.15 var(--slab); }
+.ob .ccard .lead { margin-top: 4px; font-size: 14px; color: var(--muted); }
+.ob .ccard .drop { padding: 16px 18px; }
+.ob .stampsm { flex: none; width: 64px; height: 64px; }
+
+/* The Profile chapter: the same card, wider, in the app-sized window. A main column and a side column (SPLIT_*). */
+.ob .wide .ccard { max-width: 1120px; }
+.ob .wide .ccard .body { padding: 18px 24px 0; gap: 14px; }
+.ob .osplit { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; }
+.ob .osplit.even { grid-template-columns: minmax(0, 1fr) minmax(0, 0.86fr); }
+.ob .ocol { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.ob .oside { min-height: 0; display: flex; flex-direction: column; gap: 12px; padding-bottom: 14px; }
+.ob .oside .slip { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.ob .oside .sh { font: 600 17px/1.3 var(--slab); display: flex; align-items: baseline; gap: 8px; }
+.ob .oside .sh .n { margin-left: auto; font: 400 13px/1.3 "Schibsted Grotesk", system-ui, sans-serif; color: var(--muted); }
+.ob .oside p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.ob .tl { display: flex; gap: 3px; }
+.ob .tl i { display: block; width: 6px; height: 18px; background: var(--text); }
+.ob .tl i.o { background: var(--off); }
+.ob .reply { padding: 7px 9px; border-radius: 2px; background: var(--field); font-size: 13px; color: var(--text); }
+
+/* A scrolling well: the part of the card that scrolls, with the kit's thin bar at the right. */
+.ob .well { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.ob .well .in { padding-right: 22px; }
+.ob .well::after { content: ""; position: absolute; top: 4px; right: 2px; width: 6px; height: var(--thumb, 40%); border-radius: 3px; background: var(--line); }
+.ob .well .fade { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(transparent, var(--card)); }
+
+/* Claude's message as a document: markdown, no images, headings capped at the section size, at DOC_MEASURE. */
+.ob .doc { max-width: 620px; padding: 0; font-size: 15px; line-height: 1.5; color: var(--text); }
+.ob .doc h2 { margin: 0 0 6px; font: 600 17px/1.3 var(--slab); }
+.ob .doc p { margin: 0 0 10px; }
+.ob .doc .g { margin: 14px 0 6px; font-weight: 600; }
+.ob .doc ol { margin: 0 0 6px; padding: 0; list-style: none; }
+.ob .doc ol li { display: grid; grid-template-columns: 28px minmax(0, 1fr); margin-bottom: 6px; padding-left: 0; }
+.ob .doc ol li::before { content: none; }
+.ob .doc ol li > .qn { color: var(--muted); }
+/* NEW, question_sheet: each numbered item of Claude's message, then its own answer field. */
+.ob .qs ol li { margin-bottom: 12px; }
+.ob .qs li .fld { margin-top: 6px; font-size: 14px; }
+/* Sub-items (a, b) stay inside their question, above its one field. */
+.ob .doc .subs { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.ob .doc .subs > span { display: grid; grid-template-columns: 22px minmax(0, 1fr); }
+.ob .doc .subs .qn { color: var(--muted); }
+/* The fallback's message has no numbered items: plain bullets, as markdown renders them. */
+.ob .doc ul { margin: 0 0 10px; padding-left: 20px; }
+.ob .doc ul li { margin-bottom: 6px; }
+
+/* NEW, change_check: a numbered proposed change with its checkbox (CHECK_BOX, painted as setting_check paints it),
+   Claude's number in muted, then the change. Box, number and words are one control. Unticked, the words go muted. */
+.ob .cb { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1px solid var(--text); border-radius: 2px; background: var(--field); box-sizing: border-box; }
+.ob .cb.on { background: var(--text); }
+.ob .cb svg { width: 12px; height: 12px; }
+.ob .doc ol.chg li { grid-template-columns: 18px 26px minmax(0, 1fr); column-gap: 10px; margin-bottom: 4px; padding: 2px 0; align-items: start; }
+.ob .doc ol.chg li .cb { margin-top: 3px; }
+.ob .doc ol.chg li.offc > span:last-child { color: var(--muted); }
+.ob .doc ol.chg li.focus .cb { outline: 2px solid var(--active); outline-offset: 2px; }
+
+/* The fallback: one large field, unnumbered, beside the message (round 2's B1 layout). */
+.ob .bigf { flex: 1 1 auto; min-height: 0; padding: 8px 10px; border: 1px solid var(--text); box-shadow: 0 0 0 1px var(--text); border-radius: 3px; background: var(--field); font-size: 14px; line-height: 1.5; overflow: hidden; }
+.ob .bigf p { margin: 0 0 8px; }
+.ob .lab { font-size: 13px; font-weight: 600; }
+.ob .help { font-size: 13px; color: var(--muted); line-height: 1.45; }
+
+/* NEW, cv_check: the CV pages from ProfileCv, at the page tokens. */
+.ob .cvpages { display: flex; gap: 12px; align-items: flex-start; }
+.ob .cvpw { display: flex; flex-direction: column; gap: 5px; }
+.ob .cvpw .cap { font-size: 12.5px; color: var(--faint); }
+.ob .cvpg { position: relative; overflow: hidden; width: 294px; height: 416px; background: var(--page); border: 1px solid var(--line); border-radius: 1px; }
+.ob .art { position: absolute; left: 0; top: 0; width: 420px; height: 594px; transform: scale(0.7); transform-origin: 0 0; padding: 36px 38px; box-sizing: border-box; color: var(--page-head); font-family: "Schibsted Grotesk", system-ui, sans-serif; }
+.ob .art .nm { font: 600 34px/1.05 var(--slab); }
+.ob .art .ro { margin-top: 4px; font-size: 14px; }
+.ob .art .sec { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px; font: 600 16px/1 var(--slab); }
+.ob .art .sec::before { content: ""; width: 52px; height: 4px; background: var(--page-head); }
+.ob .art .en { display: grid; grid-template-columns: 52px 1fr; column-gap: 10px; margin-bottom: 10px; }
+.ob .art .en b { display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+.ob .art i { display: block; height: 4px; margin: 0 0 5px; background: var(--page-line); }
+.ob .art i.d { width: 44px; }
+.ob .art .two { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+
+/* ---------- First open ---------- */
+.ob .hello { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 6px 32px 18px; }
+.ob .hello h1 { margin: 0; font: 600 34px/1.1 var(--slab); }
+.ob .hello .lead { margin-top: 6px; font-size: 15px; color: var(--muted); }
+.ob .hello .choices { display: flex; flex-direction: column; gap: 8px; }
+.ob .hello .go { display: flex; align-items: center; gap: 12px; margin-top: auto; }
+.ob .hello .go .why { margin-left: auto; font-size: 13px; color: var(--muted); text-align: right; }
+
+/* ---------- Recap: the full app around the card, as today's first-run card ---------- */
+.ob .tabs { display: flex; gap: 6px; }
+.ob .tabs a { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; color: var(--muted); font-weight: 500; }
+.ob .tabs a .lbl { position: relative; z-index: 0; display: inline-block; font-size: 14px; line-height: 20px; }
+.ob .tabs a.on { color: var(--text); font-weight: 600; }
+.ob .tabs a.on .lbl::before { content: ""; position: absolute; z-index: -1; left: -6px; right: -6px; bottom: -1px; height: 14px; background: var(--mark); box-shadow: inset 0 -2px 0 var(--turn); }
+.ob .tabs a.off { opacity: .55; }
+.ob .newtask { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card); color: var(--text); font-weight: 500; }
+.ob .newtask .keys { color: var(--muted); }
+.ob .welcome { flex: 1 1 auto; display: flex; justify-content: center; align-items: flex-start; padding: 28px 32px 0; }
+.ob .wcard { width: 620px; display: flex; flex-direction: column; border-radius: 4px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 6px 6px 0 var(--line); }
+.ob .wcard .body { display: flex; flex-direction: column; gap: 12px; padding: 22px 26px 16px; }
+.ob .wcard h1 { margin: 0; font: 600 34px/1.1 var(--slab); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const STATE = (P.get('state') || 'welcome').toLowerCase();
+const THEME = (P.get('theme') || 'light').toLowerCase();
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" width="26" aria-hidden="true" viewBox="186 216 652 600"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="currentColor"></path><path d="M596 408V596a96 96 0 0 1-96 96H392" fill="none" stroke="var(--bg)" stroke-width="86"></path></svg>';
+// A plain folder, drawn from the brand mark's folder without the J.
+const FOLDER = '<svg class="fold" viewBox="186 216 652 600" aria-hidden="true"><path d="M206 272a36 36 0 0 1 36-36h228a36 36 0 0 1 36 36v28h276a36 36 0 0 1 36 36v424a36 36 0 0 1-36 36H242a36 36 0 0 1-36-36Z" fill="none" stroke="currentColor" stroke-width="40"></path></svg>';
+const TICK = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.2l2.6 2.6L10 3.4" fill="none" stroke="var(--sheet)" stroke-width="1.8"/></svg>';
+const kb = (k) => `<span class="kb">${k}</span>`;
+const kn = (t, s) => `<span class="kn ${s}">${t}</span>`;
+const tag = (t, tone) => `<span class="tag c-${tone}">${t}</span>`;
+const cb = (on) => `<span class="cb${on ? ' on' : ''}" aria-hidden="true">${on ? TICK : ''}</span>`;
+const page = (sm, style) => `<span class="mpage${sm ? ' sm' : ''}" aria-hidden="true"${style ? ` style="${style}"` : ''}><i class="h"></i><i></i><i class="s"></i><i></i><i></i><i class="s"></i>${sm ? '' : '<i></i><i class="s"></i><i></i>'}</span>`;
+const path = (dir, name) => `<span class="mono"><span class="faint">${dir}</span>${name}</span>`;
+const PLACE = path('Documents/', 'Job search');
+// The run's Elapsed, as Tasks counts it. No spend shows: tasks use the user's Claude subscription by default.
+const ELAPSED = (t) => `Elapsed ${t}`;
+
+// The day stamp's rings (day_stamp), reused as the setup stamp: one tick per step, lit as each is done, the step inside.
+function stamp(ticks, lit, top, mid, bot, spoken) {
+  const t = [];
+  for (let i = 0; i < ticks; i++) {
+    const a = -Math.PI / 2 + (i + 0.5) * (2 * Math.PI / ticks);
+    const c = (r) => [40 + r * Math.cos(a), 40 + r * Math.sin(a)].map((v) => v.toFixed(1));
+    const [x1, y1] = c(29.5), [x2, y2] = c(36);
+    t.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${i < lit ? 'var(--text)' : 'var(--off)'}" stroke-width="4.5"/>`);
+  }
+  const edge = lit ? 'var(--text)' : 'var(--line)';
+  return `<svg class="stampsm" viewBox="0 0 80 80" role="img" aria-label="${spoken}">
+    <circle cx="40" cy="40" r="38.5" fill="var(--sheet)"/>${t.join('')}
+    <circle cx="40" cy="40" r="38.5" fill="none" stroke="${edge}"/><circle cx="40" cy="40" r="27" fill="none" stroke="${edge}"/>
+    <text x="40" y="28" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">${top}</text>
+    <text x="40" y="48.5" text-anchor="middle" font-size="24.8" font-weight="600" font-family="Zilla Slab, serif" fill="var(--text)">${mid}</text>
+    <text x="40" y="61" text-anchor="middle" font-size="11.9" font-family="Schibsted Grotesk, sans-serif" fill="var(--muted)">${bot}</text></svg>`;
+}
+
+const STEPS = ['Folder', 'Computer', 'Profile', 'Done'];
+
+function lines(items, cls = '') {
+  return `<div class="paper lines ${cls}">${items.map(([n, s, words, sub, end, live]) =>
+    `<div class="ln${s === 'ahead' ? ' dim' : ''}${live ? ' live' : ''}">${kn(n, s)}<span class="w"${s !== 'ahead' ? ' style="font-weight: 600"' : ''}>${words}</span><span class="s">${sub || ''}</span><span class="end">${end || ''}</span></div>`).join('')}</div>`;
+}
+
+// The three helpers, by purpose, with their size and time in plain words. All install in the user's home folder.
+function toolRows(st) {
+  const rows = [
+    ['1', 'Keeps your tracker', 'Python', 'about 40 MB, under a minute', st.py],
+    ['2', 'Searches job sites', 'Bun', 'about 30 MB, under a minute', st.bun],
+    ['3', 'Makes your CV and cover letter PDFs', 'LaTeX', 'about 250 MB, the slow one: 5 to 15 minutes', st.tex],
+  ];
+  return `<div class="paper lines">${rows.map(([n, what, name, size, s]) => {
+    const look = {
+      checking: ['work', tag('Checking…', 'plain')], wait: ['ahead', '<span class="muted note13">Next</span>'],
+      found: ['done', tag('Already here', 'hired')], installed: ['done', tag('Installed', 'hired')],
+      installing: ['work', tag('Installing…', 'active')], failed: ['fail', tag('Could not install', 'closed')],
+    }[s.k];
+    const bar = s.k === 'installing' ? `<div class="barline"><span class="bar"><i style="width: ${s.pct}%"></i></span><span class="muted note13" style="white-space: nowrap">${s.note}</span></div>` : '';
+    const sub = s.k === 'failed' ? `<span class="s" style="color: var(--closed)">${name}. ${s.note}</span>`
+      : `<span class="s">${name}${s.k === 'installing' ? `, ${size}` : ''}</span>`;
+    return `<div class="ln${s.k === 'wait' ? ' dim' : ''}">${kn(n, look[0])}<b class="w">${what}</b>${sub}<span class="end">${look[1]}</span>${bar}</div>`;
+  }).join('')}</div>`;
+}
+
+// ---------- Claude's messages: fictional stand-ins shaped like /setup's plain-text batches. ----------
+// [number, question, answer, sub-items]. Sub-items (a, b) stay inside their question's one field.
+const BATCH2 = [
+  ['Career direction', [
+    [1, 'What kind of role do you want next, and what would you rather leave behind?', 'Senior product designer in a product company. Less agency work, more time with users.'],
+    [2, 'Would you take a step into leading a small team, or stay hands-on for now?', ''],
+  ]],
+  ['How you work', [
+    [3, 'How would the people you worked with describe you, in a sentence each?', 'a. Calm and careful. b. Quick to test an idea with real users.',
+      [['a', 'A former manager'], ['b', 'A designer on your team']]],
+    [4, 'Which kind of team brings out your best? (optional)', ''],
+  ]],
+  ['Constraints', [
+    [5, 'Which cities or regions work for you, and how many office days a week?', 'Berlin, or remote in Germany. Two office days at most.'],
+    [6, 'Is there a salary range you want Jobdesk to filter by? (optional)', ''],
+    [7, 'Is there a notice period or a start date to plan around?', 'Three months\' notice.'],
+  ]],
+  ['Numbers for stronger CVs', [
+    [8, 'For the checkout redesign at Tessel Group, do you know the effect on support tickets or sales?', 'Support tickets went down about a third after launch.'],
+    [9, 'Roughly how many designers used the design system you built? (optional)', ''],
+    [10, 'Any talk, award or article worth naming? (optional)', ''],
+  ]],
+  ['Search setup', [
+    [11, 'Which job sites do you use today, besides LinkedIn?', 'LinkedIn, and a local board for designers.'],
+    [12, 'Which language should your CVs be in: English, German, or both?', 'English, and German when the ad is in German.'],
+    [13, 'Which job titles should Jobdesk search for? Three to eight is a good number.', 'Product designer, UX designer, Service designer'],
+  ]],
+];
+const INTRO2 = `<h2>Questions on what's missing</h2><p>Your profile now has the changes you approved. A few things your documents don't say yet. Answer in any order. Short answers are fine, and you can skip any you like.</p>`;
+const li = (n, inner, cls = '') => `<li${cls ? ` class="${cls}"` : ''}><span class="qn">${n}.</span><span>${inner}</span></li>`;
+const subs = (items) => items ? `<span class="subs">${items.map(([k, t]) => `<span><span class="qn">${k}.</span><span>${t}</span></span>`).join('')}</span>` : '';
+
+// The sheet: Claude's message, with one field under each numbered item. The field grows with its text.
+function batchSheet(items = BATCH2, intro = INTRO2, focus = 13) {
+  return `<div class="doc qs">${intro}${items.map(([g, qs]) => `${g ? `<p class="g">${g}</p>` : ''}<ol>${qs.map(([n, q, a, sub]) => {
+    const opt = /\(optional\)$/.test(q);
+    const f = a
+      ? `<span class="fld typed grow${n === focus ? ' focus' : ''}">${a}${n === focus ? '<span class="caret"></span>' : ''}</span>`
+      : `<span class="fld">${opt ? 'Optional. Leave it empty to skip.' : 'Your answer, or leave it empty to skip'}</span>`;
+    return li(n, q + subs(sub) + f);
+  }).join('')}</ol>`).join('')}</div>`;
+}
+
+const ALL = BATCH2.flatMap(([, q]) => q);
+const ANSWERED = ALL.filter(([, , a]) => a).length;
+
+function answersSlip() {
+  const marks = ALL.map(([, , a]) => `<i class="${a ? '' : 'o'}"></i>`).join('');
+  return `<section class="slip"><div class="sh">Your answers <span class="n num">${ANSWERED} of ${ALL.length}</span></div>
+      <span class="tl" role="img" aria-label="${ANSWERED} of ${ALL.length} answered">${marks}</span>
+      <p><b style="color: var(--text)">Short answers are fine.</b> Answer in any order, and skip any you like. An empty one is sent as Skipped.</p></section>
+    <section class="slip"><div class="sh">Draft saved</div>
+      <p>Saved as you type, last at 14:32. Take your time: close Jobdesk and come back, and your answers wait here.</p></section>
+    <section class="slip"><p>Send joins your answers into one numbered reply, in Claude's order.</p>
+      <span><a class="lnk note13" href="#">Show all Claude wrote</a></span></section>`;
+}
+
+// The fallback's message: Claude asked in prose and bullets, with no numbered items for Jobdesk to find.
+const FALLBACK_DOC = `<div class="doc"><h2>A few more things</h2>
+  <p>Thanks, that fills most of the gaps. Before I write the search setup, I'd like to know a bit more about where you want to work.</p>
+  <ul><li>Which cities or regions work for you, and how many office days a week?</li>
+    <li>Is there a notice period or a start date to plan around?</li>
+    <li>Which job sites do you use today, besides LinkedIn?</li></ul>
+  <p>Any detail helps, but short answers are fine.</p></div>`;
+
+// The proposal: 16 numbered changes, in Claude's sections. Each gets a checkbox, all ticked to start.
+const PROPOSAL = [
+  ['Profile summary', [
+    'Lead with product design for payments and banking apps, which both documents stress.',
+    'Use the title from your CV, Senior Product Designer, not the shorter one from LinkedIn.',
+    'Add the years from your LinkedIn profile: 2016 to now.',
+  ]],
+  ['Experience', [
+    'Tessel Group: add the checkout redesign and the design system, from the reference letter.',
+    'Harbor Studio: use the end date from your CV, March 2021, as you confirmed.',
+    'Leave out the 2014 internship, as you asked.',
+    'Lumen Telecom: add the research work listed only on LinkedIn.',
+    'Group the two freelance years under one heading.',
+  ]],
+  ['Skills and languages', [
+    'Add usability testing, service blueprints and accessibility reviews.',
+    'German at B2, as you confirmed. English stays fluent.',
+    'Drop two tools your CV lists but LinkedIn no longer does.',
+    'List prototyping tools in one line, not three.',
+  ]],
+  ['Education', [
+    'BA in Communication Design, with the year from your diploma.',
+    'Add the accessibility course certificate.',
+  ]],
+  ['Writing style', [
+    'Keep cover letters short: one page, plain words.',
+    'Write in the first person, without buzzwords.',
+  ]],
+];
+const CHANGES = PROPOSAL.reduce((n, [, items]) => n + items.length, 0);
+
+function proposalDoc(off = []) {
+  let n = 0;
+  return `<div class="doc"><h2>Proposed additive changes</h2><p>Here is what I would add to your profile. Nothing is removed unless you asked for it.</p>
+    ${PROPOSAL.map(([g, items]) => `<p class="g">${g}</p><ol class="chg">${items.map((t) => {
+      n += 1;
+      const on = !off.includes(n);
+      return `<li class="${on ? '' : 'offc'}${n === off[off.length - 1] ? ' focus' : ''}" role="checkbox" aria-checked="${on}">${cb(on)}<span class="qn">${n}.</span><span>${t}</span></li>`;
+    }).join('')}</ol>`).join('')}
+    <p>Reply yes to apply all, or list the numbers to skip.</p></div>`;
+}
+
+function reviewCard(off) {
+  const kept = CHANGES - off.length;
+  const reply = off.length ? `Apply all except ${off.join(' and ')}.` : 'Yes, apply these changes.';
+  const marks = Array.from({ length: CHANGES }, (_, i) => `<i class="${off.includes(i + 1) ? 'o' : ''}"></i>`).join('');
+  const count = off.length
+    ? `<p><b style="color: var(--text)">${off.length} left out: ${off.join(' and ')}.</b> Claude skips them, and they stay out of your profile.</p>`
+    : `<p>Untick any change you don't want. The rest go ahead when you press Apply these changes.</p>`;
+  return {
+    ch: 3, wide: true, title: 'Claude proposes changes to your profile', lead: 'From your documents and your first answers. Nothing changes until you say so.',
+    body: `<div class="osplit"><div class="well" style="--thumb: 46%"><div class="in">${proposalDoc(off)}</div><span class="fade"></span></div>
+      <div class="oside"><section class="slip"><div class="sh">${kept} of ${CHANGES} changes</div>
+        <span class="tl" role="img" aria-label="${kept} of ${CHANGES} ticked">${marks}</span>${count}</section>
+        <section class="slip"><p>Apply these changes sends Claude this reply:</p><span class="reply mono">${reply}</span></section>
+        <section class="slip"><p>Something to fix? Change something opens a field. Say what to change in your own words.</p></section></div></div>`,
+    pri: 'Apply these changes', sec: 'Change something', why: ELAPSED('11:05'),
+  };
+}
+
+// A page of the CV, as the rasterised PDF shows it, reusing ProfileCv's stand-in art.
+function art(n) {
+  const L = (k, widths) => widths.slice(0, k).map((w) => `<i style="width:${w}%"></i>`).join('');
+  const W = [100, 96, 88, 100, 92, 70, 98, 84];
+  const entry = (title, k) => `<div class="en"><div><i class="d"></i></div><div><b>${title}</b>${L(k, W)}</div></div>`;
+  if (n === 1) return `<div class="art"><div class="nm">Sample Candidate</div><div class="ro">Senior Product Designer</div>
+    <div class="two" style="margin-top: 12px">${L(2, [86, 60])}<div>${L(2, [74, 90])}</div></div>
+    <div class="sec">Profile</div>${L(4, W)}<div class="sec">Experience</div>${entry('Senior Product Designer', 5)}${entry('Product Designer', 4)}${entry('UX Designer', 3)}</div>`;
+  return `<div class="art"><div class="sec" style="margin-top: 4px">Experience</div>${entry('Junior Designer', 3)}
+    <div class="sec">Education</div>${entry('BA Communication Design', 2)}<div class="sec">Skills</div><div class="two">${L(4, [90, 70, 84, 60])}<div>${L(4, [76, 66, 88, 58])}</div></div>
+    <div class="sec">Languages</div>${L(2, [62, 48])}</div>`;
+}
+
+const NEXT_SLIPS = `<section class="slip"><div class="sh">What comes next</div>
+        <p>Claude reads your documents, then writes to you in a few rounds of questions. Answer them on your own time, in any order.</p>
+        <p>Setup took one tester about 40 minutes, most of it writing answers. Your answers are saved as you type.</p></section>`;
+
+function sheet() {
+  return {
+    ch: 3, wide: true, title: 'Claude has 13 questions', lead: 'Writing your profile. Your second round of answers.',
+    body: `<div class="osplit"><div class="well" style="--thumb: 38%"><div class="in">${batchSheet()}</div><span class="fade"></span></div>
+      <div class="oside">${answersSlip()}</div></div>`,
+    pri: 'Send answers ' + kb('Cmd Enter'), sec: 'Stop setup', why: ELAPSED('18:40'),
+  };
+}
+
+const S = {
+  // ---------- Small window: folder and computer ----------
+  place: () => ({
+    ch: 1, title: 'Where should your job search live?',
+    lead: 'Jobdesk makes one folder for it. Your CV, the jobs it finds and your applications all go there.',
+    body: `<div class="paper place">${FOLDER}<div class="grow"><div>${PLACE}</div><div class="muted note13">A new folder in your Documents folder.</div></div><button class="btn" type="button">Change…</button></div>
+      <p class="muted">Next, Jobdesk downloads ai-job-search into it: the free job search toolkit that Jobdesk runs on.</p>`,
+    pri: 'Save here', sec: 'Back', why: 'Your files stay on this computer. Claude reads them only while a task runs.',
+  }),
+  notempty: () => ({
+    ch: 1, title: 'Where should your job search live?', lead: 'That folder already has files in it.',
+    body: `<div class="alertbox"><b>Jobdesk sets up only in a new or empty folder.</b><span>${path('Documents/', 'Projects')} holds other files, and setting up there could overwrite them.</span></div>
+      <div class="paper place">${FOLDER}<div class="grow"><div>${path('Documents/Projects/', 'Job search')}</div><div class="muted note13">A new folder inside the one you chose.</div></div>${tag('Suggested', 'plain')}</div>`,
+    pri: 'Use this new folder', sec: 'Change…', why: 'An ai-job-search folder? Open it from the welcome.',
+  }),
+  download: () => ({
+    ch: 1, title: 'Getting your folder ready', lead: 'This takes under a minute.',
+    body: lines([
+      ['1', 'done', 'Folder made', PLACE, tag('Done', 'hired')],
+      ['2', 'work', 'Downloading ai-job-search', 'The latest version, 1.7.5', '<span class="bar" style="width: 140px"><i style="width: 58%"></i></span>'],
+      ['3', 'ahead', 'Checking the download'],
+      ['4', 'ahead', 'Unpacking it into your folder'],
+    ]) + `<p class="muted note13">Jobdesk compares the download with its own record of version 1.7.5 before it unpacks anything.</p>`,
+    pri: 'Continue', priOff: true, sec: 'Cancel', why: 'Continue opens when the folder is ready.',
+  }),
+  offline: () => ({
+    ch: 1, title: 'Getting your folder ready', lead: 'The download did not finish.',
+    body: `<div class="alertbox"><b>Jobdesk could not reach the internet.</b><span>Check that this computer is online, then try again. Your folder is still empty, so nothing is half done.</span></div>` + lines([
+      ['1', 'done', 'Folder made', PLACE, tag('Done', 'hired')],
+      ['2', 'fail', 'Downloading ai-job-search', 'Stopped: no connection', tag('Stopped', 'closed')],
+      ['3', 'ahead', 'Checking the download'],
+    ]),
+    pri: 'Try again', sec: 'Back', why: 'Still stuck? <a class="lnk" href="#">Get help</a>',
+  }),
+  mismatch: () => ({
+    ch: 1, title: 'Getting your folder ready', lead: 'Jobdesk stopped before unpacking.',
+    body: `<div class="alertbox"><b>This download doesn't match. Nothing was saved.</b><span>What arrived is not the ai-job-search 1.7.5 that Jobdesk knows, so it was thrown away. Your folder is still empty.</span></div>` + lines([
+      ['1', 'done', 'Folder made', PLACE, tag('Done', 'hired')],
+      ['2', 'done', 'Downloading ai-job-search', 'Version 1.7.5', tag('Done', 'hired')],
+      ['3', 'fail', 'Checking the download', 'It does not match Jobdesk\'s record', tag('No match', 'closed')],
+    ]),
+    pri: 'Try again', sec: 'Back', why: 'Happens again? <a class="lnk" href="#">Get help</a>',
+  }),
+  checking: () => ({
+    ch: 2, title: 'Get this computer ready',
+    lead: 'Your job search needs three free helpers. Jobdesk checks which ones this computer has, then installs the rest.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'checking' }, tex: { k: 'wait' } }) +
+      `<p class="muted note13">They install in your own user folder, only for you. Nothing else on this computer changes.</p>`,
+    pri: 'Install what is missing', priOff: true, sec: 'Back', why: 'Checking takes a few seconds.',
+  }),
+  installing: () => ({
+    ch: 2, title: 'Get this computer ready', lead: 'Installing what was missing. LaTeX is the slow one: you can step away and come back.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'installed' }, tex: { k: 'installing', pct: 34, note: 'About 8 minutes left' } }) +
+      `<p class="muted note13">Each download is compared with Jobdesk's own record of it before it is installed.</p>`,
+    pri: 'Continue', priOff: true, sec: 'Cancel', why: 'Continue opens when all three are ready.',
+  }),
+  toolfail: () => ({
+    ch: 2, title: 'Get this computer ready', lead: 'Two helpers are ready. One could not be installed.',
+    body: toolRows({ py: { k: 'found' }, bun: { k: 'installed' }, tex: { k: 'failed', note: 'The download stopped before it finished.' } }) +
+      `<p class="muted">Without LaTeX, Jobdesk still finds and scores jobs and writes your profile, but it cannot make PDFs of your CV and cover letters yet. You can install it later from Setup.</p>`,
+    pri: 'Try again', quiet: 'Continue without PDFs', why: 'Not sure? <a class="lnk" href="#">Get help</a>',
+  }),
+
+  // ---------- The Profile chapter, in the app-sized window ----------
+  docs: () => ({
+    ch: 3, wide: true, title: 'Tell Jobdesk about you',
+    lead: 'Add your CV and anything else that says what you have done. Claude reads it all, then asks about what is missing.',
+    body: `<div class="osplit"><div class="ocol">
+        <div class="drop" style="padding: 28px 26px"><span class="stack" aria-hidden="true">${page(false, 'left: 0; top: 10px')}${page(false, 'left: 22px; top: 0')}</span>
+          <div class="words"><span class="slab">Drop your documents here</span><span class="muted">Your CV, and any of these: a LinkedIn profile saved as a PDF, diplomas, reference letters. PDF or Word files.</span>
+          <span style="margin-top: 8px"><button class="btn" type="button">Choose files…</button></span></div></div>
+        <p class="muted note13">Jobdesk copies them into the documents folder inside ${PLACE}. The originals stay where they are. <a class="lnk" href="#">How to save your LinkedIn profile as a PDF</a></p>
+      </div><div class="oside">${NEXT_SLIPS}</div></div>`,
+    pri: 'Read my documents', priOff: true, sec: 'Back', why: 'Add at least your CV first.',
+  }),
+  dropped: () => ({
+    ch: 3, wide: true, title: 'Tell Jobdesk about you',
+    lead: 'Add your CV and anything else that says what you have done. Claude reads it all, then asks about what is missing.',
+    body: `<div class="osplit"><div class="ocol">
+        <div class="paper files">
+          <div class="fr">${page(true)}<span class="nm">${path('', 'Sample_Candidate_CV.pdf')}</span><span class="muted note13 num">2 pages</span><button class="btn sm" type="button">Remove</button></div>
+          <div class="fr">${page(true)}<span class="nm">${path('', 'Profile.pdf')}</span><span class="muted note13 num">4 pages</span><button class="btn sm" type="button">Remove</button></div>
+        </div>
+        <div class="drop slim"><span class="muted">Drop more here: diplomas, reference letters.</span><button class="btn sm" type="button">Choose files…</button></div>
+        <p class="muted note13">Jobdesk copies them into the documents folder inside ${PLACE}. The originals stay where they are.</p>
+      </div><div class="oside">${NEXT_SLIPS}</div></div>`,
+    pri: 'Read my documents', sec: 'Back', why: '2 documents added',
+  }),
+  reading: () => ({
+    ch: 3, wide: true, title: 'Claude is reading your documents', lead: 'Then it writes to you with its first questions. This can take a few minutes.',
+    body: `<div class="osplit"><div class="ocol">` + lines([
+      ['1', 'done', 'Documents copied into your folder', '2 files', tag('Done', 'hired')],
+      ['2', 'work', 'Reading your documents', 'Last update 4s ago', '', true],
+      ['3', 'ahead', 'Comparing your CV with your other documents'],
+      ['4', 'ahead', 'Writing your profile'],
+      ['5', 'ahead', 'Making your CV'],
+      ['6', 'ahead', 'Choosing job sites and search terms'],
+    ], 'wide') + `<div class="figs">${ELAPSED('2:10')}</div></div>
+      <div class="oside"><section class="slip"><div class="sh">While you wait</div><p>You can leave this window open and do something else. Claude's questions show here as soon as they come.</p></section></div></div>`,
+    pri: null, sec: 'Stop setup', why: 'Questions from Claude show up right here.',
+  }),
+  sheet,
+  'sheet-fallback': () => ({
+    ch: 3, wide: true, title: 'Claude has a few questions', lead: 'Writing your profile. Your third round of answers.',
+    body: `<div class="osplit even"><div class="ocol"><div class="lab">Claude wrote</div><div class="well" style="--thumb: 0"><div class="in">${FALLBACK_DOC}</div></div></div>
+      <div class="ocol" style="padding-bottom: 14px"><div class="lab">Your answer</div>
+        <div class="bigf"><p>Berlin, or remote in Germany. Two office days at most.</p><p>Three months' notice.</p><p>LinkedIn, and a local board for designers.<span class="caret"></span></p></div>
+        <div class="help">Claude asked in its own words this time, so your answer is one reply. Answer in any order; short answers are fine.<br>Draft saved as you type, last at 14:51. You can close Jobdesk and come back.</div></div></div>`,
+    pri: 'Send answer ' + kb('Cmd Enter'), sec: 'Stop setup', why: ELAPSED('24:12'),
+  }),
+  review: () => reviewCard([]),
+  'review-skip': () => reviewCard([3, 7]),
+  working: () => ({
+    ch: 3, wide: true, title: 'Claude is writing your profile', lead: 'With the 13 answers you just sent. This can take a few minutes.',
+    body: `<div class="osplit"><div class="ocol">` + lines([
+      ['1', 'done', 'Reading your documents', '2 files', tag('Done', 'hired')],
+      ['2', 'done', 'Applying the changes you approved', '16 changes', tag('Done', 'hired')],
+      ['3', 'work', 'Writing your profile', 'No update for 48s. Long writes can be quiet.', '', true],
+      ['4', 'ahead', 'Making your CV'],
+      ['5', 'ahead', 'Choosing job sites and search terms'],
+    ], 'wide') + `<div class="figs">${ELAPSED('21:52')}</div></div>
+      <div class="oside"><section class="slip"><div class="sh">So far</div>
+        <p><b style="color: var(--text)">2 rounds answered</b>: 5 questions, then 13.</p><p><b style="color: var(--text)">16 changes</b> applied to your profile.</p></section>
+        <section class="slip"><p>You can step away. Claude's next message shows here as soon as it comes.</p></section></div></div>`,
+    pri: null, sec: 'Stop setup', why: 'Claude may have one or two more questions.',
+  }),
+  followup: () => ({
+    ch: 3, wide: true, title: 'Two quick checks', lead: 'Before Claude makes your CV.',
+    body: `<div class="osplit"><div class="well" style="--thumb: 0"><div class="in">${batchSheet([
+      ['', [
+        [1, 'You said support tickets went down about a third. Can the CV say "cut support tickets by 30%"?', 'Yes, 30% is right.'],
+        [2, 'With three months\' notice, should the CV say "Available from March"?', 'Leave it off the CV, please.'],
+      ]]], '<p>Two figures to confirm, so the CV only says what you can stand behind.</p>', 2)}</div></div>
+      <div class="oside"><section class="slip"><div class="sh">Your answers <span class="n num">2 of 2</span></div><p><b style="color: var(--text)">Short answers are fine.</b> Saved as you type. An empty one is sent as Skipped.</p></section></div></div>`,
+    pri: 'Send answers ' + kb('Cmd Enter'), sec: 'Stop setup', why: ELAPSED('26:30'),
+  }),
+  cvcheck: () => ({
+    ch: 3, wide: true, title: 'Check your CV', lead: 'Claude made it from your profile. Have a look before setup finishes.',
+    body: `<div class="osplit"><div class="ocol"><div class="cvpages">${[1, 2].map((n) => `<div class="cvpw"><div class="cvpg">${art(n)}</div><span class="cap num">Page ${n} of 2</span></div>`).join('')}</div></div>
+      <div class="oside"><section class="slip"><div class="sh">Sample_Candidate_CV</div>
+        <p>English, 2 pages. Saved in the cv folder of your job search folder.</p><span><button class="btn sm" type="button">Open PDF</button></span></section>
+        <section class="slip"><p>Spotted something? Ask for a change opens a field. Say it in your own words, such as "Put the design system first".</p></section>
+        <section class="slip"><p>Looks good sends Claude this reply:</p><span class="reply mono">The CV looks good.</span></section></div></div>`,
+    pri: 'Looks good', sec: 'Ask for a change', why: ELAPSED('31:12'),
+  }),
+  choice: () => ({
+    ch: 3, wide: true, title: 'Claude has a question', lead: 'Choosing job sites and search terms.',
+    body: `<div class="osplit"><div class="ocol"><div class="ask" role="group" aria-label="Your turn. Claude asks: Which language should your CVs be in?">
+        <span class="who"><span class="tagt">Claude asks</span>Pick one, or write your own answer.</span>
+        <span class="q">Which language should your CVs be in?</span>
+        <div class="opts">
+          <div class="opt on"><span class="rd"></span><b>English</b><span class="d">Accepted in most countries. Cover letters still follow each job ad's language.</span></div>
+          <div class="opt"><span class="rd"></span><b>German</b><span class="d">Matches most job ads where you live.</span></div>
+        </div>
+        <span class="fld">Or write your own answer</span></div></div>
+      <div class="oside"><section class="slip"><p>This card shows when Claude asks with set choices. Most of setup's questions come as a list instead.</p></section></div></div>`,
+    pri: 'Send answer', sec: 'Decline', why: ELAPSED('27:02'),
+  }),
+  stopped: () => ({
+    ch: 3, wide: true, title: 'Setup stopped partway', lead: 'Nothing is lost. Claude picks up where it stopped.',
+    body: `<div class="osplit"><div class="ocol"><div class="alertbox"><b>Claude stopped while writing your profile.</b><span>The connection to Claude dropped.</span></div>` + lines([
+      ['1', 'done', 'Reading your documents', '2 files', tag('Done', 'hired')],
+      ['2', 'done', 'Answering Claude\'s questions', '2 rounds, all saved', tag('Done', 'hired')],
+      ['3', 'fail', 'Writing your profile', 'Stopped partway', tag('Stopped', 'closed')],
+      ['4', 'ahead', 'Making your CV'],
+      ['5', 'ahead', 'Choosing job sites and search terms'],
+    ], 'wide') + `</div>
+      <div class="oside"><section class="slip"><div class="sh">What is kept</div><p>Your documents, your answers and every change Claude already wrote are in your folder.</p>
+        <p>Finish later opens Jobdesk. The next time you open it, setup offers to pick up here.</p></section></div></div>`,
+    pri: 'Pick up where it stopped', sec: 'Finish later', why: 'Keeps stopping? <a class="lnk" href="#">Get help</a>',
+  }),
+
+  // ---------- The recap, in the app ----------
+  recap: () => recapCard(false),
+  'recap-nopdf': () => recapCard(true),
+};
+
+function recapCard(nopdf) {
+  const tick = (n, s, title, sub, end) => `<div class="ln">${kn(n, s)}<b class="w">${title}</b><span class="s">${sub}</span><span class="end">${end || ''}</span></div>`;
+  return {
+    recap: true, nopdf, title: 'Your job search is ready',
+    lead: nopdf ? 'Here is what Jobdesk set up. PDFs come once LaTeX is installed.' : 'Here is what Jobdesk set up. You can change any of it later.',
+    body: `<div class="paper lines">
+        ${tick('1', 'done', 'Folder saved', PLACE, '<a class="lnk note13" href="#">Show in Finder</a>')}
+        ${nopdf ? tick('2', 'fail', 'This computer is almost ready', 'Python and Bun are installed. LaTeX is not, so PDFs are not ready yet.', tag('Not yet', 'plain'))
+          : tick('2', 'done', 'This computer is ready', 'Python, Bun and LaTeX are installed.')}
+        ${tick('3', 'done', 'Profile written: 9 of 11 topics', 'Finish the other 2 in Profile when you like.', `<span class="tally fat" role="img" aria-label="9 of 11 filled">${'<i></i>'.repeat(9)}${'<i class="off"></i>'.repeat(2)}</span>`)}
+        ${nopdf ? tick('4', 'ahead', 'Your CV is written', 'Its PDF comes once LaTeX is installed.')
+          : tick('4', 'done', 'Your CV is made', 'Checked by you: Sample_Candidate_CV.pdf', '<a class="lnk note13" href="#">Open PDF</a>')}
+        ${tick('5', 'done', 'Job sites chosen', 'LinkedIn and Freehire, for Germany.')}
+        <div class="ln">${kn('+', 'add')}<span class="w">Use a job site that is not listed?</span><span class="s">Claude can add it as a new search, from the site's address.</span><span class="end"><a class="lnk note13" href="#">Add a job site you use…</a></span></div>
+      </div>
+      <div class="figs"><span>Setup took 41 minutes.</span></div>`,
+    pri: 'Open Jobdesk', why: nopdf ? 'Setup stays in the menu until LaTeX is installed.' : 'Today suggests your first search.',
+  };
+}
+
+function foot(s) {
+  const pri = s.pri ? `<button class="btn pri${s.priOff ? ' off' : ''}" type="button">${s.pri}</button>` : '';
+  const sec = s.sec ? `<button class="btn" type="button">${s.sec}</button>` : '';
+  const quiet = s.quiet ? `<a class="lnk qlnk" href="#">${s.quiet}</a>` : '';
+  return `<div class="foot">${pri}${sec}${quiet}<span class="why">${s.why || ''}</span></div>`;
+}
+
+function statusbar(text) {
+  return `<footer class="statusbar"><span><span class="sq" style="background: var(--hired)"></span>${text}</span><span class="r">Settings <span class="keys">Cmd ,</span></span></footer>`;
+}
+
+const topbar = () => `<header class="menu"><div class="brand">${MARK}Jobdesk</div></header>`;
+
+// ---------- First open, and the next open after quitting midway, in the small window. ----------
+function welcome() {
+  const scratch = `<div class="choice on"><span class="rd"></span><span class="t">Set up from scratch ${tag('Recommended', 'plain')}</span>
+      <span class="d">Jobdesk makes your job search folder, gets this computer ready and builds your profile from your CV. About 40 minutes, most of it answering Claude's questions about you.</span></div>`;
+  const have = `<div class="choice"><span class="rd"></span><span class="t">I already have an ai-job-search folder</span><span class="d">Choose it, and Jobdesk opens it as it is.</span></div>`;
+  const words = '<h1>Welcome to Jobdesk</h1><p class="lead">Your job search as a short list of decisions. Claude does the legwork, and nothing runs until you say so.</p>';
+  return `<div class="app ob" data-theme="${THEME}">${topbar()}
+    <main class="main"><div class="hello"><div class="row" style="gap: 18px; align-items: center">${stamp(12, 0, 'Tue', '10', 'Nov', 'Tuesday 10 November')}<div>${words}</div></div>
+      <div class="choices">${scratch}${have}</div>
+      <div class="go"><button class="btn pri" type="button">Start setup</button><span class="why">Each step says what it does before it does it.<br>Quit any time: setup picks up where you stopped.</span></div>
+    </div></main>${statusbar('Claude Code is signed in. Jobdesk uses it for every task.')}</div>`;
+}
+
+function resume() {
+  return `<div class="app ob" data-theme="${THEME}">${topbar()}
+    <main class="main"><div class="hello"><div class="row" style="gap: 18px; align-items: center">${stamp(4, 2, 'Step', '3', 'of 4', 'Step 3 of 4. 2 of 4 steps done.')}<div>
+      <h1>Welcome back</h1><p class="lead">Your folder and tools are ready. Let's finish your profile.</p></div></div>
+      ${lines([
+        ['1', 'done', 'Folder', PLACE, tag('Done', 'hired')],
+        ['2', 'done', 'Computer', 'Python, Bun and LaTeX are ready.', tag('Done', 'hired')],
+        ['3', 'next', 'Profile', 'You stopped at Claude\'s questions. Your draft answers are kept.', ''],
+        ['4', 'ahead', 'Done'],
+      ])}
+      <div class="go"><button class="btn pri" type="button">Finish my profile</button><span class="why">You stopped on Tuesday 10 November.</span></div>
+    </div></main>${statusbar('Claude Code is signed in. Jobdesk uses it for every task.')}</div>`;
+}
+
+// ---------- One card per step. Small window for Folder and Computer, app-sized for Profile. ----------
+function wizard(s) {
+  const dots = STEPS.map((n, i) => `<div class="sd${i + 1 < s.ch ? ' done' : i + 1 === s.ch ? ' on' : ''}"><i></i><span>${n}</span></div>`).join('');
+  return `<div class="app ob" data-theme="${THEME}">${topbar()}
+    <main class="main"><div class="cw${s.wide ? ' wide' : ''}"><nav class="sds" aria-label="Step ${s.ch} of 4, ${STEPS[s.ch - 1]}">${dots}</nav>
+      <section class="ccard"><div class="body">
+        <div class="hd">${stamp(4, s.ch - 1, 'Step', s.ch, 'of 4', `Step ${s.ch} of 4`)}<div><h1>${s.title}</h1><p class="lead">${s.lead}</p></div></div>
+        ${s.body}</div>${foot(s)}</section>
+    </div></main></div>`;
+}
+
+function recap(s) {
+  const names = ['Today', 'Jobs', 'Applications', 'Insights', 'Tasks', 'Profile'].concat(s.nopdf ? ['Setup'] : []);
+  const tabs = names.map((t) => `<a class="${t === 'Today' ? 'on' : 'off'}" href="#"><span class="lbl">${t}</span></a>`).join('');
+  return `<div class="app ob" data-theme="${THEME}">
+    <header class="menu" style="gap: 28px"><div class="brand">${MARK}Jobdesk</div><nav class="tabs" aria-label="Main">${tabs}</nav><span class="newtask" style="opacity: .55">New task <span class="keys">Cmd K</span></span></header>
+    <main class="main"><div class="welcome"><section class="wcard"><div class="body">
+      <div class="row" style="gap: 18px">${stamp(4, s.nopdf ? 3 : 4, 'Tue', '10', 'Nov', `Set up on Tuesday 10 November. ${s.nopdf ? 3 : 4} of 4 steps done.`)}<div><h1>${s.title}</h1><p class="lead muted" style="font-size: 15px; margin-top: 4px">${s.lead}</p></div></div>
+      ${s.body}</div>${foot(s)}</section></div></main>${statusbar('Claude is ready')}</div>`;
+}
+
+const root = document.getElementById('root');
+if (STATE === 'resume') root.innerHTML = resume();
+else if (STATE === 'welcome' || !S[STATE]) root.innerHTML = welcome();
+else {
+  const s = S[STATE]();
+  root.innerHTML = s.recap ? recap(s) : wizard(s);
+}
+</script>
+</body>
+</html>

@@ -70,9 +70,11 @@ pub mod tests {
 
     /// The public key of a throwaway pair made only to sign the fixtures. Its secret half was deleted once they were signed.
     /// `tests/fixtures/updates` holds two stand-in builds signed under their release names with
-    /// `cargo packager signer sign`, and the feed `scripts/update-feed.sh` wrote for them with
-    /// `PUB_DATE=2026-10-30T09:00:00Z`. `Jobdesk-v0.1.9-windows-x64-setup.exe.sig` signs the same bytes as the 0.2.0
-    /// setup, under the 0.1.9 name. `other.pub` is a second key.
+    /// `cargo packager signer sign`, a fictional ai-job-search pin, and the feed `scripts/update-feed.sh` wrote for them
+    /// with `PUB_DATE=2026-10-30T09:00:00Z`. `Jobdesk-v0.1.9-windows-x64-setup.exe.sig` signs the same bytes as the 0.2.0
+    /// setup, under the 0.1.9 name. The pin's line, `ai-job-search-v1.4.0.zip.sha256`, was signed as a file named
+    /// `ai-job-search-v1.4.0.zip`, so its trusted comment names the zip, as the release's sign job does.
+    /// `ai-job-search-v1.3.0.zip.sha256.sig` signs the same hash for 1.3.0, under that name. `other.pub` is a second key.
     pub fn fixture_key() -> UpdateKey {
         UpdateKey::decode(&fs::read_to_string(fixture("throwaway.pub")).unwrap()).unwrap()
     }

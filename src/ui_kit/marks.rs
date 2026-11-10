@@ -10,7 +10,7 @@ use crate::shared_kernel::CheckState;
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::motion_time;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::on_desk;
+use crate::ui_kit::surfaces::{folder_fill, on_desk};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_job, add_text, cut_hover, line, paint_centred, paint_text};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BRAND_GAP, BRAND_MARK_WIDTH, CHIP_HEIGHT, CHIP_PADDING, DAY_STAMP_EMPTY_TICKS, DAY_STAMP_MAX_TICKS, DAY_STAMP_RINGS, DAY_STAMP_SETTLE,
@@ -40,15 +40,25 @@ pub fn fitted_row_tag(ui: &mut Ui, text: impl Into<String>, tone: Tone) -> Respo
 
 fn sized_tag(ui: &mut Ui, text: String, tone: Tone, padding: f32, height: f32) -> Response {
     let p = Palette::of(ui);
-    let color = tone.color(&p);
-    let galley = line(ui, &text, Type::TAG, color, f32::INFINITY);
+    let galley = line(ui, &text, Type::TAG, tone.color(&p), f32::INFINITY);
     let size = vec2(galley.size().x + padding * 2.0, height);
     let fill = if on_desk(ui) { p.sheet } else { Color32::TRANSPARENT };
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect(rect, RADIUS_CARD, fill, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
-    paint_centred(ui, rect, galley, color, fill);
+    paint_tag(ui, rect, galley, tone, fill);
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &text));
     response
+}
+
+/// A `tag`'s words, laid out for a widget that paints its own: its width is the galley's and `TAG_PADDING` either side.
+pub(in crate::ui_kit) fn tag_galley(ui: &Ui, text: &str, tone: Tone) -> Arc<Galley> {
+    line(ui, text, Type::TAG, tone.color(&Palette::of(ui)), f32::INFINITY)
+}
+
+/// A tag's hairline and words in `rect`, filled with `fill`, for a widget that paints its own parts.
+pub(in crate::ui_kit) fn paint_tag(ui: &Ui, rect: Rect, galley: Arc<Galley>, tone: Tone, fill: Color32) {
+    let color = tone.color(&Palette::of(ui));
+    ui.painter().rect(rect, RADIUS_CARD, fill, Stroke::new(HAIRLINE, color), StrokeKind::Inside);
+    paint_centred(ui, rect, galley, color, fill);
 }
 
 /// A tag filled with its colour, for what needs you now. The same size as `tag`.
@@ -219,7 +229,7 @@ pub fn knot(ui: &mut Ui, text: &str, state: KnotState, size: f32) -> Response {
         KnotState::Waiting => (p.turn, p.on_turn, None),
         KnotState::Failed => (p.sheet, p.closed, Some(p.closed)),
         KnotState::Next => (p.primary, p.on_primary, None),
-        KnotState::Ahead => (p.panel, p.muted, None),
+        KnotState::Ahead => (folder_fill(ui), p.muted, None),
     };
     let style = if size < KNOT_SIZE { Type::KEY } else { Type::TAG };
     let galley = line(ui, text, style, ink, f32::INFINITY);

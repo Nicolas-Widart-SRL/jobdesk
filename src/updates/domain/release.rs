@@ -55,6 +55,52 @@ pub fn asset_url(version: &Version, platform: Platform) -> String {
     format!("{REPOSITORY}/releases/download/{}/{}", version.tag(), platform.asset_name(version))
 }
 
+/// Where `ai-job-search` is published, as `owner/name` on GitHub. The address of its source is built from this and a
+/// version tag, never read from the feed.
+pub const AI_JOB_SEARCH_REPOSITORY: &str = "ai-job-search-dev/ai-job-search";
+
+/// The `ai-job-search` release this copy of Jobdesk vouches for: its version, and the SHA-256 of its source zip.
+/// It comes from the feed only once the update key's signature of both checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcePin {
+    pub version: Version,
+    /// 64 lowercase hex digits, as `sha256sum` writes them.
+    pub sha256: String,
+}
+
+impl SourcePin {
+    /// A pin of `version` and `sha256`, when the version is exactly three numbers and the hash is 64 lowercase hex digits.
+    pub fn parse(version: &str, sha256: &str) -> Option<SourcePin> {
+        let version = Version::parse(version)?;
+        let hex = sha256.len() == 64 && sha256.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        hex.then(|| SourcePin { version, sha256: sha256.to_owned() })
+    }
+
+    /// The text the release's `sign` job signs, as `sha256sum` writes it: the hash, two spaces, the zip's name and a
+    /// line end, such as `<sha256>  ai-job-search-v1.4.0.zip\n`.
+    pub fn signed_text(&self) -> String {
+        format!("{}  {}\n", self.sha256, source_zip_name(&self.version))
+    }
+}
+
+/// The name of a release's source zip, such as `ai-job-search-v1.4.0.zip`. The pin's signature names it.
+pub fn source_zip_name(version: &Version) -> String {
+    format!("ai-job-search-{}.zip", version.tag())
+}
+
+/// The source zip of a release: GitHub's fixed address for the zip of that tag.
+pub fn source_zip_url(version: &Version) -> String {
+    format!("https://codeload.github.com/{AI_JOB_SEARCH_REPOSITORY}/zip/refs/tags/{}", version.tag())
+}
+
+/// Reads the `ai-job-search` release the feed pins.
+pub trait SourcePinReader: Send + Sync {
+    /// Reads the feed, so it blocks: call it away from the window's thread. A feed that cannot be reached or read
+    /// says why. `Ok(None)` is a feed with no pin this copy can trust: none, one that does not read, or one whose
+    /// signature fails. A build with no update key always gets `Ok(None)`, and reads nothing.
+    fn read(&self) -> Result<Option<SourcePin>, Failure>;
+}
+
 /// What the feed says about the latest release, for this computer's build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
@@ -232,5 +278,31 @@ mod tests {
             asset_url(&v020(), Platform::WindowsX64),
             "https://github.com/Nicolas-Widart-SRL/jobdesk/releases/download/v0.2.0/Jobdesk-v0.2.0-windows-x64-setup.exe"
         );
+    }
+
+    #[test]
+    fn the_source_zip_has_its_name_and_fixed_address() {
+        let v140 = Version { major: 1, minor: 4, patch: 0 };
+        assert_eq!(source_zip_name(&v140), "ai-job-search-v1.4.0.zip");
+        assert_eq!(source_zip_url(&v140), "https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/v1.4.0");
+    }
+
+    #[test]
+    fn a_pin_reads_only_a_plain_version_and_a_lowercase_hash() {
+        let hash = "6550a4353ffc282750bff417f4c9a5a7b27ddcd7d2644ac301939b9b97ebd341";
+        let pin = SourcePin::parse("v1.4.0", hash).unwrap();
+        assert_eq!(pin, SourcePin { version: Version { major: 1, minor: 4, patch: 0 }, sha256: hash.to_owned() });
+        assert_eq!(pin.signed_text(), format!("{hash}  ai-job-search-v1.4.0.zip\n"));
+        for (version, sha256) in [
+            ("1.4.0-beta", hash.to_owned()),
+            ("1.4", hash.to_owned()),
+            ("1.4.0", hash[1..].to_owned()),
+            ("1.4.0", format!("{hash}0")),
+            ("1.4.0", hash.to_uppercase()),
+            ("1.4.0", hash.replacen('6', "g", 1)),
+            ("1.4.0", String::new()),
+        ] {
+            assert_eq!(SourcePin::parse(version, &sha256), None, "{version} {sha256}");
+        }
     }
 }

@@ -23,6 +23,7 @@ use jobdesk::ui_kit::{
     status_progress, status_waits, step_line, strong, switch, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, turn_band_live,
     undo_row,
 };
+use jobdesk::ui_kit::{LineEnd, SetupLine, WizardStep, alert_slip, choice_card, setup_line, setup_stamp, step_dots, wizard_card};
 
 /// Snapshot baselines come from one renderer, so only macOS draws and compares them. Every other assertion runs everywhere.
 const SNAPSHOTS: bool = cfg!(target_os = "macos");
@@ -1174,6 +1175,175 @@ fn ui_kit_gallery_live_light() {
     live_sheet(Theme::Light, "ui_kit_gallery_live_light");
 }
 
+/// The wizard sheet's size: a card at the first window's size, two narrower ones, then the loose parts.
+const WIZARD_SHEET: [f32; 2] = [1000.0, 1520.0];
+/// The first window, 720x560, less its brand row and its status strip.
+const WIZARD_ROOM: [f32; 2] = [720.0, 470.0];
+/// Half the sheet's width, for two cards side by side.
+const WIZARD_HALF: [f32; 2] = [468.0, 500.0];
+/// The widest a card gets in the first window.
+const WIZARD_CARD: f32 = 640.0;
+const WIZARD_STEPS: [&str; 4] = ["Folder", "Computer", "Profile", "Done"];
+
+/// A helper's line, with nothing under its title but its name.
+const fn helper(knot: &'static str, state: KnotState, title: &'static str, under: &'static str, end: LineEnd<'static>) -> SetupLine<'static> {
+    SetupLine { knot, state, title, under, end, bar: None, live: None }
+}
+
+const PYTHON: SetupLine = helper("1", KnotState::Done, "Keeps your tracker", "Python", LineEnd::Tag("Already here", Tone::Hired));
+const BUN: SetupLine = helper("2", KnotState::Done, "Searches job sites", "Bun", LineEnd::Tag("Installed", Tone::Hired));
+const LATEX: SetupLine = SetupLine {
+    bar: Some((0.35, "About 8 minutes left")),
+    ..helper(
+        "3",
+        KnotState::Working,
+        "Makes your CV and cover letter PDFs",
+        "LaTeX, about 250 MB, the slow one: 5 to 15 minutes",
+        LineEnd::Tag("Installing…", Tone::Active),
+    )
+};
+
+/// One wizard card in a room the size of `room`.
+fn wizard_in(ui: &mut Ui, room: [f32; 2], step: &WizardStep, body: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui), why: &str) {
+    ui.allocate_ui_with_layout(egui::vec2(room[0], room[1]), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_size(egui::vec2(room[0], room[1]));
+        wizard_card(ui, step, WIZARD_CARD, body, actions, why);
+    });
+}
+
+/// The first-run wizard's parts: three cards, each with its foot, then step dots, setup stamps and choice cards.
+fn wizard(ui: &mut Ui) {
+    desk_label(ui, "Wizard card at 720x560: lines with a bar, a disabled primary, Cancel and when it opens", Type::NOTE, Ink::Muted);
+    let installing = WizardStep {
+        steps: &WIZARD_STEPS,
+        at: 1,
+        title: "Get this computer ready",
+        lead: "Installing what was missing. LaTeX is the slow one: you can step away and come back.",
+    };
+    wizard_in(
+        ui,
+        WIZARD_ROOM,
+        &installing,
+        |ui| {
+            paper(ui, false, |ui| {
+                setup_line(ui, &PYTHON, true);
+                setup_line(ui, &BUN, false);
+                setup_line(ui, &LATEX, false);
+            });
+            desk_label(ui, "Each download is compared with Jobdesk's own record of it before it is installed.", Type::NOTE, Ink::Muted);
+        },
+        |ui| {
+            enabled_when(ui, false, "Continue opens when all three are ready.", |ui| primary_button(ui, "Continue"));
+            button(ui, "Cancel");
+        },
+        "Continue opens when all three are ready.",
+    );
+    ui.add_space(14.0);
+    desk_label(ui, "A failed line, an alert and a quiet link; a live line, a line ahead and a slip on the card", Type::NOTE, Ink::Muted);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        let download = WizardStep { steps: &WIZARD_STEPS, at: 0, title: "Download ai-job-search", lead: "Into the new Job search folder." };
+        wizard_in(
+            ui,
+            WIZARD_HALF,
+            &download,
+            |ui| {
+                paper(ui, false, |ui| {
+                    setup_line(ui, &helper("1", KnotState::Done, "Folder made", "", LineEnd::Nothing), true);
+                    let failed =
+                        helper("2", KnotState::Failed, "Checking the download", "It does not match version 1.7.5.", LineEnd::Tag("No match", Tone::Closed));
+                    setup_line(ui, &failed, false);
+                    setup_line(ui, &helper("3", KnotState::Ahead, "Unpacking it into your folder", "", LineEnd::Note("Next")), false);
+                });
+                alert_slip(ui, "This download doesn't match. Nothing was saved.", "Your folder is still empty.");
+            },
+            |ui| {
+                primary_button(ui, "Try again");
+                link(ui, "Get help");
+            },
+            "",
+        );
+        let reading = WizardStep { steps: &WIZARD_STEPS, at: 2, title: "Building your profile", lead: "This can take a few minutes." };
+        wizard_in(
+            ui,
+            WIZARD_HALF,
+            &reading,
+            |ui| {
+                paper(ui, false, |ui| {
+                    setup_line(ui, &helper("1", KnotState::Done, "Documents copied into your folder", "", LineEnd::Nothing), true);
+                    let live = SetupLine {
+                        live: Some((SweepForm::Working, 1.2)),
+                        ..helper("2", KnotState::Working, "Reading your documents", "Last update 4s ago", LineEnd::Nothing)
+                    };
+                    setup_line(ui, &live, false);
+                    setup_line(ui, &helper("3", KnotState::Ahead, "Writing your profile", "", LineEnd::Note("Next")), false);
+                });
+                slip(ui, |ui| {
+                    panel_header(ui, "So far", None);
+                    panel_body(ui, |ui| {
+                        muted(ui, "No rounds answered yet.");
+                    });
+                });
+            },
+            |ui| {
+                button(ui, "Stop setup");
+            },
+            "Elapsed 18:40",
+        );
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "Step dots at each step", Type::NOTE, Ink::Muted);
+    Grid::new("wizard_dots").spacing([24.0, 10.0]).show(ui, |ui| {
+        for at in 0..WIZARD_STEPS.len() {
+            step_dots(ui, &WIZARD_STEPS, at);
+            if at % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "The setup stamp at each step, then the date on the welcome", Type::NOTE, Ink::Muted);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
+        for at in 0..WIZARD_STEPS.len() {
+            setup_stamp(ui, at, WIZARD_STEPS.len());
+        }
+        day_stamp(ui, "Tue", "10", "Nov", 0, 0, "Tuesday 10 November");
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "Choice cards: picked with a tag, then not picked", Type::NOTE, Ink::Muted);
+    ui.allocate_ui(egui::vec2(656.0, 200.0), |ui| {
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        choice_card(
+            ui,
+            true,
+            "Set up from scratch",
+            Some(("Recommended", Tone::Plain)),
+            "Jobdesk makes your job search folder, gets this computer ready and builds your profile from your CV. About 40 minutes, most of it answering Claude's questions about you.",
+        );
+        choice_card(ui, false, "I already have an ai-job-search folder", None, "Choose it, and Jobdesk opens it as it is.");
+    });
+}
+
+fn wizard_sheet(theme: Theme, name: &str) {
+    let mut harness = with_renderer(Harness::builder().with_size(WIZARD_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(|ui| {
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, wizard));
+        });
+    harness.run_steps(3);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn ui_kit_gallery_wizard_dark() {
+    wizard_sheet(Theme::Dark, "ui_kit_gallery_wizard_dark");
+}
+
+#[test]
+fn ui_kit_gallery_wizard_light() {
+    wizard_sheet(Theme::Light, "ui_kit_gallery_wizard_light");
+}
+
 /// The settings sheet's size: room for every row and the open popover under the last one.
 const SETTINGS_SHEET: [f32; 2] = [1000.0, 1730.0];
 const CONFIRM_WIDTH: f32 = 340.0;
@@ -1707,7 +1877,7 @@ fn switch_flips_on_a_click_and_says_its_state() {
 /// Every clickable kit widget in the galleries shows the pointing hand under the pointer, and a disabled one keeps the arrow.
 #[test]
 fn every_clickable_widget_shows_the_hand() {
-    for (sheet, height, least) in [(gallery as fn(&mut Ui), SHEET[1], 20), (profile_gallery, PROFILE_HEIGHT, 10)] {
+    for (sheet, height, least) in [(gallery as fn(&mut Ui), SHEET[1], 20), (profile_gallery, PROFILE_HEIGHT, 10), (wizard, WIZARD_SHEET[1], 5)] {
         let mut harness = Harness::builder().with_size([1000.0, height]).with_pixels_per_point(1.0).with_context_setup(install_look).build_ui(move |ui| {
             jobdesk::ui_kit::desk(ui, |ui| {
                 jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| {

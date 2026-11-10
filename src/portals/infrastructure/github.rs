@@ -15,7 +15,7 @@ use crate::portals::domain::{
     parse_codeowners, parse_tree_path,
 };
 use crate::portals::infrastructure::community_cache::CommunityCache;
-use crate::shared_kernel::https::{TimedBody, github_config};
+use crate::shared_kernel::https::{TimedBody, https_config};
 
 /// The most of the answer naming the branch's latest commit that is read: 40 hex digits.
 pub const HEAD_LIMIT: u64 = 1024;
@@ -61,7 +61,7 @@ pub trait Api: Send + Sync {
     /// The body of `url` as `accept` asks for it, or why there is none. A body over `limit` bytes is `BadAnswer`.
     fn get(&self, url: &str, accept: &str, limit: u64) -> Result<Vec<u8>, CommunityFailure>;
 }
-/// GitHub as `github_config` reaches it, with no credential. A status is read here, so a rate limit tells its reset.
+/// GitHub as `https_config` reaches it, with no credential. A status is read here, so a rate limit tells its reset.
 /// No redirect is followed, so no request goes on to another host: a 3xx reads as refused.
 pub struct HttpsApi {
     agent: Agent,
@@ -69,7 +69,7 @@ pub struct HttpsApi {
 
 impl HttpsApi {
     pub fn new(version: &str) -> Self {
-        let config = github_config(version).max_redirects(0).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT));
+        let config = https_config(version).max_redirects(0).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT));
         Self { agent: config.build().new_agent() }
     }
 

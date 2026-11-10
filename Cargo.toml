@@ -36,7 +36,12 @@ eframe = { version = "0.37", default-features = false, features = ["accesskit", 
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui_commonmark = { version = "0.26", default-features = false }
 egui_extras = "0.37"
+# Its default Rust backend inflates the release zips, here and in `zip`.
+flate2 = "1"
 hayro = "0.8"
+# Already built for the `url` crate that `eframe` pulls in. Onboarding uses it to find names in the release zip that
+# one disk would take for the same name.
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native"] }
 minisign-verify = "0.2"
 notify = "8"
@@ -44,14 +49,18 @@ pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 tempfile = "3"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# Reading only, and deflate only: no other compression method.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-flate2 = "1"
+# Pure Rust xz, to unpack the TeX Live packages first-run setup adds to TinyTeX.
+lzma-rs = { version = "0.3", default-features = false }
 tar = { version = "0.4", default-features = false }
 
 # Removing a portal moves its folder to the Trash. The crate needs a backend feature on Linux, where Jobdesk does not run.

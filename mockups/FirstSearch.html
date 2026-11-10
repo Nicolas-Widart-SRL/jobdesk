@@ -7,9 +7,10 @@
 <link rel="stylesheet" href="app.css">
 <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600&amp;family=Zilla+Slab:wght@600&amp;family=Courier+Prime:wght@400;700&amp;display=swap" rel="stylesheet">
 <style>
-/* The app right after onboarding, shared by options A and B. Choose with ?state=today|launcher|jobs&theme=light|dark.
+/* The app right after onboarding. Choose with ?state=today|launcher|jobs&theme=light|dark.
    today: Today suggests the first search. launcher: Y opened New task on /scrape, and the user presses Run there.
    jobs: the search finished, Jobs shows the new jobs and suggests scoring them. No card action starts a run.
+   No spend, estimate or cap shows: tasks use the user's Claude subscription by default, and Usage stays in Settings.
    Grid.html's scoped styles, copied and scoped to .fs, so app.css and the other canvases are unchanged. Fictional data. */
 body { margin: 0; }
 .fs {
@@ -82,7 +83,6 @@ body { margin: 0; }
 .fs .lslip label { font-size: 13px; color: var(--muted); }
 .fs .fld { height: 34px; padding: 0 8px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--field); color: var(--faint); }
 .fs .code2 { padding: 9px 11px; border-radius: 2px; background: var(--field); font: 400 13.5px var(--type); }
-.fs .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 /* NEW, from_note: a short note at the top of the launcher's side slip, naming the suggestion that opened it. */
 .fs .from { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; padding: 8px 10px; border-radius: 3px; background: var(--card); font-size: 13px; color: var(--muted); }
 .fs .from b { color: var(--text); }
@@ -151,7 +151,7 @@ function today() {
       <section class="col-a"><article class="offer">
         <div class="ob2"><h2>Find your first jobs</h2>
           <p class="take">Jobdesk searches LinkedIn and Freehire for the job titles you gave Claude, and lists every new job in Jobs.</p>
-          <div class="steps"><span><i>1</i>Find new jobs opens the search task.</span><span><i>2</i>Press Run there. It takes about 5 minutes and about $0.40 of your Claude plan.</span><span><i>3</i>When it is done, Jobs shows what it found, ready to score.</span></div></div>
+          <div class="steps"><span><i>1</i>Find new jobs opens the search task.</span><span><i>2</i>Press Run there. It takes about 5 minutes.</span><span><i>3</i>When it is done, Jobs shows what it found, ready to score.</span></div></div>
         <div class="cfoot"><button class="btn pri" type="button">Find new jobs… ${kb('Y')}</button>
           <span class="why">Opens the search task. Nothing starts until you press Run.<br><a class="lnk" href="#">Show the command</a></span></div>
       </article></section>
@@ -179,8 +179,7 @@ function launcher() {
         <div class="from"><b>Your first search, from Today.</b>Leave the box below empty to search for all your job titles.</div>
         <span class="muted">Find new postings on installed portals</span>
         <label>Focus area, broad, or health</label><span class="fld"></span>
-        <div class="row2"><div style="display: flex; flex-direction: column; gap: 6px"><label>Model</label><span class="fld" style="color: var(--text); justify-content: space-between">Claude default <span>▾</span></span></div>
-          <div style="display: flex; flex-direction: column; gap: 6px"><label>Spend at most, USD</label><span class="fld" style="color: var(--text)">2.00</span></div></div>
+        <label>Model</label><span class="fld" style="color: var(--text); justify-content: space-between">Claude default <span>▾</span></span>
         <label>Claude will run</label><span class="code2">/scrape</span>
         <span class="muted">Runs in your job search folder.</span>
         <span><button class="btn pri" type="button">Run <span class="keys" style="color: inherit">Cmd Enter</span></button></span>
@@ -203,7 +202,7 @@ function jobs() {
     <header class="phead"><div><h1>Jobs</h1><div class="sub">Scored from the job ad alone. Drafting an application also checks the company.</div></div>
       <div class="acts"><button class="btn" type="button">Find new jobs…</button></div></header>
     <div class="bbody">
-      <div class="note2"><div class="t"><b>Your first search found 14 new jobs on 2 sites.</b><span class="muted">Scoring reads each ad against your profile and puts the best fits first. About 5 minutes and about $0.60 of your Claude plan.</span></div>
+      <div class="note2"><div class="t"><b>Your first search found 14 new jobs on 2 sites.</b><span class="muted">Scoring reads each ad against your profile and puts the best fits first. It takes about 5 minutes.</span></div>
         <button class="btn pri" type="button">Score 14 new jobs…</button></div>
       <div class="seg2"><button type="button">Shortlist<span class="n num">0</span></button><button class="on" type="button">New<span class="n num">14</span></button><button type="button">Low score<span class="n num">0</span></button><button type="button">Ruled out<span class="n num">0</span></button></div>
       <div class="split2" style="gap: 16px">

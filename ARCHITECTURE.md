@@ -8,6 +8,11 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
+Two more changes come from the Portals screen, and neither happens while a run works:
+
+- a portal's switch writes the `enabled:` line in its `SKILL.md` frontmatter, the same way a profile save writes;
+- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash. It never deletes one, and a built-in portal has no Remove.
+
 Everything else Jobdesk writes stays in its data folder, with two exceptions:
 
 - Restart to update replaces Jobdesk itself.
@@ -33,7 +38,7 @@ Each feature is a bounded context with its own language.
 | `settings` | preference, page, search hit, run default, command override, spend cap, retention, sign-in method, API key, connection test, Coming up range, Later length, skip reason list, Jobs view filter, update switch | its own `settings.json` in the data folder; the system keychain, through a port in `domain` and adapters in `infrastructure`; through the `Snapshot`: runs' and tracking's application layers and discovery's terms; through the shell: workspace's readiness, the count of jobs the Jobs view hides, the data folder's sizes, the tray decision count and, for About, the update view from updates' application layer |
 | `updates` | release, version, feed, download, signature, update key, install block, restart plan, apply failure | `latest.json` on the latest GitHub release, and the build the feed names for this computer; the update key built into the app; its own `updates/` folder in the data folder |
 
-Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
+Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `portals` is Portals, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
 
 Three modules are not features:
 
@@ -91,7 +96,7 @@ A feature that fails to load reports an issue, and the others keep working. Its 
 - Until the first snapshot arrives, every screen shows a loading view, not an empty one.
 - A screen whose source failed shows the alert and says its content is hidden, never that it is empty.
 
-Jobs, Applications, Insights, Profile, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs and Applications get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile hides a failed file's topics through its own `ProfileView`, and its CV documents through `CvShelf::Unread`. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
+Jobs, Applications, Insights, Profile, Portals, Setup and Settings › Runtime status learn both through `ScreenState`: whether their source is still being read, failed or ready, and which `Source`s failed, in `unread`. They draw the alert under their head. Only Jobs, Applications and Portals get `Load::Failed`, when their own source fails. The others get only `Reading` or `Ready`: Insights, Setup and Runtime status check `unread` to hide the parts a failed source feeds, and Profile hides a failed file's topics through its own `ProfileView`, and its CV documents through `CvShelf::Unread`. Today gets the alert and the missing sources through a context of its own, and draws them under its head too.
 
 Tasks, the launcher and Dossier take no `ScreenState`: the shell draws the alert above their head. For Dossier the shell also draws the loading view and, when the tracker failed, the note that the application is hidden.
 

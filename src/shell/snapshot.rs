@@ -182,7 +182,17 @@ mod tests {
         let snapshot = Snapshot::load(&root, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
         let portals: Vec<(&str, bool, Option<usize>)> =
             snapshot.portals.portals.iter().map(|portal| (portal.folder.as_str(), portal.on, portal.jobs.map(|(count, _)| count))).collect();
-        assert_eq!(portals, [("jobnet-search", false, Some(0)), ("linkedin-search", true, Some(6))]);
+        let expected = [
+            ("freehire-search", true, Some(4)),
+            ("jobindex-search", false, Some(0)),
+            ("jobnet-search", false, Some(0)),
+            ("linkedin-search", true, Some(6)),
+            ("northfield-search", true, Some(0)),
+            ("samplefreelance-search", true, Some(0)),
+        ];
+        assert_eq!(portals, expected);
+        let terms: Vec<usize> = snapshot.portals.plan.priorities.iter().map(|priority| priority.terms.len()).collect();
+        assert_eq!(terms, [3, 2, 2], "Plain terms for every priority");
         assert!(snapshot.portals.installed_read && snapshot.portals.plan_read);
     }
 

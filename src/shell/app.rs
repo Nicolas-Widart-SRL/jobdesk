@@ -17,6 +17,9 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
+use crate::portals;
+use crate::portals::application::PortalChanges;
+use crate::portals::ui::{PortalsRequest, PortalsScreen};
 use crate::profile;
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
@@ -74,13 +77,14 @@ pub enum Screen {
     Insights,
     Runs,
     Profile,
+    Portals,
     Workspace,
     Launcher,
     Dossier,
 }
 
 impl Screen {
-    const NAV: [Self; 7] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Workspace];
+    const NAV: [Self; 8] = [Self::InTray, Self::Jobs, Self::Tracker, Self::Insights, Self::Runs, Self::Profile, Self::Portals, Self::Workspace];
 
     fn title(self) -> &'static str {
         match self {
@@ -90,6 +94,7 @@ impl Screen {
             Self::Insights => "Insights",
             Self::Runs => "Tasks",
             Self::Profile => "Profile",
+            Self::Portals => "Portals",
             Self::Workspace => "Setup",
             Self::Launcher => "New task",
             Self::Dossier => "Application dossier",
@@ -106,8 +111,9 @@ impl Screen {
     }
 }
 
-/// Window state. It reads the checkout through snapshots, except the profile: it writes one block at a time through
-/// `ProfileEditor`, and reads the profile back after a Save, or after a run that no snapshot follows in time.
+/// Window state. It reads the checkout through snapshots, except the profile and the portals: it writes one profile block
+/// at a time through `ProfileEditor`, switches portals and moves them to the Trash through `PortalChanges`, and reads
+/// what it wrote back at once, as it reads the profile after a run that no snapshot follows in time.
 pub struct Shell {
     screen: Screen,
     workspace: Option<WorkspaceRoot>,
@@ -170,6 +176,11 @@ pub struct Shell {
     leave_to: Option<Screen>,
     /// When the profile was last read back, after a save or a run, so a snapshot read before it cannot show the old text again.
     profile_saved: Option<Instant>,
+    portals_screen: PortalsScreen,
+    /// Switches the open folder's portals and moves them to the Trash.
+    portal_changes: Option<PortalChanges>,
+    /// When the portals were last read back, after a switch or a removal, so a snapshot read before it cannot undo it on screen.
+    portals_changed: Option<Instant>,
     /// What waits, over every screen, on the ask to drop unsaved profile text, and whether Keep editing still has to
     /// take the focus.
     away: Option<(Pending, bool)>,
@@ -258,6 +269,9 @@ impl Shell {
             profile_editor: None,
             leave_to: None,
             profile_saved: None,
+            portals_screen: PortalsScreen::default(),
+            portal_changes: None,
+            portals_changed: None,
             away: None,
             quit_after: false,
             quit_agreed: false,
@@ -275,14 +289,19 @@ impl Shell {
     /// A shell with fixed data, for tests and previews.
     pub fn with_snapshot(screen: Screen, workspace: WorkspaceRoot, snapshot: Snapshot) -> Self {
         let today = snapshot.today;
-        let profile_editor = Some(profile::open_editor(workspace.path()));
-        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
+        let (profile_editor, portal_changes) = (Some(profile::open_editor(workspace.path())), Some(portals::open_changes(workspace.path())));
+        Self { workspace: Some(workspace), snapshot, loaded: true, tray: Some(InTray::unsaved()), profile_editor, portal_changes, ..Self::empty(screen, today) }
     }
 
     /// A shell whose folder is open but not read yet, for tests and previews.
     pub fn loading(screen: Screen, workspace: WorkspaceRoot, today: NaiveDate) -> Self {
-        let profile_editor = Some(profile::open_editor(workspace.path()));
-        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, ..Self::empty(screen, today) }
+        let (profile_editor, portal_changes) = (Some(profile::open_editor(workspace.path())), Some(portals::open_changes(workspace.path())));
+        Self { workspace: Some(workspace), tray: Some(InTray::unsaved()), profile_editor, portal_changes, ..Self::empty(screen, today) }
+    }
+
+    /// Switches portals and moves them to the Trash through `changes`, such as a fake store, for tests.
+    pub fn with_portal_changes(self, changes: PortalChanges) -> Self {
+        Self { portal_changes: Some(changes), ..self }
     }
 
     /// The first run: no folder is open yet.
@@ -516,6 +535,7 @@ impl Shell {
                 // The last folder's marks, picked topic and edit mean nothing here.
                 (self.marks, self.profile_screen, self.was_busy, self.run_ended) = (UpdatedMarks::default(), ProfileScreen::default(), false, None);
                 (self.profile_editor, self.leave_to, self.profile_saved, self.away) = (Some(profile::open_editor(root.path())), None, None, None);
+                (self.portals_screen, self.portal_changes, self.portals_changed) = (PortalsScreen::default(), Some(portals::open_changes(root.path())), None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
                 // A task in plain words was written for the last folder.
@@ -780,6 +800,16 @@ impl Shell {
         match self.profile_saved {
             Some(saved) if latest.read_at.is_some_and(|read| read < saved) => latest.profile = std::mem::take(&mut self.snapshot.profile),
             _ => self.profile_saved = None,
+        }
+        // The same for the portals read back after a switch or a removal.
+        match self.portals_changed {
+            Some(changed) if latest.read_at.is_some_and(|read| read < changed) => {
+                latest.portals = std::mem::take(&mut self.snapshot.portals);
+                latest.workspace.set_portals(&latest.portals);
+                latest.issues.retain(|issue| issue.source != Source::Portals);
+                latest.issues.extend(self.snapshot.issues.iter().filter(|issue| issue.source == Source::Portals).cloned());
+            }
+            _ => self.portals_changed = None,
         }
         // The first snapshot read after a run ended holds what the run wrote, so the marks compare it with the start.
         if let Some(ended) = self.run_ended
@@ -1139,7 +1169,7 @@ impl Shell {
         let state = |load: Load| ScreenState { load, unread: &unread, alerts: &alerts };
         // Each screen says where its alert goes, so a new one must choose.
         let alert_over_head = match self.screen {
-            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Workspace => false,
+            Screen::InTray | Screen::Jobs | Screen::Tracker | Screen::Insights | Screen::Profile | Screen::Portals | Screen::Workspace => false,
             // These keep it over their head until they take a `ScreenState` too.
             Screen::Runs | Screen::Launcher | Screen::Dossier => true,
         };
@@ -1260,6 +1290,12 @@ impl Shell {
                     None => {}
                 }
             }
+            Screen::Portals => {
+                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, busy) {
+                    self.change_portals(request);
+                }
+            }
             Screen::Workspace => {
                 let name = self.workspace.as_ref().map(WorkspaceRoot::name).unwrap_or_default();
                 // Only previews lack the tool check. They draw no Setup, but still the alert.
@@ -1277,6 +1313,7 @@ impl Shell {
                         self.choose_folder(&ctx);
                     }
                     Some(WorkspaceAction::OpenProfile) => self.screen = Screen::Profile,
+                    Some(WorkspaceAction::OpenPortals) => self.screen = Screen::Portals,
                     None => {}
                 }
             }
@@ -1311,6 +1348,38 @@ impl Shell {
         if self.screen != Screen::Profile {
             self.profile_screen.put_away();
         }
+        if self.screen != Screen::Portals {
+            self.portals_screen.put_away();
+        }
+    }
+
+    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works, which the changes
+    /// check again. What it wrote is read back at once, and the snapshot worker is asked to read again.
+    fn change_portals(&mut self, request: PortalsRequest) {
+        let Some(changes) = &self.portal_changes else { return };
+        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        let result = match &request {
+            PortalsRequest::Switch { folder, on } => changes.switch(folder, *on, busy),
+            PortalsRequest::Remove { folder, origin } => changes.remove(folder, *origin, busy),
+        };
+        self.portals_screen.settle(&request, result);
+        self.read_back_portals();
+        if let Some(reload) = &self.reload {
+            reload.ask();
+        }
+    }
+
+    /// Reads the portals back after a switch or a removal, so the change shows at once. The jobs they found come from the
+    /// snapshot's saved jobs, and stay hidden while those cannot be read.
+    fn read_back_portals(&mut self) {
+        let Some(root) = self.workspace.as_ref() else { return };
+        let jobs_failed = self.snapshot.issues.iter().any(|issue| issue.source == Source::Jobs);
+        let (view, error) = portals::load(root.path(), (!jobs_failed).then_some(&self.snapshot.board));
+        self.snapshot.workspace.set_portals(&view);
+        self.snapshot.portals = view;
+        self.snapshot.issues.retain(|issue| issue.source != Source::Portals);
+        self.snapshot.issues.extend(error.map(|error| Issue { source: Source::Portals, error }));
+        self.portals_changed = Some(Instant::now());
     }
 
     /// Reads the profile back after a save, so the saved block shows at once instead of after the folder watcher's next
@@ -1454,10 +1523,11 @@ impl Shell {
                 })
             })
             .inner;
-        // Open Profile leaves Settings for the Profile screen, as Back to app would leave it for the screen underneath.
-        if runtime_asked == Some(WorkspaceAction::OpenProfile) {
-            self.settings_open = false;
-            self.screen = Screen::Profile;
+        // Open Profile and Open Portals leave Settings for their screen, as Back to app would leave it for the screen underneath.
+        match runtime_asked {
+            Some(WorkspaceAction::OpenProfile) => (self.settings_open, self.screen) = (false, Screen::Profile),
+            Some(WorkspaceAction::OpenPortals) => (self.settings_open, self.screen) = (false, Screen::Portals),
+            Some(WorkspaceAction::ChangeFolder) | None => {}
         }
         let ctx = ui.ctx().clone();
         // Providers picked this frame drew before the read, so it reads now and draws again.
@@ -1574,7 +1644,7 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
         alert(ui, error);
         ui.add_space(WELCOME_STEP_PADDING / 2.0);
     }
-    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit. Tasks you start change it through Claude Code on this computer.";
+    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.";
     ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
     choose
 }
@@ -1607,8 +1677,7 @@ fn source_place(source: Source) -> (Option<Screen>, bool) {
         Source::Applications => (Some(Screen::Tracker), true),
         Source::SkillGaps => (Some(Screen::Insights), false),
         Source::Profile | Source::CvDocuments => (Some(Screen::Profile), false),
-        // Setup lists the portals until they have a screen of their own.
-        Source::Portals => (Some(Screen::Workspace), false),
+        Source::Portals => (Some(Screen::Portals), false),
         Source::Decisions => (None, false),
     }
 }

@@ -4,7 +4,7 @@ mod view;
 
 pub use changes::PortalChanges;
 pub use community::{Community, CommunityPortalView, CommunityState, CommunityView, CountryGroup, STALE_AFTER};
-pub use view::{Badge, PortalSummary, PortalView, PortalsView, portals_view};
+pub use view::{Badge, CHECK_ALL_LINE, PortalSummary, PortalView, PortalsView, SEARCH_TERMS_LINE, portals_view};
 
 pub use crate::portals::domain::{
     BUILT_IN, CommunityFailure, CommunityList, CountryCode, FolderName, GitSha, ListedPortal, Origin, Phrase, Priority, Quotes, SearchPlan, Term,

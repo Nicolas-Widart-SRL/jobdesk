@@ -4,6 +4,7 @@
 pub mod application;
 mod domain;
 mod infrastructure;
+pub mod ui;
 
 use std::path::Path;
 use std::sync::Arc;

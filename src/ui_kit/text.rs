@@ -192,6 +192,21 @@ pub fn title_over(ui: &mut Ui, title: &str, detail: &str) -> Response {
     .response
 }
 
+/// The room between a `name_line`'s name and its note.
+const NAME_NOTE_GAP: f32 = 8.0;
+
+/// A name in strong type with a `muted` note after it, such as a portal and its country, on one line cut at the right.
+pub fn name_line(ui: &mut Ui, name: &str, note: Option<&str>) -> Response {
+    let p = Palette::of(ui);
+    let mut job = LayoutJob::default();
+    job.append(name, 0.0, TextFormat::simple(Type::STRONG.font(), p.text));
+    if let Some(note) = note {
+        // A real space, so a screen reader hears the two apart, and the rest of the gap as room.
+        job.append(&format!(" {note}"), NAME_NOTE_GAP / 2.0, TextFormat::simple(Type::NOTE.font(), p.muted));
+    }
+    add_job(ui, job, TextWrapMode::Truncate)
+}
+
 /// One wrapped sentence that leads with a bold phrase, such as a verdict.
 pub fn lead_line(ui: &mut Ui, strong: &str, rest: &str) -> Response {
     let p = Palette::of(ui);

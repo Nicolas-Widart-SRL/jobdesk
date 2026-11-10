@@ -53,6 +53,19 @@ pub struct PortalSummary {
     pub jobs_found: Option<usize>,
 }
 
+/// The launcher line that checks every installed portal.
+pub const CHECK_ALL_LINE: &str = "/scrape health";
+/// The launcher line that changes the search terms every portal shares: the `/setup` section the Profile screen's Job
+/// search topic opens.
+pub const SEARCH_TERMS_LINE: &str = "/setup --section search";
+
+impl PortalView {
+    /// `/scrape health <folder>`, only for a folder name that is safe on a command line.
+    pub fn check_line(&self) -> Option<String> {
+        self.safe_name.then(|| format!("{CHECK_ALL_LINE} {}", self.folder))
+    }
+}
+
 impl PortalsView {
     /// Jobs found sums every installed portal, on or off.
     pub fn summary(&self) -> PortalSummary {
@@ -146,6 +159,21 @@ mod tests {
         let safe: Vec<(&str, bool)> = view.portals.iter().map(|portal| (portal.folder.as_str(), portal.safe_name)).collect();
         assert_eq!(safe, [("-odd name", false), ("linkedin-search", true), ("northfield-search", true)]);
         assert!(!safe_name("-search") && !safe_name("") && !safe_name("north;rm") && safe_name("north_2.v-search"));
+    }
+
+    #[test]
+    fn only_a_safe_folder_gets_its_own_check_line() {
+        let view = portals_view(sample(), Ok(SearchPlan::default()), None, &[]);
+        let lines: Vec<Option<String>> = view.portals.iter().map(PortalView::check_line).collect();
+        assert_eq!(lines, [None, Some("/scrape health linkedin-search".into()), Some("/scrape health northfield-search".into())]);
+    }
+
+    /// Change search terms… opens what the Profile screen's Job search topic opens, as the terms live in one file.
+    #[test]
+    fn the_search_terms_line_is_the_job_search_topics() {
+        use crate::profile::application::TopicId;
+        let line = TopicId::JobSearch.spec().setup_section.map(|section| format!("/setup --section {section}"));
+        assert_eq!(line.as_deref(), Some(SEARCH_TERMS_LINE));
     }
 
     #[test]

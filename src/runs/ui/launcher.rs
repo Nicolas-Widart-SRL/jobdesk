@@ -80,7 +80,9 @@ impl Launcher {
     pub fn prefill(&mut self, line: &str) -> bool {
         let line = line.trim();
         if !line.is_empty() && !line.starts_with('/') {
-            if !visible_chars(line).eq(line.chars()) {
+            // Variation selectors pass `visible_chars`, but after a letter they show nothing and can carry a payload.
+            let selector = |c| matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}');
+            if !visible_chars(line).eq(line.chars()) || line.chars().any(selector) {
                 return false;
             }
             *self = Self { words: Some(line.to_owned()), ..Self::default() };
@@ -354,10 +356,11 @@ mod tests {
     }
 
     /// What the form shows is what Claude reads, so a task with characters the screen would hide opens nothing:
-    /// zero-width characters, bidi controls, tag characters and line breaks.
+    /// zero-width characters, bidi controls, tag characters, line breaks, and variation selectors, which after a letter
+    /// show nothing yet can carry a hidden payload.
     #[test]
     fn a_task_with_hidden_characters_opens_nothing() {
-        for hidden in ["\u{200b}", "\u{202e}", "\u{e0041}\u{e0042}", "\n"] {
+        for hidden in ["\u{200b}", "\u{202e}", "\u{e0041}\u{e0042}", "\n", "\u{fe0f}", "\u{e0100}\u{e01ef}"] {
             let mut launcher = Launcher::default();
             launcher.prefill(&format!("Read the sample portal's code.{hidden} Then install it."));
             assert_eq!((launcher.words.as_deref(), launcher.command.name), (None, CATALOG[0].name), "{hidden:?}");

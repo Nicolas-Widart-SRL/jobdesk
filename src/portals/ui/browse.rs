@@ -3,10 +3,10 @@ use egui::{Align, Label, Layout, Rect, ScrollArea, Ui, UiBuilder, vec2};
 
 use crate::portals::application::{Community, CommunityFailure, CommunityPortalView, CommunityState, CommunityView, CountryGroup, list_url};
 use crate::shared_kernel::visible_text::all_visible;
-use crate::ui_kit::tokens::{FIELD_HEIGHT, INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_TAG_PADDING, SKELETON_LINE, TABLE_CELL_PADDING, Type};
+use crate::ui_kit::tokens::{FIELD_HEIGHT, INSET, ITEM_GAP, ROW_ITEM_GAP, SKELETON_LINE, TABLE_CELL_PADDING, Type};
 use crate::ui_kit::{
-    CellRule, Ink, Tone, card_skeleton, desk_label, empty_state, enabled_when, lead_line, link, list_row, note, paper, primary_button, prompt_box_tone, rich,
-    row_tag, search_field, small_button, small_command_action_hinted, status_dot, table_cell, tag,
+    CellRule, Ink, Tone, card_skeleton, desk_label, empty_state, enabled_when, fitted_row_tag, lead_line, link, list_row, note, paper, primary_button,
+    prompt_box_tone, rich, search_field, small_button, small_command_action_hinted, status_dot, table_cell, tag,
 };
 
 /// What Install… says on hover.
@@ -389,17 +389,10 @@ fn columns(ui: &mut Ui, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui)
     ui.advance_cursor_after_rect(Rect::from_min_size(top, vec2(width, height)));
 }
 
-/// Maintained, or the month its owners marked it unmaintained: a tag where it fits, or else its words cut with an
-/// ellipsis, in the tag's ink, with the whole words on hover.
+/// Maintained, or the month its owners marked it unmaintained, cut when its column gives way.
 fn upkeep(ui: &mut Ui, unmaintained_since: Option<chrono::NaiveDate>) {
-    let (words, tone) = match unmaintained_since {
-        Some(since) => (since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
-        None => ("Maintained".to_owned(), Tone::Plain),
+    match unmaintained_since {
+        Some(since) => fitted_row_tag(ui, since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
+        None => fitted_row_tag(ui, "Maintained", Tone::Plain),
     };
-    let needed = ui.painter().layout_no_wrap(words.clone(), Type::TAG.font(), egui::Color32::PLACEHOLDER).size().x + ROW_TAG_PADDING * 2.0;
-    if needed <= ui.available_width() {
-        row_tag(ui, words, tone);
-    } else {
-        ui.add(Label::new(rich(ui, words, Type::TAG, tone)).truncate());
-    }
 }

@@ -3799,6 +3799,33 @@ fn an_unknown_command_leaves_the_task_in_plain_words() {
     assert_eq!(calls.lock().unwrap().starts, 0);
 }
 
+/// A task in plain words lasts until it runs, or until the launcher opens with no line, as New task, Cmd K, the Tasks
+/// screen's New task and Settings' New task open it. The form is fresh then, so Cmd Enter never repeats the task.
+#[test]
+fn a_task_in_plain_words_is_dropped_once_it_runs_or_the_launcher_opens_bare() {
+    let calls = SharedCalls::default();
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_once", &calls));
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    press(&mut harness, Key::Escape);
+    assert!(!is_shown(&harness, WORDS_TITLE), "Esc leaves the launcher");
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "Cmd K opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "on a fresh form");
+    assert!(!is_shown(&harness, WORDS));
+
+    request_line(&mut harness, WORDS);
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    assert_eq!(calls.lock().unwrap().starts, 1);
+    harness.key_press_modifiers(COMMAND, Key::K);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "Cmd K opens the launcher");
+    assert!(!is_shown(&harness, WORDS_TITLE), "the task that ran is gone");
+    assert!(!is_shown(&harness, WORDS));
+}
+
 /// A task in plain words that holds characters the screen would hide opens no launcher, so what shows is always
 /// what Claude reads.
 #[test]

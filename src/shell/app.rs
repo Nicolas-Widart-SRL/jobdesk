@@ -518,6 +518,8 @@ impl Shell {
                 (self.profile_editor, self.leave_to, self.profile_saved, self.away) = (Some(profile::open_editor(root.path())), None, None, None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
+                // A task in plain words was written for the last folder.
+                self.launcher.clear_words();
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
@@ -877,6 +879,13 @@ impl Shell {
         }
     }
 
+    /// Opens the launcher with no line, as New task does: a task in plain words left from before is dropped,
+    /// so Cmd Enter on the fresh form never repeats it.
+    fn new_task(&mut self) {
+        self.launcher.clear_words();
+        self.open_launcher();
+    }
+
     /// Opens the launcher and keeps where it came from, for Esc. It closes Settings, which keeps its page for next time.
     fn open_launcher(&mut self) {
         self.settings_open = false;
@@ -937,7 +946,7 @@ impl Shell {
             self.settings_open = true;
         }
         if ask && self.workspace.is_some() {
-            self.open_launcher();
+            self.new_task();
         }
     }
 
@@ -996,7 +1005,7 @@ impl Shell {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if enabled_when(ui, open, CHOOSE_FOLDER, |ui| shortcut_button(ui, "New task", &ASK_KEYS)).clicked() {
-                    self.open_launcher();
+                    self.new_task();
                 }
             });
         });
@@ -1205,7 +1214,7 @@ impl Shell {
                 if let Some(desk) = &mut self.desk
                     && self.run_screen.show(ui, desk, &root) == Some(RunScreenRequest::NewTask)
                 {
-                    self.open_launcher();
+                    self.new_task();
                 }
             }
             Screen::Profile => {
@@ -1484,7 +1493,7 @@ impl Shell {
                 self.screen = Screen::Tracker;
                 ctx.request_repaint();
             }
-            Some(SettingsRequest::NewTask) => self.open_launcher(),
+            Some(SettingsRequest::NewTask) => self.new_task(),
             // Edit in Profile leaves Settings for the Profile tab, as Back to app would leave it for the screen underneath.
             Some(SettingsRequest::OpenProfile) => {
                 self.settings_open = false;
@@ -1929,6 +1938,19 @@ mod tests {
         shell.desk = None;
         shell.open(&ctx, &checkout_named(&folder, "other-search"));
         assert_eq!(shell.workspace.as_ref().map(|workspace| workspace.name()), Some("other-search".to_owned()), "with no task, the folder changes");
+    }
+
+    /// A task in plain words belongs to the folder it was written for, so a folder change drops it, even from the
+    /// launcher Settings keeps underneath.
+    #[test]
+    fn a_folder_change_drops_a_task_in_plain_words() {
+        let data = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        assert!(shell.launcher.prefill("Read the sample portal's code and tell me what it does."));
+        shell.open(&ctx, &checkout_named(&folder, "other-search"));
+        assert_eq!(shell.launcher.words(), None);
     }
 
     /// A folder change from anywhere, such as Settings, asks before it drops unsaved profile text, and goes on only once

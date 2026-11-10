@@ -97,10 +97,23 @@ impl Launcher {
         self.values.get(field.key).cloned().unwrap_or_else(|| field.default.to_owned())
     }
 
+    /// The task in plain words the form holds, if any.
+    pub fn words(&self) -> Option<&str> {
+        self.words.as_deref()
+    }
+
+    /// Drops a task in plain words for a fresh form. A task lasts only until it runs or the launcher opens with no line,
+    /// so Run never repeats it unseen. A command's form stays as the user left it.
+    pub fn clear_words(&mut self) {
+        if self.words.is_some() {
+            *self = Self::default();
+        }
+    }
+
     /// What Run sends: the task in plain words, or the command line the form composes.
     fn line(&self) -> String {
-        match &self.words {
-            Some(words) => words.clone(),
+        match self.words() {
+            Some(words) => words.to_owned(),
             None => compose_line(self.command, |field| self.value_of(field)),
         }
     }
@@ -266,6 +279,9 @@ impl Launcher {
                 run(ui)
             };
         });
+        if matches!(asked, Some(LauncherRequest::Started(_))) {
+            self.clear_words();
+        }
         asked
     }
 }

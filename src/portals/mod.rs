@@ -17,8 +17,8 @@ use crate::portals::infrastructure::{CommunityCache, GithubCommunity, HttpsApi, 
 use crate::shared_kernel::LoadError;
 
 /// The installed portals and the search file. `board` is `None` when the saved jobs could not be read. A
-/// `.agents/skills` that could not be read is the error. A search file that could not be read only reads as unread in
-/// the view, because the profile reports that file already.
+/// `.agents/skills`, or a `SKILL.md` in it, that could not be read is the error. A search file that could not be read
+/// only reads as unread in the view, because the profile reports that file already.
 pub fn load(root: &Path, board: Option<&JobBoard>) -> (PortalsView, Option<LoadError>) {
     let folder = PortalFolder::in_workspace(root);
     let installed = folder.installed();

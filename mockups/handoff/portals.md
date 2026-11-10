@@ -29,7 +29,7 @@ Setup is drawn in one place only, `Profile.html?state=setup`, which already draw
 | `Portals-loading.png` | `screen=yours&state=loading` | Reading the folder |
 | `Portals-nofolder.png` | `screen=yours&state=nofolder` | No job search folder chosen |
 | `Portals-none.png` | `screen=yours&state=none` | A folder with no portal installed |
-| `Portals-failed.png` | `screen=yours&state=failed` | `.agents/skills` could not be read |
+| `Portals-failed.png` | `screen=yours&state=failed` | `.agents/skills`, or a `SKILL.md` in it, could not be read |
 | `Portals-browse.png`, `-browse-dark.png` | `screen=browse&state=cached` | The community list, saved 12 minutes ago |
 | `Portals-browse-loading.png` | `screen=browse&state=loading` | The first read from GitHub |
 | `Portals-browse-offline.png` | `screen=browse&state=offline` | GitHub unreachable, the saved list shown |

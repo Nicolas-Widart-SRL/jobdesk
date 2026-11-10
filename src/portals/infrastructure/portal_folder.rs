@@ -23,7 +23,8 @@ impl PortalFolder {
     }
 
     /// Each portal folder with its manifest. No `.agents/skills` means none. A folder whose name starts with a dot, is
-    /// not UTF-8 or holds hidden characters is left out, and so is one without a readable `SKILL.md`.
+    /// not UTF-8 or holds hidden characters is left out, and so is one without a `SKILL.md`. A `SKILL.md` that is there
+    /// but cannot be read is the error, so the list is never short of a portal it holds.
     pub fn installed(&self) -> Result<Vec<(String, Manifest)>, LoadError> {
         let skills = self.root.join(SKILLS);
         let entries = match fs::read_dir(&skills) {
@@ -31,15 +32,19 @@ impl PortalFolder {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(LoadError::new(SKILLS, error)),
         };
-        Ok(entries
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
-                let shown = !name.starts_with('.') && visible_chars(&name).eq(name.chars());
-                let text = shown.then(|| read_manifest(&entry.path().join("SKILL.md")))??;
-                Some((name.clone(), parse_manifest(&text, &name)))
-            })
-            .collect())
+        let mut installed = Vec::new();
+        for entry in entries.flatten() {
+            let Ok(name) = entry.file_name().into_string() else { continue };
+            if name.starts_with('.') || !visible_chars(&name).eq(name.chars()) || !entry.path().is_dir() {
+                continue;
+            }
+            match read_manifest(&entry.path().join("SKILL.md")) {
+                Ok(text) => installed.push((name.clone(), parse_manifest(&text, &name))),
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(LoadError::new(format!("{SKILLS}/{name}/SKILL.md"), error)),
+            }
+        }
+        Ok(installed)
     }
 
     /// The shared search terms. No search file means none.
@@ -59,9 +64,9 @@ fn read_start(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// The start of a `SKILL.md`, or `None` when it cannot be read. A character cut at the limit reads as a replacement.
-fn read_manifest(path: &Path) -> Option<String> {
-    read_start(path).ok().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+/// The start of a `SKILL.md`. A character cut at the limit reads as a replacement.
+fn read_manifest(path: &Path) -> io::Result<String> {
+    read_start(path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]
@@ -134,6 +139,16 @@ mod tests {
         write(dir.path(), ".agents/skills", "a file");
         let error = PortalFolder::in_workspace(dir.path()).installed().unwrap_err();
         assert_eq!(error.source, ".agents/skills");
+    }
+
+    /// A `SKILL.md` that is there but cannot be read fails the whole list, so the count is never short by one.
+    #[test]
+    fn a_manifest_that_cannot_be_read_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), ".agents/skills/alder-search/SKILL.md", "# Alder Search Skill\n");
+        fs::create_dir_all(dir.path().join(".agents/skills/northfield-search/SKILL.md")).unwrap();
+        let error = PortalFolder::in_workspace(dir.path()).installed().unwrap_err();
+        assert_eq!(error.source, ".agents/skills/northfield-search/SKILL.md");
     }
 
     #[test]

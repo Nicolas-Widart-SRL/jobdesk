@@ -26,8 +26,9 @@ impl PortalWriter {
     }
 
     /// The portal folder named `folder` in `.agents/skills`, checked before any write: one plain name that is not a dot
-    /// folder, a `.agents/skills` that resolves inside the root, and a real folder holding a regular `SKILL.md`, neither
-    /// one a link.
+    /// folder, spelled exactly as `.agents/skills` lists it, a `.agents/skills` that resolves inside the root, and a real
+    /// folder holding a regular `SKILL.md`, neither one a link. The exact spelling matters on a disk that ignores case:
+    /// there `LinkedIn-Search` would reach the built-in `linkedin-search`, which only that exact name is known as.
     ///
     /// The check runs once, before the write, as a profile save's does: a folder swapped for a link between the two is
     /// not caught, because the standard library has no folder-relative open that would close that gap.
@@ -41,6 +42,9 @@ impl PortalWriter {
         let skills = fs::canonicalize(self.root.join(SKILLS)).map_err(failed)?;
         if !skills.starts_with(&root) {
             return Err(refused("is outside your job search folder, so nothing changed"));
+        }
+        if !fs::read_dir(&skills).map_err(failed)?.flatten().any(|entry| entry.file_name() == *folder) {
+            return Err(refused("is not a folder in .agents/skills by that exact name, so nothing changed"));
         }
         let path = skills.join(folder);
         if !fs::symlink_metadata(&path).map_err(failed)?.file_type().is_dir() {
@@ -238,6 +242,21 @@ mod tests {
             assert!(refused(writer.trash(name)).contains("not a portal folder name"), "{name:?}");
         }
         assert_eq!(manifest(dir.path(), ".hidden-search"), NORTHFIELD);
+    }
+
+    /// On a disk that ignores case another spelling would reach the folder, and the built-in check knows only the exact
+    /// name, so a name `.agents/skills` does not list exactly is refused, on any disk.
+    #[test]
+    fn a_name_in_another_case_is_refused() {
+        let (dir, writer) = workspace();
+        portal(dir.path(), "linkedin-search", NORTHFIELD);
+        for name in ["Northfield-Search", "NORTHFIELD-SEARCH", "LinkedIn-Search"] {
+            assert!(refused(writer.set_enabled(name, true)).contains("exact name"), "{name}");
+            assert!(refused(writer.trash(name)).contains("exact name"), "{name}");
+        }
+        assert_eq!(manifest(dir.path(), "northfield-search"), NORTHFIELD);
+        assert_eq!(manifest(dir.path(), "linkedin-search"), NORTHFIELD);
+        assert_eq!(writer.set_enabled("northfield-search", true), Ok(()), "the exact name still works");
     }
 
     #[test]

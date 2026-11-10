@@ -330,9 +330,6 @@ mod tests {
         }
     }
 
-    /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then. The
-    /// umask is `022` for the write, so a copy opened with the default mode would read `644`, not `600`, whatever the
-    /// umask of the shell. Files other tests make meanwhile may get `022` too, and none of them checks a default mode.
     /// The rename would hand the file to the current user, so a file someone else owns is refused.
     #[cfg(unix)]
     #[test]
@@ -366,6 +363,9 @@ mod tests {
         assert_eq!(refusal(&target, &fs::metadata(&target).unwrap(), &words), Some("read-only here"));
     }
 
+    /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then. The
+    /// umask is `022` for the write, so a copy opened with the default mode would read `644`, not `600`, whatever the
+    /// umask of the shell. Files other tests make meanwhile may get `022` too, and none of them checks a default mode.
     #[cfg(unix)]
     #[test]
     fn the_copy_is_private_until_its_text_is_in() {

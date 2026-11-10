@@ -1,4 +1,4 @@
-use crate::portals::domain::{BUILT_IN, ChangeError, Origin, PortalStore};
+use crate::portals::domain::{ChangeError, Origin, PortalStore, origin};
 
 /// Switches installed portals on or off and moves them to the Trash. Both wait while a run works, because one run works
 /// at a time and a run may read or write the portal folders.
@@ -19,10 +19,11 @@ impl PortalChanges {
         self.store.set_enabled(folder, on)
     }
 
-    /// Moves the portal in `folder` to the Trash. A built-in portal is refused, by its `origin` or by its folder name in
-    /// any case, since the folder name is what decides on a disk that ignores case. While `busy`, nothing is moved.
-    pub fn remove(&self, folder: &str, origin: Origin, busy: bool) -> Result<(), ChangeError> {
-        if origin == Origin::BuiltIn || BUILT_IN.iter().any(|(name, _)| name.eq_ignore_ascii_case(folder)) {
+    /// Moves the portal in `folder` to the Trash. A built-in portal is refused, by the `origin` passed in or by its
+    /// folder name, which `origin` matches exactly, as the folder names come from the disk. While `busy`, nothing is
+    /// moved.
+    pub fn remove(&self, folder: &str, shown: Origin, busy: bool) -> Result<(), ChangeError> {
+        if shown == Origin::BuiltIn || origin(folder, &[]).0 == Origin::BuiltIn {
             return Err(ChangeError::BuiltIn);
         }
         if busy {
@@ -38,6 +39,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::portals::domain::BUILT_IN;
 
     /// Records each write it is asked for.
     #[derive(Default, Clone)]
@@ -89,8 +91,18 @@ mod tests {
         for (folder, _) in BUILT_IN {
             assert_eq!(changes.remove(folder, Origin::MadeByYou, false), Err(ChangeError::BuiltIn), "{folder}");
         }
-        assert_eq!(changes.remove("LinkedIn-Search", Origin::MadeByYou, false), Err(ChangeError::BuiltIn), "any case");
         assert_eq!(changes.remove("linkedin-search", Origin::Community, true), Err(ChangeError::BuiltIn));
         assert!(calls.borrow().is_empty());
+    }
+
+    /// The screen offers Remove by `origin`, so a folder it calls yours is never refused as built-in, and the other way.
+    #[test]
+    fn remove_and_origin_agree_on_built_in() {
+        for folder in ["linkedin-search", "LinkedIn-search", "JOBNET-SEARCH", "northfield-search"] {
+            let (changes, _) = changes();
+            let (shown, _) = origin(folder, &[]);
+            let refused = changes.remove(folder, shown, false) == Err(ChangeError::BuiltIn);
+            assert_eq!(refused, shown == Origin::BuiltIn, "{folder}");
+        }
     }
 }

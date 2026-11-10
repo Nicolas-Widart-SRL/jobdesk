@@ -39,11 +39,13 @@ pub fn helper_bins(home: Option<&OsStr>, macos: bool) -> Vec<PathBuf> {
 }
 
 /// `first`, then the login shell's `PATH`, then the inherited one. A folder that a `PATH` cannot hold, because it is
-/// not text or holds the separator, is left out, and so is an empty part, which would name the current folder.
+/// not text or holds the separator, is left out, and so is an empty part, which would name the current folder. With
+/// Windows' `;`, a part made only of quotes is empty too. Elsewhere such a part is a folder's name and stays.
 fn joined(first: &[PathBuf], login: Option<String>, inherited: &str, separator: char) -> String {
     let first = first.iter().filter_map(|folder| folder.to_str()).filter(|folder| !folder.contains(separator));
     let rest = login.iter().flat_map(|login| parts(login, separator)).chain(parts(inherited, separator));
-    first.chain(rest.filter(|part| !part.replace('"', "").is_empty())).collect::<Vec<_>>().join(&separator.to_string())
+    let empty = |part: &&str| if separator == ';' { part.replace('"', "").is_empty() } else { part.is_empty() };
+    first.chain(rest.filter(|part| !empty(part))).collect::<Vec<_>>().join(&separator.to_string())
 }
 
 /// The parts of a `PATH` split on `separator`. With Windows' `;`, a part may be quoted to hold one, as in
@@ -229,6 +231,8 @@ mod tests {
         let helpers = [PathBuf::from("/h/python/bin")];
         assert_eq!(joined(&helpers, Some("::/a".into()), "/b::", ':'), "/h/python/bin:/a:/b", "the helpers stay first");
         assert_eq!(joined(&[], None, "/a\"b:/c", ':'), "/a\"b:/c", "outside Windows a quote is part of a name");
+        assert_eq!(joined(&[], None, "/a\"b::/c\"d", ':'), "/a\"b:/c\"d", "outside Windows a quote does not join parts");
+        assert_eq!(joined(&[], None, "/a:\"\":/b", ':'), "/a:\"\":/b", "outside Windows a part made only of quotes is a name");
     }
 
     #[test]

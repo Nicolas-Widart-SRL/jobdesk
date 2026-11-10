@@ -7630,6 +7630,31 @@ fn no_portals_yet_leads_to_browse_and_add() {
     assert!(is_shown(&harness, "A job board Claude should search"));
 }
 
+/// At a large text size the actions stay whole inside the paper: the owners and then the tag give up their width first.
+#[test]
+fn a_large_text_size_keeps_install_in_reach() {
+    let calls = SharedCalls::default();
+    let mut shell = browse_shell("portals_browse_large_text", Some(community_list(minutes_ago(12))), vec![]);
+    *shell.desk_slot() = Some(desk_on(RecordingGateway(SharedSink::default(), Arc::clone(&calls))));
+    let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| shell.show(ui));
+    harness.ctx.set_zoom_factor(1.5);
+    harness.run_steps(3);
+    open_segment(&mut harness, "Browse community");
+    let edge = harness.get_by_label("Refresh").rect().right();
+    let install = harness.get_all_by_label("Install…").next().unwrap().rect();
+    assert!(install.right() <= edge + 0.5, "Install… at {install:?} ends past the paper's edge at {edge}");
+    for code in harness.get_all_by_label("View code ↗") {
+        assert!(code.rect().right() <= edge + 0.5, "View code ↗ at {:?} ends past {edge}", code.rect());
+    }
+    // Through accesskit, because a pointer click lands where the node would be at the harness's first scale.
+    let install = harness.get_all_by_label("Install…").next().unwrap();
+    assert!(!install.accesskit_node().is_disabled());
+    install.click_accesskit();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, WORDS_LAUNCHER), "Install… is clickable");
+    assert_eq!(calls.lock().unwrap().starts, 0);
+}
+
 /// The four fields of Add a portal, in order: website, country, language and test title.
 fn type_answers(harness: &mut Harness, answers: [&str; 4]) {
     for (at, answer) in answers.into_iter().enumerate() {
@@ -7703,6 +7728,18 @@ fn portals_browse_light() {
 fn portals_browse_dark() {
     let name = "portals_browse_dark";
     compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Dark), name);
+}
+
+/// At 150% text size, the owners and the tag give way, and the actions stay whole.
+#[test]
+fn portals_browse_large_light() {
+    let name = "portals_browse_large_light";
+    let mut harness = probed_wgpu(browse_shell(name, Some(community_list(minutes_ago(12))), vec![]), Theme::Light);
+    harness.ctx.set_zoom_factor(1.5);
+    harness.run_steps(3);
+    harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Browse community").click_accesskit();
+    harness.run_steps(3);
+    compare(&mut harness, name);
 }
 
 #[test]

@@ -3,7 +3,7 @@ use egui::{Align, Label, Layout, Rect, ScrollArea, Ui, UiBuilder, vec2};
 
 use crate::portals::application::{Community, CommunityFailure, CommunityPortalView, CommunityState, CommunityView, CountryGroup, list_url};
 use crate::shared_kernel::visible_text::all_visible;
-use crate::ui_kit::tokens::{FIELD_HEIGHT, INSET, ITEM_GAP, ROW_ITEM_GAP, SKELETON_LINE, TABLE_CELL_PADDING, Type};
+use crate::ui_kit::tokens::{FIELD_HEIGHT, INSET, ITEM_GAP, ROW_ITEM_GAP, ROW_TAG_PADDING, SKELETON_LINE, TABLE_CELL_PADDING, Type};
 use crate::ui_kit::{
     CellRule, Ink, Tone, card_skeleton, desk_label, empty_state, enabled_when, lead_line, link, list_row, note, paper, primary_button, prompt_box_tone, rich,
     row_tag, search_field, small_button, small_command_action_hinted, status_dot, table_cell, tag,
@@ -21,7 +21,7 @@ const OWNERS_WIDTH: f32 = 190.0;
 const TAG_WIDTH: f32 = 240.0;
 const ACTIONS_WIDTH: f32 = 200.0;
 const COLUMN_GAP: f32 = 16.0;
-/// The narrowest the name and sentence get, however narrow the window.
+/// The narrowest the name and sentence get while the owners or the tag still show.
 const MIN_NAME_WIDTH: f32 = 160.0;
 /// An entry's least height inside its padding, as the canvas's rows.
 const ENTRY_HEIGHT: f32 = 40.0;
@@ -329,10 +329,7 @@ fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool) {
                 ui.add(Label::new(rich(ui, portal.owners.join(", "), Type::NOTE, Ink::Muted)).truncate());
             },
             |ui| {
-                match portal.unmaintained_since {
-                    Some(since) => row_tag(ui, since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
-                    None => row_tag(ui, "Maintained", Tone::Plain),
-                };
+                upkeep(ui, portal.unmaintained_since);
             },
             |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -350,12 +347,23 @@ fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool) {
     });
 }
 
-/// An entry's four columns side by side: the name, which takes the room the fixed three leave, then the owners, the tag
-/// and the actions, each centred on the row. The row is as tall as the name column, and at least `ENTRY_HEIGHT`.
+/// The widths of an entry's name, owners and tag in `width`, after the actions and the gaps. The actions keep their
+/// width, at the row's right. Then the name keeps `MIN_NAME_WIDTH`, and the owners and then the tag give up their width
+/// first, so a narrow row or a large text size never pushes View code ↗ or Install… out of reach.
+fn column_widths(width: f32) -> (f32, f32, f32) {
+    let shared = (width - ACTIONS_WIDTH - COLUMN_GAP * 3.0).max(0.0);
+    let spare = (shared - MIN_NAME_WIDTH).max(0.0);
+    let tag = TAG_WIDTH.min(spare);
+    let owners = OWNERS_WIDTH.min(spare - tag);
+    (shared - tag - owners, owners, tag)
+}
+
+/// An entry's four columns side by side: the name, the owners, the tag and the actions, each centred on the row, with
+/// widths from `column_widths`. Each column is clipped to its own room. The row is as tall as the name column, and at
+/// least `ENTRY_HEIGHT`.
 fn columns(ui: &mut Ui, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui), state: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
-    let fixed = OWNERS_WIDTH + TAG_WIDTH + ACTIONS_WIDTH + COLUMN_GAP * 3.0;
-    let name_width = (width - fixed).max(MIN_NAME_WIDTH);
+    let (name_width, owners_width, tag_width) = column_widths(width);
     let top = ui.cursor().min;
     let room = Rect::from_min_size(top, vec2(name_width, f32::MAX));
     let mut first = ui.new_child(UiBuilder::new().id_salt("name").max_rect(room).layout(Layout::top_down(Align::Min)));
@@ -364,13 +372,34 @@ fn columns(ui: &mut Ui, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui)
     let height = first.min_rect().height().max(ENTRY_HEIGHT);
     let column = |ui: &mut Ui, salt: &str, left: f32, column_width: f32| {
         let rect = Rect::from_min_size(egui::pos2(left, top.y), vec2(column_width, height));
-        ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::left_to_right(Align::Center)))
+        let mut child = ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        child
     };
     let mut left = top.x + name_width + COLUMN_GAP;
-    owners(&mut column(ui, "owners", left, OWNERS_WIDTH));
-    left += OWNERS_WIDTH + COLUMN_GAP;
-    state(&mut column(ui, "state", left, TAG_WIDTH));
-    left += TAG_WIDTH + COLUMN_GAP;
-    actions(&mut column(ui, "actions", left, ACTIONS_WIDTH));
-    ui.advance_cursor_after_rect(Rect::from_min_size(top, vec2(name_width + fixed, height)));
+    if owners_width > 0.0 {
+        owners(&mut column(ui, "owners", left, owners_width));
+    }
+    left += owners_width + COLUMN_GAP;
+    if tag_width > 0.0 {
+        state(&mut column(ui, "state", left, tag_width));
+    }
+    let actions_left = (top.x + width - ACTIONS_WIDTH).max(top.x);
+    actions(&mut column(ui, "actions", actions_left, ACTIONS_WIDTH));
+    ui.advance_cursor_after_rect(Rect::from_min_size(top, vec2(width, height)));
+}
+
+/// Maintained, or the month its owners marked it unmaintained: a tag where it fits, or else its words cut with an
+/// ellipsis, in the tag's ink, with the whole words on hover.
+fn upkeep(ui: &mut Ui, unmaintained_since: Option<chrono::NaiveDate>) {
+    let (words, tone) = match unmaintained_since {
+        Some(since) => (since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
+        None => ("Maintained".to_owned(), Tone::Plain),
+    };
+    let needed = ui.painter().layout_no_wrap(words.clone(), Type::TAG.font(), egui::Color32::PLACEHOLDER).size().x + ROW_TAG_PADDING * 2.0;
+    if needed <= ui.available_width() {
+        row_tag(ui, words, tone);
+    } else {
+        ui.add(Label::new(rich(ui, words, Type::TAG, tone)).truncate());
+    }
 }

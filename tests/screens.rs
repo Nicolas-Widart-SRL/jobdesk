@@ -7237,4 +7237,67 @@ mod first_run {
         assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0), "the window grew to the app's own");
         assert!(harness.query_by_label("Start setup").is_none());
     }
+
+    /// The window commands the shell sends over `steps` frames.
+    fn sent_over(harness: &mut Harness, steps: usize) -> Vec<egui::ViewportCommand> {
+        let mut sent = Vec::new();
+        for _ in 0..steps {
+            harness.run_steps(1);
+            sent.extend(harness.output().viewport_output.get(&egui::ViewportId::ROOT).map(|viewport| viewport.commands.clone()).unwrap_or_default());
+        }
+        sent
+    }
+
+    /// A harness in the first window on a shell the test shares, so it can act on the shell while frames run.
+    fn shared_first_window(shell: Shell) -> (Harness<'static>, Rc<RefCell<Shell>>) {
+        let shared = Rc::new(RefCell::new(shell));
+        let inner = Rc::clone(&shared);
+        let harness = Harness::builder().with_size(FIRST_WINDOW).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+        (harness, shared)
+    }
+
+    /// Settings needs the app's smallest window, so opening it over first-run setup grows the window to the app's own.
+    /// Closing it while setup still shows gives the small first window back.
+    #[test]
+    fn settings_over_first_run_takes_the_app_size_and_gives_it_back() {
+        use egui::ViewportCommand::{InnerSize, MinInnerSize};
+        let (small, app, smallest) = (egui::vec2(720.0, 560.0), egui::vec2(1280.0, 820.0), egui::vec2(1040.0, 640.0));
+        let (shell, _) = first_run_shell("settings_over_first_run", Script::default());
+        let (mut harness, shell) = shared_first_window(shell);
+        until_shown(&mut harness, "Welcome to Jobdesk");
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Settings").click();
+        let sent = sent_over(&mut harness, 3);
+        assert!(shell.borrow().settings_open());
+        assert!(sent.contains(&InnerSize(app)) && sent.contains(&MinInnerSize(smallest)), "Settings asks for the app's size and smallest: {sent:?}");
+        assert_eq!(harness.ctx.content_rect().size(), app);
+        // Pressed in one frame, so that frame's commands are the ones read.
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        harness.input_mut().events.push(escape);
+        let sent = sent_over(&mut harness, 3);
+        assert!(!shell.borrow().settings_open());
+        assert_eq!(sent, [MinInnerSize(small), InnerSize(small)], "closing Settings gives the first window back");
+        assert_eq!(harness.ctx.content_rect().size(), small);
+        assert!(harness.query_by_label_contains("Welcome to Jobdesk").is_some(), "setup still shows");
+    }
+
+    /// A folder opened while Settings shows over first-run setup leaves setup, and the window keeps the app's size.
+    #[test]
+    fn a_folder_opened_from_settings_keeps_the_app_size() {
+        let (shell, home) = first_run_shell("settings_folder_keeps_app_size", Script::default());
+        let (mut harness, shell) = shared_first_window(shell);
+        until_shown(&mut harness, "Welcome to Jobdesk");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+        harness.run_steps(3);
+        assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0), "Cmd , grows the window for Settings");
+        let theirs = home.join("Their search");
+        sample_workspace(&theirs);
+        shell.borrow_mut().choose_folder_from(&harness.ctx.clone(), theirs);
+        assert!(shell.borrow_mut().first_run_mut().is_none(), "setup has handed over");
+        let sent = sent_over(&mut harness, 3);
+        assert!(
+            !sent.iter().any(|command| matches!(command, egui::ViewportCommand::InnerSize(_) | egui::ViewportCommand::MinInnerSize(_))),
+            "nothing asks for another size: {sent:?}"
+        );
+        assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0));
+    }
 }

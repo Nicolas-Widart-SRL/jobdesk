@@ -204,7 +204,7 @@ pub struct Shell {
     /// First-run setup, while it shows in place of the welcome: on macOS, when no folder was asked for or remembered
     /// and setup has not got past the Computer step.
     first_run: Option<FirstRun>,
-    /// The size the window takes on the next frame: small for first-run setup, then the app's own once it hands over.
+    /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
     window: Option<WindowSize>,
 }
 
@@ -298,7 +298,8 @@ impl Shell {
             restart_slot: RestartSlot::default(),
             launch_args: Vec::new(),
             first_run: None,
-            window: None,
+            // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
+            window: Some(WindowSize::App),
         }
     }
 
@@ -323,7 +324,7 @@ impl Shell {
     /// Shows first-run setup through `onboarding` in place of the welcome, in the small first window. Paths under
     /// `home` show from it.
     pub fn with_first_run(self, onboarding: Onboarding, home: PathBuf) -> Self {
-        Self { first_run: Some(FirstRun { onboarding, screen: FirstRunScreen::new(home) }), window: Some(WindowSize::FirstRun), ..self }
+        Self { first_run: Some(FirstRun { onboarding, screen: FirstRunScreen::new(home) }), window: None, ..self }
     }
 
     /// First-run setup while it shows, for tests that act as its folder picker would.
@@ -653,9 +654,6 @@ impl Shell {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        if let Some(size) = self.window.take() {
-            resize(ui.ctx(), size);
-        }
         self.follow_first_run(ui.ctx());
         self.take_snapshot();
         self.follow_permissions();
@@ -717,7 +715,20 @@ impl Shell {
         if self.confirm_quit {
             self.quit_dialog(ui.ctx());
         }
+        // Last, so Settings opened or closed anywhere this frame sizes the window on it.
+        self.follow_window(ui.ctx());
         note_focus(ui.ctx());
+    }
+
+    /// Asks the window for the size what shows needs, once each time that changes: the small first window for
+    /// first-run setup, and the app's own for Settings over it, which needs the app's smallest, and once setup hands
+    /// over.
+    fn follow_window(&mut self, ctx: &egui::Context) {
+        let size = if self.first_run.is_some() && !self.settings_open { WindowSize::FirstRun } else { WindowSize::App };
+        if self.window != Some(size) {
+            self.window = Some(size);
+            resize(ctx, size);
+        }
     }
 
     /// Takes what first-run setup's worker said. Once the Folder and Computer steps are done, the folder opens as the
@@ -739,7 +750,6 @@ impl Shell {
     fn leave_first_run(&mut self) {
         let Some(mut first) = self.first_run.take() else { return };
         first.onboarding.stop();
-        self.window = Some(WindowSize::App);
         (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
         if let Some(environment) = &mut self.environment {
             environment.restart();

@@ -129,6 +129,8 @@ struct Calls {
     starts: usize,
     asked: Vec<(Option<String>, f64)>,
     sent: Vec<String>,
+    /// Each request a process started from, whose line and figures a run log's meta line holds.
+    requests: Vec<RunRequest>,
 }
 
 type SharedCalls = Arc<Mutex<Calls>>;
@@ -142,6 +144,7 @@ impl AgentGateway for RecordingGateway {
         let mut calls = self.1.lock().unwrap();
         calls.starts += 1;
         calls.asked.push((request.model.clone(), request.budget_usd));
+        calls.requests.push(request.clone());
         drop(calls);
         *self.0.lock().unwrap() = Some(sink);
         Box::new(RecordingSession(Arc::clone(&self.1)))
@@ -3737,7 +3740,7 @@ fn request_line(harness: &mut Harness, line: &str) {
 #[test]
 fn a_task_in_plain_words_opens_the_launcher_and_runs_as_written() {
     let calls = SharedCalls::default();
-    let (mut harness, shell) = shared_harness(recording_shell(Screen::Insights, "launcher_words", &calls));
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words", &calls));
     request_line(&mut harness, WORDS);
     assert!(is_shown(&harness, WORDS_LAUNCHER), "the launcher opens, asking to read the task");
     assert!(!is_shown(&harness, LAUNCHER));
@@ -3750,21 +3753,42 @@ fn a_task_in_plain_words_opens_the_launcher_and_runs_as_written() {
     harness.run_steps(3);
     let suggested = f64::from(jobdesk::runs::application::WORDS_BUDGET_USD);
     assert_eq!(calls.lock().unwrap().asked, [(None, suggested)]);
-    let line = shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].line.clone();
-    assert_eq!(line, WORDS);
+    let request = calls.lock().unwrap().requests[0].clone();
+    assert_eq!(request.line, WORDS, "the process gets the task as written");
 
-    // The log's meta line holds the line the run started with, which is all Usage reads to name its command.
+    // The meta line a run log opens with, as the gateway writes it from the request the process started from.
+    // Its line is all Usage reads to name the command.
     let logs = tempfile::tempdir().unwrap();
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("launcher_words").join("ai-job-search");
     let workspace = jobdesk::workspace::open(&root).unwrap();
     let meta = serde_json::json!({
-        "type": "jobdesk_meta", "workspace": workspace.path().display().to_string(), "id": "a", "line": line,
-        "model": null, "budget_usd": suggested, "started_at": "2026-10-30 10:00",
+        "type": "jobdesk_meta", "workspace": workspace.path().display().to_string(), "id": request.run_id, "line": request.line,
+        "model": request.model, "budget_usd": request.budget_usd, "started_at": request.started_at,
     });
     let result = r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#;
-    fs::write(logs.path().join("a.jsonl"), format!("{meta}\n{result}\n")).unwrap();
+    fs::write(logs.path().join(format!("{}.jsonl", request.run_id)), format!("{meta}\n{result}\n")).unwrap();
     let tasks = jobdesk::runs::usage_logs(logs.path().to_owned(), workspace.path()).tasks();
     assert_eq!(tasks.iter().map(|task| task.command.clone()).collect::<Vec<_>>(), [None]);
+}
+
+/// One run at a time: while another run works, Run on a task in plain words waits and says why, and Cmd Enter
+/// starts nothing either.
+#[test]
+fn a_task_in_plain_words_waits_while_another_run_works() {
+    let calls = SharedCalls::default();
+    let mut shell = recording_shell(Screen::Insights, "launcher_words_busy", &calls);
+    shell.desk_slot().as_mut().unwrap().start("/rank", &StartOptions { model: None, budget_usd: 1.0 }, run_started()).unwrap();
+    let mut harness = tray_harness(shell);
+    request_line(&mut harness, WORDS);
+    assert!(is_shown(&harness, WORDS_TITLE));
+    assert!(is_shown(&harness, "Another run is active. One run at a time keeps your files safe."));
+    let run = harness.get_by_label("Run");
+    assert!(run.accesskit_node().is_disabled());
+    run.click();
+    harness.run_steps(3);
+    cmd_enter(&mut harness);
+    assert_eq!(calls.lock().unwrap().starts, 1, "only the run already working");
+    assert!(is_shown(&harness, WORDS_TITLE), "the task stays to run later");
 }
 
 /// Run defaults for every task fill a task in plain words, and a command's own row does not.

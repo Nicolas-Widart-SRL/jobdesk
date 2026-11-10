@@ -120,7 +120,7 @@ struct RateHeaders<'a> {
 }
 
 /// A 403 or 429, from the REST API or the raw host, is the rate limit when no request is left or GitHub says how long
-/// to wait. It lasts until the reset time, or for the wait GitHub names, or a minute, and never over an hour. Any other
+/// to wait. It lasts until the reset time, or for the wait GitHub names, at least a minute and never over an hour. Any other
 /// status is refused with its code.
 fn status_failure(status: u16, headers: &RateHeaders, now: DateTime<Utc>) -> CommunityFailure {
     let used_up = headers.remaining.is_some_and(|remaining| remaining.trim() == "0");
@@ -131,7 +131,7 @@ fn status_failure(status: u16, headers: &RateHeaders, now: DateTime<Utc>) -> Com
     let reset =
         headers.reset.filter(|_| used_up).and_then(|seconds| seconds.trim().parse::<i64>().ok()).and_then(|seconds| DateTime::from_timestamp(seconds, 0));
     let until = reset.or_else(|| wait.and_then(|wait| now.checked_add_signed(wait))).unwrap_or(now + REFUSAL_WAIT);
-    CommunityFailure::Limited { until: until.clamp(now, now + LONGEST_WAIT) }
+    CommunityFailure::Limited { until: until.clamp(now + REFUSAL_WAIT, now + LONGEST_WAIT) }
 }
 
 /// Jobdesk's own word for why a request got no answer. The server's text is never kept.
@@ -491,13 +491,17 @@ mod tests {
         let retry = status_failure(429, &headers(Some("12"), Some(&reset), Some("90")), now());
         assert_eq!(retry, CommunityFailure::Limited { until: now() + TimeDelta::seconds(90) }, "a secondary limit names its wait");
         let raw = status_failure(429, &headers(None, None, Some("30")), now());
-        assert_eq!(raw, CommunityFailure::Limited { until: now() + TimeDelta::seconds(30) }, "a 429 that names only its wait");
+        assert_eq!(raw, CommunityFailure::Limited { until: now() + TimeDelta::minutes(1) }, "a 429 that names only its wait, a minute at least");
         let no_time = status_failure(403, &headers(Some("0"), Some("soon"), None), now());
         assert_eq!(no_time, CommunityFailure::Limited { until: now() + TimeDelta::minutes(1) });
         let far = (now() + TimeDelta::days(30)).timestamp().to_string();
         assert_eq!(status_failure(403, &headers(Some("0"), Some(&far), None), now()), CommunityFailure::Limited { until: now() + TimeDelta::hours(1) });
         let past = (now() - TimeDelta::hours(3)).timestamp().to_string();
-        assert_eq!(status_failure(403, &headers(Some("0"), Some(&past), None), now()), CommunityFailure::Limited { until: now() });
+        assert_eq!(
+            status_failure(403, &headers(Some("0"), Some(&past), None), now()),
+            CommunityFailure::Limited { until: now() + TimeDelta::minutes(1) },
+            "a reset already past still waits a minute"
+        );
     }
 
     #[test]

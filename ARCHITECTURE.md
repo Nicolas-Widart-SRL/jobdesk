@@ -41,6 +41,7 @@ Three modules are not features:
   - the host `PATH` lookup that `runs` and `workspace` both need, with `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
+  - `safe_save::replace_through_copy`, which replaces a text file in the checkout through a synced copy beside it and one plain rename, never retried, and removes the copies an interrupted save left. A profile save and a portal switch both write this way;
   - `file_text`, the helpers for a byte order mark and for CRLF and lone CR line endings;
   - `visible_text`, the filter that drops hidden characters from untrusted text;
   - `workspace_path::within_workspace`, the text check that keeps a path read from the checkout inside it, which `dossier` and `profile` share;

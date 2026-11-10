@@ -1,21 +1,16 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::portals::domain::{ChangeError, Edit, PortalStore, set_enabled};
 use crate::portals::infrastructure::portal_folder::SKILLS;
 use crate::shared_kernel::LoadError;
-use crate::shared_kernel::replace_file::rename_over;
+use crate::shared_kernel::safe_save::replace_through_copy;
 use crate::shared_kernel::visible_text::visible_chars;
 
 const MANIFEST: &str = "SKILL.md";
 /// A `SKILL.md` larger than this is not edited, so a huge file cannot stall the screen. A real one is a few KiB.
 const EDIT_LIMIT: u64 = 1024 * 1024;
-/// Added to `SKILL.md`, before the process id and a number, for the copy a switch writes before it replaces the file.
-const COPY_SUFFIX: &str = ".jobdesk-switch";
-/// How many names a switch tries for its copy before it gives up.
-const COPY_NAMES: usize = 100;
 
 /// The writes to the portal folders of one checkout: the `enabled:` line of a `SKILL.md`, and a folder moved to the
 /// Trash. Nothing here deletes a file or a folder for good.
@@ -57,8 +52,8 @@ impl PortalWriter {
 }
 
 impl PortalStore for PortalWriter {
-    /// Reads `SKILL.md` fresh, edits its `enabled:` lines and replaces it through a copy beside it, so a crash leaves
-    /// the old file or the new one, never half.
+    /// Reads `SKILL.md` fresh, edits its `enabled:` lines and replaces it as a profile save does: through a copy beside
+    /// it, synced, then renamed with no wait for a file another program holds, since the text came from that one read.
     fn set_enabled(&self, folder: &str, on: bool) -> Result<(), ChangeError> {
         let file = self.portal(folder).map_err(ChangeError::Failed)?.join(MANIFEST);
         let source = format!("{folder}/{MANIFEST}");
@@ -73,7 +68,7 @@ impl PortalStore for PortalWriter {
                 if let Some(why) = cannot_replace(&file, &metadata) {
                     return Err(ChangeError::Failed(LoadError::new(&source, why)));
                 }
-                replace(&file, &metadata, &text).map_err(failed)
+                replace_through_copy(&file, &text).map_err(failed)
             }
         }
     }
@@ -127,49 +122,6 @@ fn cannot_replace(target: &Path, metadata: &fs::Metadata) -> Option<&'static str
     None
 }
 
-/// Numbers the copies this process writes, so two switches at once never pick the same name.
-static COPIES: AtomicU64 = AtomicU64::new(0);
-
-/// Writes `text` to a new copy beside `target`, with the permission bits `metadata` holds, then renames it over
-/// `target`. The copy is removed when anything fails.
-fn replace(target: &Path, metadata: &fs::Metadata, text: &str) -> io::Result<()> {
-    let (copy, mut file) = create_copy(target)?;
-    let written = (|| {
-        file.write_all(text.as_bytes())?;
-        file.set_permissions(metadata.permissions())?;
-        // On disk before the rename, or a power loss could keep the rename and lose the text.
-        file.sync_all()
-    })();
-    // Closed first, because Windows cannot rename or remove a file that is open.
-    drop(file);
-    let replaced = written.and_then(|()| rename_over(&copy, target));
-    if replaced.is_err() {
-        let _ = fs::remove_file(&copy);
-    }
-    replaced
-}
-
-/// Creates the copy, empty, as `SKILL.md.jobdesk-switch-<process id>-<number>`. `create_new` never follows a link and
-/// never opens a file that is there. On Unix only the owner may open it until its permission bits are set.
-fn create_copy(target: &Path) -> io::Result<(PathBuf, File)> {
-    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else { return Err(ErrorKind::InvalidInput.into()) };
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    for _ in 0..COPY_NAMES {
-        let mut copy_name = name.to_owned();
-        copy_name.push(format!("{COPY_SUFFIX}-{}-{}", std::process::id(), COPIES.fetch_add(1, Ordering::Relaxed)));
-        let copy = folder.join(copy_name);
-        match options.open(&copy) {
-            Ok(file) => return Ok((copy, file)),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(ErrorKind::AlreadyExists, "every name for the copy was taken"))
-}
-
 /// Moves `path` to the Trash through `NSFileManager`'s `trashItemAtURL`, never through Finder and AppleScript, so macOS
 /// asks for no Automation permission.
 #[cfg(target_os = "macos")]
@@ -194,6 +146,8 @@ fn move_to_trash(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use super::*;
     use crate::portals::domain::parse_manifest;
 
@@ -235,6 +189,24 @@ mod tests {
         assert_eq!(manifest(dir.path(), "northfield-search"), NORTHFIELD);
         let names: Vec<_> = fs::read_dir(dir.path().join(SKILLS).join("northfield-search")).unwrap().flatten().map(|entry| entry.file_name()).collect();
         assert_eq!(names, ["SKILL.md"], "no copy is left behind");
+    }
+
+    /// A copy a switch cut off by a crash left over an hour ago holds the file's text, so the next switch removes it. A
+    /// fresh copy may be a live switch's, so it stays.
+    #[test]
+    fn a_copy_a_crash_left_goes_with_the_next_switch() {
+        let (dir, writer) = workspace();
+        let folder = dir.path().join(SKILLS).join("northfield-search");
+        let peer = std::process::id().wrapping_add(1);
+        let stale = folder.join(format!("SKILL.md.jobdesk-save-{peer}-3"));
+        let fresh = folder.join(format!("SKILL.md.jobdesk-save-{peer}-4"));
+        for (copy, ago) in [(&stale, 2 * 60 * 60), (&fresh, 30 * 60)] {
+            fs::write(copy, NORTHFIELD).unwrap();
+            File::options().write(true).open(copy).unwrap().set_modified(SystemTime::now() - Duration::from_secs(ago)).unwrap();
+        }
+        writer.set_enabled("northfield-search", true).unwrap();
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 
     #[test]

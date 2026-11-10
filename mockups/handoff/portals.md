@@ -12,7 +12,6 @@ A new top-level Portals screen: the job boards Claude searches, in plain words f
 - [Setup's Portals panel](#setups-portals-panel)
 - [Rules and why](#rules-and-why)
 - [New widgets](#new-widgets)
-- [Doc changes](#doc-changes)
 
 ## Canvas and states
 
@@ -124,11 +123,3 @@ Setup is drawn in one place only, `Profile.html?state=setup`, which already draw
 - **`switch`**: on or off in one click, for a setting that acts at once, with its word after it. A track `CHECK_BOX` tall and twice as wide at `RADIUS_CARD`, a square knob at `RADIUS_STAMP` inside a `HAIRLINE` edge. On: track and edge `text`, knob `field`, word in `Type::STRONG`. Off: edge and knob `muted`, track `field`, word `muted` in `Type::NOTE`. Disabled at `DISABLED_OPACITY` with `enabled_when`'s reason. Focus ring as every kit widget. A screen reader hears a switch named by its row, on or off. A `setting_check` would also work, but a checkbox reads as a form waiting to be saved, and this acts at once.
 - **Portal row**: `pick_row` with three lines and the switch at the top right.
 - **Community row**: a `list_row` with four columns: name over sentence, owners, the tag, the actions.
-
-## Doc changes
-
-- `ARCHITECTURE.md`: the `workspace` feature gains the community list (fetch, cache, GitHub's rate limit), the switch's write to `SKILL.md` frontmatter and the move of a portal folder to the Trash. Or a new `portals` feature, joined to `FEATURES`, if the lead prefers. Add Portals to the screen names. Add the GitHub API to the network calls, next to the update feed.
-- `docs/guide.md`: a Portals section, screen by screen, after Profile. Remove is a move to the Trash after Jobdesk asks, built-in portals have only Off, and Add a portal's answers go on the task's line. In "Setup and the status bar": the Portals panel is one line, how many portals are on and the jobs they found, with Open Portals, which opens the Portals screen. With no portal installed it says so, and with the saved jobs unreadable the jobs found hide. Check portal health and Add portal move to the Portals screen.
-- `docs/architecture/trust.md`: a row in Rendering untrusted text for community portal names, descriptions and owners, and for the names and sentences read from installed `SKILL.md` files.
-- `AGENTS.md` hard rules: the switch and Remove are the two writes Jobdesk makes outside Profile, and both wait while a run works. Remove moves the folder to the Trash, never deletes it. The community list is not a run.
-- `docs/architecture/ui-kit.md`: the `switch` widget, and when to use it rather than `setting_check`.

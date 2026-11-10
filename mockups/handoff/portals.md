@@ -83,7 +83,7 @@ Setup is drawn in one place only, `Profile.html?state=setup`, which already draw
 - A `search_field` that matches name, country and description, then the list's age at the right: "From GitHub, updated 12 min ago" with Refresh.
 - A `note` slip with an `interview` square: community portals are code other people wrote, it runs next to your career data, and Install… opens a task in which Claude reads the code and says what it does before anything installs.
 - Paper grouped by country, the user's market first and marked "your market", then Worldwide, then the rest by name. The market is the country of the user's Location filter. A market with no portal reads "No community portals for <country> yet", with Add a portal.
-- Each entry: name over its description, owners, a tag (Maintained in `Tone::Plain`, "Unmaintained since YYYY-MM" in `Tone::Interview`), View code ↗, and Installed (`Tone::Hired`) or Install…. Installed matches by folder name.
+- Each entry: name over its description, owners, a tag (Maintained in `Tone::Plain`, "Unmaintained since YYYY-MM" in `Tone::Interview`; a portal with no owners has neither owners nor tag), View code ↗, and Installed (`Tone::Hired`) or Install…. Installed matches by folder name.
 - Install… is a `small_command_action_hinted`. It opens the launcher on a task that copies the portal into `.agents/skills/`, explains its code, then asks before it runs the CLI installer. Its hover says nothing runs until the user starts it.
 - States: loading (grey lines), cached, offline with the saved list (an alert box in `interview`), rate-limited with the saved list and Try again disabled until GitHub's reset time, and offline with no saved list (empty state with Try again and a link to the list on GitHub).
 

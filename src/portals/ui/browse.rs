@@ -329,7 +329,7 @@ fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool, needs: Needs) {
                 }
             },
             |ui| owners(ui, portal),
-            |ui| upkeep(ui, portal.unmaintained_since),
+            |ui| upkeep(ui, portal),
             |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
@@ -371,7 +371,7 @@ fn needs(ui: &mut Ui, view: &CommunityView) -> Needs {
     let mut needs = Needs { owners: 0.0, tag: 0.0 };
     for (at, portal) in view.groups.iter().flat_map(|group| &group.portals).enumerate() {
         needs.owners = needs.owners.max(probe(ui, (at, "owners"), OWNERS_WIDTH, &|ui| owners(ui, portal)));
-        needs.tag = needs.tag.max(probe(ui, (at, "tag"), TAG_WIDTH, &|ui| upkeep(ui, portal.unmaintained_since)));
+        needs.tag = needs.tag.max(probe(ui, (at, "tag"), TAG_WIDTH, &|ui| upkeep(ui, portal)));
     }
     needs
 }
@@ -419,17 +419,30 @@ fn columns(ui: &mut Ui, needs: Needs, name: impl FnOnce(&mut Ui), owners: impl F
     ui.advance_cursor_after_rect(Rect::from_min_size(top, vec2(width, height)));
 }
 
-/// A portal's owners on GitHub as plain words, cut with an ellipsis and whole on hover.
+/// A portal's owners on GitHub as plain words, cut with an ellipsis and whole on hover. None reads nothing.
 fn owners(ui: &mut Ui, portal: &CommunityPortalView) {
-    ui.add(Label::new(rich(ui, portal.owners.join(", "), Type::NOTE, Ink::Muted)).truncate());
+    if !portal.owners.is_empty() {
+        ui.add(Label::new(rich(ui, portal.owners.join(", "), Type::NOTE, Ink::Muted)).truncate());
+    }
 }
 
-/// Maintained, or the month its owners marked it unmaintained, cut when its column gives way.
-fn upkeep(ui: &mut Ui, unmaintained_since: Option<chrono::NaiveDate>) {
-    match unmaintained_since {
-        Some(since) => fitted_row_tag(ui, since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
-        None => fitted_row_tag(ui, "Maintained", Tone::Plain),
-    };
+/// The upkeep tag, cut when its column gives way.
+fn upkeep(ui: &mut Ui, portal: &CommunityPortalView) {
+    if let Some((words, tone)) = upkeep_tag(portal) {
+        fitted_row_tag(ui, words, tone);
+    }
+}
+
+/// The month its owners marked the portal unmaintained, or Maintained when it has owners and no such mark. A portal
+/// with no owners has no tag, because nobody says either way.
+fn upkeep_tag(portal: &CommunityPortalView) -> Option<(String, Tone)> {
+    if portal.owners.is_empty() {
+        return None;
+    }
+    Some(match portal.unmaintained_since {
+        Some(since) => (since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
+        None => ("Maintained".to_owned(), Tone::Plain),
+    })
 }
 
 #[cfg(test)]
@@ -444,6 +457,29 @@ mod tests {
         let needs = Needs { owners: 95.0, tag: 100.0 };
         assert_eq!(column_widths(1200.0, needs), (1200.0 - ROOM - 195.0, 95.0, 100.0));
         assert_eq!(column_widths(1200.0, Needs { owners: 500.0, tag: 500.0 }), (1200.0 - ROOM - OWNERS_WIDTH - TAG_WIDTH, OWNERS_WIDTH, TAG_WIDTH), "capped");
+    }
+
+    fn listed(owners: &[&str], unmaintained_since: Option<chrono::NaiveDate>) -> CommunityPortalView {
+        CommunityPortalView {
+            folder: "northfield-search".into(),
+            name: "Northfield".into(),
+            sentence: None,
+            owners: owners.iter().map(|owner| (*owner).to_owned()).collect(),
+            unmaintained_since,
+            installed: false,
+            code_url: String::new(),
+            install_prompt: String::new(),
+        }
+    }
+
+    /// Maintained needs owners: a portal no rule names, or a list with no `CODEOWNERS`, has no tag.
+    #[test]
+    fn only_a_portal_with_owners_has_an_upkeep_tag() {
+        let since = chrono::NaiveDate::from_ymd_opt(2026, 3, 1);
+        assert_eq!(upkeep_tag(&listed(&["@jdoe"], None)), Some(("Maintained".to_owned(), Tone::Plain)));
+        assert_eq!(upkeep_tag(&listed(&["@jdoe"], since)), Some(("Unmaintained since 2026-03".to_owned(), Tone::Interview)));
+        assert_eq!(upkeep_tag(&listed(&[], None)), None);
+        assert_eq!(upkeep_tag(&listed(&[], since)), None);
     }
 
     /// When the room runs short, the name keeps its least width, and the owners give way before the tag.

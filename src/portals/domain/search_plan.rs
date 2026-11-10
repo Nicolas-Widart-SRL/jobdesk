@@ -7,8 +7,6 @@ use crate::shared_kernel::visible_text::visible_chars;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SearchPlan {
     pub priorities: Vec<Priority>,
-    /// How many days back a job may be posted, from the Date Filter section.
-    pub window_days: Option<u32>,
 }
 
 /// One `### Priority N: Name` category.
@@ -48,7 +46,8 @@ enum Block {
     Other,
 }
 
-/// Reads the search file. Only the Query Categories and Date Filter sections count.
+/// Reads the search file. Only the Query Categories section counts: `/scrape` scopes every portal search to the last
+/// 14 days by itself and never reads the Date Filter section.
 pub fn parse_search_plan(text: &str) -> SearchPlan {
     let text = with_lf(without_bom(text));
     let mut plan = SearchPlan::default();
@@ -82,8 +81,6 @@ pub fn parse_search_plan(text: &str) -> SearchPlan {
                     Block::Other
                 };
             }
-        } else if section.starts_with("date filter") && plan.window_days.is_none() {
-            plan.window_days = days(line);
         }
     }
     plan
@@ -109,15 +106,6 @@ fn add(priority: &mut Priority, block: Block, line: &str) {
         Block::Before if line.starts_with("site:") => priority.google.push(line.to_owned()),
         Block::Before | Block::Other => {}
     }
-}
-
-/// The first number of days a line names, such as 14 in "within the last 14 days".
-fn days(line: &str) -> Option<u32> {
-    let words: Vec<&str> = line.split_whitespace().collect();
-    words.windows(2).find_map(|pair| {
-        let unit = pair[1].trim_end_matches(|c: char| !c.is_alphanumeric());
-        (unit.eq_ignore_ascii_case("days") || unit.eq_ignore_ascii_case("day")).then(|| pair[0].parse().ok()).flatten()
-    })
 }
 
 /// The Google lines that name the portal's own site: a label of the `site:` host is the board's word, the folder
@@ -177,7 +165,6 @@ mod tests {
         assert_eq!(texts(&plan.priorities[0]), ["Platform Lead", "[YOUR_KEY_SKILL] developer", "Rust"]);
         assert_eq!(texts(&plan.priorities[1]), ["route planning"]);
         assert_eq!(plan.priorities[0].google.len(), 3);
-        assert_eq!(plan.window_days, Some(14));
     }
 
     #[test]
@@ -193,7 +180,6 @@ mod tests {
         assert_eq!(plan.priorities.len(), 2);
         assert!(plan.priorities.iter().all(|priority| priority.terms.is_empty()));
         assert_eq!(plan.priorities[0].google, ["site:jobs.example.com \"Lead Backend Engineer\" Namur", "site:jobs.example.com \"Platform Lead\" Brussels"]);
-        assert_eq!(plan.window_days, Some(7));
     }
 
     #[test]

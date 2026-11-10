@@ -124,9 +124,9 @@ mod tests {
         fs::create_dir_all(dir.path().join(SEARCH_FILE)).unwrap();
         assert_eq!(PortalFolder::in_workspace(dir.path()).search_plan().unwrap_err().source, SEARCH_FILE);
         fs::remove_dir(dir.path().join(SEARCH_FILE)).unwrap();
-        fs::write(dir.path().join(SEARCH_FILE), b"## Date Filter\n\nCaf\xe9 within 14 days\n").unwrap();
+        fs::write(dir.path().join(SEARCH_FILE), b"## Query Categories\n\n### Priority 1: Caf\xe9\n").unwrap();
         assert!(PortalFolder::in_workspace(dir.path()).search_plan().is_err(), "a file that is not UTF-8");
-        write(dir.path(), SEARCH_FILE, "## Date Filter\n\nWithin 14 days.\n");
-        assert_eq!(PortalFolder::in_workspace(dir.path()).search_plan().unwrap().window_days, Some(14));
+        write(dir.path(), SEARCH_FILE, "## Query Categories\n\n### Priority 1: Cafe\n");
+        assert_eq!(PortalFolder::in_workspace(dir.path()).search_plan().unwrap().priorities[0].name, "Cafe");
     }
 }

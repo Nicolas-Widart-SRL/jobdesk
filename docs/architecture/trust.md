@@ -152,7 +152,7 @@ On macOS, the `onboarding` feature makes the job search folder, fills it with th
 1. The helper pins are built into Jobdesk, so whoever ships a Jobdesk build decides which Python, Bun and TeX Live files it installs.
 2. To check a copy the user already has, setup runs it. A program placed on the `PATH` runs with the user's rights, as it would in their terminal.
 3. Once installed, Jobdesk's helpers shadow the user's own copies for every task, newer ones included.
-4. The `~/.jobdesk` checks refuse a link they find when they look. A program running as the user that swaps `~/.jobdesk` for a link between the check and the write could send an install, a replace or a cleanup elsewhere. Such a program can already change or delete those files directly.
+4. The `~/.jobdesk` checks refuse a link they find when they look. A program running as the user that swaps `~/.jobdesk` for a link between the check and the write could send an install, a replace or a cleanup elsewhere. A program with the same access as Jobdesk can already change or delete those files directly. But macOS privacy permissions, such as access to Documents, can differ between processes of the same user. A program without that access that swaps `~/.jobdesk` for a link at the right moment could make Jobdesk write its pinned helper files, or remove folders named like its own staging folders, inside a protected folder. What Jobdesk writes there is only its own helper files, checked against their pinned hashes. Directory-relative operations would close this gap, and Jobdesk does not use them yet.
 
 ## Updates
 

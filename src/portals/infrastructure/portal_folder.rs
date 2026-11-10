@@ -1,6 +1,7 @@
 use std::fs::{self, File};
-use std::io::{ErrorKind, Read};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
+use std::string::FromUtf8Error;
 
 use crate::portals::domain::{Manifest, SearchPlan, parse_manifest, parse_search_plan};
 use crate::shared_kernel::LoadError;
@@ -8,8 +9,8 @@ use crate::shared_kernel::visible_text::visible_chars;
 
 const SKILLS: &str = ".agents/skills";
 const SEARCH_FILE: &str = ".claude/skills/job-scraper/search-queries.md";
-/// A `SKILL.md` is read up to this size, so a huge file cannot stall the snapshot.
-const MANIFEST_LIMIT: u64 = 256 * 1024;
+/// A `SKILL.md` and the search file are read up to this size, so a huge file cannot stall the snapshot.
+const READ_LIMIT: u64 = 256 * 1024;
 
 /// The portal folders of a checkout and its search file.
 pub struct PortalFolder {
@@ -43,19 +44,36 @@ impl PortalFolder {
 
     /// The shared search terms. No search file means none.
     pub fn search_plan(&self) -> Result<SearchPlan, LoadError> {
-        match fs::read_to_string(self.root.join(SEARCH_FILE)) {
-            Ok(text) => Ok(parse_search_plan(&text)),
+        match read_start(&self.root.join(SEARCH_FILE)) {
+            Ok(bytes) => Ok(parse_search_plan(&utf8_start(bytes).map_err(|error| LoadError::new(SEARCH_FILE, error))?)),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(SearchPlan::default()),
             Err(error) => Err(LoadError::new(SEARCH_FILE, error)),
         }
     }
 }
 
+/// The first `READ_LIMIT` bytes of a file.
+fn read_start(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.take(READ_LIMIT).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 /// The start of a `SKILL.md`, or `None` when it cannot be read. A character cut at the limit reads as a replacement.
 fn read_manifest(path: &Path) -> Option<String> {
-    let mut bytes = Vec::new();
-    File::open(path).ok()?.take(MANIFEST_LIMIT).read_to_end(&mut bytes).ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    read_start(path).ok().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The bytes as text. Only a character the limit cut in two at the end is dropped; any other byte that is not UTF-8
+/// is an error, as for a file read whole.
+fn utf8_start(mut bytes: Vec<u8>) -> Result<String, FromUtf8Error> {
+    if let Err(error) = std::str::from_utf8(&bytes)
+        && error.error_len().is_none()
+        && bytes.len() as u64 == READ_LIMIT
+    {
+        bytes.truncate(error.valid_up_to());
+    }
+    String::from_utf8(bytes)
 }
 
 #[cfg(test)]
@@ -95,11 +113,32 @@ mod tests {
     #[test]
     fn a_large_manifest_is_read_up_to_its_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let text = format!("# Alder Search Skill\n\n{}\n\nQuery syntax: an exact phrase.\n", "x".repeat(MANIFEST_LIMIT as usize));
+        let text = format!("# Alder Search Skill\n\n{}\n\nQuery syntax: an exact phrase.\n", "x".repeat(READ_LIMIT as usize));
         write(dir.path(), ".agents/skills/alder-search/SKILL.md", &text);
         let installed = PortalFolder::in_workspace(dir.path()).installed().unwrap();
         assert_eq!(installed[0].1.name, "Alder");
         assert_eq!(installed[0].1.quotes, crate::portals::domain::Quotes::Unknown, "the line past the limit is not read");
+    }
+
+    #[test]
+    fn a_large_search_file_is_read_up_to_the_same_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let filler = "x".repeat(READ_LIMIT as usize);
+        let text = format!("## Query Categories\n\n### Priority 1: Early\n\n{filler}\n\n### Priority 2: Late\n");
+        write(dir.path(), SEARCH_FILE, &text);
+        let plan = PortalFolder::in_workspace(dir.path()).search_plan().unwrap();
+        let names: Vec<&str> = plan.priorities.iter().map(|priority| priority.name.as_str()).collect();
+        assert_eq!(names, ["Early"], "the priority past the limit is not read");
+    }
+
+    /// A character the limit cuts in two is dropped, not taken for a file that is not UTF-8.
+    #[test]
+    fn a_character_cut_at_the_limit_is_no_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let head = "## Query Categories\n\n### Priority 1: Early\n\n";
+        let filler = "x".repeat(READ_LIMIT as usize - head.len() - 1);
+        write(dir.path(), SEARCH_FILE, &format!("{head}{filler}é\n"));
+        assert_eq!(PortalFolder::in_workspace(dir.path()).search_plan().unwrap().priorities.len(), 1);
     }
 
     #[test]

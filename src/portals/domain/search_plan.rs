@@ -210,6 +210,14 @@ mod tests {
     }
 
     #[test]
+    fn a_site_line_in_two_priorities_shows_once() {
+        let plan = parse_search_plan(
+            "## Query Categories\n\n### Priority 1: One\n\n```\nsite:northfield.example lead\n```\n\n### Priority 2: Two\n\n```\nsite:northfield.example lead\nsite:northfield.example rust\n```\n",
+        );
+        assert_eq!(site_lines_for(&plan, "northfield-search"), ["site:northfield.example lead", "site:northfield.example rust"]);
+    }
+
+    #[test]
     fn terms_go_in_quotes_only_where_the_portal_honours_them() {
         assert_eq!(term_as_sent("Rust", Quotes::Phrase), ("Rust".into(), Phrase::OneWord));
         assert_eq!(term_as_sent("route planning", Quotes::Phrase), ("\"route planning\"".into(), Phrase::Together));

@@ -68,7 +68,7 @@ fn split_frontmatter(text: &str) -> (Option<&str>, &str) {
 /// The last top-level `enabled` key, as YAML takes it, turns the portal off when its value reads `false` in any case.
 /// Space may stand before the colon, and a `#` after a space or a tab opens a comment.
 fn enabled(frontmatter: &str) -> bool {
-    let Some(value) = frontmatter.lines().filter_map(enabled_value).last() else { return true };
+    let Some(value) = frontmatter.lines().rev().find_map(enabled_value) else { return true };
     !value.trim_matches(['"', '\'']).eq_ignore_ascii_case("false")
 }
 
@@ -341,6 +341,7 @@ mod tests {
         assert_eq!(parse_manifest("# Northfield Search Skill\n\n> note\n## Commands\n\nRun it.\n", "n").sentence, None, "a skipped block stops at a heading");
         assert_eq!(parse_manifest("# Northfield Search Skill\n\n- item\n### Usage\n\nRun it.\n", "n").sentence, None);
         assert_eq!(parse_manifest("# Northfield Search Skill\n\nSearch `jobs` and ask!\n", "n").sentence.as_deref(), Some("Search jobs and ask!"));
+        assert_eq!(parse_manifest("# Northfield Search Skill\n\nLooking for jobs? Search here.\n", "n").sentence.as_deref(), Some("Looking for jobs?"));
     }
 
     #[test]
@@ -364,6 +365,7 @@ mod tests {
     fn query_syntax_words_map_to_quotes() {
         assert_eq!(quotes(" double quotes make an exact phrase; single quotes are ignored"), Quotes::Phrase);
         assert_eq!(quotes(" Quotes require every word."), Quotes::AllWords);
+        assert_eq!(quotes(" Matches every quoted word, in any order."), Quotes::AllWords);
         assert_eq!(quotes(" quotes are ignored"), Quotes::Ignored);
         assert_eq!(quotes(" not verified"), Quotes::Unknown);
     }

@@ -1,5 +1,4 @@
 {
-  "agent": "lead",
   "permissions": {
     "deny": [
       "Bash(openspec store:*)",

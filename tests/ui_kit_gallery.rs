@@ -14,7 +14,7 @@ use jobdesk::ui_kit::{
     command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal,
     deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure, figure_band,
     figure_band_loading, fitted_pages, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link, list_row, live_sweep,
-    measure, muted, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button,
+    measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label, pick_row, primary_button,
     primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich, role_entry, row_tag,
     ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check, setting_check_amount,
     setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton, skeleton_lines, slip,
@@ -1591,12 +1591,15 @@ fn ui_kit_gallery_light() {
     render(Theme::Light, "ui_kit_gallery_light");
 }
 
-/// The switch sheet's size: one row for each state.
-const SWITCH_SHEET: [f32; 2] = [520.0, 260.0];
+/// The switch sheet's size: one row for each state, then the name lines, with the paper's foot in view.
+const SWITCH_SHEET: [f32; 2] = [520.0, 400.0];
+/// A width too narrow for the name line's whole text, so it is cut.
+const CUT_NAME: f32 = 150.0;
 /// A fictional portal for the switches.
 const SWITCH_NAME: &str = "Northwind Jobs";
 
-/// The switch on paper, as a portal row shows it: on, off, both disabled, and off with the focus ring.
+/// The switch on paper, as a portal row shows it: on, off, both disabled, and off with the focus ring. Then the name line a
+/// portal row leads with: a name and its note, a name alone, and one cut at the right.
 fn switches(ui: &mut Ui) {
     paper(ui, false, |ui| {
         egui::Frame::new().inner_margin(22).show(ui, |ui| {
@@ -1616,6 +1619,15 @@ fn switches(ui: &mut Ui) {
                     }
                     ui.end_row();
                 }
+                desk_label(ui, "Name line", Type::NOTE, Ink::Muted);
+                name_line(ui, SWITCH_NAME, Some("Belgium"));
+                ui.end_row();
+                desk_label(ui, "Name alone", Type::NOTE, Ink::Muted);
+                name_line(ui, SWITCH_NAME, None);
+                ui.end_row();
+                desk_label(ui, "Name line, cut", Type::NOTE, Ink::Muted);
+                ui.allocate_ui(egui::vec2(CUT_NAME, 24.0), |ui| name_line(ui, "Northwind Regional Jobs", Some("Belgium")));
+                ui.end_row();
             });
         });
     });

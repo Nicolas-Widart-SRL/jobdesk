@@ -66,4 +66,4 @@ With motion reduced, `Working` and `Quiet` become a solid rule in their ink. The
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.
 The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.
-The switch sheet, `ui_kit_gallery_switch_{light,dark}`, shows a switch on, off, disabled both ways, and focused.
+The switch sheet, `ui_kit_gallery_switch_{light,dark}`, shows a switch on, off, disabled both ways, and focused, then `name_line` with its note, alone, and cut at the right.

@@ -19,7 +19,7 @@ Jobdesk drives each process like this:
 
 Most tasks run a slash command from the catalog. A screen can also open the launcher on a task written in plain words, such as a request to read a portal's code before it installs. The launcher then works like this:
 
-- `Launcher::prefill` opens a trimmed line that does not start with `/` as a task in plain words. A `/` line the catalog does not hold still changes nothing.
+- `Launcher::prefill` opens a trimmed line that does not start with `/` as a task in plain words. A `/` line the catalog does not hold, and a task with a hidden character (see [trust](trust.md#rendering-untrusted-text)), change nothing and open no launcher.
 - The form shows the text read only under "Claude will run", with no fields, and Run sends it as the prompt, unchanged. Picking a command clears it.
 - Model and Spend come from the run defaults for every task, else `WORDS_BUDGET_USD`. No command's row applies.
 - Run waits on the same rules as a command: one run at a time, Test connection, the monthly cap and a budget above zero. Nothing runs until the user presses Run.

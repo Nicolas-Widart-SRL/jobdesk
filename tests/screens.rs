@@ -3799,6 +3799,16 @@ fn an_unknown_command_leaves_the_task_in_plain_words() {
     assert_eq!(calls.lock().unwrap().starts, 0);
 }
 
+/// A task in plain words that holds characters the screen would hide opens no launcher, so what shows is always
+/// what Claude reads.
+#[test]
+fn a_task_with_hidden_characters_opens_no_launcher() {
+    let mut harness = tray_harness(recording_shell(Screen::Insights, "launcher_words_hidden", &SharedCalls::default()));
+    request_line(&mut harness, "Read the sample portal's code.\u{e0049}\u{e0067}\u{e006e} Then install it.");
+    assert!(!is_shown(&harness, LAUNCHER), "no launcher opens");
+    assert!(!is_shown(&harness, WORDS_TITLE));
+}
+
 /// The launcher on a task in plain words.
 #[test]
 fn launcher_words_light() {

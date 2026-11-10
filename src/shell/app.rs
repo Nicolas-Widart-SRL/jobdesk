@@ -649,8 +649,10 @@ impl Shell {
                 }
             });
         });
-        if let Some(line) = take_command_request(ui.ctx()) {
-            self.launcher.prefill(&line);
+        // A line the launcher refuses opens nothing.
+        if let Some(line) = take_command_request(ui.ctx())
+            && self.launcher.prefill(&line)
+        {
             self.open_launcher();
         }
         if self.confirm_quit {
@@ -860,8 +862,10 @@ impl Shell {
     fn follow(&mut self, ctx: &egui::Context, request: Request) {
         match request {
             Request::Command(line) => {
-                self.launcher.prefill(&line);
-                self.open_launcher();
+                // A line the launcher refuses opens nothing.
+                if self.launcher.prefill(&line) {
+                    self.open_launcher();
+                }
             }
             Request::Dossier(folder) => self.show_dossier(folder),
             Request::Run(id) => {

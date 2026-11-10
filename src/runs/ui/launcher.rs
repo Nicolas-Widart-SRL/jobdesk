@@ -7,6 +7,7 @@ use crate::runs::application::{
     spec_for_line, start_values, task_start_values,
 };
 use crate::shared_kernel::ModelChoice;
+use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, link, muted, page_body, page_head,
@@ -70,20 +71,26 @@ impl Launcher {
 
     /// Fills the form from a line such as `/outcome followup acme`. A field with a flag, such as `/setup --section goals`,
     /// takes only the value after its flag, because the line puts the flag back.
-    /// A line that does not start with `/` is a task in plain words. A `/` line the catalog does not hold changes nothing.
-    pub fn prefill(&mut self, line: &str) {
+    /// A line that does not start with `/` is a task in plain words. Returns whether the form took the line:
+    /// a `/` line the catalog does not hold changes nothing, and neither does a task with a character `visible_chars`
+    /// drops, so the task shown is always the text Claude reads.
+    pub fn prefill(&mut self, line: &str) -> bool {
         let line = line.trim();
         if !line.is_empty() && !line.starts_with('/') {
+            if !visible_chars(line).eq(line.chars()) {
+                return false;
+            }
             *self = Self { words: Some(line.to_owned()), ..Self::default() };
-            return;
+            return true;
         }
-        let Some(command) = spec_for_line(line) else { return };
+        let Some(command) = spec_for_line(line) else { return false };
         *self = Self::for_command(command);
         let arguments = line[command.name.len()..].trim();
         if let (Some(field), false) = (command.fields.first(), arguments.is_empty()) {
             let after_flag = field.flag.and_then(|flag| arguments.strip_prefix(flag)).filter(|rest| rest.starts_with(char::is_whitespace));
             self.values.insert(field.key, after_flag.map_or(arguments, str::trim).to_owned());
         }
+        true
     }
 
     fn value_of(&self, field: &FieldSpec) -> String {
@@ -325,5 +332,19 @@ mod tests {
         launcher.prefill("/outcome followup acme");
         launcher.prefill("/unknown");
         assert_eq!((launcher.words.as_deref(), launcher.line().as_str()), (None, "/outcome followup acme"));
+    }
+
+    /// What the form shows is what Claude reads, so a task with characters the screen would hide opens nothing:
+    /// zero-width characters, bidi controls, tag characters and line breaks.
+    #[test]
+    fn a_task_with_hidden_characters_opens_nothing() {
+        for hidden in ["\u{200b}", "\u{202e}", "\u{e0041}\u{e0042}", "\n"] {
+            let mut launcher = Launcher::default();
+            launcher.prefill(&format!("Read the sample portal's code.{hidden} Then install it."));
+            assert_eq!((launcher.words.as_deref(), launcher.command.name), (None, CATALOG[0].name), "{hidden:?}");
+        }
+        let mut launcher = Launcher::default();
+        launcher.prefill("Read the code.\tThen ask me.");
+        assert_eq!(launcher.words.as_deref(), Some("Read the code.\tThen ask me."), "a tab shows as it is");
     }
 }

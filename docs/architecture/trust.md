@@ -16,6 +16,7 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A run's notices | Plain text, with hidden characters removed: see [Notices](#notices) |
 | Test connection's error | Plain text: see [Masking](#masking) |
 | PDFs, in the dossier and in CV documents | Page images only: see [CV files](#cv-files) |
+| A task in plain words in the launcher, which may hold a name from GitHub | Plain text, read only, sent to Claude exactly as shown. A task with any character that hidden-character removal would drop, line breaks included, opens no launcher, so the text shown and the text sent never differ. |
 | Release notes from the update feed | Markdown with no image loading and no links, through `release_markdown`. A link shows as its words in body ink and never opens, an image as its alt text, and raw HTML as its text. Headings render at the section size, and hidden characters are removed before parsing. |
 
 A link opens only on click, and only for `http` or `https`. Release notes have no link: their one way out is Open the release page, whose address Jobdesk builds itself.

@@ -24,7 +24,7 @@ pub const HEAD_LIMIT: u64 = 1024;
 pub const TREE_LIMIT: u64 = 8 * 1024 * 1024;
 /// The most of one `SKILL.md` or of `CODEOWNERS` that is read. A longer one is refused whole.
 pub const FILE_LIMIT: u64 = 256 * 1024;
-/// One request, redirects and body included.
+/// One request, body included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// GitHub's own type for its answers, the type that answers a commit with its name only, and a file's.
 const JSON: &str = "application/vnd.github+json";

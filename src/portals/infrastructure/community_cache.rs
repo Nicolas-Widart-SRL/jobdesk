@@ -67,6 +67,8 @@ impl CommunityCache {
         fs::create_dir_all(folder)?;
         let mut copy = tempfile::Builder::new().prefix("community.json.").suffix(".tmp").tempfile_in(folder)?;
         copy.write_all(&bytes)?;
+        // On disk before the rename, or a power loss could keep the rename and lose the list.
+        copy.as_file().sync_all()?;
         let copy = copy.into_temp_path();
         rename_over(&copy, &self.path)?;
         // In place now: nothing is left to remove.

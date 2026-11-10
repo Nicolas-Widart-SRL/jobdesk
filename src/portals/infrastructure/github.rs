@@ -198,30 +198,31 @@ fn file_text(api: &dyn Api, commit: &GitSha, path: &str) -> Result<String, Commu
     Ok(String::from_utf8_lossy(&api.get(&raw_url(commit, path), TEXT, FILE_LIMIT)?).into_owned())
 }
 
-/// The community list on GitHub. Each read runs on a thread of its own, saves the list it read in the data folder,
-/// and its answer comes back through a channel, with a repaint so the window shows it. It starts no `claude` process,
-/// uses no API key and writes no run log, so neither Tasks nor Usage ever sees it.
+/// The community list on GitHub. Each read runs on a thread of its own, saves the list it read in the data folder when
+/// there is one, and its answer comes back through a channel, with a repaint so the window shows it. It starts no
+/// `claude` process, uses no API key and writes no run log, so neither Tasks nor Usage ever sees it.
 pub struct GithubCommunity {
     api: Arc<dyn Api>,
-    cache: Arc<CommunityCache>,
+    cache: Option<Arc<CommunityCache>>,
     repaint: Arc<dyn Fn() + Send + Sync>,
     sender: Sender<Result<CommunityList, CommunityFailure>>,
     answers: Receiver<Result<CommunityList, CommunityFailure>>,
 }
 
 impl GithubCommunity {
-    pub fn new(api: Arc<dyn Api>, cache: CommunityCache, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
+    /// `cache` is `None` with no data folder: each read then fetches every file and saves nothing.
+    pub fn new(api: Arc<dyn Api>, cache: Option<CommunityCache>, repaint: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (sender, answers) = mpsc::channel();
-        Self { api, cache: Arc::new(cache), repaint, sender, answers }
+        Self { api, cache: cache.map(Arc::new), repaint, sender, answers }
     }
 }
 
 impl CommunitySource for GithubCommunity {
     fn fetch(&mut self, saved: Option<CommunityList>) {
-        let (api, cache, repaint, sender) = (Arc::clone(&self.api), Arc::clone(&self.cache), Arc::clone(&self.repaint), self.sender.clone());
+        let (api, cache, repaint, sender) = (Arc::clone(&self.api), self.cache.clone(), Arc::clone(&self.repaint), self.sender.clone());
         thread::spawn(move || {
             let answer = fetch_list(api.as_ref(), saved.as_ref(), Utc::now());
-            if let Ok(list) = &answer {
+            if let (Ok(list), Some(cache)) = (&answer, cache) {
                 // The list still shows when it cannot be saved: the next launch reads it again.
                 let _ = cache.save(list);
             }
@@ -514,6 +515,18 @@ mod tests {
         assert_eq!(HttpsApi::new("0.1.0").get("http://127.0.0.1:9/", JSON, 10), Err(CommunityFailure::Unreachable));
     }
 
+    /// The first answer of `source`, waited for up to ten seconds.
+    fn first_answer(source: &mut GithubCommunity) -> Result<CommunityList, CommunityFailure> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(answer) = source.poll() {
+                return answer;
+            }
+            assert!(Instant::now() < deadline, "no answer");
+            thread::yield_now();
+        }
+    }
+
     #[test]
     fn a_read_runs_off_the_window_thread_and_saves_the_list() {
         let data = tempfile::tempdir().unwrap();
@@ -522,21 +535,22 @@ mod tests {
         let repaint = Arc::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
         });
-        let mut source = GithubCommunity::new(Arc::new(full()), CommunityCache::in_data(data.path()), repaint);
+        let mut source = GithubCommunity::new(Arc::new(full()), Some(CommunityCache::in_data(data.path())), repaint);
         source.fetch(None);
         let deadline = Instant::now() + Duration::from_secs(10);
-        let answer = loop {
-            if let Some(answer) = source.poll() {
-                break answer;
-            }
-            assert!(Instant::now() < deadline, "no answer");
-            thread::yield_now();
-        };
-        let list = answer.unwrap();
+        let list = first_answer(&mut source).unwrap();
         assert_eq!(CommunityCache::in_data(data.path()).load().map(|saved| saved.portals), Some(list.portals));
         while repaints.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
             thread::yield_now();
         }
         assert_eq!(repaints.load(Ordering::SeqCst), 1);
+    }
+
+    /// With no data folder, a read still answers, so Browse never waits on a list that cannot come.
+    #[test]
+    fn a_read_with_no_data_folder_answers_and_saves_nothing() {
+        let mut source = GithubCommunity::new(Arc::new(full()), None, Arc::new(|| {}));
+        source.fetch(None);
+        assert_eq!(first_answer(&mut source).map(|list| list.portals.len()), Ok(2));
     }
 }

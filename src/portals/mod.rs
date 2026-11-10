@@ -27,12 +27,12 @@ pub fn load(root: &Path, board: Option<&JobBoard>) -> (PortalsView, Option<LoadE
 }
 
 /// The community list from GitHub, without sign-in. `data` is the app's data folder: the list read last is saved in its
-/// `portals/community.json`, and read from there now, without the network. `version` is this copy's version, sent as its
-/// user agent, and `repaint` wakes the window when an answer arrives. Nothing here starts `claude`, uses the API key or
-/// writes a run log.
-pub fn community(data: &Path, version: &str, repaint: Arc<dyn Fn() + Send + Sync>) -> Community {
-    let cache = CommunityCache::in_data(data);
-    let saved = cache.load();
+/// `portals/community.json`, and read from there now, without the network. With no data folder, nothing is saved and
+/// every read fetches the whole list. `version` is this copy's version, sent as its user agent, and `repaint` wakes the
+/// window when an answer arrives. Nothing here starts `claude`, uses the API key or writes a run log.
+pub fn community(data: Option<&Path>, version: &str, repaint: Arc<dyn Fn() + Send + Sync>) -> Community {
+    let cache = data.map(CommunityCache::in_data);
+    let saved = cache.as_ref().and_then(CommunityCache::load);
     Community::new(Box::new(GithubCommunity::new(Arc::new(HttpsApi::new(version)), cache, repaint)), saved)
 }
 

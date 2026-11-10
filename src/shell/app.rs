@@ -474,13 +474,13 @@ impl Shell {
             None => updates::idle_updates(env!("CARGO_PKG_VERSION"), auto),
         };
         let repaint = ctx.clone();
-        let make_community = move |data: &Path| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
+        let make_community = move |data: Option<&Path>| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
         Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) }
     }
 
     /// `start` with the tool check, the providers, the updates and the community list given, so tests can launch without
     /// asking real tools, the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
-    /// `make_community` takes the data folder, where the list read last is saved.
+    /// `make_community` takes the data folder, where the list read last is saved, and is asked with none too.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
     fn launch(
         ctx: &egui::Context,
@@ -489,7 +489,7 @@ impl Shell {
         mut environment: EnvironmentChecks,
         providers: Providers,
         make_updates: impl FnOnce(bool) -> Updates,
-        make_community: impl FnOnce(&Path) -> Community,
+        make_community: impl FnOnce(Option<&Path>) -> Community,
     ) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
@@ -510,7 +510,8 @@ impl Shell {
         }
         let first = start_screen(settings.preferences().open_on);
         let permissions = settings.preferences().permissions;
-        let community = data.as_deref().map_or_else(|| portals::scripted_community(None, Vec::new()), make_community);
+        // With no data folder too, so Browse reads the list rather than wait on one that never comes.
+        let community = make_community(data.as_deref());
         let mut shell = Self {
             community,
             data,
@@ -1940,6 +1941,28 @@ mod tests {
 
         shell.open(&ctx, &checkout_named(&folder, "third-search"));
         assert_eq!(shell.desk.as_ref().unwrap().sign_in(), SignIn::ClaudeSignIn, "a new desk takes the method in use, not the last desk's");
+    }
+
+    /// With no data folder, the community list is still asked for, with no folder to save it in, so Browse reads it.
+    #[test]
+    fn no_data_folder_still_asks_for_the_community_list() {
+        let providers = settings::open_providers(settings::memory_keychain(None), settings::idle_tester());
+        let checks = EnvironmentChecks::new(Arc::new(AllTools), Arc::new(|| {}));
+        let mut asked = None;
+        let ctx = egui::Context::default();
+        Shell::launch(
+            &ctx,
+            None,
+            None,
+            checks,
+            providers,
+            |auto| updates::idle_updates("0.1.0", auto),
+            |data| {
+                asked = Some(data.map(Path::to_owned));
+                portals::scripted_community(None, Vec::new())
+            },
+        );
+        assert_eq!(asked, Some(None));
     }
 
     /// A key known to be gone signs tasks in with the Claude sign-in, whatever the setting says.

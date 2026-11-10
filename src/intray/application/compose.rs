@@ -77,6 +77,8 @@ struct RunWords {
 fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> RunWords) -> Card {
     let line = first_line(&run.line);
     let command = run_name(&line);
+    // A command's line names what it works on. A task in plain words is long prose, so the subtitle names it "Task".
+    let lead = if command.starts_with('/') { line } else { command.clone() };
     let words = words(&command);
     Card {
         key,
@@ -86,7 +88,7 @@ fn run_card(run: &Run, kind: CardKind, key: String, words: impl FnOnce(&str) -> 
         subject: Subject::Run(run.id.clone()),
         title: words.title,
         // The cost as Tasks shows it, About while it holds an estimate, so the two screens agree.
-        subtitle: format!("{line} {}, {} spent", words.status, cost_text(run)),
+        subtitle: format!("{lead} {}, {} spent", words.status, cost_text(run)),
         take: words.take.into(),
         when: words.when.into(),
         due: None,
@@ -805,7 +807,7 @@ mod tests {
         assert_eq!(card.body, Body::Code { label: "Claude asks".into(), text: "Rank all postings, or only the shortlist?".into() });
     }
 
-    /// A task in plain words has no command, so its cards call it a task rather than by its first word.
+    /// A task in plain words has no command, so its cards call it a task rather than by its first word or its whole text.
     #[test]
     fn a_task_in_plain_words_is_named_task() {
         const WORDS: &str = "Copy the sample portal. Read its code and tell me what it does.";
@@ -814,6 +816,7 @@ mod tests {
         end_turn(&mut run, 0.5);
         let card = turn_card_of(&run).unwrap();
         assert_eq!((card.name.as_str(), card.title.as_str()), ("Task", "Task is waiting for your reply"));
+        assert_eq!(card.subtitle, "Task is waiting, $0.50 of $2.00 spent");
         let mut held = paused(PromptKind::Questions(vec![]));
         held.line = WORDS.to_owned();
         assert_eq!(turn_card_of(&held).map(|card| card.name), Some("Task".to_owned()));

@@ -280,6 +280,7 @@ mod tests {
     }
 
     /// Sets the time `path` was last changed to `ago` before now.
+    #[cfg(unix)]
     fn last_changed(path: &Path, ago: Duration) {
         fs::File::options().write(true).open(path).unwrap().set_modified(SystemTime::now() - ago).unwrap();
     }

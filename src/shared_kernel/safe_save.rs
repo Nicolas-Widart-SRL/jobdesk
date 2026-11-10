@@ -39,11 +39,13 @@ pub struct Refusals {
     /// The file belongs to another user. Unix only.
     pub not_yours: &'static str,
     pub cannot_write: &'static str,
+    /// The file went between the caller's read and the check. `None` lets the save go on and create it again.
+    pub gone: Option<&'static str>,
 }
 
 /// Why the file at `target`, with this `metadata`, may not be replaced, in the caller's `words`. The rename needs only
 /// the folder, so it would quietly pass over a read-only file, a file another user owns, which would change hands, or a
-/// file the user cannot write.
+/// file the user cannot write. A file gone by now is refused only when the caller has words for it.
 pub fn refusal(target: &Path, metadata: &fs::Metadata, words: &Refusals) -> Option<&'static str> {
     if metadata.permissions().readonly() {
         return Some(words.read_only);
@@ -52,7 +54,11 @@ pub fn refusal(target: &Path, metadata: &fs::Metadata, words: &Refusals) -> Opti
     if owned_by_other(metadata, current_user()) {
         return Some(words.not_yours);
     }
-    cannot_write(target, metadata).then_some(words.cannot_write)
+    match write_probe(target, metadata) {
+        Ok(()) => None,
+        Err(error) if error.kind() == ErrorKind::NotFound => words.gone,
+        Err(_) => Some(words.cannot_write),
+    }
 }
 
 #[cfg(unix)]
@@ -69,12 +75,15 @@ fn owned_by_other(metadata: &fs::Metadata, user: libc::uid_t) -> bool {
     metadata.uid() != user
 }
 
-/// Whether the file at `target` cannot be written in place, which the rename would not notice, because it needs only the
+/// Whether the file at `target` can be written in place, which the rename would not notice, because it needs only the
 /// folder. The mode bits or an access list can deny a write that the read-only flag does not show, so the file is opened
-/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file that is
-/// gone by now is not a refusal: the save creates it.
-fn cannot_write(target: &Path, metadata: &fs::Metadata) -> bool {
-    metadata.is_file() && OpenOptions::new().write(true).open(target).is_err_and(|error| error.kind() != ErrorKind::NotFound)
+/// for writing, which changes nothing. On Windows an open that another program blocks fails the same way. A file gone by
+/// now fails with `NotFound`.
+fn write_probe(target: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.is_file() {
+        OpenOptions::new().write(true).open(target)?;
+    }
+    Ok(())
 }
 
 /// How long a copy must sit unchanged before a later save takes it for one an interrupted save left. A save writes and
@@ -334,17 +343,21 @@ mod tests {
         assert!(!owned_by_other(&metadata, current_user()));
     }
 
+    /// A file gone by now is refused only when the caller has words for it.
     #[test]
-    fn a_file_that_is_gone_is_not_a_refusal_to_write() {
+    fn a_file_that_is_gone_is_refused_only_in_words_for_it() {
         let (_dir, target) = notes();
         let metadata = fs::metadata(&target).unwrap();
         fs::remove_file(&target).unwrap();
-        assert!(!cannot_write(&target, &metadata));
+        let allowed = Refusals { read_only: "read-only here", not_yours: "not yours here", cannot_write: "not writable here", gone: None };
+        assert_eq!(refusal(&target, &metadata, &allowed), None);
+        let refused = Refusals { gone: Some("gone here"), ..allowed };
+        assert_eq!(refusal(&target, &metadata, &refused), Some("gone here"));
     }
 
     #[test]
     fn a_refusal_is_in_the_callers_words() {
-        let words = Refusals { read_only: "read-only here", not_yours: "not yours here", cannot_write: "not writable here" };
+        let words = Refusals { read_only: "read-only here", not_yours: "not yours here", cannot_write: "not writable here", gone: None };
         let (_dir, target) = notes();
         assert_eq!(refusal(&target, &fs::metadata(&target).unwrap(), &words), None);
         let mut permissions = fs::metadata(&target).unwrap().permissions();

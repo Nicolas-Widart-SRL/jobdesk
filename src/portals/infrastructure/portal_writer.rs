@@ -107,11 +107,13 @@ fn read_whole(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Why a switch refuses a `SKILL.md`, as a profile save refuses a file.
+/// Why a switch refuses a `SKILL.md`, as a profile save refuses a file. Unlike a profile save, a switch refuses a
+/// `SKILL.md` gone since it read it, because writing its edit would put back a portal another program removed.
 const REFUSALS: Refusals = Refusals {
     read_only: "is read-only, so nothing changed",
     not_yours: "belongs to another user, so nothing changed",
     cannot_write: "cannot be written, or is open in another program, so nothing changed",
+    gone: Some("is no longer there, so nothing changed"),
 };
 
 /// Moves `path` to the Trash through `NSFileManager`'s `trashItemAtURL`, never through Finder and AppleScript, so macOS
@@ -275,6 +277,16 @@ mod tests {
         let path = portal(dir.path(), "latin-search", "");
         fs::write(path.join(MANIFEST), b"---\nenabled: false\n---\nCaf\xe9\n").unwrap();
         assert!(refused(writer.set_enabled("latin-search", true)).contains("UTF-8"));
+    }
+
+    /// A `SKILL.md` another program removed after the switch read it is refused, so the switch never puts it back.
+    #[test]
+    fn a_manifest_gone_before_the_write_is_refused() {
+        let (dir, _writer) = workspace();
+        let file = dir.path().join(SKILLS).join("northfield-search").join(MANIFEST);
+        let metadata = fs::metadata(&file).unwrap();
+        fs::remove_file(&file).unwrap();
+        assert_eq!(refusal(&file, &metadata, &REFUSALS), Some("is no longer there, so nothing changed"));
     }
 
     #[test]

@@ -58,9 +58,13 @@ const CANNOT_WRITE: &str = "cannot be written by your user, so it was not saved"
 #[cfg(not(unix))]
 const CANNOT_WRITE: &str = "cannot be written, or is open in another program, so it was not saved";
 
-/// Why a save refuses a file it may not replace.
-const REFUSALS: Refusals =
-    Refusals { read_only: "is read-only, so it was not saved", not_yours: "belongs to another user, so it was not saved", cannot_write: CANNOT_WRITE };
+/// Why a save refuses a file it may not replace. A file gone between the checks is saved anew.
+const REFUSALS: Refusals = Refusals {
+    read_only: "is read-only, so it was not saved",
+    not_yours: "belongs to another user, so it was not saved",
+    cannot_write: CANNOT_WRITE,
+    gone: None,
+};
 
 /// The folder of `file` from the root, as the user would look for it.
 fn folder_of(file: ProfileFile) -> &'static str {
@@ -231,6 +235,17 @@ mod tests {
         fs::set_permissions(&path, permissions).unwrap();
         assert!(files.write(ProfileFile::Candidate, "new").unwrap_err().reason.contains("read-only"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    /// A file gone between the checks is not a refusal: the save creates it.
+    #[test]
+    fn a_file_gone_before_the_write_is_saved() {
+        let (dir, _) = files();
+        let path = dir.path().join(ProfileFile::Candidate.relative_path());
+        fs::write(&path, "old").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(refusal(&path, &metadata, &REFUSALS), None);
     }
 
     /// Write bits for the group alone do not read as read-only, yet the owner cannot write the file in place.

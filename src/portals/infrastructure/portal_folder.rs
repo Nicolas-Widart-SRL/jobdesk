@@ -6,7 +6,7 @@ use crate::portals::domain::{Manifest, SearchPlan, parse_manifest, parse_search_
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::visible_text::visible_chars;
 
-const SKILLS: &str = ".agents/skills";
+pub(super) const SKILLS: &str = ".agents/skills";
 const SEARCH_FILE: &str = ".claude/skills/job-scraper/search-queries.md";
 /// A `SKILL.md` is read up to this size, so a huge file cannot stall the snapshot. The search file is read whole, as
 /// the profile reads it in the same load, so both show the same priorities.

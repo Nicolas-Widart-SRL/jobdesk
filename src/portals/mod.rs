@@ -9,7 +9,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::discovery::application::JobBoard;
+use crate::portals::application::PortalChanges;
 use crate::portals::application::{Community, CommunityFailure, CommunityList, PortalsView, portals_view};
+use crate::portals::infrastructure::PortalWriter;
 use crate::portals::infrastructure::{CommunityCache, GithubCommunity, HttpsApi, PortalFolder, ScriptedCommunity};
 use crate::shared_kernel::LoadError;
 
@@ -37,4 +39,9 @@ pub fn community(data: &Path, version: &str, repaint: Arc<dyn Fn() + Send + Sync
 /// reaches any state without the network. Once `answers` is used up, a read never ends.
 pub fn scripted_community(saved: Option<CommunityList>, answers: Vec<Result<CommunityList, CommunityFailure>>) -> Community {
     Community::new(Box::new(ScriptedCommunity::new(answers)), saved)
+}
+
+/// The switch and the removal for the portals of the checkout at `root`.
+pub fn open_changes(root: &Path) -> PortalChanges {
+    PortalChanges::new(Box::new(PortalWriter::in_workspace(root)))
 }

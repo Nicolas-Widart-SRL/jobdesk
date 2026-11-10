@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -59,15 +59,18 @@ impl CommunityCache {
         list_from(serde_json::from_slice(&bytes).ok()?)
     }
 
-    /// Goes through a temporary file, so a crash leaves the previous list whole.
+    /// Goes through a copy of its own, so a crash leaves the previous list whole, and two windows saving at once each
+    /// put a whole list in place. A copy left by a save that failed is removed.
     pub fn save(&self, list: &CommunityList) -> io::Result<()> {
         let bytes = serde_json::to_vec(&record_from(list)).map_err(io::Error::other)?;
-        if let Some(folder) = self.path.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, bytes)?;
-        rename_over(&temporary, &self.path)
+        let folder = self.path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+        fs::create_dir_all(folder)?;
+        let mut copy = tempfile::Builder::new().prefix("community.json.").suffix(".tmp").tempfile_in(folder)?;
+        copy.write_all(&bytes)?;
+        let copy = copy.into_temp_path();
+        rename_over(&copy, &self.path)?;
+        // In place now: nothing is left to remove.
+        copy.keep().map(drop).map_err(|error| error.error)
     }
 }
 
@@ -180,6 +183,27 @@ mod tests {
         let good = fs::read_to_string(&cache.path).unwrap();
         write(&cache, &good.replace("\"Northfield\"", "\"North\\u200bfield\\nSearch\""));
         assert_eq!(cache.load().unwrap().portals[0].name, "Northfield Search");
+    }
+
+    /// Two windows may save at once: each save writes its own copy, so every save lands whole and none fails.
+    #[test]
+    fn saves_at_once_never_mix() {
+        let (data, _cache) = cache();
+        let lists: Vec<CommunityList> = (0..8).map(|n| CommunityList { saved_at: list().saved_at + chrono::TimeDelta::seconds(n), ..list() }).collect();
+        std::thread::scope(|scope| {
+            for saved in &lists {
+                let folder = data.path();
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        CommunityCache::in_data(folder).save(saved).unwrap();
+                    }
+                });
+            }
+        });
+        let loaded = CommunityCache::in_data(data.path()).load().unwrap();
+        assert!(lists.contains(&loaded));
+        let left: Vec<_> = fs::read_dir(data.path().join("portals")).unwrap().flatten().map(|entry| entry.file_name()).collect();
+        assert_eq!(left, ["community.json"], "no copy is left behind");
     }
 
     #[test]

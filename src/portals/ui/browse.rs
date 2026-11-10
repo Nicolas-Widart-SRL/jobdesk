@@ -199,6 +199,7 @@ fn loading_groups(ui: &mut Ui) {
             list_row(ui, at == 0, |ui| {
                 columns(
                     ui,
+                    Needs::FULL,
                     |ui| {
                         ui.spacing_mut().item_spacing.y = ITEM_GAP;
                         card_skeleton(ui, 150.0, SKELETON_LINE);
@@ -241,8 +242,9 @@ fn list(ui: &mut Ui, view: &CommunityView, market: Option<&str>, query: &str) ->
             if let Some(market) = market {
                 ask = no_market_portal(ui, market);
             }
+            let needs = needs(ui, view);
             for group in &view.groups {
-                country(ui, group);
+                country(ui, group, needs);
             }
             if view.groups.is_empty() && market.is_none() {
                 list_row(ui, true, |ui| {
@@ -281,7 +283,7 @@ fn market_title(ui: &mut Ui, country: &str) {
 }
 
 /// A country's head, then its portals.
-fn country(ui: &mut Ui, group: &CountryGroup) {
+fn country(ui: &mut Ui, group: &CountryGroup, needs: Needs) {
     let count = group.portals.len();
     group_head(ui, |ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -296,7 +298,7 @@ fn country(ui: &mut Ui, group: &CountryGroup) {
         });
     });
     for (at, portal) in group.portals.iter().enumerate() {
-        entry(ui, portal, at == 0);
+        entry(ui, portal, at == 0, needs);
     }
 }
 
@@ -314,10 +316,11 @@ fn group_head(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 
 /// One community portal: its name over its sentence, its owners as words, whether someone looks after it, then View
 /// code ↗ and Installed or Install…. Every word from GitHub stays on one line, cut with an ellipsis.
-fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool) {
+fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool, needs: Needs) {
     list_row(ui, first, |ui| {
         columns(
             ui,
+            needs,
             |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.add(Label::new(rich(ui, &portal.name, Type::STRONG, Ink::Text)).truncate());
@@ -325,12 +328,8 @@ fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool) {
                     ui.add(Label::new(rich(ui, sentence, Type::NOTE, Ink::Muted)).truncate());
                 }
             },
-            |ui| {
-                ui.add(Label::new(rich(ui, portal.owners.join(", "), Type::NOTE, Ink::Muted)).truncate());
-            },
-            |ui| {
-                upkeep(ui, portal.unmaintained_since);
-            },
+            |ui| owners(ui, portal),
+            |ui| upkeep(ui, portal.unmaintained_since),
             |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = ROW_ITEM_GAP;
@@ -347,23 +346,54 @@ fn entry(ui: &mut Ui, portal: &CommunityPortalView, first: bool) {
     });
 }
 
+/// The widths the owners and tag columns ask for: their widest content across the list, each capped at
+/// `OWNERS_WIDTH` and `TAG_WIDTH`, so every row lines up and the room their words do not use goes to the names.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Needs {
+    owners: f32,
+    tag: f32,
+}
+
+impl Needs {
+    /// Both columns at their widest, for the grey lines while the list loads.
+    const FULL: Self = Self { owners: OWNERS_WIDTH, tag: TAG_WIDTH };
+}
+
+/// The widest owners and tag of the portals listed, laid out unseen in a sizing pass, each capped at its column's width.
+fn needs(ui: &mut Ui, view: &CommunityView) -> Needs {
+    let probe = |ui: &mut Ui, salt: (usize, &str), cap: f32, add: &dyn Fn(&mut Ui)| {
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(cap, ENTRY_HEIGHT));
+        let layout = Layout::left_to_right(Align::Center);
+        let mut unseen = ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(layout).sizing_pass().invisible());
+        add(&mut unseen);
+        unseen.min_rect().width().min(cap)
+    };
+    let mut needs = Needs { owners: 0.0, tag: 0.0 };
+    for (at, portal) in view.groups.iter().flat_map(|group| &group.portals).enumerate() {
+        needs.owners = needs.owners.max(probe(ui, (at, "owners"), OWNERS_WIDTH, &|ui| owners(ui, portal)));
+        needs.tag = needs.tag.max(probe(ui, (at, "tag"), TAG_WIDTH, &|ui| upkeep(ui, portal.unmaintained_since)));
+    }
+    needs
+}
+
 /// The widths of an entry's name, owners and tag in `width`, after the actions and the gaps. The actions keep their
-/// width, at the row's right. Then the name keeps `MIN_NAME_WIDTH`, and the owners and then the tag give up their width
-/// first, so a narrow row or a large text size never pushes View code ↗ or Install… out of reach.
-fn column_widths(width: f32) -> (f32, f32, f32) {
+/// width, at the row's right. The owners and the tag take no more than their content `needs`, so the name gets the rest.
+/// When the room runs short, the name keeps `MIN_NAME_WIDTH`, and the owners and then the tag give up their width first,
+/// so a narrow row or a large text size never pushes View code ↗ or Install… out of reach.
+fn column_widths(width: f32, needs: Needs) -> (f32, f32, f32) {
     let shared = (width - ACTIONS_WIDTH - COLUMN_GAP * 3.0).max(0.0);
     let spare = (shared - MIN_NAME_WIDTH).max(0.0);
-    let tag = TAG_WIDTH.min(spare);
-    let owners = OWNERS_WIDTH.min(spare - tag);
+    let tag = needs.tag.min(TAG_WIDTH).min(spare);
+    let owners = needs.owners.min(OWNERS_WIDTH).min(spare - tag);
     (shared - tag - owners, owners, tag)
 }
 
 /// An entry's four columns side by side: the name, the owners, the tag and the actions, each centred on the row, with
 /// widths from `column_widths`. Each column is clipped to its own room. The row is as tall as the name column, and at
 /// least `ENTRY_HEIGHT`.
-fn columns(ui: &mut Ui, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui), state: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) {
+fn columns(ui: &mut Ui, needs: Needs, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui), state: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
-    let (name_width, owners_width, tag_width) = column_widths(width);
+    let (name_width, owners_width, tag_width) = column_widths(width, needs);
     let top = ui.cursor().min;
     let room = Rect::from_min_size(top, vec2(name_width, f32::MAX));
     let mut first = ui.new_child(UiBuilder::new().id_salt("name").max_rect(room).layout(Layout::top_down(Align::Min)));
@@ -389,10 +419,39 @@ fn columns(ui: &mut Ui, name: impl FnOnce(&mut Ui), owners: impl FnOnce(&mut Ui)
     ui.advance_cursor_after_rect(Rect::from_min_size(top, vec2(width, height)));
 }
 
+/// A portal's owners on GitHub as plain words, cut with an ellipsis and whole on hover.
+fn owners(ui: &mut Ui, portal: &CommunityPortalView) {
+    ui.add(Label::new(rich(ui, portal.owners.join(", "), Type::NOTE, Ink::Muted)).truncate());
+}
+
 /// Maintained, or the month its owners marked it unmaintained, cut when its column gives way.
 fn upkeep(ui: &mut Ui, unmaintained_since: Option<chrono::NaiveDate>) {
     match unmaintained_since {
         Some(since) => fitted_row_tag(ui, since.format("Unmaintained since %Y-%m").to_string(), Tone::Interview),
         None => fitted_row_tag(ui, "Maintained", Tone::Plain),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOM: f32 = ACTIONS_WIDTH + COLUMN_GAP * 3.0;
+
+    /// Short owners and a short tag take only their own width, and the name gets the rest.
+    #[test]
+    fn owners_and_tag_take_only_what_their_words_need() {
+        let needs = Needs { owners: 95.0, tag: 100.0 };
+        assert_eq!(column_widths(1200.0, needs), (1200.0 - ROOM - 195.0, 95.0, 100.0));
+        assert_eq!(column_widths(1200.0, Needs { owners: 500.0, tag: 500.0 }), (1200.0 - ROOM - OWNERS_WIDTH - TAG_WIDTH, OWNERS_WIDTH, TAG_WIDTH), "capped");
+    }
+
+    /// When the room runs short, the name keeps its least width, and the owners give way before the tag.
+    #[test]
+    fn the_owners_then_the_tag_give_way() {
+        let needs = Needs { owners: 95.0, tag: 185.0 };
+        assert_eq!(column_widths(ROOM + MIN_NAME_WIDTH + 190.0, needs), (MIN_NAME_WIDTH, 5.0, 185.0));
+        assert_eq!(column_widths(ROOM + MIN_NAME_WIDTH + 100.0, needs), (MIN_NAME_WIDTH, 0.0, 100.0));
+        assert_eq!(column_widths(ROOM + 50.0, needs), (50.0, 0.0, 0.0), "the actions keep their width");
+    }
 }

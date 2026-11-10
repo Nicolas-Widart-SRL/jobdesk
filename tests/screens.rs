@@ -7751,7 +7751,8 @@ fn portals_browse_dark() {
     compare(&mut render_browse(name, Some(community_list(minutes_ago(12))), vec![], Theme::Dark), name);
 }
 
-/// At 150% text size, the owners and the tag give way, and the actions stay whole.
+/// At 150% text size the actions stay whole, with the room the owners and the tag do not need given to the name. The
+/// search frames the rows that show Install… and an Unmaintained tag.
 #[test]
 fn portals_browse_large_light() {
     let name = "portals_browse_large_light";
@@ -7760,6 +7761,12 @@ fn portals_browse_large_light() {
     harness.run_steps(3);
     harness.get_by_role_and_label(egui::accesskit::Role::Tab, "Browse community").click_accesskit();
     harness.run_steps(3);
+    let field = harness.get_by_role(egui::accesskit::Role::TextInput);
+    field.focus();
+    field.type_text("remote");
+    harness.run_steps(3);
+    assert!(is_shown(&harness, "Unmaintained since 2026-05"));
+    assert_eq!(harness.query_all_by_label("Install…").count(), 1);
     compare(&mut harness, name);
 }
 

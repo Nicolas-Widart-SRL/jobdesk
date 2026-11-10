@@ -130,6 +130,6 @@ By default `RunDesk` allows tool permissions and records them in the activity, a
 An update downloads only over https from addresses built from its version, and applies only when its signature checks against the key built into Jobdesk.
 The community portal list is read over https from GitHub, without sign-in, and its words render on one line with hidden characters removed. View code ↗ and Install… are built from a validated country and folder name, never from the list's text.
 
-Jobdesk makes three kinds of network request, none of them a run: the update feed and its builds, the community portal list, both from GitHub, and what each task's `claude` process sends.
+Jobdesk itself makes two kinds of network request, both to GitHub and neither of them a run: the update feed and its builds, and the community portal list. Every other request comes from a `claude` process Jobdesk starts: a task's, which is a run, and Test connection's, which is not.
 
 Changing how untrusted text renders, a path check, the API key's path, tool permissions or updates: read [trust](docs/architecture/trust.md). It also lists the accepted residuals.

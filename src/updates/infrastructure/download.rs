@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::shared_kernel::https::{Fetch, Transport, read_failure};
+pub use crate::shared_kernel::own_folder::{new_private_file, private_dir};
 use crate::updates::domain::{DownloadEnd, DownloadId, Failure, Platform, Release, asset_url, percent};
 use crate::updates::infrastructure::signature::{UpdateKey, signed_by};
 
@@ -178,25 +179,6 @@ pub fn read_build(path: &Path) -> io::Result<Vec<u8>> {
         return Err(io::Error::other("larger than any download"));
     }
     Ok(bytes)
-}
-
-/// `<data>/updates`, readable only by the user, as the run logs are.
-pub fn private_dir(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    builder.create(dir)
-}
-
-/// A new file only the user can read. Whatever had the name before goes first, and a link there is removed, not followed.
-pub fn new_private_file(path: &Path) -> io::Result<File> {
-    let _ = fs::remove_file(path);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)
 }
 
 #[cfg(test)]

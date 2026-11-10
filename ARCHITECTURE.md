@@ -8,10 +8,11 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 - never while a run works;
 - only when the block on disk is unchanged, or the user chose Save mine over it.
 
-Everything else Jobdesk writes stays in its data folder, with two exceptions:
+Everything else Jobdesk writes stays in its data folder, with three exceptions:
 
 - Restart to update replaces Jobdesk itself.
 - On macOS, a copy that runs from a `.app` bundle writes beside the bundle at each launch. A build with an update key makes and removes a `.Jobdesk.app.probe-<pid>` folder there, to learn whether an update may apply. Every build deletes the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders that a Jobdesk which no longer runs left there. See [Where an update may apply](docs/architecture/trust.md#where-an-update-may-apply).
+- First-run setup makes the job search folder the user chose, only when it is missing or empty. It unpacks the ai-job-search release into a hidden `.<name>.jobdesk-<pid>` folder beside it, after the zip matches the SHA-256 the signed feed pins, and renames that folder over the empty one. The next launch deletes such a folder that a Jobdesk which no longer runs left.
 
 How Save works is in [profile](docs/architecture/profile.md#save).
 
@@ -25,6 +26,7 @@ Each feature is a bounded context with its own language.
 | `tracking` | application, status, bucket, follow-up, outcome | `job_search_tracker.csv`; `documents/applications/*/outcome.md` |
 | `insights` | search report, funnel, skill gap, study order | tracking's and discovery's application layers; the profile's topic counts; `upskill/report-*.md` |
 | `intray` | card, decision, skip reason, queue | discovery's, tracking's, dossier's and runs' application layers; settings' application layer, for the queue rules; its own decisions file |
+| `onboarding` | progress record, step, folder place, release download, download phase, staging folder | its own `onboarding.json` and `onboarding/` in the data folder; the chosen folder; the ai-job-search release zip from GitHub; updates' application layer, for the source pin; workspace's check for an ai-job-search folder, wired in its `mod.rs` |
 | `runs` | run, activity, prompt, decision, step rail, stop point, quick reply, step phrase, command catalog, usage (tasks only, from run logs) | the `claude` CLI stream; its own run logs; settings' application layer, for the run defaults and the cap; the saved API key, through the shell's key reader |
 | `dossier` | archive, document, findings, page | `documents/applications/*`; compiled PDFs; `company_research/`; tracking's and runs' application layers |
 | `profile` | topic, block, placeholder, draft, conflict, updated mark, CV document, staleness | the profile files that `TOPICS` in `profile/domain/topic.rs` names; the `## Candidate Profile` part of `CLAUDE.md`; the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists; dossier's application layer, for the page cache; settings' application layer, for ages and sizes |
@@ -40,6 +42,7 @@ Three modules are not features:
   - the host `PATH` lookup that `runs` and `workspace` both need, with `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
+  - `own_folder`, the `<pid>` folder each running Jobdesk claims and locks in `updates/` and `onboarding/`, and the cleanup that leaves another running Jobdesk's folder alone;
   - `https`, the one network client: `https` only, at most 5 redirects, the system's certificates, the environment's proxy and fixed timeouts, with its own failure words that each feature maps to its own;
   - `file_text`, the helpers for a byte order mark and for CRLF and lone CR line endings;
   - `visible_text`, the filter that drops hidden characters from untrusted text;

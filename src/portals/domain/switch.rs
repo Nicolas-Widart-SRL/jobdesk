@@ -34,10 +34,10 @@ pub trait PortalStore {
 }
 
 /// Turns a `SKILL.md` on or off, as `parse_manifest` then reads it. Every top-level `enabled:` line in the frontmatter
-/// gets `true` or `false`, with its comment and the space around its value kept. A line that already holds that word
-/// stays as it is. Off with no such line adds `enabled: false` just before the closing `---`. On with no such line, or
-/// with no frontmatter, changes nothing, because the portal already reads as on. A byte order mark and the line
-/// endings stay.
+/// gets `true` or `false`, with its comment and the space around its value kept. A line whose value already reads as
+/// that word stays as it is. Off with no such line adds `enabled: false` just before the closing `---`. On with no such
+/// line, or with no frontmatter, changes nothing, because the portal already reads as on. A byte order mark and the
+/// line endings stay.
 pub fn set_enabled(text: &str, on: bool) -> Edit {
     let (bom, rest) = text.strip_prefix(BOM).map_or((false, text), |rest| (true, rest));
     let lines = lines(rest);
@@ -58,7 +58,7 @@ pub fn set_enabled(text: &str, on: bool) -> Edit {
         match enabled_line(line).filter(|_| at > 0 && at < close) {
             Some((head, value, tail)) => {
                 found = true;
-                if holds(value, on) {
+                if reads_as(value, word) {
                     out.push_str(line);
                 } else {
                     let space_before = if head.ends_with(':') { " " } else { "" };
@@ -73,9 +73,10 @@ pub fn set_enabled(text: &str, on: bool) -> Edit {
     if out == text { Edit::Unchanged } else { Edit::Changed(out) }
 }
 
-/// Whether a value already holds the word YAML reads as on or off.
-fn holds(value: &str, on: bool) -> bool {
-    if on { matches!(value, "true" | "True" | "TRUE") } else { matches!(value, "false" | "False" | "FALSE") }
+/// Whether a value already reads as `word`, as `parse_manifest` reads it: in any case, in quotes or not. Any other value
+/// is rewritten.
+fn reads_as(value: &str, word: &str) -> bool {
+    value.trim_matches(['"', '\'']).eq_ignore_ascii_case(word)
 }
 
 /// Each line with its ending: CRLF, LF or a lone CR, as `with_lf` breaks lines. The last line may have none.
@@ -165,12 +166,21 @@ mod tests {
         assert!(reads(&on));
     }
 
+    /// A value `parse_manifest` already reads as the state asked for, quoted or in any case, is left as it is.
     #[test]
-    fn a_line_that_already_holds_the_word_stays() {
+    fn a_line_that_already_reads_as_asked_stays() {
         assert_eq!(set_enabled("---\nenabled: TRUE  # on\n---\n", true), Edit::Unchanged);
         assert_eq!(set_enabled(JOBNET, false), Edit::Unchanged);
-        assert_eq!(changed("---\nenabled: 'False'\n---\n", false), "---\nenabled: false\n---\n", "quotes make a YAML string");
+        for off in ["enabled: 'False'", "enabled: \"false\"  # off", "enabled: fAlSe"] {
+            let text = format!("---\n{off}\n---\n");
+            assert!(!reads(&text), "{off}");
+            assert_eq!(set_enabled(&text, false), Edit::Unchanged, "{off}");
+        }
+        for on in ["enabled: 'True'", "enabled: \"true\"", "enabled: tRuE"] {
+            assert_eq!(set_enabled(&format!("---\n{on}\n---\n"), true), Edit::Unchanged, "{on}");
+        }
         assert_eq!(changed("---\nenabled: no\n---\n", true), "---\nenabled: true\n---\n");
+        assert_eq!(changed("---\nenabled: 'yes'\n---\n", false), "---\nenabled: false\n---\n");
     }
 
     #[test]

@@ -32,8 +32,12 @@
 # Updates: installers.yml builds with no key. The sign job alone gets the update key, from the two secrets
 # JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD named in its signing step, and runs no build and only actions
 # pinned to commits. It signs the two update files under their release names, so each signature names its version.
-# Before it tags, publish checks both signatures against assets/update/jobdesk-update.pub and writes latest.json,
-# the feed the app reads, with scripts/update-feed.sh.
+# The source job pins the ai-job-search release that first-run setup installs: the latest release of
+# ai-job-search-dev/ai-job-search, and the SHA-256 of that tag's source zip from GitHub's fixed address, the one the app
+# builds from the version. The sign job also signs the line `<sha256>  ai-job-search-vA.B.C.zip`, under the zip's name.
+# When no ai-job-search release resolves, nothing is signed, tagged or published.
+# Before it tags, publish hashes the zip again, checks the three signatures against assets/update/jobdesk-update.pub
+# and writes latest.json, the feed the app reads, with scripts/update-feed.sh.
 name: Tag release
 
 on:
@@ -166,11 +170,59 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
+  # Pins the ai-job-search release this one installs at first run: the latest release, never a draft or a pre-release,
+  # and the SHA-256 of its source zip. The address is built from the repository and the tag only, as the app builds it.
+  # A release that does not resolve, a tag that is not vX.Y.Z or a zip that does not download fails the run.
+  source:
+    name: Pin the ai-job-search release
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      version: ${{ steps.pin.outputs.version }}
+      sha256: ${{ steps.pin.outputs.sha256 }}
+    steps:
+      - name: Resolve and hash the latest ai-job-search release
+        id: pin
+        shell: bash
+        env:
+          REPOSITORY: ai-job-search-dev/ai-job-search
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! tag=$(gh api "repos/$REPOSITORY/releases/latest" --jq '.tag_name'); then
+            echo "::error::No release of $REPOSITORY resolves, so this release cannot pin one. Nothing is published."
+            exit 1
+          fi
+          if ! [[ $tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::The latest release of $REPOSITORY has the tag '$tag', which is not vX.Y.Z. Nothing is published."
+            exit 1
+          fi
+          version=${BASH_REMATCH[1]}
+          zip="$RUNNER_TEMP/ai-job-search-v$version.zip"
+          if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 300 \
+            --output "$zip" "https://codeload.github.com/$REPOSITORY/zip/refs/tags/v$version"; then
+            echo "::error::The source zip of $REPOSITORY v$version did not download. Nothing is published."
+            exit 1
+          fi
+          if ! unzip -tq "$zip" > /dev/null; then
+            echo "::error::The source zip of $REPOSITORY v$version is not a whole zip. Nothing is published."
+            exit 1
+          fi
+          sha256=$(sha256sum "$zip" | cut -d ' ' -f 1)
+          echo "Pinning $REPOSITORY v$version, source zip SHA-256 $sha256."
+          {
+            echo "version=$version"
+            echo "sha256=$sha256"
+          } >> "$GITHUB_OUTPUT"
+
   # Signs the update files. The key reaches only the Sign step, in its environment, never a command line or a log.
   # No checkout and no build, so no code from the repository or its dependencies runs beside it.
+  # It also signs the ai-job-search pin: the line `<sha256>  ai-job-search-vA.B.C.zip`, with a trusted comment that
+  # names the zip, so the app can rebuild the line from the feed and check it.
   sign:
     name: Sign the updates
-    needs: [version, installers]
+    needs: [version, installers, source]
     runs-on: ubuntu-latest
     permissions: {}
     defaults:
@@ -178,6 +230,8 @@ jobs:
         shell: bash
     env:
       TAG: ${{ needs.version.outputs.tag }}
+      PIN_VERSION: ${{ needs.source.outputs.version }}
+      PIN_SHA256: ${{ needs.source.outputs.sha256 }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -196,6 +250,7 @@ jobs:
 
       # The key file is written to a folder only this user can read, and deleted when the step ends.
       # minisign reads the password from stdin. The trusted comment names the file, which the app checks.
+      # The pin is checked to be a plain version and a lowercase SHA-256 before the key is written.
       - name: Sign
         env:
           UPDATE_KEY: ${{ secrets.JOBDESK_UPDATE_KEY }}
@@ -203,6 +258,10 @@ jobs:
         run: |
           if [ -z "$UPDATE_KEY" ] || [ -z "$UPDATE_KEY_PASSWORD" ]; then
             echo "::error::A release needs the update key. Set the JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD secrets, as the Release section of CONTRIBUTING.md says."
+            exit 1
+          fi
+          if ! [[ $PIN_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $PIN_SHA256 =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::The ai-job-search pin is not a version X.Y.Z and a SHA-256."
             exit 1
           fi
           umask 077
@@ -219,6 +278,12 @@ jobs:
               -c "signature from the Jobdesk update key" -t "timestamp:$(date +%s)"$'\t'"file:$name"
             base64 -w0 < "$keys/$name.minisig" > "signatures/$name.sig"
           done
+          # The pin: the line the app rebuilds from the feed, signed under the name of the zip it pins.
+          zip="ai-job-search-v$PIN_VERSION.zip"
+          printf '%s  %s\n' "$PIN_SHA256" "$zip" > "$keys/$zip.sha256"
+          printf '%s\n' "$UPDATE_KEY_PASSWORD" | minisign -S -s "$keys/update.key" -m "$keys/$zip.sha256" -x "$keys/$zip.sha256.minisig" \
+            -c "signature from the Jobdesk update key" -t "timestamp:$(date +%s)"$'\t'"file:$zip"
+          base64 -w0 < "$keys/$zip.sha256.minisig" > "signatures/$zip.sha256.sig"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -228,7 +293,7 @@ jobs:
 
   publish:
     name: Tag and publish release
-    needs: [version, installers, sign]
+    needs: [version, installers, source, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -239,6 +304,8 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       SHA: ${{ needs.version.outputs.sha }}
       GH_TOKEN: ${{ github.token }}
+      PIN_VERSION: ${{ needs.source.outputs.version }}
+      PIN_SHA256: ${{ needs.source.outputs.sha256 }}
     # Its actions are pinned to commits, because the job holds a token that can write the repository.
     steps:
       # Every tag, so the check below finds the key of the release before this one.
@@ -277,10 +344,35 @@ jobs:
           name: signatures
           path: dist
 
+      # The pin must still describe what the fixed address serves: the zip is downloaded and hashed again, and a hash
+      # that changed since the source job fails the run. The pin's line is written to dist for update-feed.sh, and the
+      # zip stays out of dist, so the release never carries it.
+      - name: Hash the ai-job-search source again
+        env:
+          REPOSITORY: ai-job-search-dev/ai-job-search
+        run: |
+          if ! [[ $PIN_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $PIN_SHA256 =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::The ai-job-search pin is not a version X.Y.Z and a SHA-256."
+            exit 1
+          fi
+          zip="ai-job-search-v$PIN_VERSION.zip"
+          if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 300 \
+            --output "$RUNNER_TEMP/$zip" "https://codeload.github.com/$REPOSITORY/zip/refs/tags/v$PIN_VERSION"; then
+            echo "::error::The source zip of $REPOSITORY v$PIN_VERSION did not download."
+            exit 1
+          fi
+          sha256=$(sha256sum "$RUNNER_TEMP/$zip" | cut -d ' ' -f 1)
+          if [ "$sha256" != "$PIN_SHA256" ]; then
+            echo "::error::The source zip of $REPOSITORY v$PIN_VERSION now hashes to $sha256, not the pinned $PIN_SHA256."
+            exit 1
+          fi
+          printf '%s  %s\n' "$PIN_SHA256" "$zip" > "dist/$zip.sha256"
+
       # A build the installed copies cannot check must never be published. They trust the key of the release they run,
       # so both updates must pass the key of the latest release before this one, under their own names, before anything
-      # is tagged. A release that carries a new key is still signed with the old one. Only when no earlier release
-      # carries a real key, at the first release with updates, is the key of this commit the one to pass.
+      # is tagged, and so must the ai-job-search pin, under the name of its zip. A release that carries a new key is still
+      # signed with the old one. Only when no earlier release carries a real key, at the first release with updates, is
+      # the key of this commit the one to pass.
       - name: Install minisign
         run: |
           sudo apt-get update
@@ -321,8 +413,23 @@ jobs:
               exit 1
             fi
           done
+          pin="dist/ai-job-search-v$PIN_VERSION.zip.sha256"
+          if [ ! -s "$pin" ] || [ ! -s "$pin.sig" ]; then
+            echo "::error::$pin or its .sig is missing."
+            exit 1
+          fi
+          base64 -d "$pin.sig" > "$RUNNER_TEMP/pin.minisig"
+          if ! minisign -V -q -p "$RUNNER_TEMP/jobdesk-update.pub" -m "$pin" -x "$RUNNER_TEMP/pin.minisig"; then
+            echo "::error::$pin does not match $key."
+            exit 1
+          fi
+          files=$(sed -n 's/^trusted comment: //p' "$RUNNER_TEMP/pin.minisig" | tr '\t' '\n' | grep '^file:' || true)
+          if [ "$files" != "file:ai-job-search-v$PIN_VERSION.zip" ]; then
+            echo "::error::The signature of $pin does not name ai-job-search-v$PIN_VERSION.zip, and it alone."
+            exit 1
+          fi
           scripts/update-feed.sh "$TAG" "$RUNNER_TEMP/release-notes.md" dist > "$RUNNER_TEMP/latest.json"
-          rm dist/*.sig
+          rm dist/*.sig dist/*.sha256
           mv "$RUNNER_TEMP/latest.json" dist/latest.json
           cat dist/latest.json
 

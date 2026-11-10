@@ -1,3 +1,5 @@
+//! The one way Jobdesk reads a file from the network: https only, with fixed redirect, proxy and timeout rules.
+
 use std::io::{self, Read};
 use std::time::Duration;
 
@@ -5,9 +7,7 @@ use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::{Agent, Proxy};
 
-use crate::updates::domain::Failure;
-
-/// Finding GitHub's address, then reaching it.
+/// Finding the server's address, then reaching it.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The whole feed request, redirects and body included, from the first byte sent to the last one read.
@@ -21,20 +21,33 @@ const MAX_REDIRECTS: u32 = 5;
 /// What a request is for, which sets how long it may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fetch {
+    /// A small file read whole, such as a feed: the whole request must end within 20 seconds.
     Feed,
+    /// A large file read as it arrives: it fails when its next bytes take over 30 seconds, or after an hour.
     Download,
+}
+
+/// Why a request did not get a whole answer. The caller says each in its own words, and the server's text is never kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpsFailure {
+    TimedOut,
+    Unreachable,
+    /// The server answered with this status code.
+    Refused(u16),
+    /// The body stopped partway, for a reason other than time.
+    Interrupted,
 }
 
 /// The body of an answer, read as it arrives. A read that waited too long fails with `ErrorKind::TimedOut`.
 pub type Body = Box<dyn Read + Send>;
 
-/// Opens an address and hands back its body. The real one is GitHub over https, and tests put a fake in its place.
+/// Opens an address and hands back its body. The real one is `HttpsTransport`, and tests put a fake in its place.
 pub trait Transport: Send + Sync {
     /// The body of `url`, or why it could not be reached. A status other than success is `Refused`.
-    fn open(&self, url: &str, fetch: Fetch) -> Result<Body, Failure>;
+    fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure>;
 }
 
-/// GitHub over https only: no plain http, even after a redirect, at most 5 redirects, the system's certificates,
+/// https only: no plain http, even after a redirect, at most 5 redirects, the system's certificates,
 /// and the proxy the environment names. It sends no cookie and no credential.
 pub struct HttpsTransport {
     feed: Agent,
@@ -42,7 +55,7 @@ pub struct HttpsTransport {
 }
 
 impl HttpsTransport {
-    /// `current` is the version of this copy, sent as `Jobdesk/<version>` so GitHub can tell the requests apart.
+    /// `current` is the version of this copy, sent as `Jobdesk/<version>` so a server can tell the requests apart.
     pub fn new(current: &str) -> Self {
         let agent = |fetch: Fetch| {
             let builder = Config::builder()
@@ -66,7 +79,7 @@ impl HttpsTransport {
 }
 
 impl Transport for HttpsTransport {
-    fn open(&self, url: &str, fetch: Fetch) -> Result<Body, Failure> {
+    fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
         let agent = match fetch {
             Fetch::Feed => &self.feed,
             Fetch::Download => &self.download,
@@ -76,13 +89,13 @@ impl Transport for HttpsTransport {
     }
 }
 
-/// Jobdesk's own word for why a request did not get an answer. The server's text is never kept.
-fn failure_of(error: &ureq::Error) -> Failure {
+/// Why a request did not get an answer. The server's text is never kept.
+fn failure_of(error: &ureq::Error) -> HttpsFailure {
     match error {
-        ureq::Error::StatusCode(code) => Failure::Refused(*code),
-        ureq::Error::Timeout(_) => Failure::TimedOut,
-        ureq::Error::Io(error) if error.kind() == io::ErrorKind::TimedOut => Failure::TimedOut,
-        _ => Failure::Unreachable,
+        ureq::Error::StatusCode(code) => HttpsFailure::Refused(*code),
+        ureq::Error::Timeout(_) => HttpsFailure::TimedOut,
+        ureq::Error::Io(error) if error.kind() == io::ErrorKind::TimedOut => HttpsFailure::TimedOut,
+        _ => HttpsFailure::Unreachable,
     }
 }
 
@@ -98,9 +111,9 @@ impl<R: Read> Read for TimedBody<R> {
     }
 }
 
-/// Jobdesk's word for a read that failed partway.
-pub fn read_failure(error: &io::Error) -> Failure {
-    if error.kind() == io::ErrorKind::TimedOut { Failure::TimedOut } else { Failure::Interrupted }
+/// The failure of a read that failed partway.
+pub fn read_failure(error: &io::Error) -> HttpsFailure {
+    if error.kind() == io::ErrorKind::TimedOut { HttpsFailure::TimedOut } else { HttpsFailure::Interrupted }
 }
 
 #[cfg(test)]
@@ -109,11 +122,11 @@ mod tests {
 
     #[test]
     fn a_status_is_refused_with_its_code_and_nothing_else_is_kept() {
-        assert_eq!(failure_of(&ureq::Error::StatusCode(404)), Failure::Refused(404));
-        assert_eq!(failure_of(&ureq::Error::HostNotFound), Failure::Unreachable);
-        assert_eq!(failure_of(&ureq::Error::ConnectionFailed), Failure::Unreachable);
-        assert_eq!(failure_of(&ureq::Error::Io(io::Error::new(io::ErrorKind::TimedOut, "slow"))), Failure::TimedOut);
-        assert_eq!(failure_of(&ureq::Error::RequireHttpsOnly("http://example.com".into())), Failure::Unreachable);
+        assert_eq!(failure_of(&ureq::Error::StatusCode(404)), HttpsFailure::Refused(404));
+        assert_eq!(failure_of(&ureq::Error::HostNotFound), HttpsFailure::Unreachable);
+        assert_eq!(failure_of(&ureq::Error::ConnectionFailed), HttpsFailure::Unreachable);
+        assert_eq!(failure_of(&ureq::Error::Io(io::Error::new(io::ErrorKind::TimedOut, "slow"))), HttpsFailure::TimedOut);
+        assert_eq!(failure_of(&ureq::Error::RequireHttpsOnly("http://example.com".into())), HttpsFailure::Unreachable);
     }
 
     #[test]
@@ -125,8 +138,8 @@ mod tests {
             }
         }
         let error = TimedBody(Slow).read(&mut [0; 4]).unwrap_err();
-        assert_eq!(read_failure(&error), Failure::TimedOut);
-        assert_eq!(read_failure(&io::Error::new(io::ErrorKind::ConnectionReset, "reset")), Failure::Interrupted);
+        assert_eq!(read_failure(&error), HttpsFailure::TimedOut);
+        assert_eq!(read_failure(&io::Error::new(io::ErrorKind::ConnectionReset, "reset")), HttpsFailure::Interrupted);
     }
 
     #[test]
@@ -136,6 +149,6 @@ mod tests {
             let refused = agent.get("http://127.0.0.1:9/latest.json").call().unwrap_err();
             assert!(matches!(refused, ureq::Error::RequireHttpsOnly(_)), "{refused:?}");
         }
-        assert_eq!(transport.open("http://127.0.0.1:9/latest.json", Fetch::Feed).err(), Some(Failure::Unreachable));
+        assert_eq!(transport.open("http://127.0.0.1:9/latest.json", Fetch::Feed).err(), Some(HttpsFailure::Unreachable));
     }
 }

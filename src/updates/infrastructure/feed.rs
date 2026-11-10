@@ -4,8 +4,9 @@ use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::updates::domain::{FEED_URL, Failure, Platform, Release, Version};
-use crate::updates::infrastructure::http::{Fetch, Transport, read_failure};
+use crate::shared_kernel::https::{Fetch, Transport, read_failure};
+use crate::updates::domain::{FEED_URL, Failure, Platform, Release, SourcePin, Version, source_zip_name};
+use crate::updates::infrastructure::signature::{UpdateKey, signs};
 
 /// The most of the feed that is read. A longer one is refused whole.
 pub const FEED_LIMIT: u64 = 256 * 1024;
@@ -13,6 +14,7 @@ pub const FEED_LIMIT: u64 = 256 * 1024;
 pub const NOTES_LIMIT: usize = 64 * 1024;
 
 /// `latest.json`, as `scripts/update-feed.sh` writes it. Any other field, such as an address, is never read.
+/// The `ai_job_search` pin is read on its own, by `parse_pin`, so a pin that does not read never spoils the update.
 #[derive(Deserialize)]
 struct Feed {
     version: String,
@@ -30,15 +32,41 @@ struct Build {
     size: u64,
 }
 
+/// The feed's `ai_job_search` field, kept as it is until `Pin` reads it.
+#[derive(Deserialize)]
+struct Pinned {
+    #[serde(default)]
+    ai_job_search: Option<Value>,
+}
+
+/// The `ai-job-search` release the feed pins: its version, the SHA-256 of its source zip, and the update key's
+/// signature of the two. It holds no address.
+#[derive(Deserialize)]
+struct Pin {
+    version: String,
+    sha256: String,
+    signature: String,
+}
+
 /// Reads the feed from GitHub and gives the release it names, for `platform`'s build.
 pub fn read_feed(transport: &dyn Transport, platform: Option<Platform>) -> Result<Release, Failure> {
+    parse_feed(&fetch_feed(transport)?, platform)
+}
+
+/// Reads the feed from GitHub and gives the `ai-job-search` release it pins, when `key` signed it.
+pub fn read_pin(transport: &dyn Transport, key: &UpdateKey) -> Result<Option<SourcePin>, Failure> {
+    Ok(parse_pin(&fetch_feed(transport)?, key))
+}
+
+/// The feed's bytes, or why they could not be read. A feed over `FEED_LIMIT` is `BadFeed`.
+fn fetch_feed(transport: &dyn Transport) -> Result<Vec<u8>, Failure> {
     let body = transport.open(FEED_URL, Fetch::Feed)?;
     let mut bytes = Vec::new();
     body.take(FEED_LIMIT + 1).read_to_end(&mut bytes).map_err(|error| read_failure(&error))?;
     if bytes.len() as u64 > FEED_LIMIT {
         return Err(Failure::BadFeed);
     }
-    parse_feed(&bytes, platform)
+    Ok(bytes)
 }
 
 /// A feed whose version or date cannot be read is `BadFeed`, and one with no build for `platform` is `NoBuild`.
@@ -58,6 +86,16 @@ pub fn parse_feed(bytes: &[u8], platform: Option<Platform>) -> Result<Release, F
     Ok(Release { version, released, notes: cut(feed.notes), size: build.size, signature: build.signature })
 }
 
+/// The pin in the feed, once `key` signed it. Jobdesk rebuilds the signed text from the version and the hash, and the
+/// signature's trusted comment must name the zip of that version, so a signature of another version, another hash or
+/// with another key never passes. A missing pin, one that does not read and one whose signature fails all give `None`.
+pub fn parse_pin(bytes: &[u8], key: &UpdateKey) -> Option<SourcePin> {
+    let pinned: Pinned = serde_json::from_slice(bytes).ok()?;
+    let pin = Pin::deserialize(pinned.ai_job_search?).ok()?;
+    let found = SourcePin::parse(&pin.version, &pin.sha256)?;
+    signs(key, found.signed_text().as_bytes(), &pin.signature, &source_zip_name(&found.version)).then_some(found)
+}
+
 fn cut(mut notes: String) -> String {
     if notes.len() > NOTES_LIMIT {
         let mut end = NOTES_LIMIT;
@@ -70,15 +108,16 @@ fn cut(mut notes: String) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::fs;
     use std::io::{self, Cursor};
 
     use chrono::NaiveDate;
 
     use super::*;
-    use crate::updates::infrastructure::http::Body;
-    use crate::updates::infrastructure::signature::tests::{fixture, fixture_signature};
+    use crate::shared_kernel::https::{Body, HttpsFailure};
+    use crate::updates::domain::source_zip_url;
+    use crate::updates::infrastructure::signature::tests::{fixture, fixture_key, fixture_signature};
 
     fn mac() -> Option<Platform> {
         Some(Platform::MacArm)
@@ -88,10 +127,33 @@ mod tests {
         format!(r#"{{"version": "0.2.0", "pub_date": "2026-10-30T09:00:00Z", "notes": "Notes", "platforms": {platforms}}}"#)
     }
 
+    /// The pin in the fixture feed: the hash in `ai-job-search-v1.4.0.zip.sha256`, which the fixture key signed.
+    pub fn fixture_pin() -> SourcePin {
+        let line = fs::read_to_string(fixture("ai-job-search-v1.4.0.zip.sha256")).unwrap();
+        let (sha256, name) = line.trim_end().split_once("  ").unwrap();
+        assert_eq!(name, "ai-job-search-v1.4.0.zip");
+        SourcePin::parse("1.4.0", sha256).unwrap()
+    }
+
+    /// The fixture feed with its `ai_job_search` field set to `pin`, or removed when `pin` is `None`.
+    fn with_pin(pin: Option<Value>) -> Vec<u8> {
+        let mut feed: Value = serde_json::from_slice(&fs::read(fixture("latest.json")).unwrap()).unwrap();
+        let fields = feed.as_object_mut().unwrap();
+        match pin {
+            Some(pin) => fields.insert("ai_job_search".to_owned(), pin),
+            None => fields.remove("ai_job_search"),
+        };
+        serde_json::to_vec(&feed).unwrap()
+    }
+
+    fn pin(version: &str, sha256: &str, signature: &str) -> Value {
+        serde_json::json!({"version": version, "sha256": sha256, "signature": signature})
+    }
+
     struct Serves(Vec<u8>);
 
     impl Transport for Serves {
-        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, Failure> {
+        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
             assert_eq!((url, fetch), (FEED_URL, Fetch::Feed));
             Ok(Box::new(Cursor::new(self.0.clone())))
         }
@@ -194,7 +256,8 @@ mod tests {
     fn an_oversized_feed_is_refused_whole() {
         let padding = " ".repeat(FEED_LIMIT as usize);
         let oversized = feed(r#"{"darwin-aarch64": {"signature": "sig", "size": 10}}"#).replacen('{', &format!("{{{padding}"), 1);
-        assert_eq!(read_feed(&Serves(oversized.into_bytes()), mac()), Err(Failure::BadFeed));
+        assert_eq!(read_feed(&Serves(oversized.clone().into_bytes()), mac()), Err(Failure::BadFeed));
+        assert_eq!(read_pin(&Serves(oversized.into_bytes()), &fixture_key()), Err(Failure::BadFeed));
         let fits = fs::read(fixture("latest.json")).unwrap();
         assert!(read_feed(&Serves(fits), mac()).is_ok());
     }
@@ -203,13 +266,13 @@ mod tests {
     fn a_feed_that_cannot_be_reached_says_why() {
         struct Down;
         impl Transport for Down {
-            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, Failure> {
-                Err(Failure::Refused(503))
+            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
+                Err(HttpsFailure::Refused(503))
             }
         }
         struct Drops;
         impl Transport for Drops {
-            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, Failure> {
+            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
                 Ok(Box::new(Cursor::new(b"{\"version\"".to_vec()).chain(Failing)))
             }
         }
@@ -221,5 +284,74 @@ mod tests {
         }
         assert_eq!(read_feed(&Down, mac()), Err(Failure::Refused(503)));
         assert_eq!(read_feed(&Drops, mac()), Err(Failure::TimedOut));
+        assert_eq!(read_pin(&Down, &fixture_key()), Err(Failure::Refused(503)));
+        assert_eq!(read_pin(&Drops, &fixture_key()), Err(Failure::TimedOut));
+    }
+
+    #[test]
+    fn a_good_pin_reads() {
+        let bytes = fs::read(fixture("latest.json")).unwrap();
+        assert_eq!(parse_pin(&bytes, &fixture_key()), Some(fixture_pin()));
+        assert_eq!(read_pin(&Serves(bytes), &fixture_key()), Ok(Some(fixture_pin())));
+    }
+
+    #[test]
+    fn a_pin_signed_for_another_version_is_dropped() {
+        let older = fixture_signature("ai-job-search-v1.3.0.zip.sha256");
+        let sha256 = fixture_pin().sha256;
+        assert!(parse_pin(&with_pin(Some(pin("1.3.0", &sha256, &older))), &fixture_key()).is_some(), "the signature itself is good");
+        assert_eq!(parse_pin(&with_pin(Some(pin("1.4.0", &sha256, &older))), &fixture_key()), None, "but it pins 1.3.0, not 1.4.0");
+        let current = fixture_signature("ai-job-search-v1.4.0.zip.sha256");
+        assert_eq!(parse_pin(&with_pin(Some(pin("1.4.1", &sha256, &current))), &fixture_key()), None);
+    }
+
+    #[test]
+    fn a_pin_signed_for_another_hash_is_dropped() {
+        let signature = fixture_signature("ai-job-search-v1.4.0.zip.sha256");
+        let other = fixture_pin().sha256.replacen('6', "7", 1);
+        assert_eq!(parse_pin(&with_pin(Some(pin("1.4.0", &other, &signature))), &fixture_key()), None);
+    }
+
+    #[test]
+    fn a_pin_signed_with_another_key_is_dropped() {
+        let other = UpdateKey::decode(&fs::read_to_string(fixture("other.pub")).unwrap()).unwrap();
+        assert_eq!(parse_pin(&fs::read(fixture("latest.json")).unwrap(), &other), None);
+    }
+
+    #[test]
+    fn a_bad_pin_leaves_the_update_intact() {
+        let plain = with_pin(None);
+        assert_eq!(parse_pin(&plain, &fixture_key()), None, "no pin");
+        let sha256 = fixture_pin().sha256;
+        let signature = fixture_signature("ai-job-search-v1.4.0.zip.sha256");
+        for bad in [
+            serde_json::json!("1.4.0"),
+            serde_json::json!(null),
+            serde_json::json!({"version": "1.4.0", "sha256": sha256}),
+            pin("1.4.0", &sha256, ""),
+            pin("1.4.0", &sha256, "not a signature"),
+            pin("1.4.0", &sha256, &fixture_signature("Jobdesk-v0.2.0-windows-x64-setup.exe")),
+            pin("1.4.0", &sha256.to_uppercase(), &signature),
+            pin("1.4", &sha256, &signature),
+            serde_json::json!({"version": 140, "sha256": sha256, "signature": signature}),
+        ] {
+            let bytes = with_pin(Some(bad.clone()));
+            assert_eq!(parse_pin(&bytes, &fixture_key()), None, "{bad}");
+            for platform in [Platform::MacArm, Platform::WindowsX64] {
+                assert_eq!(parse_feed(&bytes, Some(platform)), parse_feed(&plain, Some(platform)), "{bad}");
+                assert!(parse_feed(&bytes, Some(platform)).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn an_address_beside_the_pin_is_never_read() {
+        let mut lured: Value = serde_json::from_slice(&fs::read(fixture("latest.json")).unwrap()).unwrap();
+        let fields = lured["ai_job_search"].as_object_mut().unwrap();
+        fields.insert("url".to_owned(), Value::from("https://attacker.example/ai-job-search.zip"));
+        fields.insert("repository".to_owned(), Value::from("attacker/ai-job-search"));
+        let found = parse_pin(&serde_json::to_vec(&lured).unwrap(), &fixture_key()).unwrap();
+        assert_eq!(found, fixture_pin());
+        assert_eq!(source_zip_url(&found.version), "https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/v1.4.0");
     }
 }

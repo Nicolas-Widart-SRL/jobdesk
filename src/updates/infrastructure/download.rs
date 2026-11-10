@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::shared_kernel::https::{Fetch, Transport, read_failure};
 use crate::updates::domain::{DownloadEnd, DownloadId, Failure, Platform, Release, asset_url, percent};
-use crate::updates::infrastructure::http::{Fetch, Transport, read_failure};
 use crate::updates::infrastructure::signature::{UpdateKey, signed_by};
 
 /// The largest build Jobdesk downloads, whatever the feed says.
@@ -83,7 +83,7 @@ impl Job {
         let Ok(mut file) = private_dir(&self.dir).and_then(|()| new_private_file(part)) else { return failed(0, Failure::Disk) };
         let mut body = match transport.open(&asset_url(&self.release.version, self.platform), Fetch::Download) {
             Ok(body) => body,
-            Err(failure) => return failed(0, failure),
+            Err(failure) => return failed(0, failure.into()),
         };
         let mut buffer = vec![0; 64 * 1024];
         let mut done = 0;
@@ -97,7 +97,7 @@ impl Job {
                 Ok(0) => break,
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return failed(done, read_failure(&error)),
+                Err(error) => return failed(done, read_failure(&error).into()),
             };
             if done + read as u64 > size {
                 return failed(done, Failure::TooLarge);
@@ -205,8 +205,8 @@ pub mod tests {
     use std::sync::mpsc::{self, Receiver};
 
     use super::*;
+    use crate::shared_kernel::https::{Body, HttpsFailure};
     use crate::updates::domain::Version;
-    use crate::updates::infrastructure::http::Body;
     use crate::updates::infrastructure::signature::tests::{fixture, fixture_key, fixture_signature};
 
     pub const WINDOWS: &str = "Jobdesk-v0.2.0-windows-x64-setup.exe";
@@ -223,7 +223,7 @@ pub mod tests {
     pub struct Serves(pub Vec<u8>);
 
     impl Transport for Serves {
-        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, Failure> {
+        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
             assert_eq!(url, "https://github.com/Nicolas-Widart-SRL/jobdesk/releases/download/v0.2.0/Jobdesk-v0.2.0-windows-x64-setup.exe");
             assert_eq!(fetch, Fetch::Download);
             Ok(Box::new(Cursor::new(self.0.clone())))
@@ -257,7 +257,7 @@ pub mod tests {
     }
 
     impl Transport for Pauses {
-        fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, Failure> {
+        fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
             let go = self.go.lock().unwrap().take();
             Ok(Box::new(PausedBody { first: Cursor::new(self.first.clone()), rest: Cursor::new(self.rest.clone()), go }))
         }
@@ -340,7 +340,7 @@ pub mod tests {
     fn a_feed_size_over_the_limit_is_refused_before_any_request() {
         struct Never;
         impl Transport for Never {
-            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, Failure> {
+            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
                 panic!("nothing is requested")
             }
         }
@@ -357,8 +357,8 @@ pub mod tests {
     fn an_unreachable_build_says_why() {
         struct Missing;
         impl Transport for Missing {
-            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, Failure> {
-                Err(Failure::Refused(404))
+            fn open(&self, _url: &str, _fetch: Fetch) -> Result<Body, HttpsFailure> {
+                Err(HttpsFailure::Refused(404))
             }
         }
         let data = tempfile::tempdir().unwrap();

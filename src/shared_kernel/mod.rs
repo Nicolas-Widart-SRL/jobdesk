@@ -4,6 +4,7 @@ pub mod data_folder;
 pub mod dates;
 pub mod file_text;
 pub mod host_path;
+pub mod https;
 pub mod key_mask;
 pub mod load_error;
 pub mod markdown;

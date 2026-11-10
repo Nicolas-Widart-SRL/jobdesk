@@ -30,7 +30,7 @@ Each feature is a bounded context with its own language.
 | `profile` | topic, block, placeholder, draft, conflict, updated mark, CV document, staleness | the profile files that `TOPICS` in `profile/domain/topic.rs` names; the `## Candidate Profile` part of `CLAUDE.md`; the `.tex` and PDF files in `cv/` and their modification times; whether `.claude/commands/build-cv.md` exists; dossier's application layer, for the page cache; settings' application layer, for ages and sizes |
 | `workspace` | workspace root, portal, tool check | the checkout folder; installed tools; file changes; profile's application layer |
 | `settings` | preference, page, search hit, run default, command override, spend cap, retention, sign-in method, API key, connection test, Coming up range, Later length, skip reason list, Jobs view filter, update switch | its own `settings.json` in the data folder; the system keychain, through a port in `domain` and adapters in `infrastructure`; through the `Snapshot`: runs' and tracking's application layers and discovery's terms; through the shell: workspace's readiness, the count of jobs the Jobs view hides, the data folder's sizes, the tray decision count and, for About, the update view from updates' application layer |
-| `updates` | release, version, feed, download, signature, update key, install block, restart plan, apply failure | `latest.json` on the latest GitHub release, and the build the feed names for this computer; the update key built into the app; its own `updates/` folder in the data folder |
+| `updates` | release, version, feed, download, signature, update key, install block, restart plan, apply failure, ai-job-search source pin | `latest.json` on the latest GitHub release, and the build the feed names for this computer; the update key built into the app; its own `updates/` folder in the data folder |
 
 Screen names differ from feature names: `intray` is Today, `discovery` is Jobs, `tracking` is Applications, `dossier` is an application's dossier, `runs` is Tasks, `profile` is Profile, `workspace` is Setup, and `settings` is Settings. Runtime status is drawn by workspace's UI and placed in Settings by the shell. `updates` has no screen: its UI draws the update group and the release notes, which the shell places at the right of the status bar, and Settings › About draws its Updates section from the same view.
 
@@ -40,6 +40,7 @@ Three modules are not features:
   - the host `PATH` lookup that `runs` and `workspace` both need, with `system_program` for the programs that ship with Windows;
   - `process_tree`, which starts every console program through `no_window` and stops a run with everything it started;
   - `replace_file`, whose `rename_over` replaces a file and on Windows tries a held file again a few times;
+  - `https`, the one network client: `https` only, at most 5 redirects, the system's certificates, the environment's proxy and fixed timeouts, with its own failure words that each feature maps to its own;
   - `file_text`, the helpers for a byte order mark and for CRLF and lone CR line endings;
   - `visible_text`, the filter that drops hidden characters from untrusted text;
   - `workspace_path::within_workspace`, the text check that keeps a path read from the checkout inside it, which `dossier` and `profile` share;

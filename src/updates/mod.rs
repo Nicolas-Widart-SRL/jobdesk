@@ -9,10 +9,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::updates::application::{ApplyFailed, ApplyFailure, InstallBlock, Platform, RestartPlan, ServiceEvent, Updates};
+use crate::shared_kernel::https::HttpsTransport;
+use crate::updates::application::{ApplyFailed, ApplyFailure, InstallBlock, Platform, RestartPlan, ServiceEvent, SourcePinReader, Updates};
 #[cfg(target_os = "macos")]
 use crate::updates::infrastructure::install_macos::reopen;
-use crate::updates::infrastructure::{GithubUpdates, HttpsTransport, IdleUpdates, ScriptedUpdates, UpdateKey, cleanup, install_windows};
+use crate::updates::infrastructure::{GithubSourcePins, GithubUpdates, IdleUpdates, ScriptedUpdates, UpdateKey, cleanup, install_windows};
 
 /// The folder in the app's data folder that holds the downloads, and the note of an apply that failed.
 fn downloads(data: &Path) -> PathBuf {
@@ -28,6 +29,13 @@ pub fn github(data: &Path, current: &str, block: Option<InstallBlock>, auto: boo
     let block = if key.is_none() { Some(InstallBlock::NoKey) } else { block };
     let service = GithubUpdates::new(Arc::new(HttpsTransport::new(current)), downloads(data), Platform::current(), key, repaint);
     Updates::new(Box::new(service), current, block, auto)
+}
+
+/// The `ai-job-search` release this copy vouches for, read from the feed on GitHub and checked against the update key
+/// built into it. `current` is the version this copy runs. A build with no update key has no pin, and reads nothing.
+/// Nothing here starts `claude`, uses the API key or writes a run log.
+pub fn source_pins(current: &str) -> Arc<dyn SourcePinReader> {
+    Arc::new(GithubSourcePins::new(Arc::new(HttpsTransport::new(current)), UpdateKey::embedded()))
 }
 
 /// Why this copy cannot replace itself, if it cannot: a build with no update key, a copy no installer put in place,

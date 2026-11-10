@@ -124,16 +124,26 @@ The `updates` feature reads the feed, downloads a build, checks its signature an
 
 - The feed is `latest.json` on the latest release, at the fixed address `FEED_URL`.
 - The download's address and the release page's address are built from `REPOSITORY` and the version tag, such as `v0.2.0`. No address is ever read from the feed or the notes.
-- `HttpsTransport` requests `https` only, after a redirect too, follows at most 5 redirects, checks certificates with the system's verifier and uses the proxy the environment names. It sends no cookie and no credential, only `Jobdesk/<version>` as its user agent.
+- The address of an `ai-job-search` source zip is built from `AI_JOB_SEARCH_REPOSITORY` and the pinned version's tag: GitHub's fixed address for the zip of that tag, such as `https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/v1.4.0`.
+- `HttpsTransport`, in `shared_kernel::https`, requests `https` only, after a redirect too, follows at most 5 redirects, checks certificates with the system's verifier and uses the proxy the environment names. It sends no cookie and no credential, only `Jobdesk/<version>` as its user agent. Every feature that reads the network uses it, so the rules hold for each.
 - A failure shows in Jobdesk's own words, such as "the connection timed out" or "GitHub answered with the error 404". No text from the server reaches the screen.
 
 ### The feed and its limits
 
-- The feed holds the version, the release date, the notes, and each build's signature and size. Any other field is never read.
+- The feed holds the version, the release date, the notes, each build's signature and size, and the `ai-job-search` pin. Any other field is never read.
 - A feed over 256 KiB is refused whole, and notes are cut at 64 KiB.
 - The version must be exactly three numbers, such as `0.2.0` or `v0.2.0`. Only a version newer than this copy is offered.
 - A download stops at the size the feed gives, and never goes past 200 MiB.
 - The feed request must end within 20 seconds. A download fails when its next bytes take over 30 seconds, when a minute brings under 16 KiB, or after an hour.
+
+### The ai-job-search pin
+
+The feed itself is not signed, so the release Jobdesk vouches for at first-run setup is pinned with a signature of its own. The `ai_job_search` field holds the version of an `ai-job-search` release, the SHA-256 of its source zip, and the update key's signature of the two.
+
+- The Tag release workflow resolves the latest release of `ai-job-search-dev/ai-job-search`, downloads that tag's source zip from the fixed address, and hashes it. Its `sign` job signs the line `<sha256>  ai-job-search-v<version>.zip` and a line end, as `sha256sum` writes it, with a trusted comment that names `ai-job-search-v<version>.zip` alone. The publish job hashes the zip again, checks the signature like those of the builds, and publishes nothing when no release resolves or the hash changed.
+- Jobdesk rebuilds that line from the version and the hash in the feed, and checks the signature against it with the update key built into it. So a signature of another version, another hash or another key fails.
+- The version must be exactly three numbers, and the hash 64 lowercase hex digits.
+- A pin that is missing, does not read or fails its check is dropped, and only the pin: the update check reads the same release either way. A build with no update key has no pin, and does not read the feed for one.
 
 ### Signature checks
 
@@ -157,6 +167,8 @@ Each copy checks a download against the update key built into it from `assets/up
 ### Accepted residuals
 
 1. The feed itself is not signed. Whoever can change `latest.json` on the latest release can show any version number and notes, or hide a release. They cannot get a file applied without a signature from the update key.
+   For the `ai-job-search` pin, they can drop it, or put back the signed pin of an earlier Jobdesk release, so first-run setup offers an older `ai-job-search` release that the update key once signed. They cannot pin a zip the key never signed.
 2. Whoever holds the update key and its password, and can publish a release in this repository, can ship a build every copy installs.
 3. A macOS build that is ad-hoc signed, one made from source or from the Actions tab, has no Developer ID, so macOS App Management may stop Jobdesk from replacing the bundle. Then the swap fails, the old copy opens again, and the next launch says the new copy could not be put in place. A release is signed with a Developer ID.
 4. The Windows setup, in its passive mode, closes every running `jobdesk.exe` without asking, so another Jobdesk window closes too, whatever it was doing. Restart to update waits only on the sessions of the window it runs in.
+5. The `ai-job-search` pin vouches for what GitHub served for the latest `ai-job-search` tag when the Jobdesk release ran, unread. Whoever could publish an `ai-job-search` release at that time decides what the pinned zip holds.

@@ -7132,7 +7132,8 @@ fn remove_asks_first_and_keep_it_writes_nothing() {
     harness.get_by_label("Remove…").click();
     harness.run_steps(3);
     assert!(harness.query_all_by_label("Remove Northfield Jobs?").count() > 0, "the ask opens");
-    assert!(harness.query_by_label_contains(".agents/skills/northfield-search, to the Trash.").is_some());
+    let trash = if cfg!(target_os = "macos") { "the Trash" } else { "the Recycle Bin" };
+    assert!(harness.query_by_label_contains(&format!(".agents/skills/northfield-search, to {trash}.")).is_some());
     harness.get_by_label("Keep it").click();
     harness.run_steps(3);
     assert!(!is_shown(&harness, "Remove Northfield Jobs?"));

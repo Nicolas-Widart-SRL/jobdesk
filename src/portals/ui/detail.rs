@@ -2,7 +2,7 @@ use egui::{Align, Frame, Label, Layout, Margin, Ui, vec2};
 
 use crate::portals::application::{Origin, Phrase, PortalView, Priority, Quotes, SEARCH_TERMS_LINE, SearchPlan, site_lines_for, term_as_sent};
 use crate::portals::ui::rail::{badge_word, day, origin_word, portal_switch};
-use crate::portals::ui::screen::{BUILT_IN, BUSY};
+use crate::portals::ui::screen::{BUILT_IN, BUSY, TRASH};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_ITEM_GAP, SKELETON_LINE, Type};
 use crate::ui_kit::{
     Confirm, Ink, Tone, alert, code_box, confirm_popover, desk_label, divider, enabled_when, headed_paper, hidden_note, lead_line, muted, path_label, rich,
@@ -162,7 +162,7 @@ fn actions(ui: &mut Ui, shown: &Detail, confirm: &mut Option<bool>) -> bool {
     .inner
 }
 
-/// What Remove… says it does: the folder goes to the Trash, and the jobs it found stay.
+/// What Remove… says it does: the folder goes to the Trash, or the Recycle Bin on Windows, and the jobs it found stay.
 fn remove_note(portal: &PortalView) -> String {
     let jobs = match portal.jobs {
         Some((0, _)) => String::new(),
@@ -170,7 +170,7 @@ fn remove_note(portal: &PortalView) -> String {
         Some((count, _)) => format!(" The {count} jobs it found stay in Jobs."),
         None => " The jobs it found stay in Jobs.".to_owned(),
     };
-    format!("Jobdesk moves its folder, .agents/skills/{}, to the Trash.{jobs} To use it again, put the folder back, or add it again.", portal.folder)
+    format!("Jobdesk moves its folder, .agents/skills/{}, to {TRASH}.{jobs} To use it again, put the folder back, or add it again.", portal.folder)
 }
 
 /// A section's title, with a note at its right.
@@ -367,7 +367,9 @@ mod tests {
     fn remove_says_where_the_folder_goes_and_that_the_jobs_stay() {
         assert_eq!(
             remove_note(&portal(Some((7, None)))),
-            "Jobdesk moves its folder, .agents/skills/northfield-search, to the Trash. The 7 jobs it found stay in Jobs. To use it again, put the folder back, or add it again."
+            format!(
+                "Jobdesk moves its folder, .agents/skills/northfield-search, to {TRASH}. The 7 jobs it found stay in Jobs. To use it again, put the folder back, or add it again."
+            )
         );
         assert!(remove_note(&portal(Some((1, None)))).contains(" The job it found stays in Jobs. "));
         assert!(!remove_note(&portal(Some((0, None)))).contains("Jobs."), "no job to keep");

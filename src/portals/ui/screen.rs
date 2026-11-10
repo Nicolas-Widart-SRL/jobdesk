@@ -10,6 +10,8 @@ use crate::ui_kit::{Load, ScreenState, Subtitle, Title, command_action, empty_no
 pub const BUSY: &str = "A task is running. Turn portals on or off once it ends.";
 /// What a built-in portal shows in place of Remove….
 pub(super) const BUILT_IN: &str = "Built-in portals stay installed. Turn one off to skip it.";
+/// Where Remove moves a portal's folder, in the system's own words.
+pub(super) const TRASH: &str = if cfg!(target_os = "macos") { "the Trash" } else { "the Recycle Bin" };
 /// The head's subtitle, before the count.
 const LEAD: &str = "The job boards Claude searches when you find new jobs.";
 /// The list's width, from the canvas. It never takes more than this share of the screen.
@@ -65,7 +67,7 @@ fn failure_words(error: &ChangeError, removing: bool) -> String {
         ChangeError::NoFrontmatter => {
             "Jobdesk could not turn this portal off: its SKILL.md has no settings block at the top to hold the switch. Nothing was changed.".to_owned()
         }
-        ChangeError::Failed(error) if removing => format!("Jobdesk could not move this portal to the Trash. {error}"),
+        ChangeError::Failed(error) if removing => format!("Jobdesk could not move this portal to {TRASH}. {error}"),
         ChangeError::Failed(error) => format!("Jobdesk could not turn this portal on or off. {error}"),
     }
 }
@@ -206,6 +208,13 @@ mod tests {
         groups.clone().map(|group| group.iter().map(|portal| portal.folder.clone()).collect())
     }
 
+    /// Remove names the place the system keeps removed files: the Trash on macOS, the Recycle Bin on Windows.
+    #[test]
+    fn remove_names_the_systems_bin() {
+        let expected = if cfg!(target_os = "macos") { "the Trash" } else { "the Recycle Bin" };
+        assert_eq!(TRASH, expected);
+    }
+
     #[test]
     fn the_list_puts_portals_on_first() {
         let mut order = None;
@@ -234,7 +243,7 @@ mod tests {
         screen.settle(&remove, Err(ChangeError::Failed(LoadError::new(".agents/skills/north-search", "in use"))));
         let (folder, words) = screen.failure.clone().unwrap();
         assert_eq!(folder, "north-search");
-        assert!(words.starts_with("Jobdesk could not move this portal to the Trash."), "{words}");
+        assert!(words.starts_with(&format!("Jobdesk could not move this portal to {TRASH}.")), "{words}");
         assert!(words.contains("in use"), "{words}");
         screen.settle(&PortalsRequest::Switch { folder: "north-search".into(), on: false }, Err(ChangeError::NoFrontmatter));
         assert!(screen.failure.as_ref().unwrap().1.contains("Nothing was changed"));

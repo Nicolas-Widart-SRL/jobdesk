@@ -11,7 +11,7 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 Two more changes come from the Portals screen, and neither happens while a run works:
 
 - a portal's switch writes the `enabled:` line in its `SKILL.md` frontmatter, the same way a profile save writes;
-- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash. It never deletes one, and a built-in portal has no Remove.
+- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash (the Recycle Bin on Windows). It never deletes one, and a built-in portal has no Remove.
 
 Everything else Jobdesk writes stays in its data folder, with two exceptions:
 

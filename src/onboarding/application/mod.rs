@@ -5,7 +5,7 @@ mod onboarding;
 mod profile_run;
 mod work;
 
-pub use batch::{Batch, Group, Item, Message, read_message};
+pub use batch::{Batch, Group, Item, Message, MessageBlock, read_message};
 pub use documents::{Added, CopyStop, Documents, Refused};
 pub use helpers::HelperSetup;
 pub use onboarding::{HelperLine, Onboarding, Stage, Work};

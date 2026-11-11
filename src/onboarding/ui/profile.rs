@@ -13,8 +13,8 @@ use egui::{ColorImage, Key, Modifiers, OpenUrl, TextureFilter, TextureHandle, Te
 use egui_commonmark::CommonMarkCache;
 
 use crate::onboarding::application::{
-    Batch, CV_LOOKS_GOOD, DRAFT_SAVE_EVERY, Decision, DocumentKind, Draft, LineState, PageState, PageStore, PdfDocument, ProfilePhase, ProfileRun, PromptKind,
-    Question as AskedQuestion, Quiet, Run, RunDesk, RunStatus, StartRefusal, StartRules, WorkLine, elapsed_text, quiet, review_reply,
+    Batch, CV_LOOKS_GOOD, DRAFT_SAVE_EVERY, Decision, DocumentKind, Draft, LineState, MessageBlock, PageState, PageStore, PdfDocument, ProfilePhase,
+    ProfileRun, PromptKind, Question as AskedQuestion, Quiet, Run, RunDesk, RunStatus, StartRefusal, StartRules, WorkLine, elapsed_text, quiet, review_reply,
 };
 use crate::onboarding::ui::{STEPS, get_help};
 use crate::shared_kernel::visible_text::visible_chars;
@@ -131,9 +131,9 @@ impl ProfileChapter {
                 working(ui, run, cx.desk, &phase);
                 None
             }
-            ProfilePhase::Sheet { message, batch } => self.sheet(ui, run, cx, message, batch, send_keys),
+            ProfilePhase::Sheet { batch, .. } => self.sheet(ui, run, cx, batch, send_keys),
             ProfilePhase::FallbackSheet { message } => self.fallback(ui, run, cx, message, send_keys),
-            ProfilePhase::Review { message, batch } => self.review(ui, run, cx, message, batch),
+            ProfilePhase::Review { batch, .. } => self.review(ui, run, cx, batch),
             ProfilePhase::CvCheck { message, pdf } => self.cv(ui, run, cx, message, pdf),
             ProfilePhase::Choice => {
                 self.choice(ui, run, cx);
@@ -281,13 +281,13 @@ impl ProfileChapter {
     }
 
     /// Claude's numbered questions, a field under each, then Send answers.
-    fn sheet(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, message: &str, batch: &Batch, send_keys: bool) -> Option<ChapterRequest> {
+    fn sheet(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, batch: &Batch, send_keys: bool) -> Option<ChapterRequest> {
         let numbers = batch.numbers();
         if let Some(draft) = self.pending.take() {
             self.answers =
                 numbers.iter().map(|number| draft.answers.iter().find(|(at, _)| at == number).map(|(_, text)| text.clone()).unwrap_or_default()).collect();
         }
-        let laid = lay_out(message, batch);
+        let laid = lay_out(batch, false);
         let subs: Vec<Vec<SubItem>> =
             laid.items.iter().map(|item| item.subs.iter().map(|(letter, text)| SubItem { letter: *letter, text }).collect()).collect();
         let parts: Vec<SheetPart> = laid
@@ -398,10 +398,10 @@ impl ProfileChapter {
     }
 
     /// Claude's proposed changes, a checkbox each, then the reply the ticks build.
-    fn review(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, message: &str, batch: &Batch) -> Option<ChapterRequest> {
+    fn review(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, batch: &Batch) -> Option<ChapterRequest> {
         self.pending = None;
         let numbers = batch.numbers();
-        let laid = lay_out(message, batch);
+        let laid = lay_out(batch, true);
         let parts: Vec<ProposalPart> = laid
             .parts
             .iter()
@@ -955,11 +955,10 @@ fn ordinal(round: usize) -> &'static str {
     }
 }
 
-/// Claude's message taken apart for a sheet or a review: every block of it in order, its headings, its lead, the prose
-/// between groups and its closing words as Markdown, with each numbered item in place of its own lines. An item's words
-/// keep its lettered sub-items apart. An item the message's lines do not show where the batch found it goes last, so
-/// none is ever left out.
-fn lay_out(message: &str, batch: &Batch) -> Laid {
+/// Claude's message for a sheet or a review, from the blocks the parser read: its prose as Markdown, its titles as
+/// plain words, and each numbered item in its place, its words with its lettered sub-items apart. The review card
+/// leaves out a proposal's ask, which invites typing numbers; Show all Claude wrote still holds it.
+fn lay_out(batch: &Batch, review: bool) -> Laid {
     let items: Vec<LaidItem> = batch
         .items()
         .map(|item| {
@@ -973,88 +972,17 @@ fn lay_out(message: &str, batch: &Batch) -> Laid {
             LaidItem { number: item.number, text: words.join(" ").trim().to_owned(), subs, optional: item.optional }
         })
         .collect();
-    let lines: Vec<&str> = message.lines().collect();
-    let (mut parts, mut prose, mut next, mut at) = (Vec::new(), Vec::new(), 0, 0);
-    // A bold line alone, as its own paragraph, heads the items under it as a group's title. The rest stays Markdown.
-    let flush = |prose: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
-        let mut kept: Vec<&str> = Vec::new();
-        let keep = |kept: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
-            let text = kept.join("\n").trim().to_owned();
-            if !text.is_empty() {
-                parts.push(LaidPart::Prose(text));
-            }
-            kept.clear();
-        };
-        let text = prose.join("\n");
-        for paragraph in text.split("\n\n") {
-            let alone = paragraph.trim();
-            if !alone.contains('\n') && is_bold_line(alone) {
-                keep(&mut kept, parts);
-                parts.push(LaidPart::Group(plain(alone.trim_matches('*').trim())));
-            } else {
-                kept.push(paragraph);
-                kept.push("");
-            }
-        }
-        keep(&mut kept, parts);
-        prose.clear();
-    };
-    while at < lines.len() {
-        if next < items.len() && starts_item(lines[at], items[next].number) {
-            flush(&mut prose, &mut parts);
-            parts.push(LaidPart::Item(next));
-            next += 1;
-            at += 1;
-            // The item's lines run on through its indented and lettered lines, and a line that carries its paragraph on.
-            let mut after_blank = false;
-            while at < lines.len() {
-                let line = lines[at];
-                if next < items.len() && starts_item(line, items[next].number) {
-                    break;
-                }
-                if line.trim().is_empty() {
-                    after_blank = true;
-                } else if line.starts_with([' ', '\t']) || lettered(line).is_some() || (!after_blank && !starts_block(line)) {
-                    after_blank = false;
-                } else {
-                    break;
-                }
-                at += 1;
-            }
-            continue;
-        }
-        prose.push(lines[at]);
-        at += 1;
-    }
-    flush(&mut prose, &mut parts);
-    parts.extend((next..items.len()).map(LaidPart::Item));
+    let parts = batch
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            MessageBlock::Prose(source) => Some(LaidPart::Prose(source.clone())),
+            MessageBlock::Title(words) => Some(LaidPart::Group(plain(words))),
+            MessageBlock::Item(number) => items.iter().position(|item| item.number == *number).map(LaidPart::Item),
+            MessageBlock::Ask(source) => (!review).then(|| LaidPart::Prose(source.clone())),
+        })
+        .collect();
     Laid { parts, items }
-}
-
-/// Whether `line` starts the numbered item `number`, indented less than a code block.
-fn starts_item(line: &str, number: u32) -> bool {
-    let trimmed = line.trim_start();
-    let indent = line.len() - trimmed.len();
-    let mark = number.to_string();
-    indent < 4 && trimmed.strip_prefix(&mark).is_some_and(|rest| rest.starts_with(['.', ')']))
-}
-
-/// Whether `line` starts a block of its own: a heading, a bold line or a numbered item.
-fn starts_block(line: &str) -> bool {
-    let line = line.trim_start();
-    line.starts_with('#') || is_bold_line(line) || numbered(line)
-}
-
-/// Whether `line` is bold and nothing else, as Claude heads a group.
-fn is_bold_line(line: &str) -> bool {
-    let line = line.trim_end();
-    line.len() > 4 && line.starts_with("**") && line.ends_with("**")
-}
-
-/// Whether `line` starts a numbered item, such as "1." or "2)".
-fn numbered(line: &str) -> bool {
-    let digits = line.chars().take_while(char::is_ascii_digit).count();
-    digits > 0 && matches!(line[digits..].chars().next(), Some('.' | ')'))
 }
 
 /// A lettered sub-item, such as "a. A former manager", with or without a list mark before it.
@@ -1101,10 +1029,9 @@ mod tests {
     #[test]
     fn every_block_of_a_batch_shows_in_order_with_the_items_in_place() {
         let Message::Questions(batch) = read_message(THIRTEEN) else { panic!("questions") };
-        let laid = lay_out(THIRTEEN, &batch);
+        let laid = lay_out(&batch, false);
         let blocks = prose(&laid);
         assert!(blocks[0].starts_with("Thank you."), "the lead");
-        assert_eq!(blocks[1], "About the roles you want");
         assert!(matches!(&laid.parts[1], LaidPart::Group(title) if title == "About the roles you want"), "a bold line alone is a group's title");
         assert_eq!(blocks.len(), 6, "the lead and each group's title: {blocks:?}");
         assert_eq!(order(&laid), (1..=13).collect::<Vec<_>>());
@@ -1113,20 +1040,30 @@ mod tests {
         assert_eq!(second.subs, [('a', "Individual contributor with deep craft".to_owned()), ('b', "Lead of a small team".to_owned())]);
 
         let Message::Proposal(proposal) = read_message(SIXTEEN) else { panic!("proposal") };
-        let laid = lay_out(SIXTEEN, &proposal);
+        let laid = lay_out(&proposal, true);
         let blocks = prose(&laid);
-        assert_eq!(blocks[0], "I have what I need. Here is what I will write. Nothing changes until you say so.\n\n## CLAUDE.md", "the lead and the heading");
-        assert_eq!(*blocks.last().unwrap(), "Reply yes to apply all, or list the numbers to skip.", "the closing words");
+        assert_eq!(blocks[..2], ["I have what I need. Here is what I will write. Nothing changes until you say so.", "CLAUDE.md"]);
+        assert!(!blocks.iter().any(|block| block.contains("list the numbers")), "the review leaves out the ask: {blocks:?}");
         assert_eq!(order(&laid).len(), 16);
     }
 
+    /// A zero-width space before an item, odd line breaks or a numbered line in code never move a field or show a
+    /// question twice: each field sits directly under its own question.
     #[test]
-    fn a_paragraph_after_a_heading_and_between_groups_stays() {
-        let message = "## Your profile\n\nA few things to settle first.\n\n1. Which city?\n2. Which salary?\n\nNow about the documents.\n\n3. Which language?\n\nTake your time.";
-        let Message::Questions(batch) = read_message(message) else { panic!("questions") };
-        let laid = lay_out(message, &batch);
-        assert_eq!(prose(&laid), ["## Your profile\n\nA few things to settle first.", "Now about the documents.", "Take your time."]);
-        assert!(matches!(laid.parts[1], LaidPart::Item(0)) && matches!(laid.parts[4], LaidPart::Item(2)));
+    fn each_question_shows_once_with_its_field_under_it() {
+        for message in [
+            "Intro.\n\n\u{200b}1. Which city?\n2. Which salary?\n\nThanks.",
+            "Intro.\u{2029}\u{2029}1. Which city?\u{2028}2. Which salary?\u{2028}\u{2028}Thanks.",
+            "Intro:\n\n```\n1. Which city?\n```\n\n1. Which city?\n2. Which salary?\n\nThanks.",
+        ] {
+            let Message::Questions(batch) = read_message(message) else { panic!("questions: {message:?}") };
+            let laid = lay_out(&batch, false);
+            assert_eq!(order(&laid), [1, 2], "{message:?}");
+            assert!(matches!(laid.parts.last(), Some(LaidPart::Prose(text)) if text == "Thanks."), "{message:?}");
+            assert!(prose(&laid).iter().all(|block| !block.contains("Which salary")), "no question shows twice: {message:?}");
+            let at = laid.parts.iter().position(|part| matches!(part, LaidPart::Item(0))).unwrap();
+            assert!(matches!(laid.parts[at + 1], LaidPart::Item(1)), "each field under its question: {message:?}");
+        }
     }
 
     #[test]

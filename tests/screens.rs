@@ -8283,9 +8283,11 @@ mod profile_chapter {
         review.at(SIXTEEN);
         review.until_shown("16 of 16 changes");
         assert!(review.shown("I have what I need."), "the lead");
-        assert!(review.shown("Reply yes to apply all, or list the numbers to skip."), "the closing words");
+        assert!(review.shown("Here is what I will write."), "the lead");
+        assert!(!review.shown("list the numbers to skip"), "the ask to type numbers is left out of the card");
         review.click("Show all Claude wrote");
         review.until_shown("All Claude wrote");
+        assert!(review.shown("list the numbers to skip"), "Show all Claude wrote still holds it");
 
         let mut check = self::scene("setup_blocks_cv", Theme::Light, false);
         cv_check(&mut check);

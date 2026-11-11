@@ -21,10 +21,27 @@ pub enum Message {
     Free,
 }
 
-/// The numbered items of a message, in Claude's order, in the groups Claude gave them.
+/// The numbered items of a message, in Claude's order, in the groups Claude gave them, and the whole message as its
+/// blocks in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Batch {
     pub groups: Vec<Group>,
+    /// Every block of the message, in order, read from the same text as the items: so a screen shows all of it, with
+    /// each item where Claude put it, and never looks for an item itself.
+    pub blocks: Vec<MessageBlock>,
+}
+
+/// One block of a message, as the parser read it, without hidden characters and with every line break a newline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageBlock {
+    /// Claude's words between the items, as Markdown source: a paragraph, a list of bullets, a code block, a quote.
+    Prose(String),
+    /// A heading, or a bold line alone, that titles the items under it, as plain words.
+    Title(String),
+    /// The numbered item of this number.
+    Item(u32),
+    /// A proposal's closing paragraph, which asks to confirm, as Markdown source.
+    Ask(String),
 }
 
 impl Batch {
@@ -67,13 +84,53 @@ pub fn read_message(message: &str) -> Message {
     let text = unified.lines().map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n");
     let Some(scan) = scan(&text) else { return Message::Free };
     let numbered = scan.groups.iter().flat_map(|group| group.items.iter()).enumerate().all(|(at, item)| u64::from(item.number) == at as u64 + 1);
-    let batch = Batch { groups: scan.groups };
-    if batch.items().count() < 2 || !numbered {
+    let count = scan.groups.iter().map(|group| group.items.len()).sum::<usize>();
+    if count < 2 || !numbered {
         return Message::Free;
     }
     // "Apply all except 2." would be ambiguous to Claude when a sub-list repeats the numbers, so that is never a proposal.
     let asks = !scan.nested && scan.closing.as_deref().is_some_and(asks_to_apply);
-    if asks && batch.items().all(|item| !item.text.contains('?')) { Message::Proposal(batch) } else { Message::Questions(batch) }
+    let proposal = asks && scan.groups.iter().flat_map(|group| group.items.iter()).all(|item| !item.text.contains('?'));
+    let ask = if proposal { scan.closing_range.clone() } else { None };
+    let batch = Batch { blocks: blocks(&text, &scan.spans, ask), groups: scan.groups };
+    if proposal { Message::Proposal(batch) } else { Message::Questions(batch) }
+}
+
+/// What a stretch of the message is, past its prose.
+#[derive(Debug, Clone)]
+enum Span {
+    Item(u32),
+    Title(String),
+}
+
+/// The message's blocks in order: each item and title where its span lies, the proposal's ask apart, and the text
+/// between them as prose, one block for each stretch.
+fn blocks(text: &str, spans: &[(Range<usize>, Span)], ask: Option<Range<usize>>) -> Vec<MessageBlock> {
+    let mut marked: Vec<(Range<usize>, Option<&Span>)> = spans.iter().map(|(range, span)| (range.clone(), Some(span))).collect();
+    marked.extend(ask.map(|range| (range, None)));
+    marked.sort_by_key(|(range, _)| range.start);
+    let mut found = Vec::new();
+    let mut at = 0;
+    let prose = |found: &mut Vec<MessageBlock>, range: Range<usize>| {
+        let source = text[range].trim();
+        if !source.is_empty() {
+            found.push(MessageBlock::Prose(source.to_owned()));
+        }
+    };
+    for (range, span) in marked {
+        if range.start < at {
+            continue;
+        }
+        prose(&mut found, at..range.start);
+        found.push(match span {
+            Some(Span::Item(number)) => MessageBlock::Item(*number),
+            Some(Span::Title(words)) => MessageBlock::Title(words.clone()),
+            None => MessageBlock::Ask(text[range.clone()].trim().to_owned()),
+        });
+        at = range.end;
+    }
+    prose(&mut found, at..text.len());
+    found
 }
 
 /// Whether the closing paragraph holds the word "apply" and one of "skip", "number" or "numbers", in any case. That is
@@ -90,6 +147,10 @@ struct Scan {
     closing: Option<String>,
     /// Whether a top-level item holds a numbered list of its own.
     nested: bool,
+    /// Where the closing paragraph is in the text.
+    closing_range: Option<Range<usize>>,
+    /// Where each top-level item and each title is in the text, in order.
+    spans: Vec<(Range<usize>, Span)>,
 }
 
 /// A paragraph or heading outside any list, being read.
@@ -136,6 +197,8 @@ fn scan(text: &str) -> Option<Scan> {
     let mut separated = false;
     let mut code: Vec<Range<usize>> = Vec::new();
     let mut item_starts: HashSet<usize> = HashSet::new();
+    let mut closing_range = None;
+    let mut spans: Vec<(Range<usize>, Span)> = Vec::new();
     for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::List(start)) => {
@@ -145,7 +208,7 @@ fn scan(text: &str) -> Option<Scan> {
                     // A bullet list between numbered ones sets them apart.
                     separated |= start.is_none();
                     if start.is_some() {
-                        closing = None;
+                        (closing, closing_range) = (None, None);
                         // A heading, a bold line or a plain paragraph before the list starts a group, titled or not.
                         if groups.is_empty() || separated || title.is_some() {
                             groups.push(Group { title: title.take(), items: Vec::new() });
@@ -204,7 +267,10 @@ fn scan(text: &str) -> Option<Scan> {
                     && let Some(item) = open.take()
                 {
                     let group = groups.last_mut()?;
-                    group.items.push(finish(item, text)?);
+                    let range = item.start..item.end;
+                    let done = finish(item, text)?;
+                    spans.push((range, Span::Item(done.number)));
+                    group.items.push(done);
                 }
             }
             Event::Start(Tag::CodeBlock(_)) => {
@@ -241,16 +307,21 @@ fn scan(text: &str) -> Option<Scan> {
                             item.body.push_str(source);
                             item.text.push(' ');
                             item.text.push_str(&line);
+                            if let Some((range, _)) = spans.iter_mut().rev().find(|(_, span)| matches!(span, Span::Item(_))) {
+                                range.end = range.end.max(done.range.end);
+                            }
                         }
                         _ => {
                             after_item = false;
                             separated = true;
                             // A plain paragraph between a title and its list, such as an intro line, keeps the title.
-                            if done.heading || (done.bold_text && !done.plain_text) {
-                                title = Some(line.clone()).filter(|line| !line.is_empty()).or(title);
+                            if (done.heading || (done.bold_text && !done.plain_text)) && !line.is_empty() {
+                                spans.push((done.range.clone(), Span::Title(line.clone())));
+                                title = Some(line.clone());
                             }
                             if !done.heading {
                                 closing = Some(line);
+                                closing_range = Some(done.range.clone());
                             }
                         }
                     }
@@ -307,7 +378,7 @@ fn scan(text: &str) -> Option<Scan> {
     if hides_numbered_line(text, &code, &item_starts) {
         return None;
     }
-    Some(Scan { groups, closing, nested })
+    Some(Scan { groups, closing, nested, closing_range, spans })
 }
 
 /// Where the item that starts at `at` has its marker: its range may begin on the indent before it.
@@ -650,6 +721,66 @@ mod tests {
 
     fn batch_of(message: &str) -> Batch {
         batch(read_message(message))
+    }
+
+    /// The blocks of `message`, with each item by its number, a title by its words, prose by its source.
+    fn blocks_of(message: &str) -> Vec<String> {
+        batch_of(message)
+            .blocks
+            .iter()
+            .map(|block| match block {
+                MessageBlock::Prose(source) => format!("prose: {source}"),
+                MessageBlock::Title(words) => format!("title: {words}"),
+                MessageBlock::Item(number) => format!("item {number}"),
+                MessageBlock::Ask(source) => format!("ask: {source}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_message_is_its_blocks_in_order_with_each_item_in_place() {
+        let message = "## Your profile\n\nA few things first.\n\n1. Which city?\n2. Which salary?\n\nNow the documents.\n\n**Letters**\n\n3. Which language?\n\nTake your time.";
+        assert_eq!(
+            blocks_of(message),
+            [
+                "title: Your profile",
+                "prose: A few things first.",
+                "item 1",
+                "item 2",
+                "prose: Now the documents.",
+                "title: Letters",
+                "item 3",
+                "prose: Take your time."
+            ]
+        );
+        let lettered = blocks_of("Intro.\n\n1. First?\n2. Which?\n\na. IC\nb. Lead\n\n3. Third?\n\nThanks.");
+        assert_eq!(lettered, ["prose: Intro.", "item 1", "item 2", "item 3", "prose: Thanks."], "lettered lines stay in their item");
+    }
+
+    /// The blocks come from the text the parser read: hidden characters and odd line breaks change nothing.
+    #[test]
+    fn hidden_characters_and_odd_line_breaks_keep_every_item_once_in_place() {
+        let plain = blocks_of("Intro.\n\n1. Which city?\n2. Which salary?\n\nThanks.");
+        assert_eq!(blocks_of("Intro.\n\n\u{200b}1. Which city?\n2. Which salary?\n\nThanks."), plain);
+        assert_eq!(blocks_of("Intro.\u{2029}\u{2029}1. Which city?\u{2028}2. Which salary?\u{2028}\u{2028}Thanks."), plain);
+        assert_eq!(blocks_of("Intro.\r\n\r\n1. Which city?\r2. Which salary?\r\n\r\nThanks."), plain);
+    }
+
+    /// A fenced code block in the lead that starts with "1." is prose, and the items keep their own place.
+    #[test]
+    fn a_numbered_line_inside_code_stays_in_its_code_block() {
+        let blocks = blocks_of("Here is the format:\n\n```\n1. Example\n```\n\n1. Which city?\n2. Which salary?");
+        assert_eq!(blocks, ["prose: Here is the format:\n\n```\n1. Example\n```", "item 1", "item 2"]);
+    }
+
+    /// The paragraph that makes a message a proposal is its ask, so the review card can leave it out.
+    #[test]
+    fn a_proposals_closing_ask_is_a_block_of_its_own() {
+        let blocks = blocks_of(SIXTEEN);
+        assert_eq!(blocks.last().map(String::as_str), Some("ask: Reply yes to apply all, or list the numbers to skip."));
+        assert_eq!(blocks.iter().filter(|block| block.starts_with("item")).count(), 16);
+        let questions = blocks_of(&format!("{FIVE}\nTake your time."));
+        assert_eq!(questions.last().map(String::as_str), Some("prose: Take your time."), "a question batch has no ask");
     }
 
     #[test]

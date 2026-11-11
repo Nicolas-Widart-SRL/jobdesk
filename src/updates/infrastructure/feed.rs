@@ -665,6 +665,27 @@ pub mod tests {
         }
     }
 
+    /// The app reads each part of a version as a `u32` and names the zip from those numbers, so a pin for `01.8.0`
+    /// names a zip the app never asks for, and one above `u32::MAX` never reads: the script refuses the whole feed.
+    #[cfg(unix)]
+    #[test]
+    fn the_script_refuses_a_pin_whose_version_the_app_would_not_write_back() {
+        for version in ["01.8.0", "1.08.0", "1.8.00", "1.8.4294967296", "1.8.99999999999"] {
+            let output = run_script(pins_dir(&["1.4.0", version]).path());
+            assert!(!output.status.success(), "{version}");
+            assert!(output.stdout.is_empty(), "{version}: no feed is written");
+            let said = String::from_utf8_lossy(&output.stderr);
+            assert!(said.contains(&format!("ai-job-search-v{version}.zip.sha256 is not one line")), "{version}: {said}");
+        }
+        if std::process::Command::new("jq").arg("--version").output().is_err() {
+            return;
+        }
+        for version in ["0.8.0", "1.8.4294967295"] {
+            let output = run_script(pins_dir(&["1.4.0", version]).path());
+            assert!(output.status.success(), "{version}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_script_lists_up_to_five_newest_first() {

@@ -105,7 +105,7 @@ fn needs() -> Vec<Need> {
     needs
 }
 
-/// The value of `key` in a skill's front matter, unquoted, or `None` when the file has no front matter or the front
+/// The value of `key` in a skill's front matter, trimmed, or `None` when the file has no front matter or the front
 /// matter does not give it.
 fn front_matter(bytes: &[u8], key: &str) -> Option<String> {
     let text = String::from_utf8_lossy(bytes);
@@ -113,31 +113,62 @@ fn front_matter(bytes: &[u8], key: &str) -> Option<String> {
     if lines.next()?.trim_end() != "---" {
         return None;
     }
-    lines
-        .take_while(|line| line.trim_end() != "---")
-        .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
-        .map(|value| value.trim().trim_matches(['"', '\'']).to_owned())
+    lines.take_while(|line| line.trim_end() != "---").find_map(|line| line.strip_prefix(key)?.strip_prefix(':')).map(|value| value.trim().to_owned())
 }
 
-/// Whether the user can start a skill as a slash command: not when its front matter says `user-invocable: false`.
+/// The `name:` of a skill's front matter, unquoted.
+fn skill_name(bytes: &[u8]) -> Option<String> {
+    front_matter(bytes, "name").map(|name| name.trim_matches(['"', '\'']).to_owned())
+}
+
+/// Whether the user can start a skill as a slash command: not when its front matter sets `user-invocable` to false.
+/// Claude Code reads front matter as YAML, so the value is read the same way, failing closed: a trailing comment
+/// (whitespace, then `#`) is dropped, one pair of matching quotes is stripped, and any case of `false` counts. Any
+/// other value, or none, counts as invocable.
 fn user_invocable(bytes: &[u8]) -> bool {
-    front_matter(bytes, "user-invocable").as_deref() != Some("false")
+    let Some(value) = front_matter(bytes, "user-invocable") else {
+        return true;
+    };
+    let comment = value.char_indices().find(|&(at, letter)| letter == '#' && value[..at].ends_with(char::is_whitespace)).map(|(at, _)| at);
+    let value = value[..comment.unwrap_or(value.len())].trim();
+    let value = ["\"", "'"].into_iter().find_map(|quote| value.strip_prefix(quote)?.strip_suffix(quote)).unwrap_or(value);
+    !value.eq_ignore_ascii_case("false")
 }
 
-/// The file that makes `name` a slash command: its command file, or else a skill of that name the user can start. A
-/// skill is named by the `name:` of its front matter, or by its folder when it has none, as Claude Code names it: a
-/// skill whose `name:` names another command is not this one, whatever its folder. A skill with `user-invocable: false`
-/// is no slash command, so the launcher cannot start it.
-fn command_file<'a>(files: &'a Files, name: &str) -> Option<(&'a str, &'a [u8])> {
+/// Every skill that is named `name`, the user can invoke or not, by its path and bytes. A skill is named by the `name:`
+/// of its front matter, or by its folder when it has none, as Claude Code names it: a skill whose `name:` names another
+/// command is not this one, whatever its folder.
+fn skills_named<'a>(files: &'a Files, name: &'a str) -> impl Iterator<Item = (&'a str, &'a [u8])> + 'a {
+    files
+        .iter()
+        .filter(move |(path, bytes)| skill_folder(path).is_some_and(|folder| skill_name(bytes).as_deref().unwrap_or(folder) == name))
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+}
+
+/// The file that makes `name` a slash command: its command file, or else a skill of that name the user can invoke. A
+/// skill whose front matter sets `user-invocable` to false is no slash command, so the launcher cannot start it.
+fn command_file<'a>(files: &'a Files, name: &'a str) -> Option<(&'a str, &'a [u8])> {
     if let Some((path, bytes)) = files.get_key_value(&command_path(name)) {
         return Some((path, bytes));
     }
-    files
-        .iter()
-        .find(|(path, bytes)| {
-            skill_folder(path).is_some_and(|folder| front_matter(bytes, "name").as_deref().unwrap_or(folder) == name) && user_invocable(bytes)
-        })
-        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+    skills_named(files, name).find(|(_, bytes)| user_invocable(bytes))
+}
+
+/// Why the slash command `name` is missing: no command file, and either a skill of that name the user cannot invoke,
+/// named by its path, or no skill of that name at all.
+fn missing_command(files: &Files, name: &str) -> String {
+    let command = command_path(name);
+    let hidden: Vec<&str> = skills_named(files, name).map(|(path, _)| path).collect();
+    if hidden.is_empty() {
+        format!(
+            "/{name} is missing: no {command}, and no skill of that name the user can invoke, which is either a {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name} or a {CLAUDE_SKILLS}/{name}/{MANIFEST} with no name, and in both cases one whose front matter does not set user-invocable to false"
+        )
+    } else {
+        format!(
+            "/{name} is missing: no {command}, and the skill of that name, {}, sets user-invocable to false in its front matter, so the user cannot invoke it",
+            hidden.join(" and ")
+        )
+    }
 }
 
 /// The folder of a skill's `SKILL.md` right under `CLAUDE_SKILLS`, or `None` for any other path.
@@ -160,10 +191,7 @@ fn unmet(files: &Files) -> Vec<String> {
         let Some((path, bytes)) = found else {
             let missing = match &need.place {
                 Place::File(path) => format!("{path} is missing"),
-                Place::Command(name) => format!(
-                    "/{name} is missing: no {}, no {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name}, and no {CLAUDE_SKILLS}/{name}/{MANIFEST} with no name, that is not user-invocable: false",
-                    command_path(name)
-                ),
+                Place::Command(name) => missing_command(files, name),
             };
             lines.push(format!("{missing} ({})", need.why));
             continue;
@@ -327,14 +355,35 @@ fn a_skill_the_user_cannot_invoke_is_not_the_command() {
         (&b"---\nname: scrape\nuser-invocable: false\n---\n"[..], "named for the command"),
         (&b"---\nuser-invocable: false\ndescription: Finds jobs.\n---\n"[..], "named by its folder"),
         (&b"\xef\xbb\xbf---\nuser-invocable:   false  \nname: scrape\n---\n"[..], "after a BOM, with spaces around the value"),
+        (&b"---\nname: scrape\nuser-invocable: false  # internal\n---\n"[..], "a trailing comment"),
+        (&b"---\nname: scrape\nuser-invocable: false\t# internal\n---\n"[..], "a trailing comment after a tab"),
+        (&b"---\nname: scrape\nuser-invocable: False\n---\n"[..], "False"),
+        (&b"---\nname: scrape\nuser-invocable: FALSE\n---\n"[..], "FALSE"),
+        (&b"---\nname: scrape\nuser-invocable: \"false\"\n---\n"[..], "double quotes"),
+        (&b"---\nname: scrape\nuser-invocable: 'False' # internal\n---\n"[..], "single quotes and a comment"),
     ] {
         files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
         let lines = unmet(&files);
         assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
         assert!(lines[0].starts_with("/scrape is missing"), "{why}: {}", lines[0]);
+        assert!(
+            lines[0].contains(".claude/skills/scrape/SKILL.md, sets user-invocable to false"),
+            "{why}: the line names the skill the user cannot invoke: {}",
+            lines[0]
+        );
     }
+    files.remove(".claude/skills/scrape/SKILL.md");
+    let lines = unmet(&files);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert!(
+        lines[0].starts_with("/scrape is missing") && !lines[0].contains("the skill of that name,"),
+        "no skill at all is not one the user cannot invoke: {}",
+        lines[0]
+    );
     for (bytes, why) in [
         (&b"---\nname: scrape\nuser-invocable: true\n---\n"[..], "invocable"),
+        (&b"---\nname: scrape\nuser-invocable: falsehood\n---\n"[..], "another word"),
+        (&b"---\nname: scrape\nuser-invocable: true  # false\n---\n"[..], "false only in the comment"),
         (&b"---\nname: scrape\n---\n"[..], "no user-invocable"),
         (&b"---\nname: scrape\n---\nuser-invocable: false\n"[..], "user-invocable outside the front matter"),
         (&b"# Scrape\n\nuser-invocable: false\n"[..], "no front matter"),

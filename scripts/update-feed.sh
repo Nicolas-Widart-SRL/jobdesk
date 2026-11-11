@@ -68,11 +68,16 @@ if [ "${#pins[@]}" -lt 1 ] || [ "${#pins[@]}" -gt "$limit" ]; then
 fi
 
 # One row for each pin: its version, its hash and its signature, apart by a space.
+# A pin's version is three numbers from 0 to 4294967295 with no leading zero: the form the app writes back once it reads
+# each as a u32, and names the zip by. A part is 0, or 1 to 9 then at most 9 more digits, so bash holds it exactly.
+part='(0|[1-9][0-9]{0,9})'
+largest=4294967295
+pin_shape="^([0-9a-f]{64})  (ai-job-search-v($part\\.$part\\.$part)\\.zip)\$"
 rows=""
 for pin in "${pins[@]}"; do
   line=$(head -n 1 "$pin")
-  if ! [[ $line =~ ^([0-9a-f]{64})\ \ (ai-job-search-v([0-9]+\.[0-9]+\.[0-9]+)\.zip)$ ]]; then
-    echo "error: $pin is not one line '<sha256>  ai-job-search-vA.B.C.zip'" >&2
+  if ! [[ $line =~ $pin_shape ]] || ((BASH_REMATCH[4] > largest || BASH_REMATCH[5] > largest || BASH_REMATCH[6] > largest)); then
+    echo "error: $pin is not one line '<sha256>  ai-job-search-vA.B.C.zip', with A, B and C from 0 to $largest and no leading zero" >&2
     exit 1
   fi
   pin_sha256=${BASH_REMATCH[1]}

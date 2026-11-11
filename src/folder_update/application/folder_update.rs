@@ -132,8 +132,8 @@ enum Event {
     Phase(Phase),
     /// What the rollback at an open found of the folder.
     Looked(Look),
-    /// The version of the folder's base as the worker read it, at the open's look or once a pass or an undo ended.
-    /// `None` when the folder keeps no base, or one that does not read.
+    /// The version the record of the folder's base gives, as the worker read it, at the open's look or once a pass or
+    /// an undo ended. `None` for a folder under git, when the record does not read, and after a worker that panicked.
     Base(Option<Version>),
     /// The stage it ended at, and whether the last update can be undone now.
     Ended(Stage, bool),
@@ -213,8 +213,9 @@ pub struct FolderUpdate {
     updatable: bool,
     /// A pass has asked the gate for the open folder, so a check has already done what it can.
     checked: bool,
-    /// The version of the open folder's base, as the worker last read it: at the open's look, and again once each
-    /// update pass or undo ended. `None` until then, and when the folder keeps no base or one that does not read.
+    /// The version the record of the open folder's base gives, as the worker last read it: at the open's look, and again
+    /// once each update pass or undo ended. `None` until then, for a folder under git, when the record does not read,
+    /// and once a worker panicked, since what it left is not known.
     base: Option<Version>,
 }
 
@@ -383,7 +384,8 @@ impl FolderUpdate {
 
     /// The line Settings › About shows when the open folder's files come from a release that `feed`, the answer of the
     /// last check that read it, no longer lists as compatible. Nothing when no check has read the feed, when its signed
-    /// list is empty, or when the folder's base was not read or does not read: nothing can be said then.
+    /// list is empty, for a folder under git, whose files git updates without the record, or when the record of the
+    /// folder's base was not read or does not read: nothing can be said then.
     pub fn support_line(&self, feed: Option<&LatestFeed>) -> Option<&'static str> {
         let (base, feed) = (self.base?, feed?);
         (feed.supports(base) == Some(false)).then_some(notice::UNSUPPORTED)
@@ -486,7 +488,7 @@ impl FolderUpdate {
         self.working_on = Some(folder.clone());
         self.spawn(Phase::Checking, Stage::Ended(Outcome::Failed(Failure::Disk)), move |ports, tell| {
             let outcome = run(ports, &folder, &feed, current, &mut |phase| tell(Event::Phase(phase)));
-            tell(Event::Base(base_version(ports, &folder)));
+            tell(Event::Base(about_version(ports, &folder)));
             (Stage::Ended(outcome), ports.updater.can_undo(&folder))
         });
     }
@@ -533,7 +535,7 @@ impl FolderUpdate {
         }
         self.spawn(Phase::Undoing, Stage::Undid(UndoOutcome::Failed(Failure::Disk)), move |ports, tell| {
             let outcome = undo(ports, &folder);
-            tell(Event::Base(base_version(ports, &folder)));
+            tell(Event::Base(about_version(ports, &folder)));
             (Stage::Undid(outcome), ports.updater.can_undo(&folder))
         });
     }
@@ -575,7 +577,8 @@ impl FolderUpdate {
     }
 
     /// Runs `job` on a worker. It always ends with an `Ended` event, so `working` never stays true: a job that panics
-    /// ends at `panicked`, with nothing to undo, since what it left is not known.
+    /// ends at `panicked`, with nothing to undo and no version of the base for About, since what it left is not known.
+    /// An update may have put the new record in place before it panicked.
     fn spawn(&mut self, first: Phase, panicked: Stage, job: impl FnOnce(&Ports, &dyn Fn(Event)) -> (Stage, bool) + Send + 'static) {
         self.working = true;
         self.stage = Stage::Working(first);
@@ -587,7 +590,10 @@ impl FolderUpdate {
             };
             // The ports hold no state of a job: a later one reads the folder afresh, so a panic leaves nothing half
             // changed in memory that it would trust. What it left on the disk is the next open's rollback to handle.
-            let (stage, undoable) = panic::catch_unwind(AssertUnwindSafe(|| job(&ports, &tell))).unwrap_or((panicked, false));
+            let (stage, undoable) = panic::catch_unwind(AssertUnwindSafe(|| job(&ports, &tell))).unwrap_or_else(|_| {
+                tell(Event::Base(None));
+                (panicked, false)
+            });
             tell(Event::Ended(stage, undoable));
         });
     }
@@ -662,36 +668,38 @@ fn recover_stopped(ports: &Ports, folder: &Path) -> Option<Outcome> {
 }
 
 /// What the gate would find of `folder` before it asks the feed: why Jobdesk leaves it as it is, or that a check would
-/// update it, and the version of its base, for About to say whether the feed still lists it. A folder under git has its
-/// base read too, since its files may still be the ones setup unpacked. `(None, None)` when it is not there. It reads
-/// only the folder.
+/// update it, and the version the record of its base gives, for About to say whether the feed still lists it. A folder
+/// under git has no base read and no version: git updates its files and leaves the record as it was. `(None, None)`
+/// when it is not there. It reads only the folder.
 fn look_at(ports: &Ports, folder: &Path) -> (Option<Look>, Option<Version>) {
     if !ports.probe.exists(folder) {
         return (None, None);
     }
-    let git = ports.probe.has_git(folder);
-    let base = ports.base.read(folder);
-    let version = base_of(&base);
-    let look = match base {
-        _ if git => Look::Quiet(Quiet::GitFolder),
-        Base::Missing => Look::Quiet(Quiet::NoBase),
-        Base::Found { .. } if version.is_some() => Look::Updatable,
-        Base::Bad | Base::Found { .. } => Look::Quiet(Quiet::BadBase),
-    };
-    (Some(look), version)
-}
-
-/// The version of `folder`'s base, as the worker reads it once a pass or an undo ended. `None` when it keeps none, or
-/// one that does not read.
-fn base_version(ports: &Ports, folder: &Path) -> Option<Version> {
-    base_of(&ports.base.read(folder))
-}
-
-fn base_of(base: &Base) -> Option<Version> {
-    match base {
-        Base::Found { source, .. } => Version::parse(&source.version),
-        Base::Missing | Base::Bad => None,
+    if ports.probe.has_git(folder) {
+        return (Some(Look::Quiet(Quiet::GitFolder)), None);
     }
+    let look = match ports.base.read(folder) {
+        Base::Missing => Look::Quiet(Quiet::NoBase),
+        Base::Bad => Look::Quiet(Quiet::BadBase),
+        Base::Found { source, .. } if Version::parse(&source.version).is_none() => Look::Quiet(Quiet::BadBase),
+        Base::Found { .. } => Look::Updatable,
+    };
+    (Some(look), recorded_version(ports, folder))
+}
+
+/// The version for About once a pass or an undo ended: `None` for a folder under git, as at the look, and else what
+/// the record of the base gives.
+fn about_version(ports: &Ports, folder: &Path) -> Option<Version> {
+    if ports.probe.has_git(folder) {
+        return None;
+    }
+    recorded_version(ports, folder)
+}
+
+/// The version the record of `folder`'s base gives, read alone: neither the kept zip, up to the largest release, nor
+/// its hash is read for a line in About, and writers wait while a worker runs. `None` when it does not read.
+fn recorded_version(ports: &Ports, folder: &Path) -> Option<Version> {
+    ports.base.record(folder).and_then(|source| Version::parse(&source.version))
 }
 
 fn undo(ports: &Ports, folder: &Path) -> UndoOutcome {
@@ -833,6 +841,13 @@ mod tests {
         fn read(&self, _folder: &Path) -> Base {
             self.note("base".into());
             self.moved.lock().unwrap().clone().unwrap_or_else(|| self.base.clone())
+        }
+        fn record(&self, _folder: &Path) -> Option<InstalledSource> {
+            self.note("record".into());
+            match self.moved.lock().unwrap().clone().unwrap_or_else(|| self.base.clone()) {
+                Base::Found { source, .. } => Some(source),
+                Base::Missing | Base::Bad => None,
+            }
         }
         fn skipped(&self, _folder: &Path) -> Option<InstalledSource> {
             self.skipped.clone()
@@ -1594,8 +1609,9 @@ mod tests {
         opened
     }
 
-    /// About says the folder's files come from a release Jobdesk no longer supports only when the folder's base reads
-    /// and a check read a signed list that leaves it out. Under git too, since its files may still be setup's.
+    /// About says the folder's files come from a release Jobdesk no longer supports only when the record of the
+    /// folder's base reads and a check read a signed list that leaves it out. Never under git, since git updates the
+    /// files and leaves the record as it was.
     #[test]
     fn about_says_when_the_folders_version_is_no_longer_supported() {
         let dropped = listing(&["1.4.0"]);
@@ -1605,8 +1621,15 @@ mod tests {
         assert_eq!(old.support_line(Some(&dropped)), Some(notice::UNSUPPORTED));
         assert_eq!(old.support_line(None), None, "no check has read the feed");
         assert_eq!(old.support_line(Some(&listing(&[]))), None, "a feed with no verified release says nothing");
-        let under_git = looked(Fake { base: based_on("1.3.0"), git: true, ..Fake::ready() });
-        assert_eq!(under_git.support_line(Some(&dropped)), Some(notice::UNSUPPORTED));
+        let fake = Arc::new(Fake { base: based_on("1.3.0"), git: true, ..Fake::ready() });
+        let mut under_git = desk(&fake, "0.2.0");
+        under_git.opened(PathBuf::from(FOLDER));
+        follow(&mut under_git, None, true);
+        assert_eq!(under_git.support_line(Some(&dropped)), None, "a folder under git");
+        follow(&mut under_git, Some((1, &dropped)), true);
+        assert_eq!(under_git.stage(), &Stage::Ended(Outcome::GitFolder));
+        assert_eq!(under_git.support_line(Some(&dropped)), None, "nor after a pass");
+        assert!(!fake.asked().iter().any(|line| line == "base" || line == "record"), "its base is never read: {:?}", fake.asked());
 
         let listed = looked(Fake { base: based_on("1.4.0"), ..Fake::ready() });
         assert_eq!(listed.support_line(Some(&listing(&["1.4.0", "1.3.0"]))), None);
@@ -1639,6 +1662,42 @@ mod tests {
         assert_eq!(opened.support_line(Some(&feed)), None, "About speaks of the open folder only");
     }
 
+    /// Once a pass or an undo ended, About's version comes from the record alone: the kept zip, up to the largest
+    /// release, is read only by the gate, and not again while writers wait.
+    #[test]
+    fn the_version_after_a_pass_or_an_undo_comes_from_the_record_alone() {
+        let fake = Arc::new(Fake::ready());
+        let mut opened = desk(&fake, "0.2.0");
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, None, true);
+        let looked = fake.asked().len();
+        follow(&mut opened, Some((1, &feed())), true);
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::Updated(report())));
+        let pass = fake.asked()[looked..].to_vec();
+        assert_eq!(pass.iter().filter(|line| line.as_str() == "base").count(), 1, "the gate's own read: {pass:?}");
+        assert_eq!(pass[pass.len() - 3..], ["git", "record", "can undo"]);
+    }
+
+    /// A pass or an Undo whose worker panicked may have put the new record in place, or part of it, so About says
+    /// nothing of the folder's version until the next look.
+    #[test]
+    fn a_worker_that_panics_leaves_no_version_for_about() {
+        let dropped = listing(&["1.4.0"]);
+        let mut opened = looked(Fake { base: based_on("1.3.0"), panics: true, ..Fake::ready() });
+        assert_eq!(opened.support_line(Some(&dropped)), Some(notice::UNSUPPORTED));
+        follow(&mut opened, Some((1, &dropped)), true);
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::Failed(Failure::Disk)));
+        assert_eq!(opened.support_line(Some(&dropped)), None, "the pass panicked");
+
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, None, true);
+        assert_eq!(opened.support_line(Some(&dropped)), Some(notice::UNSUPPORTED), "the next look reads it again");
+        opened.undo(PathBuf::from(FOLDER), true);
+        settle(&mut opened);
+        assert_eq!(opened.stage(), &Stage::Undid(UndoOutcome::Failed(Failure::Disk)));
+        assert_eq!(opened.support_line(Some(&dropped)), None, "the undo panicked");
+    }
+
     #[test]
     fn a_working_stage_shown_for_a_preview_keeps_working() {
         let fake = Arc::new(Fake::ready());
@@ -1660,7 +1719,7 @@ mod tests {
         };
         let fake = Arc::new(Fake { recover: Ok(Some(rolled_back.clone())), ..Fake::ready() });
         assert_eq!(recovering(&fake).stage(), &Stage::Ended(Outcome::Recovered(rolled_back)));
-        assert_eq!(fake.asked(), ["recover", "exists", "git", "base", "can undo"], "a look at the folder for About, no download, no update");
+        assert_eq!(fake.asked(), ["recover", "exists", "git", "base", "record", "can undo"], "a look at the folder for About, no download, no update");
 
         let opened = recovering(&Arc::new(Fake::ready()));
         assert_eq!(opened.stage(), &Stage::Idle, "no update had stopped, so there is nothing to say");
@@ -1693,7 +1752,7 @@ mod tests {
         settle(&mut desk);
         assert_eq!(desk.stage(), &Stage::Undid(UndoOutcome::Undone(Reverted { reverted: vec!["CLAUDE.md".into()], kept: Vec::new() })));
         assert!(!desk.can_undo(), "as the worker found it after the undo");
-        assert_eq!(fake.asked(), ["undo", "base", "can undo"], "the base is read again for About");
+        assert_eq!(fake.asked(), ["undo", "git", "record", "can undo"], "the record alone is read again for About");
     }
 
     #[test]

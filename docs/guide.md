@@ -224,7 +224,7 @@ In Settings › About, under Latest version, one line says when Jobdesk leaves y
 - "Jobdesk cannot read the copy it keeps of how this folder was set up, so Jobdesk leaves it as it is."
 - With Check for updates automatically off: "With automatic checks off, your job search folder is brought up to date only after you check for updates."
 
-Each Jobdesk release works with up to 5 versions of the files in your job search folder. After a check for updates, About can also say "The files in this folder are from a version Jobdesk no longer supports, so some tasks may not work as expected." It shows when the version Jobdesk last put in your folder, at [first run](#your-folder) or in an update, is not one the latest Jobdesk works with. It goes once Jobdesk brings your folder up to date, and comes back if you undo that update. It shows for a folder under git too, and Jobdesk knows only the version it put there, so the line can stay after you update the files yourself. The status bar says nothing of it.
+Each Jobdesk release works with up to 5 versions of the files in your job search folder. After a check for updates, About can also say "The files in your job search folder are from a version Jobdesk no longer supports, so some tasks may not work as expected." It shows when the version Jobdesk last put in your folder, at [first run](#your-folder) or in an update, is not one the latest Jobdesk works with. It goes once Jobdesk brings your folder up to date, and comes back if you undo that update. It never shows for a folder under git: git updates its files, and Jobdesk knows only the version it put there. The status bar says nothing of it.
 
 ## Privacy and trust
 

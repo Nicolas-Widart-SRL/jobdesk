@@ -26,7 +26,7 @@ pub const RESTART_WAITS: &str = "Jobdesk is updating your job search folder. Res
 pub const CHECK_HINT: &str = "With automatic checks off, your job search folder is brought up to date only after you check for updates.";
 /// What Settings › About says when the release the open folder's files come from is no longer on the feed's signed list
 /// of compatible releases. It names no program, since users need not know what the folder was set up from.
-pub const UNSUPPORTED: &str = "The files in this folder are from a version Jobdesk no longer supports, so some tasks may not work as expected.";
+pub const UNSUPPORTED: &str = "The files in your job search folder are from a version Jobdesk no longer supports, so some tasks may not work as expected.";
 /// Why Change folder waits while the folder updates.
 pub const FOLDER_WAITS: &str = "Jobdesk is updating your job search folder. Change folder once it finishes.";
 

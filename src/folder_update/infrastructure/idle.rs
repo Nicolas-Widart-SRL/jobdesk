@@ -25,6 +25,10 @@ impl BaseReader for IdleFolder {
         Base::Missing
     }
 
+    fn record(&self, _folder: &Path) -> Option<InstalledSource> {
+        None
+    }
+
     fn skipped(&self, _folder: &Path) -> Option<InstalledSource> {
         None
     }

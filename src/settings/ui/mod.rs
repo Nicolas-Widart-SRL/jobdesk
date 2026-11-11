@@ -1305,7 +1305,7 @@ mod tests {
 
     #[test]
     fn about_says_when_the_folders_files_are_no_longer_supported() {
-        const LINE: &str = "The files in this folder are from a version Jobdesk no longer supports, so some tasks may not work as expected.";
+        const LINE: &str = "The files in your job search folder are from a version Jobdesk no longer supports, so some tasks may not work as expected.";
         let state = state();
         on(&state, Page::About);
         let mut harness = harness(state.clone());

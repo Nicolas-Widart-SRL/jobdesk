@@ -96,14 +96,51 @@ The two update key secrets, `JOBDESK_UPDATE_KEY` and `JOBDESK_UPDATE_KEY_PASSWOR
 2. Review the changelog on that branch, then merge the pull request. Squash and merge is the recommended method, and a merge commit works too. Keep the squash commit subject `chore(release): vX.Y.Z`, as the pull request title gives it. When the subject is edited at the merge, for example to `Release v0.3.1 (#52)`, the workflow does not recognise the merge and the run is skipped without an error: run the Tag release workflow by hand with the tag instead. The same holds for a rebase merge, which is not supported, because it can end on a commit that is not named `chore(release): vX.Y.Z`. The merge is a push to `main`, and that push starts the Tag release workflow.
 3. The Tag release workflow starts only for the merge of a `release/vX.Y.Z` pull request: its first job asks GitHub which pull request the pushed commit merged, and ends the run, with every later job skipped, unless there is exactly one merged pull request of this repository from `release/vX.Y.Z` into `main` whose merge commit is the pushed one. Any other push to `main` starts no build. GitHub can list no pull request for a few seconds after a merge, so the check asks up to 5 times, 10 seconds apart. When the commit message looks like a release merge and GitHub still lists no pull request, the run fails with an error and starts no release: run the workflow by hand with the tag, from the Actions tab on `main`. The workflow tests and builds both installers on the merge commit, signs and notarizes the macOS app as [macOS signing](#macos-signing) says, then tags it and publishes the GitHub release with the changelog section as its notes and the installers attached.
    Between the build and the tag, a separate job signs the two update files under their release names with minisign. It alone gets the update key, and it runs no build. Then, before it tags, the workflow checks both signatures against the public key of the latest release before this one, since that is the key the installed copies trust. At the first release with updates, when no earlier release carries a real key, it checks against `assets/update/jobdesk-update.pub` of the commit it releases. Then `scripts/update-feed.sh` writes `latest.json`, the feed each copy of Jobdesk reads.
-   Each release also pins the `ai-job-search` release that first-run setup installs. The `source` job resolves the latest release of `ai-job-search-dev/ai-job-search`, downloads that tag's source zip from GitHub's fixed address, `https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/vA.B.C`, and hashes it. The sign job signs the line `<sha256>  ai-job-search-vA.B.C.zip`, as `sha256sum` writes it, under the zip's name. The publish job downloads and hashes the zip again, and checks that signature with the others. When no `ai-job-search` release resolves, its tag is not `vA.B.C`, its zip does not download or its hash changed between the two jobs, the run fails and nothing is tagged or published.
-   The feed holds the version, the date, the notes, each build's signature and size, and the pin: the `ai-job-search` version, the zip's SHA-256 and the signature. It holds no address: the app builds each address from a version.
+   Each release also signs the `ai-job-search` releases it is compatible with: the 1 to 5 entries of `assets/update/ai-job-search.json` at the release commit, as [Adding an ai-job-search release](#adding-an-ai-job-search-release) says. First-run setup and the folder update use the newest. The `source` job checks out the release commit and runs `scripts/ai-job-search.sh check`, which validates the list, downloads each entry's source zip from GitHub's fixed address, `https://codeload.github.com/ai-job-search-dev/ai-job-search/zip/refs/tags/vA.B.C`, and checks its hash. The job then requires the script's output to equal the list file and to be one JSON array of 1 to 5 entries, and downloads and hashes every zip again itself. The sign job checks the list's shape again before it writes the key, then signs, for each entry, the line `<sha256>  ai-job-search-vA.B.C.zip`, as `sha256sum` writes it, under that zip's name. The publish job checks that the list still equals the file at the release commit, downloads and hashes every zip again, checks each signature with the others, and checks that each trusted comment names exactly `file:ai-job-search-vA.B.C.zip`. When the list does not check, a zip does not download or a hash does not match, the run fails and nothing is tagged or published.
+   The feed holds the version, the date, the notes, each build's signature and size, and the `ai-job-search` releases: `ai_job_search_releases`, newest first, each with its version, the zip's SHA-256 and the signature, and `ai_job_search`, the newest entry again, which copies of Jobdesk from before the list still read. It holds no address: the app builds each address from a version.
 
 The first signed release is also the first run of the signed pipeline. If it fails, nothing is tagged. A failed build leaves no tag. Rerunning failed jobs rebuilds the same commit, so it helps with a flaky or infrastructure failure, and with a run that failed because the secrets or the `release` environment were missing: add them, then choose Re-run failed jobs, since the job reads its secrets when it starts. For a code failure, including a check of the signed pipeline that fails, merge the fix into `main` through a normal pull request, then run the Tag release workflow by hand with the tag. It builds the current `main` commit, then tags and publishes the same way.
 
 The Release workflow needs the `RELEASE_TOKEN` secret: a fine-grained personal access token with Contents and Pull requests read and write on this repository. A pull request opened with the default token would not start CI.
 
 `scripts/release.sh [auto|patch|minor|major]` prepares the same release branch locally from a clean working tree. It needs [git-cliff](https://git-cliff.org), `jq`, `perl` and `cargo`.
+
+### Adding an ai-job-search release
+
+`assets/update/ai-job-search.json` lists the `ai-job-search` releases this Jobdesk is compatible with, newest first: 1 to 5 entries, each a version and the SHA-256 of the source zip GitHub serves for that tag. First-run setup and the folder update use the newest. Settings › About tells the user when the open folder's files come from a release that the list of the latest Jobdesk release does not hold. `scripts/ai-job-search.sh` keeps the list, and needs `jq` 1.6 or newer, `curl`, `unzip`, and `sha256sum` or `shasum`.
+
+To add a release:
+
+1. Add it to the list. The script downloads the tag's source zip, hashes it and puts the entry in version order:
+
+   ```bash
+   scripts/ai-job-search.sh add vX.Y.Z
+   ```
+
+   To hash a zip you already have, pass its path after the version. It must be the zip GitHub serves for the tag, or the check and the release fail. A sixth entry drops the oldest, and the script prints the version it dropped. A release older than the oldest of a full list is refused. A version already listed with the same hash changes nothing, and with another hash fails.
+2. Open a pull request with the changed list. It runs the ai-job-search release workflow (`.github/workflows/ai-job-search.yml`) on each release it adds, or whose hash it changes. The workflow downloads the zip and runs the ignored test `the_candidate_release_has_what_jobdesk_relies_on` in `tests/ai_job_search_release.rs`. The test checks the zip against the hash in the list, holds it to the limits first-run setup holds every release to, and names every file it lacks: `.claude/commands/apply.md`, each other command of the launcher as a `.claude/commands/<name>.md` or a `.claude/skills/<folder>/SKILL.md` with `name: <name>`, every profile file, the two template guides without `BEGIN ACTIVE-TEMPLATE`, an `/add-template` that holds it, and `.agents/skills/<folder>/SKILL.md` for each built-in portal. `/build-cv` may be missing. It starts no `claude` and costs nothing.
+3. Test the release with Jobdesk by hand, then sign it off on the pull request and merge it. The workflow checks only that the files are there, not that the commands work.
+4. The next Jobdesk release signs the entry and ships it in its feed. Until then, installed copies read the list of the last release.
+
+To check a release before you add it, run the ai-job-search release workflow from the Actions tab with its version, such as `1.7.5`. Or run the same check locally, with the zip in a folder that exists:
+
+```bash
+scripts/ai-job-search.sh download vX.Y.Z /tmp/ai-job-search.zip
+```
+
+```bash
+JOBDESK_CANDIDATE_ZIP=/tmp/ai-job-search.zip JOBDESK_CANDIDATE_VERSION=X.Y.Z cargo test --test ai_job_search_release -- --ignored
+```
+
+A version not in the list yet skips only the hash check.
+
+To stop supporting a release, remove it in a pull request. Once the next Jobdesk release ships without it, About shows its line for a folder whose files come from that release. The script refuses to remove the last entry, since the list keeps at least one:
+
+```bash
+scripts/ai-job-search.sh remove vX.Y.Z
+```
+
+`scripts/ai-job-search.sh check` validates the list, and downloads and hashes every entry, as the release's `source` job does.
 
 ### The update key
 
@@ -126,7 +163,7 @@ gh secret set JOBDESK_UPDATE_KEY_PASSWORD
 - Copies of releases made before the first signed release with updates cannot update themselves, so their users install that release by hand once.
 - To change the key, first merge the new public key into `assets/update/jobdesk-update.pub`, and release with the old key still in the secrets: that release carries the new key and is signed with the old one. Only then replace both secrets with the new key. The release after it is signed with the new key, and the Tag release workflow checks it against the key the previous release carries. Copies that installed the release with the new key check the next ones against it, and the others install by hand.
 - Each signature names the file it signs, such as `Jobdesk-v0.2.0-windows-x64-setup.exe`, and the app checks that name against the version it installs. To sign a file by hand, sign it under its release name: `base64 -d ~/.jobdesk/update.key > update.minisign.key`, then `minisign -S -s update.minisign.key -m Jobdesk-vX.Y.Z-windows-x64-setup.exe`, then delete `update.minisign.key`, and put the `.minisig` in base64 on one line in the `.sig`.
-- The `ai-job-search` pin's signature names the zip, not the file it signs: write the line to `ai-job-search-vA.B.C.zip.sha256`, then sign it with `-t "timestamp:$(date +%s)"$'\t'"file:ai-job-search-vA.B.C.zip"`, as the sign job does.
+- Each `ai-job-search` entry's signature names its zip, not the file it signs: for each entry, write the line to `ai-job-search-vA.B.C.zip.sha256`, then sign it with `-t "timestamp:$(date +%s)"$'\t'"file:ai-job-search-vA.B.C.zip"`, as the sign job does.
 - These signatures are not code signing. They show a download comes from this repository's releases. macOS code signing and notarization are separate: see [macOS signing](#macos-signing). Windows still warns, as [Package](#package) says.
 
 ## Test

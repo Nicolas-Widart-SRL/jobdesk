@@ -21,7 +21,7 @@ use std::process;
 
 use crate::folder_update::domain::{Action, Plan, Report, Reverted, Update, UpdateError};
 use crate::folder_update::infrastructure::disk::{Found, exists, is_real_dir, joined, look, remove, sync_dir, write_new};
-use crate::folder_update::infrastructure::hold::hold_alone;
+use crate::folder_update::infrastructure::hold::{Open, hold_alone, hold_open};
 use crate::folder_update::infrastructure::journal::{self, BACKUP, FILES, JOURNAL, Journal, Op, RECORD};
 use crate::folder_update::infrastructure::planner::plan;
 use crate::shared_kernel::installed_source::{self, InstalledSource, sha256_hex};
@@ -87,12 +87,22 @@ pub fn update_with(folder: &Path, update: &Update, hook: &mut dyn FnMut(Moment) 
 /// needs no original, sets the journal aside as `.jobdesk/update-stopped.json`, and is `Kept` with every file whose
 /// original it could not put back. A journal that does not read is set aside the same way, as `BadJournal`. Either way
 /// the next update runs.
+///
+/// While another Jobdesk has the folder open, a stopped update's rollback cannot hold it alone and is `OpenElsewhere`,
+/// so its caller can say so and try again. Another Jobdesk's own update, Undo or rollback makes it only `Busy`.
 pub fn recover(folder: &Path) -> Result<Option<Reverted>, UpdateError> {
     let jobdesk = folder.join(installed_source::DIR);
     if !is_real_dir(&jobdesk) {
         return Ok(None);
     }
-    let _alone = hold_alone(&jobdesk)?;
+    let _alone = match hold_alone(&jobdesk) {
+        // A stopped update waits, and only other Jobdesks that have the folder open keep its rollback out: a hold
+        // shared with them still goes. One that updates, undoes or rolls it back holds it alone, and is only busy.
+        Err(UpdateError::Busy) if exists(&jobdesk.join(JOURNAL)) && matches!(hold_open(folder), Open::Held(_)) => {
+            return Err(UpdateError::OpenElsewhere);
+        }
+        held => held?,
+    };
     clear_stagings(folder);
     let journal = match journal::read(&jobdesk.join(JOURNAL)) {
         Ok(Some(journal)) => journal,
@@ -503,7 +513,6 @@ mod tests {
 
     use super::*;
     use crate::folder_update::domain::{Release, SideCopy, SkipReason, Skipped};
-    use crate::folder_update::infrastructure::hold::{Open, hold_open};
     use crate::shared_kernel::release_zip::fixtures::{Entry, zip_of};
 
     const OLD: &str = "1.7.5";
@@ -1542,6 +1551,25 @@ mod tests {
             assert_eq!(fs::read_to_string(outside.path().join("0")).unwrap(), SECRET, "linked: {linked}");
             assert!(fixture.run().is_ok(), "linked: {linked}: the folder updates again");
         }
+    }
+
+    /// A stopped update's rollback that another Jobdesk keeps out by having the folder open says so, apart from one
+    /// kept out by another Jobdesk's own update, Undo or rollback, which is only busy.
+    #[test]
+    fn a_rollback_kept_out_by_another_open_window_says_so() {
+        let fixture = stopped();
+        let before = tree(&fixture.folder);
+        let Open::Held(open) = hold_open(&fixture.folder) else { panic!("not held") };
+        assert_eq!(recover(&fixture.folder), Err(UpdateError::OpenElsewhere));
+        assert_eq!(tree(&fixture.folder), before, "nothing changed");
+        drop(open);
+        let alone = hold_alone(&fixture.jobdesk()).unwrap();
+        assert_eq!(recover(&fixture.folder), Err(UpdateError::Busy), "another Jobdesk works on it now");
+        drop(alone);
+        assert!(recover(&fixture.folder).unwrap().is_some(), "the rollback runs once no other Jobdesk has it");
+
+        let Open::Held(_open) = hold_open(&fixture.folder) else { panic!("not held") };
+        assert_eq!(recover(&fixture.folder), Err(UpdateError::Busy), "no stopped update waits: nothing to say");
     }
 
     #[test]

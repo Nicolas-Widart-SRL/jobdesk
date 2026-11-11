@@ -67,6 +67,10 @@ pub trait FolderUpdater: Send + Sync {
     /// Jobdesk holds it already or could never hold it, as for a folder with no `.jobdesk`. It never waits: while this
     /// Jobdesk's own update, Undo or rollback runs, it is false.
     fn hold_again(&self, folder: &Path) -> bool;
+    /// Whether this Jobdesk could hold `folder` alone now: no other Jobdesk has it open. It lets go of its own hold for a
+    /// moment and takes it back, as `recover` does, and never waits: while this Jobdesk's own update, Undo or rollback
+    /// runs, it is false.
+    fn alone_possible(&self, folder: &Path) -> bool;
     /// Rolls back an update of `folder` that stopped midway. `None` when none did.
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError>;
     /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`. Once it holds

@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
 use crate::folder_update::infrastructure::disk::is_real_dir;
-use crate::folder_update::infrastructure::hold::{Open, hold_open};
+use crate::folder_update::infrastructure::hold::{Open, hold_alone, hold_open};
 use crate::folder_update::infrastructure::updater;
 use crate::shared_kernel::download::{DownloadFailure, HttpsFetcher};
 use crate::shared_kernel::installed_source::{self, InstalledSource, MAX_ZIP};
@@ -58,6 +58,16 @@ impl Drop for TakeBack<'_> {
 }
 
 impl DiskFolder {
+    /// The open folder and its hold, unless a worker of this Jobdesk's own holds them now, which this never waits on. A
+    /// lock poisoned by a panic is used as it is: `TakeBack` took the hold back as the panic unwound.
+    fn try_open(&self) -> Option<MutexGuard<'_, Opened>> {
+        match self.open.try_lock() {
+            Ok(open) => Some(open),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
     /// Runs `job` on `folder` with this Jobdesk's own hold on it let go, so the job can hold the folder alone, then
     /// takes the hold again. The hold is let go of only while `job` runs, and taken again even when the job failed or
     /// panicked, or when it could not be taken at the open because another Jobdesk held the folder alone then.
@@ -112,16 +122,24 @@ impl FolderUpdater for DiskFolder {
     }
 
     fn hold_again(&self, folder: &Path) -> bool {
-        // A worker of this Jobdesk's own that holds the folder alone holds this too: never wait on it.
-        let mut open = match self.open.try_lock() {
-            Ok(open) => open,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return false,
-        };
+        let Some(mut open) = self.try_open() else { return false };
         if open.folder.as_deref() != Some(folder) || !open.kept_out {
             return false;
         }
         open.hold()
+    }
+
+    fn alone_possible(&self, folder: &Path) -> bool {
+        let Some(mut open) = self.try_open() else { return false };
+        let held = open.folder.as_deref() == Some(folder);
+        if held {
+            open.hold = None;
+        }
+        let take_back = TakeBack { open, held };
+        // The lock alone is let go of at once, before the hold is taken back.
+        let alone = hold_alone(&folder.join(installed_source::DIR)).is_ok();
+        drop(take_back);
+        alone
     }
 
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError> {

@@ -44,6 +44,10 @@ impl FolderUpdater for IdleFolder {
         false
     }
 
+    fn alone_possible(&self, _folder: &Path) -> bool {
+        false
+    }
+
     fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
         Ok(None)
     }

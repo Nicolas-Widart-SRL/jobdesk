@@ -132,6 +132,9 @@ pub enum UpdateError {
     /// Another Jobdesk has this folder open, or is updating, undoing or rolling it back now, or it changed the folder's
     /// base since the gate read it. Nothing was changed.
     Busy,
+    /// An update stopped midway and its rollback waits, because another Jobdesk has the folder open, so it cannot be
+    /// held alone. Nothing was changed.
+    OpenElsewhere,
     /// Since the gate read it, the folder's base became this release or a newer one. Nothing was changed.
     Superseded,
     /// Since the gate read the note, the user undid this very release. Nothing was changed.

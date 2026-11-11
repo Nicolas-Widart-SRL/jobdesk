@@ -60,6 +60,9 @@ pub enum Failure {
     /// A task or a Claude session is open, another Jobdesk works on this folder, or a file changed while the update
     /// ran. Nothing changed, and the next open tries again.
     Busy,
+    /// An update stopped midway, and its rollback waits until no other Jobdesk window has the folder open. Nothing
+    /// changed, and the rollback runs once the folder can be held alone.
+    OpenElsewhere,
 }
 
 /// How one pass of a folder update ended. Each gate that fails is its own outcome, so the screen says the right thing
@@ -183,6 +186,9 @@ pub struct FolderUpdate {
     /// Another Jobdesk held the open folder alone, to update, undo or roll it back, at this Jobdesk's last try to hold
     /// it, made at this moment. While it is set, nothing writes the folder, as while this Jobdesk's own worker runs.
     kept_out: Option<Instant>,
+    /// A stopped update's rollback of the open folder waits for another Jobdesk window to close it, as the last try,
+    /// made at this moment, found. `follow` tries again every `HOLD_RETRY`, once the folder can be held alone.
+    rollback_waits: Option<Instant>,
     /// Each folder whose rollback ran or failed this launch, at an open or in a pass. No pass starts for it again until
     /// the next launch, so the notice of the rollback stays, and so does the backup that holds the originals of any
     /// file it kept, which an update would replace.
@@ -231,6 +237,7 @@ impl FolderUpdate {
             tried: HashSet::new(),
             working_on: None,
             kept_out: None,
+            rollback_waits: None,
             held_back: HashSet::new(),
             told: None,
             undo_offered: false,
@@ -269,7 +276,7 @@ impl FolderUpdate {
     pub fn opened(&mut self, folder: PathBuf) {
         self.kept_out = self.ports.updater.open(&folder).then(|| (self.clock)());
         self.folder = Some(folder);
-        self.recover_due = true;
+        (self.recover_due, self.rollback_waits) = (true, None);
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
         self.offer_outlives_tasks = false;
         (self.updatable, self.checked) = (false, false);
@@ -282,7 +289,9 @@ impl FolderUpdate {
     /// session is open, even one only waiting on a reply, and while anything else may write the folder.
     ///
     /// While another Jobdesk holds the open folder alone, it tries to hold the folder again every `HOLD_RETRY`, and
-    /// starts nothing until it does: see `is_busy`.
+    /// starts nothing until it does: see `is_busy`. While a stopped update's rollback waits for another Jobdesk window
+    /// to close the folder, it looks every `HOLD_RETRY` whether the folder can be held alone, starts nothing else, and
+    /// starts the rollback once it can.
     pub fn follow(&mut self, feed: Option<(u64, &LatestFeed)>, runs_idle: bool) {
         self.poll();
         let now = (self.clock)();
@@ -295,6 +304,17 @@ impl FolderUpdate {
             return;
         }
         let Some(folder) = self.folder.clone() else { return };
+        if let Some(tried) = self.rollback_waits {
+            if now.saturating_duration_since(tried) < HOLD_RETRY {
+                return;
+            }
+            // A look that lets go of the hold for a moment, not a worker: nothing reads as busy while the wait lasts.
+            if !self.ports.updater.alone_possible(&folder) {
+                self.rollback_waits = Some(now);
+                return;
+            }
+            (self.rollback_waits, self.recover_due) = (None, true);
+        }
         if self.recover_due {
             self.recover_due = !self.recover(folder, true);
             return;
@@ -481,11 +501,15 @@ impl FolderUpdate {
                 Event::Looked(Look::Updatable) => (self.quiet, self.updatable) = (None, true),
                 Event::Ended(stage, undoable) => {
                     let folder = self.working_on.take();
-                    // A rollback another Jobdesk kept out ran nothing, so it holds nothing back.
-                    let rolled_back = matches!(&stage, Stage::Ended(Outcome::Recovered(_) | Outcome::RollbackFailed(_)))
-                        && stage != Stage::Ended(Outcome::RollbackFailed(Failure::Busy));
+                    // A rollback another Jobdesk kept out ran nothing, so it holds nothing back. One that waits for
+                    // another window to close the folder is tried again until it runs.
+                    let kept_out = matches!(&stage, Stage::Ended(Outcome::RollbackFailed(Failure::Busy | Failure::OpenElsewhere)));
+                    let rolled_back = matches!(&stage, Stage::Ended(Outcome::Recovered(_) | Outcome::RollbackFailed(_))) && !kept_out;
                     if let (true, Some(folder)) = (rolled_back, folder) {
                         self.held_back.insert(folder);
+                    }
+                    if stage == Stage::Ended(Outcome::RollbackFailed(Failure::OpenElsewhere)) {
+                        self.rollback_waits = Some((self.clock)());
                     }
                     self.remember(&stage);
                     self.stage = stage;
@@ -634,6 +658,7 @@ fn failure_of(error: UpdateError) -> Failure {
         UpdateError::Busy | UpdateError::Interrupted | UpdateError::Changed => Failure::Busy,
         // Only an update ends so, and `run` takes each for the gate it stands for.
         UpdateError::Superseded | UpdateError::Undone => Failure::Busy,
+        UpdateError::OpenElsewhere => Failure::OpenElsewhere,
         UpdateError::Kept(files) => Failure::Kept(files),
         UpdateError::Unnoted => Failure::Unnoted,
         // Only the rollback reads a journal, and it sets aside one that does not read without rolling anything back.
@@ -675,6 +700,8 @@ mod tests {
         panics: bool,
         /// Another Jobdesk holds the folder alone, so this one cannot hold it open.
         kept_out: AtomicBool,
+        /// Another Jobdesk has the folder open, so a stopped update's rollback waits.
+        others_open: AtomicBool,
     }
 
     impl Fake {
@@ -694,6 +721,7 @@ mod tests {
                 unfinished: false,
                 panics: false,
                 kept_out: AtomicBool::new(false),
+                others_open: AtomicBool::new(false),
             }
         }
 
@@ -748,8 +776,14 @@ mod tests {
         fn hold_again(&self, _folder: &Path) -> bool {
             self.kept_out.load(Ordering::SeqCst)
         }
+        fn alone_possible(&self, _folder: &Path) -> bool {
+            !self.others_open.load(Ordering::SeqCst)
+        }
         fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
             self.note("recover".into());
+            if self.others_open.load(Ordering::SeqCst) {
+                return Err(UpdateError::OpenElsewhere);
+            }
             self.recover.clone()
         }
         fn update(&self, folder: &Path, update: &Update) -> Result<Report, UpdateError> {
@@ -1161,6 +1195,36 @@ mod tests {
         follow(&mut opened, None, true);
         assert!(!opened.kept_out(), "held once tried again");
         assert_eq!(rollbacks(&fake), 1, "and the rollback due at the open runs");
+    }
+
+    /// A stopped update whose rollback waits because another Jobdesk window has the folder open says so, and the
+    /// rollback is tried again on the hold's cadence, starting only once the folder can be held alone.
+    #[test]
+    fn a_rollback_another_window_keeps_waiting_says_so_and_runs_once_it_closes() {
+        let rolled_back = Reverted { reverted: vec!["CLAUDE.md".into()], kept: Vec::new() };
+        let fake = Arc::new(Fake { others_open: AtomicBool::new(true), recover: Ok(Some(rolled_back.clone())), ..Fake::ready() });
+        let hands = Hands::new();
+        let mut opened = desk(&fake, "0.2.0").with_clock(hands.clock());
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, Some((1, &feed())), true);
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::RollbackFailed(Failure::OpenElsewhere)));
+        let notice = opened.notice().expect("the wait is told");
+        assert_eq!(
+            notice.words,
+            "Jobdesk could not finish an interrupted update of your job search folder because another Jobdesk window has it open. Close the other window to let it finish."
+        );
+
+        hands.advance(HOLD_RETRY);
+        follow(&mut opened, Some((2, &feed())), true);
+        assert_eq!((rollbacks(&fake), passes(&fake)), (1, 0), "nothing starts while the other window has it open");
+
+        fake.others_open.store(false, Ordering::SeqCst);
+        follow(&mut opened, None, true);
+        assert_eq!(rollbacks(&fake), 1, "not before HOLD_RETRY");
+        hands.advance(HOLD_RETRY);
+        follow(&mut opened, None, true);
+        assert_eq!(rollbacks(&fake), 2, "the rollback runs once the folder can be held alone");
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::Recovered(rolled_back)));
     }
 
     /// A rollback another Jobdesk kept out ran nothing and says nothing, so it holds no update back.

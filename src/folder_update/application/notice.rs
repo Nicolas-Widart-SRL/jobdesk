@@ -163,6 +163,8 @@ const RECOVERED: &str = "Jobdesk finished undoing an interrupted update of your 
 /// What follows an Undo, which keeps the same release from coming back. Only a later Jobdesk that pins a newer release
 /// updates the folder again, not every Jobdesk release.
 const AGAIN: &str = "It updates your job search folder again when a later Jobdesk brings a newer version of its files.";
+/// A stopped update whose rollback waits for another Jobdesk window to close the folder.
+const OPEN_ELSEWHERE: &str = "Jobdesk could not finish an interrupted update of your job search folder because another Jobdesk window has it open. Close the other window to let it finish.";
 const NOTHING_TO_UNDO: &str = "There was no update of your job search folder left to undo. Nothing changed.";
 
 fn working_words(current: Option<Version>) -> String {
@@ -200,6 +202,8 @@ fn undone(reverted: &Reverted) -> Notice {
 fn failed(failure: &Failure, pass: Pass) -> Notice {
     let plain = |words: &str| (words.to_owned(), Vec::new());
     let (words, lists) = match failure {
+        // Only a rollback waits so: the folder is as the stopped update left it until the other window closes.
+        Failure::OpenElsewhere => plain(OPEN_ELSEWHERE),
         // A Busy rollback is silent, so this is a rollback whose files could not be read or written. No update ran.
         Failure::Disk | Failure::Busy | Failure::Offline | Failure::Refused(_) | Failure::Mismatch | Failure::TooLarge if pass == Pass::Rollback => plain(
             "Jobdesk could not finish undoing an interrupted update of your job search folder: a file could not be read or written. It tries again the next time the folder opens.",

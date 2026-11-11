@@ -12,6 +12,8 @@ use crate::ui_kit::{
 
 /// Why every switch and every action waits while a run works: one run at a time, and `/scrape` reads the same files.
 pub const BUSY: &str = "A task is running. Turn portals on or off once it ends.";
+/// Why every switch and every action waits while Jobdesk updates the job search folder, or undoes its update.
+pub const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. Turn portals on or off once it ends.";
 /// What a built-in portal shows in place of Remove….
 pub(super) const BUILT_IN: &str = "Built-in portals stay installed. Turn one off to skip it.";
 /// Where Remove moves a portal's folder, in the system's own words.
@@ -75,20 +77,21 @@ impl PortalsScreen {
         self.segment = segment;
     }
 
-    /// What became of a request. A failure stays under the portal's actions until its next change.
-    pub fn settle(&mut self, request: &PortalsRequest, result: Result<(), ChangeError>) {
+    /// What became of a request. A failure stays under the portal's actions until its next change. `wait` is why the
+    /// change waited, if it did: `BUSY` or `FOLDER_UPDATING`.
+    pub fn settle(&mut self, request: &PortalsRequest, result: Result<(), ChangeError>, wait: Option<&'static str>) {
         let (folder, removing) = match request {
             PortalsRequest::Switch { folder, .. } => (folder, false),
             PortalsRequest::Remove { folder, .. } => (folder, true),
         };
-        self.failure = result.err().map(|error| (folder.clone(), failure_words(&error, removing)));
+        self.failure = result.err().map(|error| (folder.clone(), failure_words(&error, removing, wait)));
     }
 }
 
 /// Why a change failed, in words. A file's reason shows as plain text.
-fn failure_words(error: &ChangeError, removing: bool) -> String {
+fn failure_words(error: &ChangeError, removing: bool, wait: Option<&'static str>) -> String {
     match error {
-        ChangeError::Busy => BUSY.to_owned(),
+        ChangeError::Busy => wait.unwrap_or(BUSY).to_owned(),
         ChangeError::BuiltIn => BUILT_IN.to_owned(),
         ChangeError::NoFrontmatter => {
             "Jobdesk could not turn this portal off: its SKILL.md has no settings block at the top to hold the switch. Nothing was changed.".to_owned()
@@ -100,15 +103,15 @@ fn failure_words(error: &ChangeError, removing: bool) -> String {
 
 /// The head, then three views: Your portals, the list beside the picked portal's detail; Browse community; and Add a
 /// portal. `state.load` is the portals' own: a folder that could not be read hides them, and never calls them none. While
-/// `busy`, every switch and action on your portals waits and says why. Every action that reaches Claude only opens the
-/// launcher. Browse asks `community` for its list once each time it comes on show. Returns the switch or removal the user
-/// asked for.
+/// `wait` holds a reason, such as `BUSY` while a run works, every switch and action on your portals waits and says it.
+/// Every action that reaches Claude only opens the launcher. Browse asks `community` for its list once each time it comes
+/// on show. Returns the switch or removal the user asked for.
 pub fn show(
     ui: &mut Ui,
     screen: &mut PortalsScreen,
     state: &ScreenState,
     view: &PortalsView,
-    busy: bool,
+    wait: Option<&'static str>,
     mut community: BrowseContext,
 ) -> Option<PortalsRequest> {
     let reading = state.reading();
@@ -122,7 +125,7 @@ pub fn show(
     };
     page_head(ui, Title::Slab("Portals"), Some(Subtitle::Text(&subtitle)), |ui| {
         if !reading {
-            enabled_when(ui, !busy, BUSY, |ui| command_action(ui, "Check all portals…", CHECK_ALL_LINE));
+            enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| command_action(ui, "Check all portals…", CHECK_ALL_LINE));
         }
     });
     page_body(ui, |ui| {
@@ -131,7 +134,7 @@ pub fn show(
         segments(ui, screen, count);
         ui.add_space(SCREEN_GAP / 2.0);
         match screen.segment {
-            Segment::Yours => yours(ui, screen, view, busy, reading, failed),
+            Segment::Yours => yours(ui, screen, view, wait, reading, failed),
             Segment::Browse => {
                 // Before the list draws, so a read that starts shows as one at once.
                 if !screen.browse_opened {
@@ -164,7 +167,7 @@ fn segments(ui: &mut Ui, screen: &mut PortalsScreen, count: Option<usize>) {
 }
 
 /// Your portals: the list beside the picked portal, or why there is none to show.
-fn yours(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, busy: bool, reading: bool, failed: bool) -> Option<PortalsRequest> {
+fn yours(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, wait: Option<&'static str>, reading: bool, failed: bool) -> Option<PortalsRequest> {
     if reading {
         columns(ui, loading_rail, loading_detail);
         return None;
@@ -187,20 +190,20 @@ fn yours(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, busy: bool
         });
         return None;
     }
-    list_and_detail(ui, screen, view, busy)
+    list_and_detail(ui, screen, view, wait)
 }
 
-fn list_and_detail(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, busy: bool) -> Option<PortalsRequest> {
+fn list_and_detail(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, wait: Option<&'static str>) -> Option<PortalsRequest> {
     let [on, off] = listed(view, &mut screen.order);
     let first = on.first().or(off.first()).copied()?;
     let portal = screen.picked.as_deref().and_then(|folder| view.portals.iter().find(|portal| portal.folder == folder)).unwrap_or(first);
     let failure = screen.failure.as_ref().filter(|(folder, _)| *folder == portal.folder).map(|(_, words)| words.as_str());
     let (listed, detailed) = columns(
         ui,
-        |ui| rail(ui, [&on, &off], &portal.folder, busy),
+        |ui| rail(ui, [&on, &off], &portal.folder, wait),
         |ui| {
             ui.push_id(("portal detail", &portal.folder), |ui| {
-                let shown = Detail { portal, plan: &view.plan, plan_read: view.plan_read, busy, failure };
+                let shown = Detail { portal, plan: &view.plan, plan_read: view.plan_read, wait, failure };
                 detail(ui, &shown, &mut screen.confirm)
             })
             .inner
@@ -329,14 +332,16 @@ mod tests {
     fn a_failure_is_kept_for_its_portal_until_the_next_change() {
         let mut screen = PortalsScreen::default();
         let remove = PortalsRequest::Remove { folder: "north-search".into(), origin: Origin::MadeByYou };
-        screen.settle(&remove, Err(ChangeError::Failed(LoadError::new(".agents/skills/north-search", "in use"))));
+        screen.settle(&remove, Err(ChangeError::Failed(LoadError::new(".agents/skills/north-search", "in use"))), None);
         let (folder, words) = screen.failure.clone().unwrap();
         assert_eq!(folder, "north-search");
         assert!(words.starts_with(&format!("Jobdesk could not move this portal to {TRASH}.")), "{words}");
         assert!(words.contains("in use"), "{words}");
-        screen.settle(&PortalsRequest::Switch { folder: "north-search".into(), on: false }, Err(ChangeError::NoFrontmatter));
+        screen.settle(&PortalsRequest::Switch { folder: "north-search".into(), on: false }, Err(ChangeError::NoFrontmatter), None);
         assert!(screen.failure.as_ref().unwrap().1.contains("Nothing was changed"));
-        screen.settle(&remove, Ok(()));
+        screen.settle(&remove, Err(ChangeError::Busy), Some(FOLDER_UPDATING));
+        assert_eq!(screen.failure.as_ref().unwrap().1, FOLDER_UPDATING, "a refusal says what it waited for");
+        screen.settle(&remove, Ok(()), None);
         assert_eq!(screen.failure, None);
     }
 }

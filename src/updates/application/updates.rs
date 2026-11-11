@@ -6,8 +6,8 @@ use crate::updates::application::words::{
     self, AUTO_OFF, AUTO_ON, CHECK_FAILED, CHECKING, NOT_CHECKED, NOTES_FOOT, RELEASE_PAGE, RESTART, TRUST_LINE, UP_TO_DATE, WHATS_NEW,
 };
 use crate::updates::domain::{
-    ApplyFailed, CHECK_EVERY, Check, Download, InstallBlock, Platform, Release, RestartPlan, ServiceEvent, UpdateService, UpdateState, Version, due, percent,
-    release_page,
+    ApplyFailed, CHECK_EVERY, Check, Download, InstallBlock, LatestFeed, Platform, Release, RestartPlan, ServiceEvent, UpdateService, UpdateState, Version,
+    due, percent, release_page,
 };
 
 /// The colour of the square that leads the update group: news, good, or failed. Ink is the screen's to pick.
@@ -157,6 +157,10 @@ pub struct Updates {
     now: Option<NaiveDateTime>,
     /// The release the last Restart to update did not install, until a download starts or the release is gone.
     apply_failed: Option<ApplyFailed>,
+    /// What the last check that read the feed found, for a folder update. A failed check leaves it as it was.
+    feed: Option<LatestFeed>,
+    /// How many checks have read the feed, so a folder update tells a new answer from one it acted on.
+    feed_answers: u64,
 }
 
 impl Updates {
@@ -178,7 +182,31 @@ impl Updates {
             (Some(_), None) => Some(InstallBlock::NoBuild),
             (Some(_), Some(_)) => block,
         };
-        Self { service, state: UpdateState::new(version.unwrap_or_default(), block), platform, auto, last_attempt: None, now: None, apply_failed: None }
+        Self {
+            service,
+            state: UpdateState::new(version.unwrap_or_default(), block),
+            platform,
+            auto,
+            last_attempt: None,
+            now: None,
+            apply_failed: None,
+            feed: None,
+            feed_answers: 0,
+        }
+    }
+
+    /// What the last check that read the feed found: the latest Jobdesk version, and the `ai-job-search` release that
+    /// same read pins, when the update key's signature of it checks. `None` until a check, automatic or Check now,
+    /// has read the feed, so a folder update follows the automatic check's switch. A copy that never checks never has
+    /// one. No call here reads the network.
+    pub fn latest_feed(&self) -> Option<&LatestFeed> {
+        self.feed.as_ref()
+    }
+
+    /// How many checks have read the feed so far, the one `latest_feed` holds the last of. Each such check counts, even
+    /// one whose answer reads the same as the last, so a folder update that failed is tried again after the next check.
+    pub fn feed_answers(&self) -> u64 {
+        self.feed_answers
     }
 
     /// Whether this copy knows its own version, so a release can be told newer or older.
@@ -222,6 +250,10 @@ impl Updates {
                 // With no version of its own to compare, or no build to take, whatever the feed says is not taken.
                 ServiceEvent::Checked(_) if self.never_checks().is_some() => {}
                 ServiceEvent::Checked(result) => {
+                    if let Ok(release) = &result {
+                        self.feed = Some(LatestFeed::of(release));
+                        self.feed_answers += 1;
+                    }
                     // A release that is gone takes its download with it, and the service deletes the file.
                     if self.state.checked(result, now) {
                         self.service.cancel();
@@ -521,6 +553,7 @@ mod tests {
             notes: "## New\n- A thing".into(),
             size: 14_200_000,
             signature: "sig".into(),
+            pin: None,
         }
     }
 
@@ -1004,6 +1037,79 @@ mod tests {
         let view = updates.view();
         assert_eq!((view.bar, view.notes), (None, None));
         assert_eq!(view.about.tag, Some(("Up to date", Mark::Good)));
+    }
+
+    fn pin(version: &str) -> crate::updates::domain::SourcePin {
+        crate::updates::domain::SourcePin::parse(version, &"a".repeat(64)).unwrap()
+    }
+
+    /// `pin`, as the read of the feed gives it once the update key checked it.
+    fn signed(version: &str) -> crate::updates::domain::SignedPin {
+        crate::updates::domain::SignedPin::checked(pin(version))
+    }
+
+    #[test]
+    fn each_check_that_reads_the_feed_hands_over_its_latest_version_and_pin() {
+        let (mut updates, log) = desk(None);
+        assert_eq!((updates.latest_feed(), updates.feed_answers()), (None, 0), "nothing before a check");
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, pin: Some(signed("1.8.0")), ..release() })));
+        updates.poll(at(9, 0));
+        let up_to_date = LatestFeed::for_tests(Version { major: 0, minor: 1, patch: 0 }, Some(pin("1.8.0")));
+        let feed = updates.latest_feed().unwrap();
+        assert_eq!((feed.latest(), feed.pin()), (Version { major: 0, minor: 1, patch: 0 }, Some(&pin("1.8.0"))), "the getters read it back");
+        assert_eq!(updates.latest_feed(), Some(&up_to_date), "an up to date check hands it over too");
+        assert_eq!(updates.view().about.tag, Some(("Up to date", Mark::Good)), "and Jobdesk's own update reads as before");
+
+        assert_eq!(updates.feed_answers(), 1);
+
+        updates.check_now(at(10, 0));
+        answer(&log, ServiceEvent::Checked(Err(Failure::TimedOut)));
+        updates.poll(at(10, 0));
+        assert_eq!(updates.latest_feed(), Some(&up_to_date), "a failed check keeps the last answer");
+        assert_eq!(updates.feed_answers(), 1, "and is no new answer");
+
+        updates.check_now(at(11, 0));
+        answer(&log, ServiceEvent::Checked(Ok(release())));
+        updates.poll(at(11, 0));
+        assert_eq!(updates.latest_feed(), Some(&LatestFeed::for_tests(Version { major: 0, minor: 2, patch: 0 }, None)), "a feed with no pin");
+        assert_eq!(updates.feed_answers(), 2);
+        assert_eq!(calls(&log), ["check", "check", "check"], "no read of its own");
+    }
+
+    #[test]
+    fn a_pin_changes_nothing_in_jobdesks_own_update() {
+        let (mut updates, log) = desk(None);
+        updates.poll(at(9, 0));
+        answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+        updates.poll(at(9, 0));
+        let (plain, _log) = found();
+        assert_eq!(updates.view(), plain.view());
+    }
+
+    #[test]
+    fn with_the_switch_off_nothing_is_handed_over_until_check_now() {
+        let (mut updates, log) = desk(None);
+        updates.set_auto(false);
+        updates.poll(at(9, 0));
+        updates.poll(at(15, 0));
+        assert!(calls(&log).is_empty(), "the feed is never read");
+        assert_eq!(updates.latest_feed(), None);
+        updates.check_now(at(15, 1));
+        answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+        updates.poll(at(15, 1));
+        assert_eq!(calls(&log), ["check"]);
+        assert_eq!(updates.latest_feed().map(|feed| feed.pin().cloned()), Some(Some(pin("1.8.0"))));
+    }
+
+    #[test]
+    fn a_copy_that_never_checks_hands_over_nothing() {
+        for (current, platform) in [("banana", Some(Platform::MacArm)), ("0.1.0", None)] {
+            let (mut updates, log) = desk_of(current, None, platform);
+            answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+            updates.poll(at(9, 0));
+            assert_eq!(updates.latest_feed(), None, "{current} {platform:?}");
+        }
     }
 
     #[test]

@@ -5,10 +5,6 @@ use crate::shared_kernel::installed_source::InstalledSource;
 /// The largest release zip setup downloads, which is also the largest kept one that reads.
 pub use crate::shared_kernel::installed_source::MAX_ZIP;
 
-/// The most a release may hold once unpacked, and the most entries it may have. A larger one is refused whole.
-pub const MAX_UNPACKED: u64 = 100 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = 20_000;
-
 /// Where the download of ai-job-search has got to, one line each on the download screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {

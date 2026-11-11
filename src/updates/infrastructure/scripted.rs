@@ -73,7 +73,7 @@ mod tests {
     use crate::updates::domain::{DownloadEnd, Failure, Version};
 
     fn release() -> Release {
-        Release { version: Version { major: 0, minor: 2, patch: 0 }, released: None, notes: String::new(), size: 10, signature: "sig".into() }
+        Release { version: Version { major: 0, minor: 2, patch: 0 }, released: None, notes: String::new(), size: 10, signature: "sig".into(), pin: None }
     }
 
     fn drain(service: &mut dyn UpdateService) -> Vec<ServiceEvent> {

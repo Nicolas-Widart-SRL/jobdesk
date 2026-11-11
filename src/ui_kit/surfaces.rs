@@ -1018,6 +1018,27 @@ pub fn confirm_popover(button: &Response, state: &mut Option<bool>, words: &Conf
     act
 }
 
+/// What a `release_notes_popover` holds on its paper.
+#[derive(Debug, Clone, Copy)]
+pub enum NotesBody<'a> {
+    /// A release's notes: untrusted Markdown from the network, shown through `release_markdown`.
+    Markdown(&'a str),
+    /// Lists of untrusted names, such as the paths a folder update changed. Each lead is the caller's own words. Each
+    /// item shows as plain text, its hidden characters removed, wrapped to the paper's width so all of it shows, never
+    /// as Markdown or a link. The caller cuts each item to a length of its own.
+    Lists(&'a [NotesList<'a>]),
+}
+
+/// One list of a `NotesBody::Lists`.
+#[derive(Debug, Clone, Copy)]
+pub struct NotesList<'a> {
+    /// The caller's own words before the items, such as "Jobdesk put back 2 safety files you had removed:".
+    pub lead: &'a str,
+    pub items: &'a [String],
+    /// A `muted` line after the items on what the list leaves out, such as "and 3 more".
+    pub more: Option<&'a str>,
+}
+
 /// What a `release_notes_popover` shows. Every word but the notes is the caller's own.
 #[derive(Debug, Clone, Copy)]
 pub struct ReleaseNotes<'a> {
@@ -1025,8 +1046,8 @@ pub struct ReleaseNotes<'a> {
     pub title: &'a str,
     /// One `muted` line under it, such as "Released Fri 30 Oct. You have 0.1.0.".
     pub released: &'a str,
-    /// The release's notes: untrusted Markdown from the network, shown through `release_markdown`.
-    pub notes: &'a str,
+    /// What the paper holds: the release's notes, or lists of names.
+    pub notes: NotesBody<'a>,
     /// What a screen reader calls the notes, which take a Tab stop and scroll on the keys, such as "What changed in 0.2.0".
     pub notes_label: &'a str,
     /// The `faint` line under the notes on where they come from and what they cannot do.
@@ -1111,7 +1132,10 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
                         let (left, top, right, bottom) = NOTES_BODY_PADDING;
                         Frame::new().inner_margin(Margin { left, right, top, bottom }).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            release_markdown(ui, cache, notes.notes);
+                            match notes.notes {
+                                NotesBody::Markdown(text) => release_markdown(ui, cache, text),
+                                NotesBody::Lists(lists) => notes_lists(ui, lists),
+                            }
                         });
                     });
                 });
@@ -1198,6 +1222,25 @@ pub fn release_notes_popover(anchor: &Response, open: &mut bool, notes: &Release
         }
     });
     picked
+}
+
+/// The lists of a `NotesBody::Lists`, one under the other: each lead wrapped in body ink, then its items in mono, each
+/// from a new line, then what it leaves out.
+fn notes_lists(ui: &mut Ui, lists: &[NotesList]) {
+    for (at, list) in lists.iter().enumerate() {
+        if at > 0 {
+            ui.add_space(NOTES_GAP);
+        }
+        ui.add(egui::Label::new(rich(ui, list.lead, Type::BODY, Ink::Text)).wrap());
+        ui.add_space(SETTING_HELP_GAP);
+        for item in list.items {
+            let shown: String = visible_chars(item).collect();
+            ui.add(egui::Label::new(rich(ui, shown, Type::MONO, Ink::Text)).wrap());
+        }
+        if let Some(more) = list.more {
+            ui.add(egui::Label::new(rich(ui, more, Type::NOTE, Ink::Muted)).wrap());
+        }
+    }
 }
 
 /// How far the notes `id`, a view `height` tall, scroll this frame on the keys, while they have the focus: a line on

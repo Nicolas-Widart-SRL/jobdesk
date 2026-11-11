@@ -110,6 +110,8 @@ struct Head {
 const BLOCKED: &str = "Another run is working. You can reply when it finishes.";
 /// A reply to a run whose process has ended starts a new one, which waits for Settings' Test connection.
 const TESTING: &str = "Test connection is running. You can reply once it ends.";
+/// A reply would let the task read or write the job search folder while Jobdesk changes it.
+const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. You can reply once it ends.";
 /// Why the quick replies wait while the field holds a reply.
 const DRAFTED: &str = "Send or clear your reply first.";
 
@@ -977,11 +979,13 @@ fn inline_replies(ui: &Ui, replies: &[QuickReply]) -> bool {
     quick_width + REPLY_FIELD_MIN_WIDTH + gap + button_width(ui, "Send") <= ui.available_width()
 }
 
-/// Why a reply to `run` cannot be sent now, if it cannot: another run works, or it needs a new process while
-/// Test connection runs.
+/// Why a reply to `run` cannot be sent now, if it cannot: another run works, Jobdesk updates the job search folder, or
+/// it needs a new process while Test connection runs.
 fn reply_blocked(desk: &RunDesk, run: &Run) -> Option<&'static str> {
     if desk.is_busy() {
         Some(BLOCKED)
+    } else if desk.folder_updating() {
+        Some(FOLDER_UPDATING)
     } else if desk.reply_waits_for_test(&run.id) {
         Some(TESTING)
     } else {

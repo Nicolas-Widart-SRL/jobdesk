@@ -14,6 +14,9 @@ use crate::discovery::ui::JobsScreen;
 use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
 use crate::dossier::ui::DossierScreen;
+use crate::folder_update;
+use crate::folder_update::application::{FOLDER_WAITS, FolderUpdate, RESTART_WAITS};
+use crate::folder_update::ui::{NoticeRequest, NoticeScreen};
 use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
@@ -225,10 +228,25 @@ pub struct Shell {
     setup_stopping: Option<JoinHandle<()>>,
     /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
     window: Option<WindowSize>,
+    /// The update of the open job search folder that comes with each Jobdesk update, its rollback at every open, and
+    /// its Undo. Not a run: no Claude, no run log, nothing counted in Usage. While it works no run starts, Restart to
+    /// update waits and the folder stays.
+    folder_update: FolderUpdate,
+    /// Whether the folder update's details are open over the desk.
+    notice_screen: NoticeScreen,
 }
 
 /// What Restart to update applies once the window has closed, and the arguments the new copy opens with. `run` reads it.
 pub type RestartSlot = Arc<Mutex<Option<(RestartPlan, Vec<OsString>)>>>;
+
+/// What else writes the job search folder, so the folder's other writers wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FolderWriter {
+    /// A task works, and Claude may write any file.
+    Task,
+    /// Jobdesk updates the folder, or undoes its update.
+    FolderUpdate,
+}
 
 /// What would drop unsaved profile text from outside Profile, once the user agrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +343,9 @@ impl Shell {
             setup_stopping: None,
             // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
             window: Some(WindowSize::App),
+            // Folders that are never there, so a preview or a test never writes a folder or reaches the network.
+            folder_update: folder_update::idle_folder_update(env!("CARGO_PKG_VERSION")),
+            notice_screen: NoticeScreen::default(),
         }
     }
 
@@ -453,6 +474,17 @@ impl Shell {
         Self { providers, ..self }
     }
 
+    /// Takes `folder_update`, such as an idle one showing a stage, for tests and snapshots. It keeps what it shows, and
+    /// updates no folder until one opens.
+    pub fn with_folder_update(self, folder_update: FolderUpdate) -> Self {
+        Self { folder_update, ..self }
+    }
+
+    /// The folder update, for tests that swap it as a worker's end would.
+    pub fn folder_update_slot(&mut self) -> &mut FolderUpdate {
+        &mut self.folder_update
+    }
+
     /// Reads `now` as the time for every age Providers and Profile show, so snapshots never move with the wall clock.
     pub fn with_now(self, now: NaiveDateTime) -> Self {
         Self { now: Some(now), ..self }
@@ -534,9 +566,16 @@ impl Shell {
         };
         let repaint = ctx.clone();
         let make_community = move |data: Option<&Path>| portals::community(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint()));
+        let repaint = ctx.clone();
+        // The release downloads into the data folder, so a launch with none updates no folder.
+        let folder_update = match &data {
+            Some(data) => folder_update::folder_update(data, env!("CARGO_PKG_VERSION"), Arc::new(move || repaint.request_repaint())),
+            None => folder_update::idle_folder_update(env!("CARGO_PKG_VERSION")),
+        };
         // Only a launch with no folder asked for or remembered may show first-run setup.
         let first_run = if path.is_none() { data.as_deref().and_then(|data| first_run(ctx, data)) } else { None };
-        let shell = Self { restart_slot, launch_args: args, ..Self::launch(ctx, path, data, environment, providers, make_updates, make_community) };
+        let launched = Self::launch(ctx, path, data, environment, providers, make_updates, make_community, folder_update);
+        let shell = Self { restart_slot, launch_args: args, ..launched };
         match first_run {
             Some((onboarding, home)) => shell.with_first_run(onboarding, home),
             None => shell,
@@ -546,7 +585,9 @@ impl Shell {
     /// `start` with the tool check, the providers, the updates and the community list given, so tests can launch without
     /// asking real tools, the keychain or the network. `make_updates` takes the switch for the automatic check as saved.
     /// `make_community` takes the data folder, where the list read last is saved, and is asked with none too.
+    /// `folder_update` updates the folder that opens, and every folder opened after it.
     /// The first launch with no settings file keeps the theme and zoom eframe restored, and saves them.
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         ctx: &egui::Context,
         path: Option<PathBuf>,
@@ -555,6 +596,7 @@ impl Shell {
         providers: Providers,
         make_updates: impl FnOnce(bool) -> Updates,
         make_community: impl FnOnce(Option<&Path>) -> Community,
+        folder_update: FolderUpdate,
     ) -> Self {
         environment.ensure_started();
         let restored = settings::ui::restored(ctx);
@@ -586,6 +628,7 @@ impl Shell {
             providers,
             updates,
             auto_check,
+            folder_update,
             ..Self::empty(first, Local::now().date_naive())
         };
         // After the pruning, so the size is what stays.
@@ -601,9 +644,10 @@ impl Shell {
         shell
     }
 
-    /// A running task keeps its folder: a new one would replace the desk and drop the task's live session.
+    /// A running task keeps its folder: a new one would replace the desk and drop the task's live session. A folder
+    /// update keeps it too, so its notice and Undo stay with the folder it changed.
     fn folder_locked(&self) -> bool {
-        self.desk.as_ref().is_some_and(RunDesk::has_live_process)
+        self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.is_working()
     }
 
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
@@ -644,6 +688,11 @@ impl Shell {
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
+                // Its rollback is due before anything else writes it, and starts on the next frame. The last folder's
+                // notice goes.
+                self.folder_update.opened(root.path().to_owned());
+                self.notice_screen.close_details();
+                ctx.request_repaint();
                 self.workspace = Some(root);
                 self.folder_error = None;
                 // However the folder opened, first-run setup has nothing left to do.
@@ -719,6 +768,9 @@ impl Shell {
 
     /// Why Change folder waits, if it does.
     fn folder_wait(&self) -> Option<&'static str> {
+        if self.folder_update.is_working() {
+            return Some(FOLDER_WAITS);
+        }
         self.folder_locked().then_some(FOLDER_BUSY)
     }
 
@@ -747,6 +799,8 @@ impl Shell {
             environment.poll();
         }
         self.follow_updates(ui.ctx(), now);
+        // After the desk's news and the updates', and before any screen can start a task.
+        self.follow_folder_update();
         if self.community.poll(self.now_utc()) {
             self.name_community_portals();
         }
@@ -914,6 +968,49 @@ impl Shell {
         }
     }
 
+    /// Who else writes the job search folder now, if anyone: a task that works, or the folder update or its Undo. Every
+    /// other writer of the folder waits on it: a new task and a reply, through the desk, Profile's Save, and Portals'
+    /// switch and Remove. The folder update waits the other way round in `folder_writable`. Profile and Portals write on
+    /// the window's thread within one frame, so none is under way when `follow_folder_update` starts the update.
+    fn folder_writer(&self) -> Option<FolderWriter> {
+        if self.desk.as_ref().is_some_and(RunDesk::is_busy) {
+            Some(FolderWriter::Task)
+        } else if self.folder_update.is_working() {
+            Some(FolderWriter::FolderUpdate)
+        } else {
+            None
+        }
+    }
+
+    /// Why Portals' switches and actions wait, in its words, if they do.
+    fn portals_wait(&self) -> Option<&'static str> {
+        self.folder_writer().map(|writer| match writer {
+            FolderWriter::Task => portals::ui::BUSY,
+            FolderWriter::FolderUpdate => portals::ui::FOLDER_UPDATING,
+        })
+    }
+
+    /// Whether the job search folder may be written by a folder update now: no task works and no Claude session is
+    /// open, even one only waiting on a reply, as Restart to update waits for, first-run setup has handed over and its
+    /// worker has ended, and the window is not closing for Restart to update.
+    fn folder_writable(&self) -> bool {
+        self.session_state() == SessionState::None && self.first_run.is_none() && self.setup_stopping.is_none() && !self.restart_pending
+    }
+
+    /// Takes the folder update's news, then starts the open folder's rollback once after it opened, or an update once
+    /// for each answer of the feed, while the folder may be written. While one works, the desk starts no task and sends
+    /// no turn, set before any screen draws.
+    fn follow_folder_update(&mut self) {
+        let writable = self.folder_writable();
+        let feed = self.updates.latest_feed().map(|feed| (self.updates.feed_answers(), feed));
+        self.folder_update.follow(feed, writable);
+        let updating = self.folder_update.is_working();
+        if let Some(desk) = &mut self.desk {
+            desk.set_folder_updating(updating);
+        }
+        self.providers.set_folder_updating(updating);
+    }
+
     /// What a Claude session open in Tasks means for Restart to update: one that waits on a permission or a question, one
     /// working, one that only waits for a reply, or none. A run that asks the user still counts as working, so it is named first.
     fn session_state(&self) -> SessionState {
@@ -925,9 +1022,9 @@ impl Shell {
         }
     }
 
-    /// Why Restart to update waits, if it does.
+    /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
-        restart_wait(self.session_state())
+        restart_wait(self.session_state()).or_else(|| self.folder_update.is_working().then_some(RESTART_WAITS))
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -1061,6 +1158,9 @@ impl Shell {
     fn follow_runs(&mut self) {
         let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
         if busy && !self.was_busy {
+            // The task may build on what a folder update wrote, so that update is not offered for Undo any more. An Undo
+            // that did not finish stays offered: finishing it keeps the task's edits.
+            self.folder_update.task_started();
             // Before the first read the snapshot is empty, so the start waits for it.
             if self.run_ended.take().is_none() && self.loaded {
                 self.marks.begin(&self.snapshot.profile);
@@ -1169,6 +1269,10 @@ impl Shell {
         // The release notes close on Esc before anything behind them takes it, Settings' Back to app included.
         if self.update_screen.notes_open() && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.update_screen.close_notes();
+        }
+        // The folder update's details too.
+        if self.notice_screen.details_open() && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.notice_screen.close_details();
         }
         // Settings opens on the page last open, with or without a folder.
         if open_settings {
@@ -1304,19 +1408,36 @@ impl Shell {
             if let Some(note) = self.screen_note() {
                 status_note(ui, &note, false);
             }
-            // The right is Jobdesk's own: Settings, then the update group while there is one, its words cut first.
+            // The right is Jobdesk's own: Settings, then the update group while there is one, its words cut first, then
+            // the folder update's notice while there is one, its words cut before the update group's.
             let view = self.updates.view();
             let wait = self.restart_wait();
-            let asked = ui
+            let notice = self.folder_update.notice();
+            let (asked, noticed) = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if status_button(ui, "Settings", &SETTINGS_KEYS, self.settings_open).clicked() {
                         self.settings_open = true;
                     }
-                    updates::ui::bar_group(ui, &mut self.update_screen, &view, wait)
+                    let asked = updates::ui::bar_group(ui, &mut self.update_screen, &view, wait);
+                    (asked, folder_update::ui::bar_group(ui, &mut self.notice_screen, notice.as_ref()))
                 })
                 .inner;
             if let Some(request) = asked {
                 self.follow_update(ui.ctx(), request);
+            }
+            match noticed {
+                // Undo writes the folder too, so it waits as an update does.
+                Some(NoticeRequest::Undo) => {
+                    let writable = self.folder_writable();
+                    self.folder_update.undo_update(writable);
+                    let updating = self.folder_update.is_working();
+                    if let Some(desk) = &mut self.desk {
+                        desk.set_folder_updating(updating);
+                    }
+                    self.providers.set_folder_updating(updating);
+                }
+                Some(NoticeRequest::Dismiss) => self.folder_update.dismiss(),
+                None => {}
             }
         });
     }
@@ -1387,7 +1508,7 @@ impl Shell {
         match self.screen {
             Screen::InTray if !self.loaded => intray::ui::loading(ui, snapshot.today),
             Screen::InTray => {
-                let keys = !self.confirm_quit && !self.update_screen.notes_open();
+                let keys = !self.confirm_quit && !self.update_screen.notes_open() && !self.notice_screen.details_open();
                 let (jobs, applications) = (failed(Source::Jobs), failed(Source::Applications));
                 // In the alert's order, so the subtitle names them as the alert does.
                 let missing: Vec<&str> = failures
@@ -1460,7 +1581,9 @@ impl Shell {
                 // arrives. A save in between would be marked as the run's, so Save waits for that load too, for
                 // `RUN_READ_WAIT` at most.
                 let reading = self.save_waits_for_load();
-                let moment = Moment { busy: self.desk.as_ref().is_some_and(RunDesk::is_busy), reading, now: self.now() };
+                let writer = self.folder_writer();
+                let (busy, updating) = (writer == Some(FolderWriter::Task), writer == Some(FolderWriter::FolderUpdate));
+                let moment = Moment { busy, reading, updating, now: self.now() };
                 let asked = match self.profile_editor.as_mut() {
                     Some(editor) => profile::ui::show(
                         ui,
@@ -1498,10 +1621,10 @@ impl Shell {
                 }
             }
             Screen::Portals => {
-                let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+                let wait = self.portals_wait();
                 let market = profile::application::home_country(&snapshot.profile);
                 let browse = BrowseContext { community: &mut self.community, market: market.as_deref(), now, now_utc };
-                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, busy, browse) {
+                if let Some(request) = portals::ui::show(ui, &mut self.portals_screen, &state(load(Source::Portals)), &snapshot.portals, wait, browse) {
                     self.change_portals(request);
                 }
             }
@@ -1562,17 +1685,18 @@ impl Shell {
         }
     }
 
-    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works, which the shell
-    /// checks again here, whatever the screen showed. What it wrote is read back at once, and the snapshot worker is
-    /// asked to read again. The Portals screen asks for it; tests ask directly.
+    /// Switches a portal or moves it to the Trash, as Profile's Save writes: never while a run works or the folder
+    /// updates, which the shell checks again here, whatever the screen showed. What it wrote is read back at once, and
+    /// the snapshot worker is asked to read again. The Portals screen asks for it; tests ask directly.
     pub fn change_portals(&mut self, request: PortalsRequest) {
+        let wait = self.portals_wait();
         let Some(changes) = &self.portal_changes else { return };
-        let busy = self.desk.as_ref().is_some_and(RunDesk::is_busy);
+        let busy = wait.is_some();
         let result = match &request {
             PortalsRequest::Switch { folder, on } => changes.switch(folder, *on, busy),
             PortalsRequest::Remove { folder, origin } => changes.remove(folder, *origin, busy),
         };
-        self.portals_screen.settle(&request, result);
+        self.portals_screen.settle(&request, result, wait);
         self.read_back_portals();
         if let Some(reload) = &self.reload {
             reload.ask();
@@ -1693,6 +1817,10 @@ impl Shell {
         });
         let update = self.updates.view();
         let restart_wait = self.restart_wait();
+        // Of the open folder only, which the folder update forgets at each open. With the automatic check off, it asks
+        // for Check now while a check would update the folder: Jobdesk reads nothing from the network on its own.
+        let auto_check = self.settings.preferences().check_updates.is_on();
+        let folder_note = self.folder_update.about_line(auto_check).filter(|_| folder_open);
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1723,6 +1851,7 @@ impl Shell {
                     jobs,
                     update: &update,
                     restart_wait,
+                    folder_note,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
@@ -1903,7 +2032,7 @@ fn welcome_card(ui: &mut Ui, today: NaiveDate, error: Option<&str>) -> bool {
         alert(ui, error);
         ui.add_space(WELCOME_STEP_PADDING / 2.0);
     }
-    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.";
+    let promise = "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one, and when a Jobdesk update brings newer versions of its files, which you can undo right after. Tasks you start change it through Claude Code on this computer.";
     ui.add(egui::Label::new(rich(ui, promise, Type::NOTE, Ink::Muted)).wrap());
     choose
 }
@@ -2128,6 +2257,7 @@ mod tests {
             providers,
             |auto| updates::idle_updates("0.1.0", auto),
             |_| portals::scripted_community(None, Vec::new()),
+            folder_update::idle_folder_update("0.1.0"),
         )
     }
 
@@ -2177,6 +2307,7 @@ mod tests {
                 asked = Some(data.map(Path::to_owned));
                 portals::scripted_community(None, Vec::new())
             },
+            folder_update::idle_folder_update("0.1.0"),
         );
         assert_eq!(asked, Some(None));
     }
@@ -2666,6 +2797,7 @@ mod tests {
             notes: "### Features\n\n- A fictional change".into(),
             size: 10,
             signature: "sig".into(),
+            pin: None,
         }
     }
 
@@ -2898,6 +3030,113 @@ mod tests {
         assert!(shell.desk.as_ref().unwrap().is_busy(), "the run still counts as working");
         assert_eq!(shell.restart_wait(), Some("A task waits for your answer in Tasks. Answer it, then restart once the task finishes."));
         assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending);
+    }
+
+    /// A folder update that works, as an idle one showing a download keeps working with no worker to end it.
+    fn working_folder_update() -> FolderUpdate {
+        use crate::folder_update::application::{Phase, Stage};
+        folder_update::idle_folder_update("0.1.0").showing(Stage::Working(Phase::Downloading { received: 0 }), false)
+    }
+
+    /// While the folder updates, Restart to update waits, says why, and leaves no plan, whatever asked.
+    #[test]
+    fn restart_to_update_waits_while_the_folder_updates() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        shell.desk = None;
+        shell.updates = ready_updates();
+        shell.folder_update = working_folder_update();
+        assert_eq!(shell.restart_wait(), Some(RESTART_WAITS));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending, "nothing closes");
+        shell.restart_pending = true;
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None, "a folder update that works never leaves a plan");
+
+        shell.restart_pending = false;
+        shell.folder_update = folder_update::idle_folder_update("0.1.0");
+        assert_eq!(shell.restart_wait(), None);
+        assert!(restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close), "once it has ended, Restart goes");
+    }
+
+    /// While the folder updates, Run in the launcher starts nothing and says why. The same keys start the task once
+    /// the update has ended, so the update is what held it.
+    #[test]
+    fn the_launcher_starts_no_task_while_the_folder_updates() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        // A gateway that starts no real process, should the guard fail.
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        shell.folder_update = working_folder_update();
+        shell.screen = Screen::Launcher;
+        let shell = Rc::new(RefCell::new(shell));
+        let inner = Rc::clone(&shell);
+        let mut harness = Harness::builder().with_size([1280.0, 820.0]).with_context_setup(install_look).build_ui(move |ui| inner.borrow_mut().show(ui));
+        harness.run_steps(3);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert!(shell.borrow().desk.as_ref().unwrap().runs().is_empty(), "no task started");
+        assert!(shell.borrow().desk.as_ref().unwrap().folder_updating());
+        assert!(harness.query_by_label("Jobdesk is updating your job search folder. Run opens once it ends.").is_some(), "the form says why");
+
+        shell.borrow_mut().folder_update = folder_update::idle_folder_update("0.1.0");
+        harness.run_steps(3);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        harness.run_steps(3);
+        assert_eq!(shell.borrow().desk.as_ref().unwrap().runs().len(), 1, "the same keys start it once the update has ended");
+    }
+
+    /// While the folder updates, Test connection waits and says why, and goes again once the update has ended.
+    #[test]
+    fn test_connection_waits_while_the_folder_updates() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        shell.desk = None;
+        shell.folder_update = working_folder_update();
+        shell.follow_folder_update();
+        assert_eq!(shell.providers.test_gate(false), TestGate::FolderUpdating);
+        assert_eq!(shell.providers.test_sign_in(false), Err("Jobdesk is updating your job search folder. Test once it ends.".to_owned()));
+        shell.folder_update = folder_update::idle_folder_update("0.1.0");
+        shell.follow_folder_update();
+        assert_eq!(shell.providers.test_gate(false), TestGate::Ready);
+    }
+
+    /// The rollback due at an open starts only while the folder may be written: no session open, first-run setup's
+    /// worker ended, and the window not closing for Restart to update. Once it starts, every task waits.
+    #[test]
+    fn a_folder_that_opens_rolls_back_only_while_nothing_else_may_write_it() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let mut shell = launch(&ctx, Some(checkout(&folder)), data.path());
+        let idle_desk = || RunDesk::new(Box::new(Idle), Arc::new(|| {}));
+        shell.desk = Some(idle_desk());
+
+        shell.restart_pending = true;
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.is_working(), "not while the window closes for Restart to update");
+        shell.restart_pending = false;
+
+        shell.setup_stopping = Some(std::thread::spawn(|| {}));
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.is_working(), "not while first-run setup's worker may still write");
+        shell.setup_stopping = None;
+
+        let mut open = idle_desk();
+        open.start("/apply https://kestrel.example/jobs/2", &StartOptions { model: None, budget_usd: 5.0 }, Local::now().naive_local()).unwrap();
+        shell.desk = Some(open);
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.is_working(), "not while a session is open");
+
+        shell.desk = Some(idle_desk());
+        shell.follow_folder_update();
+        assert!(shell.folder_update.is_working(), "the rollback starts");
+        assert!(shell.desk.as_ref().unwrap().folder_updating(), "and every task waits for it");
+        assert_eq!(shell.folder_wait(), Some(FOLDER_WAITS), "and so does Change folder");
     }
 
     /// Keep working in the quit dialog, by click or by Esc, keeps the window, so a Restart to update that waited on it is off.

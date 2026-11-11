@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FEATURES: [&str; 12] =
-    ["discovery", "dossier", "insights", "intray", "onboarding", "portals", "profile", "runs", "settings", "tracking", "updates", "workspace"];
+const FEATURES: [&str; 13] =
+    ["discovery", "dossier", "folder_update", "insights", "intray", "onboarding", "portals", "profile", "runs", "settings", "tracking", "updates", "workspace"];
 const IMPURE: [&str; 12] = ["egui", "eframe", "std::fs", "notify", "serde", "csv::", "rfd", "Palette", "crate::ui_kit", "keyring", "ureq", "minisign"];
 const APPEARANCE: [&str; 15] = [
     "Color32",
@@ -56,9 +56,11 @@ fn joined_chains(code: &str) -> String {
     joined
 }
 
-/// `crate::feature::layer` references, with `use crate::feature::{...}` groups kept coarse.
+/// `crate::feature::layer` references, with `use crate::feature::{...}` groups kept coarse. A visibility such as
+/// `pub(in crate::updates)` is not one: it names a module that holds the item, so it uses nothing.
 fn crate_paths(code: &str) -> Vec<(String, String)> {
     code.match_indices("crate::")
+        .filter(|(at, _)| !code[..*at].ends_with("pub(in "))
         .map(|(at, marker)| {
             let mut parts = code[at + marker.len()..].split("::");
             let module = parts.next().unwrap_or_default();
@@ -87,6 +89,12 @@ fn layer_of(path: &Path, feature_root: &Path) -> Option<String> {
     let first = relative.components().next()?.as_os_str().to_str()?;
     let layer = first.trim_end_matches(".rs");
     (layer != "mod").then(|| layer.to_owned())
+}
+
+#[test]
+fn a_visibility_restriction_is_not_a_reference() {
+    let code = "pub(in crate::updates) fn checked() {}\nuse crate::updates::infrastructure::feed;\n";
+    assert_eq!(crate_paths(code), [("updates".to_owned(), "infrastructure".to_owned())]);
 }
 
 #[test]

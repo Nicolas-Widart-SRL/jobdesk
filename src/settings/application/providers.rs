@@ -11,6 +11,8 @@ use crate::shared_kernel::{ApiKey, KeyReader, KeySource, SignIn, key_source, red
 
 /// Why Test connection is off while a task runs: one Claude process at a time.
 const TASK_RUNNING: &str = "A task is running. Test once it ends.";
+/// Why Test connection is off while Jobdesk updates the job search folder.
+const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. Test once it ends.";
 /// Why Test connection is off while a task's process is up but only waits for the user's reply.
 const TASK_OPEN: &str = "A task is still open. Reply or end it, then test.";
 /// What Test connection reads while a test runs, and why a second one is refused.
@@ -30,6 +32,8 @@ pub enum TestGate {
     Ready,
     Testing,
     TaskRunning,
+    /// Jobdesk updates the job search folder, or undoes its update.
+    FolderUpdating,
 }
 
 impl TestGate {
@@ -39,6 +43,7 @@ impl TestGate {
             TestGate::Ready => None,
             TestGate::Testing => Some(TESTING),
             TestGate::TaskRunning => Some(TASK_RUNNING),
+            TestGate::FolderUpdating => Some(FOLDER_UPDATING),
         }
     }
 }
@@ -276,12 +281,20 @@ pub struct Providers {
     running: Option<Running>,
     sign_in_check: Option<SignInCheck>,
     key_failure: Option<KeyFailure>,
+    /// Jobdesk updates the job search folder, so no test starts.
+    folder_updating: bool,
 }
 
 impl Providers {
     pub fn new(keys: Arc<dyn KeyStore>, tester: Box<dyn ConnectionTester>) -> Self {
         let key = Arc::new(KeyCache::new(keys));
-        Self { key, tester, saved: Saved::NotRead, keychain_busy: false, running: None, sign_in_check: None, key_failure: None }
+        Self { key, tester, saved: Saved::NotRead, keychain_busy: false, running: None, sign_in_check: None, key_failure: None, folder_updating: false }
+    }
+
+    /// While Jobdesk updates the job search folder, or undoes its update, no test starts: one Claude process or folder
+    /// writer at a time, as for tasks. A test that already runs goes on, in its empty temporary folder.
+    pub fn set_folder_updating(&mut self, updating: bool) {
+        self.folder_updating = updating;
     }
 
     pub fn saved(&self) -> &Saved {
@@ -326,6 +339,8 @@ impl Providers {
             TestGate::Testing
         } else if task_running {
             TestGate::TaskRunning
+        } else if self.folder_updating {
+            TestGate::FolderUpdating
         } else {
             TestGate::Ready
         }
@@ -859,6 +874,20 @@ mod tests {
         assert_eq!(f.tester.calls(), 0);
         assert_eq!(TestGate::TaskRunning.reason(), Some(TASK_RUNNING));
         assert_eq!((task_wait_reason(true), task_wait_reason(false)), (TASK_RUNNING, TASK_OPEN));
+    }
+
+    #[test]
+    fn a_folder_update_keeps_the_tester_from_being_called() {
+        let mut f = fixture(Some(FAKE));
+        f.providers.set_folder_updating(true);
+        assert_eq!(f.providers.test_gate(false), TestGate::FolderUpdating);
+        assert_eq!(f.providers.test_key(false), Err(FOLDER_UPDATING.to_owned()));
+        assert_eq!(f.providers.test_sign_in(false), Err(FOLDER_UPDATING.to_owned()));
+        f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
+        assert_eq!(f.stored().as_deref(), Some(OTHER), "the key is still saved");
+        assert_eq!(f.tester.calls(), 0);
+        f.providers.set_folder_updating(false);
+        assert_eq!(f.providers.test_gate(false), TestGate::Ready);
     }
 
     #[test]

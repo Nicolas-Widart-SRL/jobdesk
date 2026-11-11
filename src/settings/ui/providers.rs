@@ -482,6 +482,7 @@ fn wait_reason(gate: TestGate, testing: bool, working: bool) -> Option<&'static 
         TestGate::Testing if testing => Some(TESTING),
         TestGate::Testing => Some(OTHER_TEST),
         TestGate::TaskRunning => Some(task_wait_reason(working)),
+        TestGate::FolderUpdating => gate.reason(),
     }
 }
 

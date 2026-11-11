@@ -25,6 +25,11 @@ const READING: EditorBusy = EditorBusy {
     why: "Jobdesk is reading the files the task changed. Save once that is done.",
     line: "Reading the files the task changed, so Save waits a moment. Your text stays here.",
 };
+/// Why Save waits, the same two ways, while Jobdesk updates the job search folder or undoes its update.
+const FOLDER_UPDATE: EditorBusy = EditorBusy {
+    why: "Jobdesk is updating your job search folder and may change this file. Save once it ends.",
+    line: "Jobdesk is updating your job search folder, so Save waits until it ends. Your text stays here.",
+};
 const SAVE_OVER: &str = "Save mine over it";
 /// The discard ask's width, as End session's popover has.
 const ASK_WIDTH: f32 = 320.0;
@@ -36,6 +41,8 @@ pub(super) enum Hold {
     Run,
     /// A run has ended, and the folder's load after it, which marks what it changed, has not arrived.
     Reading,
+    /// Jobdesk updates the job search folder, or undoes its update, and may write the same file.
+    FolderUpdate,
 }
 
 /// What an edit is of, in the words the editor uses.
@@ -193,6 +200,7 @@ pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut Profil
         busy: hold.map(|hold| match hold {
             Hold::Run => RUN,
             Hold::Reading => READING,
+            Hold::FolderUpdate => FOLDER_UPDATE,
         }),
         changed: on_disk.as_ref(),
         focus: edit.focus,

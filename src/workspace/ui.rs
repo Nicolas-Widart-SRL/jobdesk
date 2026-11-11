@@ -12,7 +12,7 @@ use crate::workspace::application::{AuthMode, EnvironmentChecks, ToolCheck, Work
 const TOOL_ROW_PADDING: i8 = 6;
 
 /// What Jobdesk promises about the folder, on Setup and on Runtime status.
-const PROMISE: &str = "Jobdesk reads your folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.";
+const PROMISE: &str = "Jobdesk reads your folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one, and when a Jobdesk update brings newer versions of its files, which you can undo right after. Tasks you start change it through Claude Code on this computer.";
 
 /// Runtime status's title and lead, as Settings indexes them for search.
 const RUNTIME_TITLE: &str = "Runtime status";

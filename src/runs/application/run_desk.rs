@@ -26,6 +26,8 @@ pub enum StartError {
     AnotherRunIsActive,
     /// Settings' Test connection runs Claude Code, and one Claude process runs at a time.
     TestRunning,
+    /// Jobdesk is updating the job search folder, and a task would read or write it halfway.
+    FolderUpdating,
 }
 
 /// Owns every run of a workspace, newest first.
@@ -43,6 +45,8 @@ pub struct RunDesk {
     sign_in: SignIn,
     /// Settings' Test connection is running, so no new process starts.
     testing: bool,
+    /// Jobdesk is updating the job search folder, so no run starts and no turn is sent.
+    folder_updating: bool,
     clock: Clock,
 }
 
@@ -60,6 +64,7 @@ impl RunDesk {
             asks_permission: false,
             sign_in: SignIn::ClaudeSignIn,
             testing: false,
+            folder_updating: false,
             clock: Arc::new(Instant::now),
         }
     }
@@ -98,6 +103,16 @@ impl RunDesk {
     /// Whether a reply to `id` would wait for Test connection: it needs a new process, and a test runs.
     pub fn reply_waits_for_test(&self, id: &str) -> bool {
         self.testing && !self.sessions.contains_key(id)
+    }
+
+    /// While Jobdesk updates the job search folder, or undoes its update, no run starts and no reply is sent, on a live
+    /// session or a new process: a task would read or write the folder halfway.
+    pub fn set_folder_updating(&mut self, updating: bool) {
+        self.folder_updating = updating;
+    }
+
+    pub fn folder_updating(&self) -> bool {
+        self.folder_updating
     }
 
     pub fn restore(&mut self, history: &dyn RunHistory) {
@@ -187,6 +202,9 @@ impl RunDesk {
         if self.testing {
             return Err(StartError::TestRunning);
         }
+        if self.folder_updating {
+            return Err(StartError::FolderUpdating);
+        }
         self.started += 1;
         let request = RunRequest {
             run_id: format!("{}-{}", now.format("%Y%m%d-%H%M%S"), self.started),
@@ -215,6 +233,9 @@ impl RunDesk {
         }
         if self.reply_waits_for_test(id) {
             return Err(StartError::TestRunning);
+        }
+        if self.folder_updating {
+            return Err(StartError::FolderUpdating);
         }
         let sign_in = self.sign_in;
         let live = self.sessions.contains_key(id);
@@ -525,6 +546,29 @@ mod tests {
         assert_eq!(desk.run(&live).unwrap().turn_number(), 2, "the refused reply is not in the story");
 
         desk.set_testing(false);
+        desk.reply(&live, "again").unwrap();
+        assert_eq!(script.borrow().requests.len(), 2);
+    }
+
+    /// While the folder updates, nothing reaches Claude: no new run, no reply on a live session, no resumed session.
+    #[test]
+    fn no_run_starts_and_no_turn_is_sent_while_the_folder_updates() {
+        let (mut desk, script) = desk();
+        let live = desk.start("/apply x", &options(), now()).unwrap();
+        desk.poll();
+        desk.sink_for(&live)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
+        desk.poll();
+        desk.set_folder_updating(true);
+        assert!(desk.folder_updating());
+        assert_eq!(desk.reply(&live, "yes"), Err(StartError::FolderUpdating), "not even on a live session");
+        assert_eq!(desk.start("/rank", &options(), now()), Err(StartError::FolderUpdating));
+        desk.sink_for(&live)(AgentEvent::ProcessExited { failure: None });
+        desk.poll();
+        assert_eq!(desk.reply(&live, "again"), Err(StartError::FolderUpdating), "nor through a new process");
+        assert_eq!((script.borrow().requests.len(), script.borrow().sent.len()), (1, 0), "nothing reached Claude");
+        assert_eq!(desk.run(&live).unwrap().turn_number(), 1, "the refused replies are not in the story");
+
+        desk.set_folder_updating(false);
         desk.reply(&live, "again").unwrap();
         assert_eq!(script.borrow().requests.len(), 2);
     }

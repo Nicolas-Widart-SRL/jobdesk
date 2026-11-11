@@ -105,11 +105,13 @@ pub enum ProfileRequest {
 
 /// The moment the screen draws in: whether a run works, so Save and Update with Claude… wait, whether Jobdesk is still
 /// reading what a run that ended changed, so Save waits for that too, and the time, which ages the head line and the
-/// foot's Changed on disk.
+/// foot's Changed on disk. `updating` is whether Jobdesk updates the job search folder, or undoes its update, so Save
+/// waits for that as well.
 #[derive(Debug, Clone, Copy)]
 pub struct Moment {
     pub busy: bool,
     pub reading: bool,
+    pub updating: bool,
     pub now: NaiveDateTime,
 }
 
@@ -117,6 +119,8 @@ impl Moment {
     fn hold(self) -> Option<Hold> {
         if self.busy {
             Some(Hold::Run)
+        } else if self.updating {
+            Some(Hold::FolderUpdate)
         } else if self.reading {
             Some(Hold::Reading)
         } else {

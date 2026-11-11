@@ -25,6 +25,8 @@ const BUSY: &str = "Another run is active. One run at a time keeps your files sa
 const TICK_FIRST: &str = "Tick \"I understand\" first.";
 /// Test connection runs Claude Code too, and one Claude process runs at a time.
 const TESTING: &str = "Test connection is running. Run opens once it ends.";
+/// A task would read or write the job search folder while Jobdesk changes it.
+const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. Run opens once it ends.";
 
 /// The form's header for a task in plain words, which has no command name to show.
 const WORDS_TITLE: &str = "Task in plain words";
@@ -239,12 +241,15 @@ impl Launcher {
                 CapCheck::Reached(reached) => Some(reached),
                 CapCheck::Open | CapCheck::Reading => None,
             };
-            let ready = budget.is_some() && !busy && !rules.testing && *rules.cap == CapCheck::Open && (!destructive || self.reset_confirmed);
+            let updating = desk.folder_updating();
+            let ready = budget.is_some() && !busy && !rules.testing && !updating && *rules.cap == CapCheck::Open && (!destructive || self.reset_confirmed);
             if budget.is_none() {
                 alert(ui, NO_BUDGET);
             }
             if busy {
                 strong(ui, BUSY);
+            } else if updating {
+                strong(ui, FOLDER_UPDATING);
             } else if rules.testing {
                 strong(ui, TESTING);
             }
@@ -254,6 +259,7 @@ impl Launcher {
             let why = match rules.cap {
                 _ if budget.is_none() => NO_BUDGET.to_owned(),
                 _ if busy => BUSY.to_owned(),
+                _ if updating => FOLDER_UPDATING.to_owned(),
                 _ if rules.testing => TESTING.to_owned(),
                 CapCheck::Reached(reached) => cap_reason(reached),
                 CapCheck::Reading => CAP_READING.to_owned(),

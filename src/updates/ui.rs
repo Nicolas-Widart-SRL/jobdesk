@@ -5,8 +5,8 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::ui_kit::tokens::ITEM_GAP;
 use crate::ui_kit::{
-    Ink, NotesAction, ReleaseNotes, Tone, enabled_when, release_notes_popover, status_action, status_button, status_divider, status_mark, status_mark_button,
-    status_progress,
+    Ink, NotesAction, NotesBody, ReleaseNotes, Tone, enabled_when, release_notes_popover, status_action, status_button, status_divider, status_mark,
+    status_mark_button, status_progress,
 };
 use crate::updates::application::{BarAction, BarGroup, ESC_CLOSES, Mark, NotesView, UpdateView};
 
@@ -102,7 +102,7 @@ fn notes_button(ui: &mut Ui, screen: &mut UpdateScreen, group: &BarGroup, notes:
     let words = ReleaseNotes {
         title: &notes.title,
         released: &notes.meta,
-        notes: &notes.notes,
+        notes: NotesBody::Markdown(&notes.notes),
         notes_label: &notes.notes_label,
         trust: notes.trust,
         slip,

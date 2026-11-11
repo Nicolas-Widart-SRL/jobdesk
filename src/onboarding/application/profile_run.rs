@@ -36,13 +36,14 @@ pub const DRAFT_RETRY_MOST: Duration = Duration::from_secs(60);
 pub const SNAPSHOT_WAIT: Duration = Duration::from_secs(2);
 
 /// What `/setup`'s closing summary says, in any case: ai-job-search v1.7.5, `.claude/commands/setup.md`, Step 4
-/// ("Confirm & Next Steps"), opens it with "**Setup complete!**". No other message of `/setup` ends the chapter.
-const SETUP_COMPLETE: &str = "setup complete";
+/// ("Confirm & Next Steps"), opens it with "**Setup complete!**". No other message of `/setup` ends the chapter. The
+/// release check asks every release for it.
+pub const SETUP_COMPLETE: &str = "setup complete";
 
 /// What `/setup`'s path question names, in any case: v1.7.5's Step 0 offers "**Path A: Read my documents folder**" or
 /// "**Path A: Documents folder**". A turn that does not name it, such as Step 0's warning about a public fork, is the
-/// user's to answer.
-const PATH_A: &str = "path a";
+/// user's to answer. The release check asks every release for it.
+pub const PATH_A: &str = "path a";
 
 /// The progress line a write under `cv/` or a LaTeX build lights.
 const MAKING_CV: &str = "Making your CV";

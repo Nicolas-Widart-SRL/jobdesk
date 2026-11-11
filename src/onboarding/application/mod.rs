@@ -5,11 +5,13 @@ mod onboarding;
 mod profile_run;
 mod work;
 
-pub use batch::{Batch, Group, Item, Message, MessageBlock, read_message};
+pub use batch::{Batch, Group, Item, Message, MessageBlock, PROPOSAL_WORDS, read_message};
 pub use documents::{Added, CopyStop, Documents, Refused};
 pub use helpers::HelperSetup;
 pub use onboarding::{HelperLine, Onboarding, Stage, Work};
-pub use profile_run::{DRAFT_SAVE_EVERY, PollInput, ProfilePhase, ProfileRun, SETUP, SaveTrouble, SendRefusal, StartRefusal, StartRules};
+pub use profile_run::{
+    DRAFT_SAVE_EVERY, PATH_A, PollInput, ProfilePhase, ProfileRun, SETUP, SETUP_COMPLETE, SaveTrouble, SendRefusal, StartRefusal, StartRules,
+};
 pub use work::{LineState, SoFar, WorkLine, so_far, work_lines};
 
 pub use crate::onboarding::domain::{

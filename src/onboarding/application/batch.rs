@@ -137,13 +137,18 @@ fn blocks(text: &str, spans: &[(Range<usize>, Span)], ask: Option<Range<usize>>)
     found
 }
 
-/// Whether the closing paragraph holds the whole words "apply", "skip" and "yes", in any case. That is the form of a
-/// proposal, "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not make one, and
-/// neither does a mention of applying, even beside "number" or "skip", as in "Answer what you can and skip the rest, and
-/// I'll apply your answers.", because "Yes, apply these changes." answers only a proposal.
+/// The words a proposal's closing paragraph holds, each whole and in any case: ai-job-search v1.7.5's
+/// `.claude/commands/setup.md`, Step A6, asks "Reply **yes** to apply all, or list the numbers you want to skip.". The
+/// release check asks every release for a line that holds them all.
+pub const PROPOSAL_WORDS: [&str; 3] = ["apply", "skip", "yes"];
+
+/// Whether the closing paragraph holds every one of `PROPOSAL_WORDS`. That is the form of a proposal, "Reply yes to
+/// apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not make one, and neither does a mention of
+/// applying, even beside "number" or "skip", as in "Answer what you can and skip the rest, and I'll apply your
+/// answers.", because "Yes, apply these changes." answers only a proposal.
 fn asks_to_apply(closing: &str) -> bool {
     let has = |ask: &str| closing.split(|c: char| !c.is_alphanumeric()).any(|word| word.eq_ignore_ascii_case(ask));
-    has("apply") && has("skip") && has("yes")
+    PROPOSAL_WORDS.iter().all(|ask| has(ask))
 }
 
 struct Scan {

@@ -1,6 +1,6 @@
 # Runs
 
-This page covers a task's `claude` processes: how one starts, stops and signs in, how Test connection differs, and when Claude waits on the user. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers a task's `claude` processes: how one starts, stops and signs in, how Test connection differs, when Claude waits on the user, and how first run builds the profile. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 ## The child process
 
@@ -174,6 +174,81 @@ The technical rows open with "Show N actions", or "Show details" for a step with
 - Quick replies never start a run. They stay disabled while another run works or the reply field holds a draft.
 - `RunDesk::reply` refuses any reply while another run is busy, even on a live session.
 - End session asks first, and Esc keeps the session open.
+
+## The first-run profile run
+
+On macOS, first run's Profile chapter builds the profile with the unchanged `/setup`, as a normal run: one run at a time, its own run log, counted in Usage statistics and listed in Tasks. `ProfileRun`, in `onboarding`'s application layer, drives it on the shell's `RunDesk`. The guide's [First run](../guide.md#first-run) describes the screens.
+
+### Read my documents starts it
+
+Read my documents is the user starting the run, as Run does in the launcher. It is the primary of a screen whose only job is to start that run, not a card action. It:
+
+- copies the documents on a worker, and starts `/setup` once every one is in `documents/`, as [trust](trust.md#the-documents) says;
+- takes the model and budget from `start_values`, as the launcher does, so a command's row in Settings › Run defaults, then the budget for every task, beats the suggestion;
+- waits on the launcher's rules: one run at a time, Test connection and the monthly cap, checked again when the copy ends. Its reason names no sum of money.
+
+### The budget
+
+The catalog suggests $25 for `/setup`, because a whole first setup reads every document and writes every profile file in one session, in about 40 minutes. The same suggestion applies in the launcher, in Settings › Run defaults and for Profile's Update with Claude….
+
+`--max-budget-usd` counts per process, not per run. A process that reaches it fails the run, and the chapter shows Stopped with the CLI's reason. Pick up where it stopped then resumes the session in a new process, which gets the whole budget again. So one setup can spend more than its budget in all. The monthly cap holds at Read my documents and at a fresh start of `/setup`, but not at a reply on the run's session.
+
+### Jobdesk's replies
+
+Jobdesk sends one reply of its own. It builds every other reply from what the user chose, and sends it only when the user presses the button. Each goes through `RunDesk::reply` on the run's session, as a typed reply does. The fixed words are in `onboarding/domain/replies.rs`.
+
+- **Path A**: "Path A: Read my documents folder." It goes once per run, after a turn that ended cleanly, with nothing else open, whose last message names Path A, as `/setup`'s opening question does. `path_a_sent` in the record, and the reply in the run's activity, stop it from going twice, after a restart too. Any other first message, such as `/setup`'s warning about a public fork, reaches the user as a sheet.
+- **Send answers**, on a question sheet: one numbered reply, a line `<n>. <answer>` for each of Claude's numbers, in Claude's order. An empty field goes as "Skipped", so the numbers always match. Each line after the first of a multi-line answer is indented by three spaces, so no line of an answer starts like an item.
+- **Apply these changes**, on the review card: "Yes, apply these changes." when every change is ticked, else "Apply all except 3 and 7.", the unticked numbers in ascending order. With none ticked there is no reply, and the button is disabled.
+- **Looks good**, on the CV check: "The CV looks good."
+- The fallback sheet's answer, Change something and Ask for a change send the user's own words, trimmed.
+
+### Reading Claude's message
+
+When a turn ends cleanly, `read_message` in `onboarding/application/batch.rs` reads its last top-level message. Hidden characters are removed from each line first.
+
+- Only the items of top-level numbered lists count, by the number Claude typed. They must run 1 to N across the whole message, with at least two. A gap, a repeat, a numbered line hidden in a paragraph or a quote, or a numbered list nested anywhere but as an item's own sub-steps from 1, makes the message free text.
+- The items are a proposal only when no item holds a "?", no item holds a numbered list of its own, and the last paragraph after the list holds "apply" and one of "skip", "number" or "numbers". Otherwise they are questions. So when Jobdesk is unsure, the message opens in the question sheet, which still reaches the user.
+
+The chapter shows the first of these that holds:
+
+1. the choice card, while an `AskUserQuestion` question or a permission prompt waits. Jobdesk never answers it;
+2. the review card for a proposal, or the question sheet for questions;
+3. the CV check, only when LaTeX was not left out with Continue without PDFs, the turn ran a LaTeX build or wrote a `.pdf` under `cv/`, a CV PDF was written since the turn began, and the message is free text. After a restart the turn's start is unknown, and the run's start counts. `/setup` itself does not build the CV PDF, so the check often does not show;
+4. the end of setup, when the message says "Setup complete", as `/setup`'s closing summary opens, or when the turn answers "The CV looks good." after an earlier turn said so and does not close on a question;
+5. the fallback sheet otherwise: the message beside one field.
+
+### Progress lines
+
+While Claude works, the card shows fixed lines from `PROGRESS_LINES` in `onboarding/domain/replies.rs`, never Claude's text or a tool row. Jobdesk's own events light three of them, and a tool call lights the rest, by tool and by path under the job search folder, or for `Bash` by the program a command runs. A path outside the folder lights nothing.
+
+| Line | Lit by |
+| --- | --- |
+| Documents copied into your folder | Jobdesk's own copy, before the run starts |
+| Reading your documents | a `Read` under `documents/` |
+| Comparing your CV with your other documents | Claude's first message after the reads |
+| Writing your profile | a write to `CLAUDE.md` or under `.claude/skills/job-application-assistant/` |
+| Applying the changes you approved | the writes after the review card's reply |
+| Making your CV | a write under `cv/`, or a `lualatex`, `xelatex`, `pdflatex` or `latexmk` command |
+| Choosing job sites and search terms | a write under `.agents/skills/` or to `.claude/skills/job-scraper/search-queries.md` |
+
+### Stopping and picking up
+
+The chapter shows Stopped, with the reason as plain text without hidden characters, when:
+
+- the run failed, as at its budget;
+- the user pressed Stop setup, which interrupts the turn and keeps the session: "You stopped setup.";
+- its last turn has no result, as after a quit or a crash: "Setup stopped before it finished.";
+- its process ended while Claude asked for the path: "Setup stopped before Claude read your documents."
+
+Pick up where it stopped goes on in one of two ways:
+
+- A run that never reported a session has nothing to resume. Jobdesk closes it and starts `/setup` anew under the rules of Read my documents, and the record moves to the new run.
+- Otherwise it is a reply on the run's own session: the Path A reply when the run stopped on the path question, else "Please pick up where you stopped." A failed run's process is ended first, so the reply resumes the session in a new process with a budget of its own.
+
+### After a restart
+
+The progress record keeps the run's id, `path_a_sent` and the user's draft, as [trust](trust.md#the-progress-record) says. When the chapter opens again, it finds the run by its id among the runs `RunDesk` restored from the run logs, and reads its phase as above. A turn cut short shows Stopped, and one that ended shows its sheet again, with the draft typed for that turn. A reply then starts a new process that resumes the same session with `--resume`, as [The child process](#the-child-process) says.
 
 ## Live figures
 

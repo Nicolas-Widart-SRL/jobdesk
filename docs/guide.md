@@ -31,17 +31,45 @@ Install what is missing installs the rest. Each line shows its download size and
 
 The helpers install only for you, in a hidden `.jobdesk` folder in your home folder: `~/.jobdesk/python`, `~/.jobdesk/bun` and `~/.jobdesk/TinyTeX`. No administrator password is needed. Jobdesk changes nothing else on this computer, and leaves any other copy of Python, Bun or LaTeX you have as it is. Your tasks use Jobdesk's copies first.
 
-If a helper cannot install, its line says why, and Try again installs it again. When only LaTeX fails, Continue without PDFs goes on without it: Jobdesk still finds and scores jobs and writes your profile, but cannot make PDFs of your CV and cover letters. Python and Bun cannot be left out. The Setup tab then stays in the menu, with LaTeX's lines missing, until LaTeX is installed.
-
-When all three are ready, Continue opens Jobdesk on Today with your new folder, in its full-size window, and checks the tools again so Setup finds the helpers. Profile then shows what is left to fill in about you.
+If a helper cannot install, its line says why, and Try again installs it again. When only LaTeX fails, Continue without PDFs goes on without it: Jobdesk still finds and scores jobs and writes your profile, but cannot make PDFs of your CV and cover letters, so setup skips the CV check. Python and Bun cannot be left out. The Setup tab then stays in the menu, with LaTeX's lines missing, until LaTeX is installed.
 
 If Jobdesk quits while a stopped download or install is still finishing, its partial files can stay: in `onboarding/<number>/` of the app's data folder, in a hidden staging folder beside your job search folder, and in staging folders in `~/.jobdesk`. They are safe to delete.
 
 Settings stays at the bottom right through setup. Choosing a folder in Settings › Change folder ends setup at once: a download or an install still running stops, and that folder opens on Today in the full-size window, behind Settings. Back to app or Esc shows it.
 
+When all three are ready, Continue goes on to your profile, and the window grows to its full size.
+
+### Your documents
+
+Claude builds your profile from your documents: your CV, your LinkedIn profile saved as a PDF, diplomas, reference letters and projects. Drop them on the card, or use Choose files…. Jobdesk reads PDF files only, up to 100 MB each. Save a Word file as a PDF first. A folder or a link is refused too: add the file itself.
+
+Each file shows its kind: CV, LinkedIn profile, Diploma, Reference letter or Project. Jobdesk guesses it from the file's name, and you can change it until you press Read my documents. A name that says nothing is taken for your CV when you have none yet, and for a project otherwise. Remove takes a file off the list.
+
+Read my documents copies each file into your folder's `documents/`, in the subfolder for its kind: `cv/`, `linkedin/`, `diplomas/`, `references/` or `projects/`. Your own files stay where they are, unchanged. A copy never replaces a file: a name already in that subfolder gets a number, such as `CV (2).pdf`. Once copied, a file stays in your folder and keeps its kind. If a copy stops, the card names the file and says whether the files before it are in your folder.
+
+To save your LinkedIn profile as a PDF, open your own profile on LinkedIn in a web browser, choose More under your name, then Save to PDF. Add the file it saves, `Profile.pdf`: Jobdesk takes it for your LinkedIn profile.
+
+### Building your profile
+
+Read my documents starts building your profile, as a task: Claude reads your documents with ai-job-search's own setup. It waits while another task runs or Settings tests the connection, and once this month's tasks reach your monthly cap. The card says why. It shows in Tasks and in Settings › Usage statistics like any task.
+
+While Claude works, the card shows plain lines of what it does, such as Reading your documents, and Stop setup. A turn can take a few minutes, so you can step away.
+
+Claude asks in rounds of numbered questions. Each round opens a sheet with a field under each question. Answer on your own time, in any order: short answers are fine, and an empty field is sent as "Skipped". Your answers save as you type and wait for you if you close Jobdesk. If they grow too long to keep, the sheet says they are not saved yet. Send answers (Cmd+Enter) sends them all as one reply. When Jobdesk cannot count the questions, the sheet shows Claude's message beside one field, and your answer goes as you wrote it. Show all Claude wrote shows the whole message.
+
+When Claude proposes changes to your profile, each one has a checkbox, and all start ticked. Untick the ones you do not want. Apply these changes sends "Yes, apply these changes.", or for example "Apply all except 3 and 7.". With none ticked, Apply these changes waits. Change something sends your own words instead. Nothing changes until you send.
+
+If Claude makes your CV's PDF, the card shows its pages. Looks good tells Claude so, and Ask for a change sends your words. ai-job-search's setup often does not make the PDF, so you may not see this step. When Claude asks you to pick from choices, the card shows them as Tasks does.
+
+If setup stops, because you pressed Stop setup, because it reached its Spend at most, or because Jobdesk quit while Claude worked, the card says why. Pick up where it stopped carries on from there, and Finish later opens Jobdesk with what is done.
+
+No setup screen shows what it costs. Building the profile uses the Spend at most of Settings › Run defaults, which suggests $25 for it. When setup stops at that limit, Pick up where it stopped may spend that much again. The launcher still shows Model and Spend at most for every task it opens, and Settings › Usage statistics keeps what setup spent.
+
+When Claude says setup is complete, a recap shows what is ready. For a job site that is not listed, Add a job site you use… opens the launcher on `/add-portal`, which asks for the site's address. Nothing runs until you press Run there. Open Jobdesk opens Today with your new folder.
+
 ### Quitting midway
 
-Quit any time. Once your folder is made, the next open shows Welcome back, with the steps already done, and Continue setup picks up where you stopped. A download or an install that was cut short starts again, and a helper that finished stays. Jobdesk keeps this progress in its data folder, and forgets it once the computer step is done.
+Quit any time. Once your folder is made, the next open shows Welcome back, with the steps already done, and Continue setup picks up where you stopped. A download or an install that was cut short starts again, and a helper that finished stays. Your profile picks up too: a sheet shows again with the answers you typed, and a turn that Claude had not finished shows Pick up where it stopped. Jobdesk keeps this progress, your draft answers included, in its data folder, and forgets it once the recap opens.
 
 ## Today
 

@@ -58,7 +58,8 @@ pub enum Failure {
 /// or nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// An update that stopped midway, at an earlier open, was rolled back. Nothing else ran: the next open updates.
+    /// An update that stopped midway, at an earlier open, was rolled back. Nothing else ran, and no pass updates the
+    /// folder for the rest of this launch: the next launch does.
     Recovered(Reverted),
     /// The folder is not there.
     NoFolder,
@@ -81,7 +82,8 @@ pub enum Outcome {
     Updated(Report),
     /// The update did not finish. The folder is as the update left it, and the next open tries again.
     Failed(Failure),
-    /// The rollback of an update that stopped midway, at an earlier open, did not finish, so no update ran.
+    /// The rollback of an update that stopped midway, at an earlier open, did not finish, so no update ran. Unless it was
+    /// `Busy`, which ran nothing, no pass updates the folder for the rest of this launch either.
     RollbackFailed(Failure),
     /// An Undo of the last update started, at an earlier open, and did not finish: the folder holds some files of each
     /// release. Undo finishes it, and the release it noted is not applied again meanwhile.
@@ -166,6 +168,12 @@ pub struct FolderUpdate {
     recover_due: bool,
     /// Each folder and answer of the feed an update pass started with, this launch, so each is tried once.
     tried: HashSet<(PathBuf, u64)>,
+    /// The folder the worker runs on, while one does.
+    working_on: Option<PathBuf>,
+    /// Each folder whose rollback ran or failed this launch, at an open or in a pass. No pass starts for it again until
+    /// the next launch, so the notice of the rollback stays, and so does the backup that holds the originals of any
+    /// file it kept, which an update would replace.
+    held_back: HashSet<PathBuf>,
     /// The last stage worth telling, which the notice says until a later one, a dismissal or another folder.
     told: Option<Stage>,
     /// Undo is offered: an update of the open folder ended this launch and no task has started since, or an Undo that
@@ -208,6 +216,8 @@ impl FolderUpdate {
             folder: None,
             recover_due: false,
             tried: HashSet::new(),
+            working_on: None,
+            held_back: HashSet::new(),
             told: None,
             undo_offered: false,
             offer_outlives_tasks: false,
@@ -246,7 +256,8 @@ impl FolderUpdate {
     }
 
     /// Call it every frame. It takes the worker's news, then, while no worker runs and `runs_idle` holds, starts the
-    /// open folder's rollback once after it opened, or else an update pass once for each answer of the feed: `feed` is
+    /// open folder's rollback once after it opened, or else an update pass once for each answer of the feed, unless a
+    /// rollback of the folder ran or failed this launch, at an open or in a pass: `feed` is
     /// how many checks have read the feed, and what the last one found. `runs_idle` is false while a task or a Claude
     /// session is open, even one only waiting on a reply, and while anything else may write the folder.
     pub fn follow(&mut self, feed: Option<(u64, &LatestFeed)>, runs_idle: bool) {
@@ -257,6 +268,9 @@ impl FolderUpdate {
         let Some(folder) = self.folder.clone() else { return };
         if self.recover_due {
             self.recover_due = !self.recover(folder, true);
+            return;
+        }
+        if self.held_back.contains(&folder) {
             return;
         }
         if let Some((answer, feed)) = feed
@@ -293,9 +307,11 @@ impl FolderUpdate {
 
     /// The one quiet line Settings › About shows of the open folder: why Jobdesk leaves it as it is, or, while the
     /// automatic check is off, `auto_check` false, that the folder is brought up to date only after a check. That line
-    /// shows for a folder with a base and no git, until a pass has asked the gate, and never after a failed rollback.
+    /// shows for a folder with a base and no git, until a pass has asked the gate, and never after a rollback that ran or
+    /// failed, since no pass updates that folder for the rest of the launch.
     pub fn about_line(&self, auto_check: bool) -> Option<&'static str> {
-        self.quiet().or_else(|| (!auto_check && self.updatable && !self.checked).then_some(notice::CHECK_HINT))
+        let held_back = self.folder.as_ref().is_some_and(|folder| self.held_back.contains(folder));
+        self.quiet().or_else(|| (!auto_check && self.updatable && !self.checked && !held_back).then_some(notice::CHECK_HINT))
     }
 
     /// Undoes the update the notice offers Undo for, of the open folder, as `undo` does. Ignored when none is offered.
@@ -362,6 +378,7 @@ impl FolderUpdate {
             return;
         }
         let (feed, current) = (feed.clone(), self.current);
+        self.working_on = Some(folder.clone());
         self.spawn(Phase::Checking, Stage::Ended(Outcome::Failed(Failure::Disk)), move |ports, tell| {
             let outcome = run(ports, &folder, &feed, current, &mut |phase| tell(Event::Phase(phase)));
             (Stage::Ended(outcome), ports.updater.can_undo(&folder))
@@ -380,6 +397,7 @@ impl FolderUpdate {
         if self.working || !runs_idle {
             return false;
         }
+        self.working_on = Some(folder.clone());
         self.spawn(Phase::Checking, Stage::Ended(Outcome::Failed(Failure::Disk)), move |ports, tell| {
             // An Undo that stopped partway leaves no journal to roll back, only its record and its note, which a look
             // that changes nothing finds.
@@ -419,6 +437,13 @@ impl FolderUpdate {
                 Event::Looked(Look::Quiet(quiet)) => (self.quiet, self.updatable) = (Some(quiet), false),
                 Event::Looked(Look::Updatable) => (self.quiet, self.updatable) = (None, true),
                 Event::Ended(stage, undoable) => {
+                    let folder = self.working_on.take();
+                    // A rollback another Jobdesk kept out ran nothing, so it holds nothing back.
+                    let rolled_back = matches!(&stage, Stage::Ended(Outcome::Recovered(_) | Outcome::RollbackFailed(_)))
+                        && stage != Stage::Ended(Outcome::RollbackFailed(Failure::Busy));
+                    if let (true, Some(folder)) = (rolled_back, folder) {
+                        self.held_back.insert(folder);
+                    }
                     self.remember(&stage);
                     self.stage = stage;
                     self.undoable = undoable;
@@ -1007,6 +1032,51 @@ mod tests {
         follow(&mut desk, Some((2, &feed)), true);
         follow(&mut desk, Some((2, &feed)), true);
         assert_eq!((rollbacks(&fake), passes(&fake)), (4, 2), "an open again rolls back, and the answer it was tried with stays tried");
+    }
+
+    /// A rollback at an open that ran, with or without files it kept, or that failed, starts no update pass of that
+    /// folder for the rest of the launch: its notice stays, and so does the backup that holds the originals of any file
+    /// it kept, which an update would replace.
+    #[test]
+    fn no_update_runs_after_a_rollback_in_the_same_launch() {
+        let reverted = |kept: &[&str]| Reverted { reverted: vec!["a.md".into()], kept: kept.iter().map(|path| (*path).to_owned()).collect() };
+        for recover in [
+            Ok(Some(reverted(&[]))),
+            Ok(Some(reverted(&["CLAUDE.md"]))),
+            Err(UpdateError::Kept(vec!["CLAUDE.md".into()])),
+            Err(UpdateError::BadJournal),
+            Err(UpdateError::Disk),
+        ] {
+            let fake = Arc::new(Fake { recover: recover.clone(), ..Fake::ready() });
+            let mut opened = desk(&fake, "0.2.0");
+            opened.opened(PathBuf::from(FOLDER));
+            follow(&mut opened, None, true);
+            let (stage, notice) = (opened.stage().clone(), opened.notice());
+            assert!(matches!(stage, Stage::Ended(Outcome::Recovered(_) | Outcome::RollbackFailed(_))), "{recover:?}: {stage:?}");
+            assert!(notice.is_some(), "{recover:?}");
+            for answer in 1..=2 {
+                follow(&mut opened, Some((answer, &feed())), true);
+            }
+            assert_eq!((rollbacks(&fake), passes(&fake)), (1, 0), "{recover:?}: no pass starts");
+            assert_eq!((opened.stage(), opened.notice()), (&stage, notice), "{recover:?}: the notice stays");
+            assert_eq!(opened.about_line(false), None, "{recover:?}: About asks for no check, which would update nothing");
+
+            opened.opened(PathBuf::from(FOLDER));
+            follow(&mut opened, None, true);
+            follow(&mut opened, Some((3, &feed())), true);
+            assert_eq!(passes(&fake), 0, "{recover:?}: nor after the folder opens again in this launch");
+        }
+    }
+
+    /// A rollback another Jobdesk kept out ran nothing and says nothing, so it holds no update back.
+    #[test]
+    fn a_busy_rollback_holds_no_update_back() {
+        let fake = Arc::new(Fake { recover: Err(UpdateError::Busy), ..Fake::ready() });
+        let mut opened = desk(&fake, "0.2.0");
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, None, true);
+        follow(&mut opened, Some((1, &feed())), true);
+        assert_eq!(rollbacks(&fake), 2, "the pass starts, and rolls back first");
     }
 
     #[test]

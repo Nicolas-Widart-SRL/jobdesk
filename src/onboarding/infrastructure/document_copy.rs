@@ -72,8 +72,15 @@ impl DocumentCopier for FileCopier {
         // Held from now until the process exits, so another Jobdesk leaves this one's part files alone. Best effort: a
         // copy goes on without it.
         let _ = own_folder::claim(&self.claims);
-        for each in DocumentKind::ALL {
-            clear_stray_parts(&folder.join(DOCUMENTS).join(each.folder()), &self.claims);
+        // `kind_folder` found `documents/` a real folder and the kind's subfolder a real folder in it, so the parent of
+        // the subfolder's resolved path is `documents/` resolved.
+        if let Some(documents_resolved) = canonical.parent() {
+            for each in DocumentKind::ALL {
+                let subfolder = folder.join(DOCUMENTS).join(each.folder());
+                if is_real_folder_in(&subfolder, documents_resolved) {
+                    clear_stray_parts(&subfolder, &self.claims);
+                }
+            }
         }
         let part = documents.join(part_name());
         let out = OpenOptions::new().write(true).create_new(true).open(&part).map_err(|_| CopyFailure::Failed)?;
@@ -111,6 +118,7 @@ fn part_pid(name: &str) -> Option<u32> {
 /// every file there. One of this process goes at once, as its copies run one after another and none runs now. So does
 /// one of a Jobdesk that no longer runs: one whose `<pid>` folder in `claims` no running Jobdesk holds locked. One of
 /// another running Jobdesk goes only once it is `STRAY_PART_AGE` old. Only regular files of that name go, never a link.
+/// The caller checks first that `folder` is a real folder directly in `documents/`.
 fn clear_stray_parts(folder: &Path, claims: &Path) {
     let Ok(entries) = fs::read_dir(folder) else { return };
     for entry in entries.flatten() {
@@ -203,6 +211,12 @@ fn rename_exclusive(_: &Path, _: &Path) -> io::Result<()> {
 /// that `documents/` was not swapped for a link while the copy ran.
 fn stays_in(path: &Path, canonical: &Path) -> bool {
     fs::canonicalize(path).is_ok_and(|resolved| resolved.parent() == Some(canonical))
+}
+
+/// Whether `path` is a real folder, not a link, that sits directly in the folder `canonical` names, links resolved. A
+/// subfolder of `documents/` that is not is never entered, so nothing outside the job search folder is removed.
+fn is_real_folder_in(path: &Path, canonical: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) && stays_in(path, canonical)
 }
 
 /// Opens `path` for reading only when it is a regular file and not a link, and checks that the handle reads the very
@@ -525,6 +539,20 @@ mod tests {
         assert_eq!(names(&references), Vec::<String>::new(), "a stopped Jobdesk's part went at once, a live one's old part too");
         assert_eq!(fs::read(cv.join("cv.pdf")).unwrap(), pdf(1));
         root_holds_only_subfolders(&folder);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_stray_parts_never_follows_another_subfolder_that_is_a_link() {
+        let (root, folder, desktop) = places();
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        // A pid no running Jobdesk holds, whose part file would go at once inside the job search folder.
+        fs::write(elsewhere.join(part(4_000_001, 0)), b"not Jobdesk's to remove").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, folder.join(DOCUMENTS).join("linkedin")).unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&elsewhere), [part(4_000_001, 0)], "the part file the link leads to stays");
     }
 
     #[cfg(target_os = "macos")]

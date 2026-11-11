@@ -5,7 +5,7 @@ mod onboarding;
 mod profile_run;
 
 pub use batch::{Batch, Group, Item, Message, read_message};
-pub use documents::{Added, Documents, Refused};
+pub use documents::{Added, CopyStop, Documents, Refused};
 pub use helpers::HelperSetup;
 pub use onboarding::{HelperLine, Onboarding, Stage, Work};
 pub use profile_run::{DRAFT_SAVE_EVERY, PollInput, ProfilePhase, ProfileRun, SETUP, SaveTrouble, SendRefusal, StartRefusal, StartRules, phase_of};

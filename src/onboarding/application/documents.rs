@@ -37,6 +37,29 @@ impl Refused {
     }
 }
 
+/// Where a copy stopped: the file it could not copy, why, and whether files before it are in the folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyStop {
+    /// The file's name as shown, without hidden characters.
+    pub name: String,
+    pub failure: CopyFailure,
+    /// Whether a document of the list is in the folder already, copied before this one.
+    pub earlier_copied: bool,
+}
+
+impl CopyStop {
+    /// The plain line that says where the copy stopped, and what is in the folder.
+    pub fn line(&self) -> String {
+        let name = &self.name;
+        match (self.failure, self.earlier_copied) {
+            (CopyFailure::Failed, false) => CopyFailure::Failed.line().to_owned(),
+            (CopyFailure::Failed, true) => format!("The copy stopped at {name}. The files before it are in your folder."),
+            (failure, false) => format!("{name}: {}", failure.line()),
+            (failure, true) => format!("The copy stopped at {name}. {} The files before it are in your folder.", failure.line()),
+        }
+    }
+}
+
 /// What a worker says about the documents.
 enum News {
     Looked(PathBuf, Result<Option<usize>, Refusal>),
@@ -53,7 +76,7 @@ pub struct Documents {
     added: Vec<Added>,
     refused: Vec<Refused>,
     copying: bool,
-    copy_failure: Option<CopyFailure>,
+    copy_failure: Option<CopyStop>,
     news: Receiver<News>,
     sender: Sender<News>,
 }
@@ -141,8 +164,8 @@ impl Documents {
     }
 
     /// Why the last copy stopped, until the next one starts.
-    pub fn copy_failure(&self) -> Option<CopyFailure> {
-        self.copy_failure
+    pub fn copy_failure(&self) -> Option<&CopyStop> {
+        self.copy_failure.as_ref()
     }
 
     /// Whether every document is in `documents/`.
@@ -170,7 +193,11 @@ impl Documents {
                             added.copied_as = Some(name);
                         }
                     }
-                    Err(failure) => self.copy_failure = Some(failure),
+                    Err(failure) => {
+                        let name = self.added.iter().find(|added| added.source == source).map(|added| added.name.clone()).unwrap_or_default();
+                        let earlier_copied = self.added.iter().any(|added| added.copied_as.is_some());
+                        self.copy_failure = Some(CopyStop { name, failure, earlier_copied });
+                    }
                 },
                 News::CopyEnded => self.copying = false,
             }
@@ -348,8 +375,11 @@ mod tests {
         documents.start_copy(folder);
         assert!(documents.is_copying(), "copied on a worker");
         settle(&mut documents);
-        assert_eq!(documents.copy_failure(), Some(CopyFailure::Failed));
+        let stop = documents.copy_failure().unwrap().clone();
+        assert_eq!(stop, CopyStop { name: "Profile.pdf".into(), failure: CopyFailure::Failed, earlier_copied: true });
+        assert_eq!(stop.line(), "The copy stopped at Profile.pdf. The files before it are in your folder.");
         assert_eq!(*shelf.copies.lock().unwrap(), ["cv.pdf"]);
+        assert_eq!(documents.added()[0].copied_as.as_deref(), Some("cv.pdf"), "a copied row stays marked");
         documents.remove(0);
         assert_eq!(documents.added().len(), 3, "a copied document stays");
         *shelf.broken.lock().unwrap() = None;
@@ -358,5 +388,25 @@ mod tests {
         assert_eq!(documents.copy_failure(), None);
         assert_eq!(*shelf.copies.lock().unwrap(), ["cv.pdf", "Profile.pdf", "Letter.pdf"]);
         assert!(documents.all_copied());
+    }
+
+    #[test]
+    fn a_copy_that_stops_at_its_first_file_says_nothing_was_saved() {
+        let (mut documents, shelf) = documents();
+        documents.add([desktop("cv\u{202e}fdp.pdf"), desktop("Profile.pdf")]);
+        settle(&mut documents);
+        *shelf.broken.lock().unwrap() = Some("cvfdp.pdf".into());
+        documents.start_copy(Path::new("/Users/sam/Documents/Job search"));
+        settle(&mut documents);
+        let stop = documents.copy_failure().unwrap();
+        assert_eq!((stop.name.as_str(), stop.earlier_copied), ("cvfdp.pdf", false), "the name as shown");
+        assert_eq!(stop.line(), "The copy did not finish. Nothing was saved.");
+        let refused = CopyStop { name: "Letter.pdf".into(), failure: CopyFailure::NoFreeName, earlier_copied: false };
+        assert_eq!(refused.line(), "Letter.pdf: Your documents folder already holds too many files of this name.");
+        let after = CopyStop { earlier_copied: true, ..refused };
+        assert_eq!(
+            after.line(),
+            "The copy stopped at Letter.pdf. Your documents folder already holds too many files of this name. The files before it are in your folder."
+        );
     }
 }

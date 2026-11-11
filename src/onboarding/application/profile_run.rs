@@ -8,10 +8,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, NaiveDateTime};
 
-use crate::onboarding::application::{Batch, Documents, Message, read_message};
+use crate::onboarding::application::{Batch, CopyStop, Documents, Message, read_message};
 use crate::onboarding::domain::{
-    CV_LOOKS_GOOD, CopyFailure, DocumentCopier, DocumentKind, Draft, PATH_A_REPLY, PICK_UP_REPLY, Progress, ProgressStore, Saved, joined_reply, review_reply,
-    tool_line,
+    CV_LOOKS_GOOD, DocumentCopier, DocumentKind, Draft, PATH_A_REPLY, PICK_UP_REPLY, Progress, ProgressStore, Saved, joined_reply, review_reply, tool_line,
 };
 use crate::profile::application::{CvShelf, PdfDocument};
 use crate::runs::application::{
@@ -111,7 +110,7 @@ pub enum StartRefusal {
     },
     /// A cap is in force and this month's spend is not read yet.
     CapReading,
-    Copy(CopyFailure),
+    Copy(CopyStop),
     /// This build's catalog has no `/setup`.
     NoCommand,
     /// Nothing is stopped to pick up.
@@ -131,7 +130,7 @@ impl StartRefusal {
                 format!("This month's tasks reached the monthly cap you set in Settings. Setup can start on {}.", reopens_on.format("%-d\u{a0}%B"))
             }
             Self::CapReading => "Setup waits while this month's tasks are counted.".to_owned(),
-            Self::Copy(failure) => failure.line().to_owned(),
+            Self::Copy(stop) => stop.line(),
             Self::NoCommand => "This copy of Jobdesk cannot build a profile.".to_owned(),
             Self::NotNow => SendRefusal::NotNow.line().to_owned(),
         }
@@ -345,7 +344,7 @@ impl ProfileRun {
         if self.starting && !self.documents.is_copying() {
             self.starting = false;
             let started = match self.documents.copy_failure() {
-                Some(failure) => Err(StartRefusal::Copy(failure)),
+                Some(stop) => Err(StartRefusal::Copy(stop.clone())),
                 None => self.start_now(desk, &input.rules, input.wall),
             };
             self.start_failure = started.err();
@@ -709,7 +708,7 @@ mod tests {
     use std::thread;
 
     use super::*;
-    use crate::onboarding::domain::{PROGRESS_LINES, Refusal, by_name, shown_name};
+    use crate::onboarding::domain::{CopyFailure, PROGRESS_LINES, Refusal, by_name, shown_name};
     use crate::profile::application::{CvFiles, FileStamp, cv_shelf};
     use crate::runs::application::{
         AgentEvent, AgentGateway, AgentSession, CapReached, EventSink, Prompt, PromptKind, RunHistory, RunRequest, WORDS_BUDGET_USD,

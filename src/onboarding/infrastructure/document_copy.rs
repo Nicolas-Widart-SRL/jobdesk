@@ -549,12 +549,15 @@ mod tests {
         FileCopier { rename: |_, _| Err(io::Error::from(ErrorKind::Unsupported)), ..linkless(beside) }
     }
 
+    /// Makes a copier for a disk, beside the folder given.
+    type MakeCopier = fn(&Path) -> FileCopier;
+
     /// Whatever way the copy gets its name, a file under a real name is whole or was there before: never a copy cut
     /// short. A disk that can take the name in no single step refuses the copy and keeps no part file.
     #[test]
     fn no_fallback_ever_leaves_a_named_file_shorter_than_the_source() {
         let renames = cfg!(target_os = "macos");
-        let ways: [(&str, fn(&Path) -> FileCopier, bool); 3] = [("link", copier, true), ("rename", linkless, renames), ("neither", unsafe_disk, false)];
+        let ways: [(&str, MakeCopier, bool); 3] = [("link", copier, true), ("rename", linkless, renames), ("neither", unsafe_disk, false)];
         for (way, make, places_it) in ways {
             let (_root, folder, desktop) = places();
             fs::create_dir(cv_folder(&folder)).unwrap();

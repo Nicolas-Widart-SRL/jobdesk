@@ -13,8 +13,8 @@ use egui::{ColorImage, Key, Modifiers, OpenUrl, TextureFilter, TextureHandle, Te
 use egui_commonmark::CommonMarkCache;
 
 use crate::onboarding::application::{
-    Batch, CV_LOOKS_GOOD, DRAFT_SAVE_EVERY, Decision, DocumentKind, Draft, LineState, MessageBlock, PageState, PageStore, PdfDocument, ProfilePhase,
-    ProfileRun, PromptKind, Question as AskedQuestion, Quiet, Run, RunDesk, RunStatus, StartRefusal, StartRules, WorkLine, elapsed_text, quiet, review_reply,
+    Batch, CV_LOOKS_GOOD, Decision, DocumentKind, Draft, LineState, MessageBlock, PageState, PageStore, PdfDocument, ProfilePhase, ProfileRun, PromptKind,
+    Question as AskedQuestion, Quiet, Run, RunDesk, RunStatus, StartRefusal, StartRules, WorkLine, elapsed_text, quiet, review_reply,
 };
 use crate::onboarding::ui::{STEPS, get_help};
 use crate::shared_kernel::visible_text::visible_chars;
@@ -47,6 +47,8 @@ const CHANGE_LIMIT: usize = 4000;
 const LOADING_PAGES: usize = 2;
 /// How often the screen asks for a frame while the sweep moves, about thirty a second.
 const SWEEP_FRAME: Duration = Duration::from_millis(33);
+/// The soonest a draft's next write asks for a frame, so a write due now does not spin the window.
+const DRAFT_FRAME: Duration = Duration::from_millis(50);
 
 /// What the chapter asks of the shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,8 +156,8 @@ impl ProfileChapter {
             None => self.show_all = false,
         }
         // A draft that waits for its next write gets a frame of its own, so the last words save without more typing.
-        if run.is_unsaved() {
-            ui.ctx().request_repaint_after(DRAFT_SAVE_EVERY);
+        if let Some(left) = run.next_draft_try(cx.now) {
+            ui.ctx().request_repaint_after(left.max(DRAFT_FRAME));
         }
         asked
     }

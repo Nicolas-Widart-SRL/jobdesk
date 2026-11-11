@@ -26,6 +26,9 @@ pub const SETUP: &str = "/setup";
 /// A draft is written to the record at most this often while the user types.
 pub const DRAFT_SAVE_EVERY: Duration = Duration::from_secs(1);
 
+/// The longest a draft that could not be written waits before it is tried again.
+pub const DRAFT_RETRY_MOST: Duration = Duration::from_secs(60);
+
 /// What `/setup`'s closing summary says, in any case: ai-job-search v1.7.5, `.claude/commands/setup.md`, Step 4
 /// ("Confirm & Next Steps"), opens it with "**Setup complete!**". No other message of `/setup` ends the chapter.
 const SETUP_COMPLETE: &str = "setup complete";
@@ -208,6 +211,10 @@ pub struct ProfileRun {
     finished: bool,
     /// The recap opened and the record is gone, so nothing writes it again.
     cleared: bool,
+    /// The draft was too long for the record, and waits for a change before it is tried again.
+    held: bool,
+    /// How many draft writes in a row could not be written, which spaces out the next try.
+    failures: u32,
 }
 
 /// A turn of the run as `poll` first saw it. Kept in memory only.
@@ -245,6 +252,8 @@ impl ProfileRun {
             turn: None,
             finished: false,
             cleared: false,
+            held: false,
+            failures: 0,
         }
     }
 
@@ -563,7 +572,20 @@ impl ProfileRun {
         }
         self.progress.draft = draft;
         self.unsaved = true;
+        // A draft too long for the record is tried again once it changes.
+        self.held = false;
         self.save_draft_if_due(now);
+    }
+
+    /// How long until the draft that waits is tried again: `DRAFT_SAVE_EVERY` at first, then twice as long after each
+    /// write that failed, up to `DRAFT_RETRY_MOST`. `None` when nothing waits, or when the draft is too long for the
+    /// record and waits for a change.
+    pub fn next_draft_try(&self, now: Instant) -> Option<Duration> {
+        if !self.unsaved || self.held {
+            return None;
+        }
+        let wait = DRAFT_SAVE_EVERY.saturating_mul(1 << self.failures.min(6)).min(DRAFT_RETRY_MOST);
+        Some(self.last_draft_try.map_or(Duration::ZERO, |at| wait.saturating_sub(now.saturating_duration_since(at))))
     }
 
     /// Whether the record misses what is held here, the draft included: it waits for its next write, or the last write
@@ -582,14 +604,20 @@ impl ProfileRun {
         self.last_draft_save
     }
 
-    /// Writes what waits, unless a write was tried less than `DRAFT_SAVE_EVERY` ago.
+    /// Writes what waits once `next_draft_try` says it is due. A draft too long for the record waits for a change, and a
+    /// record that cannot be written is tried less and less often.
     pub fn save_draft_if_due(&mut self, now: Instant) {
-        if !self.unsaved || self.last_draft_try.is_some_and(|at| now.saturating_duration_since(at) < DRAFT_SAVE_EVERY) {
+        if self.next_draft_try(now).is_none_or(|left| !left.is_zero()) {
             return;
         }
         self.last_draft_try = Some(now);
-        if self.save().is_ok() {
-            self.last_draft_save = Some(now);
+        match self.save() {
+            Ok(()) => {
+                self.last_draft_save = Some(now);
+                self.failures = 0;
+            }
+            Err(SaveTrouble::TooLong) => self.held = true,
+            Err(SaveTrouble::CouldNotWrite) => self.failures = self.failures.saturating_add(1),
         }
     }
 
@@ -1698,18 +1726,61 @@ mod tests {
             assert_eq!(f.profile.save_trouble(), Some(trouble));
             assert_eq!(f.profile.last_draft_save(), None, "the draft never reached the record");
             let tries = *f.store.saves.lock().unwrap();
-            f.poll_at(base + Duration::from_millis(300));
-            assert_eq!(*f.store.saves.lock().unwrap(), tries, "a failed write is retried at the same pace");
             f.profile.flush();
             assert_eq!(*f.store.saves.lock().unwrap(), tries + 1, "a quit tries again");
             assert!(f.profile.is_unsaved());
             *f.store.disk.lock().unwrap() = Disk::Fine;
-            f.poll_at(base + Duration::from_millis(1_100));
+            f.profile.record_draft(&f.desk, vec![(1, "Design Lead, systems".into())], String::new(), base + Duration::from_secs(70));
             assert!(!f.profile.is_unsaved());
             assert_eq!(f.profile.save_trouble(), None);
-            assert_eq!(f.profile.last_draft_save(), Some(base + Duration::from_millis(1_100)));
+            assert_eq!(f.profile.last_draft_save(), Some(base + Duration::from_secs(70)));
             assert!(f.record().draft.is_some());
         }
+    }
+
+    /// A draft too long for the record is not written again until it changes: the same draft would fail the same way.
+    #[test]
+    fn a_draft_too_long_waits_for_a_change_before_it_is_tried_again() {
+        let mut f = fixture();
+        f.at(FIVE);
+        let base = Instant::now();
+        *f.store.disk.lock().unwrap() = Disk::TooLong;
+        f.profile.record_draft(&f.desk, vec![(1, "Design Lead".into())], String::new(), base);
+        let tries = *f.store.saves.lock().unwrap();
+        for seconds in [2, 10, 120] {
+            f.poll_at(base + Duration::from_secs(seconds));
+        }
+        assert_eq!(*f.store.saves.lock().unwrap(), tries, "nothing is written while the draft stays the same");
+        assert_eq!(f.profile.next_draft_try(base + Duration::from_secs(120)), None);
+        f.profile.record_draft(&f.desk, vec![(1, "Design".into())], String::new(), base + Duration::from_secs(121));
+        assert_eq!(*f.store.saves.lock().unwrap(), tries + 1, "a change is tried");
+    }
+
+    /// A record that cannot be written is tried again with a growing wait, doubling up to a minute.
+    #[test]
+    fn a_record_that_cannot_be_written_is_tried_again_less_and_less_often() {
+        let mut f = fixture();
+        f.at(FIVE);
+        let base = Instant::now();
+        *f.store.disk.lock().unwrap() = Disk::Full;
+        f.profile.record_draft(&f.desk, vec![(1, "Design Lead".into())], String::new(), base);
+        let saves = |f: &Fixture| *f.store.saves.lock().unwrap();
+        let first = saves(&f);
+        f.poll_at(base + Duration::from_millis(1_500));
+        assert_eq!(saves(&f), first, "not after one second: the wait doubled to two");
+        f.poll_at(base + Duration::from_millis(2_100));
+        assert_eq!(saves(&f), first + 1);
+        f.poll_at(base + Duration::from_millis(5_000));
+        assert_eq!(saves(&f), first + 1, "then four seconds");
+        f.poll_at(base + Duration::from_millis(6_200));
+        assert_eq!(saves(&f), first + 2);
+        let mut at = base + Duration::from_millis(6_200);
+        for _ in 0..10 {
+            at += Duration::from_secs(61);
+            f.poll_at(at);
+        }
+        assert_eq!(saves(&f), first + 12, "never more than a minute apart");
+        assert_eq!(f.profile.next_draft_try(at), Some(Duration::from_secs(60)), "the wait stops at a minute");
     }
 
     #[test]

@@ -25,6 +25,14 @@ Settings › Today queue sets the range to 7, 14 or 30 days, 14 by default.
 
 When nothing is left to decide, the end panel offers new work: "Find new jobs…" and, while postings wait for scoring, "Score {n} new jobs…". Both only open the launcher, so the user starts the run there.
 
+In a new job search, `Queue::first_steps` replaces the end panel. It counts only while Today has nothing at all to show: no card, none set aside, no decision today, and every source read. While any run works it suggests nothing, since that run may be the search or the scoring.
+
+- With no job on the board, the head reads "Nothing to decide yet" and Find new jobs… opens the launcher on `/scrape` with the note "Your first search, from Today." The subtitle calls the profile ready only when a profile topic is written.
+- With every job still new, it offers Score {n} new jobs… instead. With no card on top, Y takes the offer's action, which only opens the launcher.
+- The Your profile slip sits on the rail under Coming up while the profile is found, readable and not full.
+
+The shell follows the run the launcher started from that note, in memory only. When one of its turns ends with its result and Claude asks nothing, Jobs opens with no list picked, so New shows while the jobs found are all new, but only while that run is open in Tasks. A failure, a stop, or a session ended while Claude asked opens nothing and keeps the run followed, so a resume in Tasks still counts. Opening another folder drops the note.
+
 ## Decisions
 
 Decisions and skip reasons live in `decisions.json` in the app's data folder.

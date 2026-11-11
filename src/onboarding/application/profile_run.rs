@@ -1025,15 +1025,18 @@ mod tests {
         }
     }
 
-    /// Takes a PDF by its name and copies under that name.
+    /// Takes a PDF by its name and copies under that name, or panics on each copy once told to.
     #[derive(Default)]
-    struct Shelf(Mutex<Vec<String>>);
+    struct Shelf(Mutex<Vec<String>>, Mutex<bool>);
 
     impl DocumentCopier for Shelf {
         fn look(&self, source: &Path) -> Result<Option<usize>, Refusal> {
             by_name(&shown_name(source)).map(|()| Some(1))
         }
         fn copy(&self, source: &Path, _: &Path, _: DocumentKind) -> Result<String, CopyFailure> {
+            if *self.1.lock().unwrap() {
+                panic!("the test copier panics");
+            }
             self.0.lock().unwrap().push(shown_name(source));
             Ok(shown_name(source))
         }
@@ -1206,6 +1209,20 @@ mod tests {
         assert_eq!((request.line.as_str(), request.model.as_deref(), request.budget_usd), (SETUP, None, 25.0), "the catalog's suggestion");
         assert_eq!(f.record().run, f.profile.progress().run);
         assert_eq!(f.profile.phase(), &ProfilePhase::Reading);
+    }
+
+    /// A copier that panics still ends Read my documents, so the gates that wait on it open again.
+    #[test]
+    fn a_copier_that_panics_ends_the_start_with_the_copy_failure() {
+        let mut f = fixture();
+        f.add("Sam Rivera CV.pdf");
+        *f.shelf.1.lock().unwrap() = true;
+        f.read(&RunDefaults::default(), &open()).unwrap();
+        assert!(!f.profile.is_starting());
+        let Some(StartRefusal::Copy(stop)) = f.profile.start_failure() else { panic!("expected the copy failure") };
+        assert_eq!(stop.line(), "The copy stopped at Sam Rivera CV.pdf. Nothing was saved.");
+        assert!(f.script.borrow().requests.is_empty(), "no run starts");
+        assert_eq!(f.profile.phase(), &ProfilePhase::Documents);
     }
 
     #[test]

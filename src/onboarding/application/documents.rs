@@ -216,8 +216,12 @@ impl Documents {
         self.copy_failure = None;
         self.copying = true;
         let folder = folder.to_owned();
+        let (sender, repaint) = (self.sender.clone(), Arc::clone(&self.repaint));
         self.spawn(move |copier, tell| {
+            // Ends the copy however the worker stops, a panic included, so nothing that waits on it waits for good.
+            let mut end = CopyEnd { sender, repaint, at: None, finished: false };
             for (source, kind) in waiting {
+                end.at = Some(source.clone());
                 let copied = copier.copy(&source, &folder, kind);
                 let failed = copied.is_err();
                 tell(News::Copied(source, copied));
@@ -225,7 +229,7 @@ impl Documents {
                     break;
                 }
             }
-            tell(News::CopyEnded);
+            end.finished = true;
         });
     }
 
@@ -238,6 +242,28 @@ impl Documents {
             };
             work(copier.as_ref(), &tell);
         });
+    }
+}
+
+/// Sends the end of a copy when the copy worker stops. A worker that did not finish, because it panicked, ends it as a
+/// failure at the file it was on, so the copy's usual failure line names that file.
+struct CopyEnd {
+    sender: Sender<News>,
+    repaint: Arc<dyn Fn() + Send + Sync>,
+    /// The file the worker is on.
+    at: Option<PathBuf>,
+    finished: bool,
+}
+
+impl Drop for CopyEnd {
+    fn drop(&mut self) {
+        if !self.finished
+            && let Some(at) = self.at.take()
+        {
+            let _ = self.sender.send(News::Copied(at, Err(CopyFailure::Failed)));
+        }
+        let _ = self.sender.send(News::CopyEnded);
+        (self.repaint)();
     }
 }
 
@@ -255,6 +281,8 @@ mod tests {
         copies: Mutex<Vec<String>>,
         kinds: Mutex<Vec<(String, DocumentKind)>>,
         broken: Mutex<Option<String>>,
+        /// The name whose copy panics, as a bug in the copier would.
+        panics: Mutex<Option<String>>,
     }
 
     impl DocumentCopier for Shelf {
@@ -264,6 +292,9 @@ mod tests {
 
         fn copy(&self, source: &Path, _: &Path, kind: DocumentKind) -> Result<String, CopyFailure> {
             let name = shown_name(source);
+            if self.panics.lock().unwrap().as_deref() == Some(name.as_str()) {
+                panic!("the test copier panics at {name}");
+            }
             if self.broken.lock().unwrap().as_deref() == Some(name.as_str()) {
                 return Err(CopyFailure::Failed);
             }
@@ -388,6 +419,26 @@ mod tests {
         assert_eq!(documents.copy_failure(), None);
         assert_eq!(*shelf.copies.lock().unwrap(), ["cv.pdf", "Profile.pdf", "Letter.pdf"]);
         assert!(documents.all_copied());
+    }
+
+    /// A copier that panics never leaves the copy open: Change folder and Restart to update wait only while it runs.
+    #[test]
+    fn a_copier_that_panics_still_ends_the_copy_as_a_failure() {
+        let (mut documents, shelf) = documents();
+        documents.add([desktop("cv.pdf"), desktop("Profile.pdf"), desktop("Letter.pdf")]);
+        settle(&mut documents);
+        *shelf.panics.lock().unwrap() = Some("Profile.pdf".into());
+        documents.start_copy(Path::new("/Users/sam/Documents/Job search"));
+        settle(&mut documents);
+        assert!(!documents.is_copying());
+        let stop = documents.copy_failure().expect("the panic ends the copy as a failure");
+        assert_eq!(stop, &CopyStop { name: "Profile.pdf".into(), failure: CopyFailure::Failed, earlier_copied: true });
+        assert_eq!(stop.line(), "The copy stopped at Profile.pdf. The files before it are in your folder.");
+        assert_eq!(documents.added().iter().map(|added| added.copied_as.is_some()).collect::<Vec<_>>(), [true, false, false]);
+        *shelf.panics.lock().unwrap() = None;
+        documents.start_copy(Path::new("/Users/sam/Documents/Job search"));
+        settle(&mut documents);
+        assert!(documents.all_copied(), "trying again copies the rest");
     }
 
     #[test]

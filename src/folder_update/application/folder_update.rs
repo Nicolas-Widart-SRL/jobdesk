@@ -17,6 +17,9 @@ use crate::updates::application::{LatestFeed, Version, source_zip_name, source_z
 /// least this often meanwhile, so the try comes even with no input.
 pub const HOLD_RETRY: Duration = Duration::from_secs(1);
 
+/// What tells `FolderUpdate` the time, so a test moves it on at will. The system's monotonic clock by default.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// Where an update or an undo is while its worker runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -162,6 +165,8 @@ pub struct FolderUpdate {
     /// This Jobdesk's version. `None` when it does not read, and then no feed names it as the latest.
     current: Option<Version>,
     repaint: Arc<dyn Fn() + Send + Sync>,
+    /// The time, for the retries: see `with_clock`.
+    clock: Clock,
     stage: Stage,
     working: bool,
     undoable: bool,
@@ -215,6 +220,7 @@ impl FolderUpdate {
             ports: Ports { probe, base, fetcher, updater },
             current: Version::parse(current),
             repaint,
+            clock: Arc::new(Instant::now),
             stage: Stage::Idle,
             working: false,
             undoable: false,
@@ -246,6 +252,12 @@ impl FolderUpdate {
         self
     }
 
+    /// Reads the time from `clock` instead of the system's, for tests: a retry waits on it alone, never on how long a
+    /// test takes to run.
+    pub fn with_clock(self, clock: Clock) -> Self {
+        Self { clock, ..self }
+    }
+
     pub fn stage(&self) -> &Stage {
         &self.stage
     }
@@ -255,7 +267,7 @@ impl FolderUpdate {
     /// the last folder, so it goes. Call it at every open, a launch's, a switch's and first-run setup's hand-over, and
     /// open no folder while `is_working`.
     pub fn opened(&mut self, folder: PathBuf) {
-        self.kept_out = self.ports.updater.open(&folder).then(Instant::now);
+        self.kept_out = self.ports.updater.open(&folder).then(|| (self.clock)());
         self.folder = Some(folder);
         self.recover_due = true;
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
@@ -273,10 +285,11 @@ impl FolderUpdate {
     /// starts nothing until it does: see `is_busy`.
     pub fn follow(&mut self, feed: Option<(u64, &LatestFeed)>, runs_idle: bool) {
         self.poll();
+        let now = (self.clock)();
         if let (Some(tried), Some(folder), false) = (self.kept_out, &self.folder, self.working)
-            && tried.elapsed() >= HOLD_RETRY
+            && now.saturating_duration_since(tried) >= HOLD_RETRY
         {
-            self.kept_out = self.ports.updater.hold_again(folder).then(Instant::now);
+            self.kept_out = self.ports.updater.hold_again(folder).then_some(now);
         }
         if self.working || !runs_idle || self.kept_out.is_some() {
             return;
@@ -481,7 +494,7 @@ impl FolderUpdate {
                     // The worker let go of this Jobdesk's hold while it ran, and another Jobdesk may hold the folder
                     // alone now, before this one took the hold again.
                     if let Some(folder) = &self.folder {
-                        self.kept_out = self.ports.updater.hold_again(folder).then(Instant::now);
+                        self.kept_out = self.ports.updater.hold_again(folder).then(|| (self.clock)());
                     }
                 }
             }
@@ -952,6 +965,25 @@ mod tests {
         }
     }
 
+    /// A clock that stands still until a test moves it on.
+    #[derive(Clone)]
+    struct Hands(Arc<Mutex<Instant>>);
+
+    impl Hands {
+        fn new() -> Self {
+            Hands(Arc::new(Mutex::new(Instant::now())))
+        }
+
+        fn clock(&self) -> Clock {
+            let hands = self.0.clone();
+            Arc::new(move || *hands.lock().unwrap())
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.0.lock().unwrap() += by;
+        }
+    }
+
     fn desk(fake: &Arc<Fake>, current: &str) -> FolderUpdate {
         FolderUpdate::new(fake.clone(), fake.clone(), fake.clone(), fake.clone(), current, Arc::new(|| {}))
     }
@@ -1112,7 +1144,8 @@ mod tests {
     #[test]
     fn a_folder_another_jobdesk_holds_alone_is_busy_until_this_one_holds_it() {
         let fake = Arc::new(Fake { kept_out: AtomicBool::new(true), ..Fake::ready() });
-        let mut opened = desk(&fake, "0.2.0");
+        let hands = Hands::new();
+        let mut opened = desk(&fake, "0.2.0").with_clock(hands.clock());
         assert!(!opened.is_busy());
         opened.opened(PathBuf::from(FOLDER));
         assert!(opened.is_busy() && opened.kept_out() && !opened.is_working());
@@ -1121,9 +1154,10 @@ mod tests {
         assert!(opened.is_busy());
 
         fake.kept_out.store(false, Ordering::SeqCst);
+        hands.advance(HOLD_RETRY - Duration::from_millis(1));
         follow(&mut opened, None, true);
         assert!(opened.is_busy(), "not tried again before HOLD_RETRY");
-        thread::sleep(HOLD_RETRY + Duration::from_millis(50));
+        hands.advance(Duration::from_millis(1));
         follow(&mut opened, None, true);
         assert!(!opened.kept_out(), "held once tried again");
         assert_eq!(rollbacks(&fake), 1, "and the rollback due at the open runs");

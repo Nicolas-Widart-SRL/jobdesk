@@ -3156,7 +3156,11 @@ mod tests {
         let other = fs::File::options().read(true).write(true).create(true).truncate(false).open(path.join(".jobdesk/.open")).unwrap();
         other.lock().unwrap();
         let mut shell = launch(&ctx, Some(path.clone()), data.path());
-        shell.folder_update = folder_update::folder_update(data.path(), "0.1.0", Arc::new(|| {}));
+        // A clock that moves only when the test moves it.
+        let hands = Arc::new(Mutex::new(std::time::Instant::now()));
+        let clock = Arc::clone(&hands);
+        let disk = folder_update::folder_update(data.path(), "0.1.0", Arc::new(|| {}));
+        shell.folder_update = disk.with_clock(Arc::new(move || *clock.lock().unwrap()));
         shell.open(&ctx, &path);
         // A gateway that starts no real process, should the guard fail.
         shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
@@ -3175,8 +3179,9 @@ mod tests {
         assert_eq!(shell.providers.test_gate(false), TestGate::FolderUpdating);
 
         drop(other);
-        // The hold is tried again about once a second.
-        std::thread::sleep(HOLD_RETRY + std::time::Duration::from_millis(100));
+        shell.follow_folder_update();
+        assert!(shell.folder_update.kept_out(), "the hold is tried again only after HOLD_RETRY");
+        *hands.lock().unwrap() += HOLD_RETRY;
         shell.follow_folder_update();
         assert!(!shell.folder_update.kept_out(), "the hold is taken");
         // Then the rollback due at the open runs, and ends.

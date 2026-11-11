@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder and its helpers, reads the community portal list and checks its own updates, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder and its helpers, reads the community portal list, checks its own updates and updates the job search folder with them, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -21,6 +21,7 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A community portal's owners, from `CODEOWNERS` | Plain words, never links: only GitHub handles such as `@name` or `@org/team` are kept, at most 10 a line, cut with an ellipsis |
 | An installed portal's name and sentence, from its own `SKILL.md` | Plain text on one line, with Markdown markup and hidden characters removed, cut with an ellipsis |
 | Release notes from the update feed | Markdown with no image loading and no links, through `release_markdown`. A link shows as its words in body ink and never opens, an image as its alt text, and raw HTML as its text. Headings render at the section size, and hidden characters are removed before parsing. |
+| File paths in the folder update's notice and details, from both release zips and the user's folder | Plain text on one line, never Markdown or a link: line breaks, tabs, hidden characters and variation selectors are removed, a path keeps at most 160 characters, cut with an ellipsis, and a list shows at most 40 paths and counts the rest. Nothing in the details opens. |
 
 A link opens only on click, and only for `http` or `https`. Release notes have no link: their one way out is Open the release page, whose address Jobdesk builds itself.
 
@@ -151,7 +152,7 @@ On macOS, the `onboarding` feature makes the job search folder, fills it with th
 - Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
 - The download's worker records the version once the feed pins it, and the folder as made once the release has taken the folder's place, before the window hears. When setup opens on a record that lacks the folder made, but whose folder is an `ai-job-search` folder with a `.jobdesk/` that reads whole for the recorded version, the folder counts as made. A record that cannot be written costs only that resume: setup goes on with what it holds in memory, and says nothing more.
 - The record is removed when the Computer step ends.
-- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. It removes links and never follows them.
+- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. The folder update's download waits there too, and is deleted once read, so only one cut off by a quit is left for setup to clear. It removes links and never follows them. Setup's clearing can also delete the folder another running Jobdesk's folder update has just made there, in the moment before that Jobdesk locks it. The download under way then fails with nothing changed, and before its next download the folder update makes and locks that Jobdesk's folder again, so the next check for updates downloads as usual.
 
 ### Accepted residuals
 
@@ -179,7 +180,7 @@ Browse community on the Portals screen reads the list of community portals from 
 
 ## Updates
 
-The `updates` feature reads the feed, downloads a build, checks its signature and applies it on Restart to update. None of it is a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics.
+The `updates` feature reads the feed, downloads a build, checks its signature and applies it on Restart to update. None of it is a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics. The job search folder updates with it, as [Folder update](#folder-update) says.
 
 ### Addresses and the network
 
@@ -226,11 +227,56 @@ Each copy checks a download against the update key built into it from `assets/up
 - When Restart to update cannot apply, Jobdesk writes an `apply-failed` note in `updates/` and opens the old copy again while it is still there. The next launch reads the note once. On Windows, once the setup has started, Jobdesk notes nothing more.
 - At launch, `clear_downloads` empties `updates/`, but for that note and the folder of any Jobdesk that still runs. It removes links and never follows them. So a past session's download is never applied. On macOS it also deletes, beside the bundle, the `.Jobdesk.app.update-`, `.old-` and `.probe-` folders of a Jobdesk that no longer runs: what a Restart to update or a launch check that died partway left there.
 
+### Folder update
+
+The `folder_update` feature merges the `ai-job-search` release the feed pins into the open job search folder, and undoes its last update. It is not a run: it starts no `claude`, uses no API key, writes no run log and is not counted in Usage statistics. When it runs and who waits for it is in [ARCHITECTURE](../../ARCHITECTURE.md#the-folder-update).
+
+The release:
+
+- Only a pin the update key checked reaches it. `SignedPin` is made only by the feed's read in the `updates` feature, and `LatestFeed`, which the folder update gets, carries only that pin. A build with no update key has no pin and updates no folder.
+- It runs only while this Jobdesk is the latest version the feed names, so the pin is the one its own release was published with.
+- The pin must be strictly newer than the folder's base. So a replayed feed, even with a pin the key once signed, never takes a folder back to an older release or the same one.
+- The zip comes from the fixed address of the pinned tag, as [Addresses and the network](#addresses-and-the-network) says, through `HttpsTransport`. A download past 100 MiB is stopped and deleted.
+- `read_verified` checks the new zip against the pin's SHA-256, then every entry, as for [setup's folder](#the-folder), before the update looks at a file it would change or writes anything. A zip that fails is not used, and nothing changes.
+
+The folder:
+
+- A folder that holds a `.git` entry of any kind, a folder, a file or a link, or one that cannot be looked at, is never updated.
+- The base is the zip and record in `.jobdesk/`. It is checked only against its own record, as [the pin](#the-ai-job-search-pin) says, so it is untrusted input: whatever can write the folder can change which files the update takes as untouched, and so replaces or removes. Every file the update writes holds the signed release's bytes, the user's own, or a three-way merge of the two.
+- A `.jobdesk` that is a link or not a folder refuses the update. No file of a release goes into `.jobdesk`, spelled in any letter case.
+- Each path is looked at one folder at a time from the job search folder down, and a link is never followed. A file that is a link, has a link above it, or whose side copy would be one is skipped and listed, so nothing is read, written, renamed or deleted through a link. A folder where a file goes, a file where a folder goes, and a folder, a release's own file or a file with other bytes where a side copy goes are skipped as in the way. So a file at a side copy's name, which may hold the user's notes, is never overwritten, and a safety file whose `.yours-` name is taken keeps the user's file and is listed as left alone.
+- On macOS, a file's permissions merge as its text does. A file the update writes over keeps the permissions the user gave it, so a private file stays private, and takes the release's while the user left the base release's, so a script the release makes runnable runs, even when its bytes do not change. The journal then keeps both modes, so Undo and a rollback put the old one back. A file it adds takes the release's, and a side copy and a backup those of the file they copy. Each file gets its whole mode whatever the umask, so a file shared with a group stays so.
+- A side copy's name ends in the plain version, such as `CLAUDE.md.update-1.8.0`, so Claude Code never loads it as a command, an agent, a setting or a module.
+- `.claude/settings.json` and `tools/security_guards.py` guard what Claude may do. In a conflict the new copy goes in place and the user's is saved beside it as `<path>.yours-<version>`, and a deleted one comes back when the release changed it.
+- For a file the release renames in letter case or accent composition alone, the update never writes, renames or deletes the user's file under either name, since macOS and Windows take both for one file. A change it would make becomes a conflict under the new name, with the new copy beside it.
+
+The staging folder, the journal and the backup:
+
+- Every new file is written into a staging folder beside the job search folder, which on macOS only the user can read, and the original of each file it replaces or deletes goes into the backup, before the first rename.
+- Each file must still hold what the plan read when it is staged, and again just before its rename. Otherwise the update stops, and what it did is rolled back. So a file saved while the update runs is never replaced, but for a save in the short gap between that last read and the rename.
+- Every Jobdesk that has a folder open holds its lock, `.jobdesk/.open`, shared, from the open until another folder opens or it quits. An update, an Undo and a rollback each hold it alone, after letting go of their own Jobdesk's hold, or end `Busy` and change nothing. So none runs while another Jobdesk has the folder open, whose tasks, Profile's Save and portal changes may write it, and two never run on one folder at once. A folder with no `.jobdesk` folder, or one that is a link or not a folder, gets no lock, and no `.jobdesk` is made for it: no update, Undo or rollback runs there. A `.jobdesk` that cannot be looked at, for its permissions or any other error, may hold a base, so it keeps the folder out as a lock file that does not open does.
+- A Jobdesk that cannot hold its open folder, because another holds it alone or because the lock file does not open or lock for any other reason, at the open or after an update, Undo or rollback of its own, keeps every writer waiting: no task starts and no reply goes, and Profile's Save, a portal's switch and Remove and Test connection wait. While another Jobdesk holds it alone, each says Jobdesk is updating the folder, and Restart to update and Change folder wait too. While `.jobdesk` cannot be looked at, or the lock file does not open or lock, for any other reason, this Jobdesk holds nothing, though another Jobdesk might still hold the folder, so the notice and each writer say instead "Jobdesk cannot lock your job search folder, so tasks and saves wait. Open another folder, or check that this one can be written.", and Restart to update and Change folder stay open as the ways out. It tries to hold the folder again about once a second, and starts its own rollback or update only once it does.
+- A link planted at `.jobdesk/.open`, or a permission change on it, makes Jobdesk wait and say so, and never makes it write anything: the lock file is opened without following a link, nothing is ever written to it, and no update, Undo or rollback runs while it does not lock.
+- The gate reads the base and Undo's note before the download, and another Jobdesk may update or undo the folder meanwhile. So once the update holds the folder alone, it reads both again, and changes nothing when the base's record no longer names the release the gate read, or the note now names this release.
+- The journal and the backup's record live in the folder, where a run's tools can write, so each is read as untrusted input. A link, a file over 32 MiB, a hash that is not 64 lowercase hex digits, a path that is not a plain relative one or that names a part of `.jobdesk` other than the base's two files, or a backup name that is not a plain number refuses the whole record. A journal that does not read is set aside as `.jobdesk/update-stopped.json`, and nothing is put back from it.
+- A rollback or an Undo puts back a file only while it still holds what the update wrote, by SHA-256, and only from an original in the backup whose SHA-256 is the one the record names. A file changed since stays as it is, and the notice lists it. A safety file and the `.yours-` copy saved beside it stay or go back together: while the file stays, for any reason, the copy holds the user's settings from before the update, so it stays and is listed too, and a copy changed since keeps the file. `.jobdesk`, `backup` and `backup/files` must be real folders, not links.
+- Undo notes the release it undoes in `backup/skipped.json` before it changes anything, and refuses when it cannot. The gate skips only that very release, version and hash alike, so a note written by anything else can skip no other release and makes nothing apply.
+
+The paths the notice shows come from both zips and the folder, so they render as [the table](#rendering-untrusted-text) says.
+
 ### Accepted residuals
 
 1. The feed itself is not signed. Whoever can change `latest.json` on the latest release can show any version number and notes, or hide a release. They cannot get a file applied without a signature from the update key.
    For the `ai-job-search` pin, they can drop it, or put back the signed pin of an earlier Jobdesk release, so first-run setup offers an older `ai-job-search` release that the update key once signed. They cannot pin a zip the key never signed.
+   For the folder update, they can only hold it back: by dropping the pin or naming another Jobdesk as the latest. A replayed pin updates a folder only to a release newer than its base.
 2. Whoever holds the update key and its password, and can publish a release in this repository, can ship a build every copy installs.
 3. A macOS build that is ad-hoc signed, one made from source or from the Actions tab, has no Developer ID, so macOS App Management may stop Jobdesk from replacing the bundle. Then the swap fails, the old copy opens again, and the next launch says the new copy could not be put in place. A release is signed with a Developer ID.
 4. The Windows setup, in its passive mode, closes every running `jobdesk.exe` without asking, so another Jobdesk window closes too, whatever it was doing. Restart to update waits only on the sessions of the window it runs in.
 5. The `ai-job-search` pin vouches for what GitHub served for the latest `ai-job-search` tag when the Jobdesk release ran, unread. Whoever could publish an `ai-job-search` release at that time decides what the pinned zip holds.
+6. Every check the folder update makes of a file, or of a link on its path, comes just before the act it guards, never with it. A save, or a folder swapped for a link, that lands in the gap is not seen: the save is lost, and the link can send a rename or a removal outside the folder. A run's tools could do this at any moment, so the checks guard against what the user leaves in the folder, and they hold only because no update, Undo or rollback runs while a task or a Claude session is open.
+7. On Windows, the folder update renames each file once, with no retry, unlike `rename_over`. A file another program holds open, such as an editor, a sync tool or an antivirus, fails the update, which then rolls back, or fails the rollback itself. Then the folder stays part updated until the next open's rollback tries again.
+8. The journal lives in `.jobdesk/`, so whatever can write the folder can plant one, and the next open rolls it back. A record that passes the checks above can put a numbered file of the backup back over a file whose SHA-256 it names, or remove such a file. A record planted in the backup does the same when the user presses Undo. That is no new power: Claude's tools can already write the folder.
+9. On a disk that tells letter case apart, a file the release renames in case alone stays under its old name, but the notice names the new one, and its side copy takes the new name too.
+10. When the backup is gone, a link or not a real folder, the rollback puts back only what needs no original: it removes the files the update added, but for the `.yours-` copy beside a safety file it keeps, and keeps and lists every file it replaced or deleted and that copy, then sets the journal aside. If the update had already put its new base in place, that base now names the new release while the files it added are gone, so the next update takes them for files the user deleted and leaves them out. If not, the files it kept hold the new release over the old base, so the next update takes them for the user's changes.
+11. Only Jobdesk takes the folder's lock. Claude Code started from a terminal, an editor or a sync tool that writes the folder knows nothing of it, so an update, Undo or rollback can run while one of them writes, as residual 6 says.
+12. Restart to update stays open while this Jobdesk cannot lock the folder, as a way out, though another Jobdesk might be updating it. If the Windows setup then closes that other Jobdesk midway, as residual 4 says, its update rolls back at its next open, as after any crash.

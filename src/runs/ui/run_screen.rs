@@ -14,6 +14,8 @@ use crate::runs::application::{
     RunDesk, RunStatus, StepLine, StepState, Sweep, ToolState, action_noun, band, closing_question, cost_note, cost_text, elapsed_text, first_line,
     notice_text, short_path, step_lines, stop_point, wants_reply,
 };
+use crate::shared_kernel::FolderWait;
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{
     BAND_COMPACT_HEIGHT, BUTTON_HEIGHT, CODE_PADDING, EVENT_GAP, EVENT_NESTED, EVENT_PADDING, EVENT_WHO_WIDTH, ITEM_GAP, KNOT_SIZE_SMALL, OFFSET_SHADOW,
@@ -110,6 +112,8 @@ struct Head {
 const BLOCKED: &str = "Another run is working. You can reply when it finishes.";
 /// A reply to a run whose process has ended starts a new one, which waits for Settings' Test connection.
 const TESTING: &str = "Test connection is running. You can reply once it ends.";
+/// A reply would let the task read or write the job search folder while Jobdesk changes it.
+const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. You can reply once it ends.";
 /// Why the quick replies wait while the field holds a reply.
 const DRAFTED: &str = "Send or clear your reply first.";
 
@@ -977,11 +981,16 @@ fn inline_replies(ui: &Ui, replies: &[QuickReply]) -> bool {
     quick_width + REPLY_FIELD_MIN_WIDTH + gap + button_width(ui, "Send") <= ui.available_width()
 }
 
-/// Why a reply to `run` cannot be sent now, if it cannot: another run works, or it needs a new process while
-/// Test connection runs.
+/// Why a reply to `run` cannot be sent now, if it cannot: another run works, Jobdesk updates the job search folder or
+/// cannot lock it, or it needs a new process while Test connection runs.
 fn reply_blocked(desk: &RunDesk, run: &Run) -> Option<&'static str> {
     if desk.is_busy() {
         Some(BLOCKED)
+    } else if let Some(wait) = desk.folder_wait() {
+        Some(match wait {
+            FolderWait::Updating => FOLDER_UPDATING,
+            FolderWait::Unlockable => UNLOCKABLE,
+        })
     } else if desk.reply_waits_for_test(&run.id) {
         Some(TESTING)
     } else {

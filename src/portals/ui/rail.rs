@@ -1,7 +1,6 @@
 use egui::{Align, Frame, Label, Layout, Margin, Response, ScrollArea, Ui, vec2};
 
 use crate::portals::application::{Badge, Origin, PortalView};
-use crate::portals::ui::screen::BUSY;
 use crate::ui_kit::tokens::{BODY_PADDING, INSET, ITEM_GAP, MIN_HIT, PICK_PADDING, RAIL_TITLE_PADDING, ROW_TAG_HEIGHT, SKELETON_LINE, Type};
 use crate::ui_kit::{Ink, Tone, desk_label, divider, enabled_when, faded, name_line, rich, row_tag, skeleton, slip, spoken_pick_row, switch};
 
@@ -20,8 +19,8 @@ pub(super) struct RailAsk {
 }
 
 /// The two groups, On then Off, on a slip that scrolls. A group with no portal is left out. `picked` is the folder on
-/// paper. While `busy`, the switches wait and say why, and the rows still pick.
-pub(super) fn rail(ui: &mut Ui, groups: [&[&PortalView]; 2], picked: &str, busy: bool) -> RailAsk {
+/// paper. While `wait` holds a reason, the switches wait and say it, and the rows still pick.
+pub(super) fn rail(ui: &mut Ui, groups: [&[&PortalView]; 2], picked: &str, wait: Option<&'static str>) -> RailAsk {
     let mut ask = RailAsk::default();
     slip(ui, |ui| {
         ui.set_min_height(ui.available_height());
@@ -38,7 +37,7 @@ pub(super) fn rail(ui: &mut Ui, groups: [&[&PortalView]; 2], picked: &str, busy:
                         if at > 0 {
                             divider(ui);
                         }
-                        let (row, flipped) = portal_row(ui, portal, portal.folder == picked, busy);
+                        let (row, flipped) = portal_row(ui, portal, portal.folder == picked, wait);
                         if flipped {
                             ask.switch = Some((portal.folder.clone(), !portal.on));
                         } else if row.clicked() {
@@ -72,9 +71,9 @@ fn rows(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The portal's switch, which waits while a run works.
-pub(super) fn portal_switch(ui: &mut Ui, portal: &PortalView, busy: bool) -> Response {
-    enabled_when(ui, !busy, BUSY, |ui| switch(ui, portal.on, &portal.name))
+/// The portal's switch, which waits while `wait` holds a reason, such as a run that works.
+pub(super) fn portal_switch(ui: &mut Ui, portal: &PortalView, wait: Option<&'static str>) -> Response {
+    enabled_when(ui, wait.is_none(), wait.unwrap_or_default(), |ui| switch(ui, portal.on, &portal.name))
 }
 
 /// What the portal's words look like: an off portal's are quieter, its switch at full ink.
@@ -116,7 +115,7 @@ fn jobs_words(jobs: Option<(usize, Option<chrono::NaiveDate>)>) -> Option<String
 
 /// One portal in three lines: its name and country with the switch at the right, the sentence on what it searches, then
 /// the jobs it found and its tags. Returns the row, and whether its switch was clicked.
-fn portal_row(ui: &mut Ui, portal: &PortalView, picked: bool, busy: bool) -> (Response, bool) {
+fn portal_row(ui: &mut Ui, portal: &PortalView, picked: bool, wait: Option<&'static str>) -> (Response, bool) {
     let mut flipped = false;
     let spoken = match &portal.country {
         Some(country) => format!("{}, {country}", portal.name),
@@ -126,7 +125,7 @@ fn portal_row(ui: &mut Ui, portal: &PortalView, picked: bool, busy: bool) -> (Re
         ui.spacing_mut().item_spacing.y = LINE_GAP;
         let width = ui.available_width();
         ui.allocate_ui_with_layout(vec2(width, MIN_HIT), Layout::right_to_left(Align::Center), |ui| {
-            flipped = portal_switch(ui, portal, busy).clicked();
+            flipped = portal_switch(ui, portal, wait).clicked();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 quiet(ui, portal.on, |ui| name_line(ui, &portal.name, portal.country.as_deref()));
             });

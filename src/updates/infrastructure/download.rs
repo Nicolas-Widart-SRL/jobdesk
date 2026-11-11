@@ -194,7 +194,14 @@ pub mod tests {
     pub const WINDOWS: &str = "Jobdesk-v0.2.0-windows-x64-setup.exe";
 
     pub fn release(size: u64) -> Release {
-        Release { version: Version { major: 0, minor: 2, patch: 0 }, released: None, notes: String::new(), size, signature: fixture_signature(WINDOWS) }
+        Release {
+            version: Version { major: 0, minor: 2, patch: 0 },
+            released: None,
+            notes: String::new(),
+            size,
+            signature: fixture_signature(WINDOWS),
+            pin: None,
+        }
     }
 
     pub fn windows_build() -> Vec<u8> {

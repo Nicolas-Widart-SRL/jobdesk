@@ -9,12 +9,12 @@ use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, MARK_RULE, ROW_GAP, RUN_SIDE, TRAY_RAIL};
 use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
-    KnotState, NodeMarks, NotesAction, PageSet, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, SweepForm, TabMark, Title, Tone, Type, agenda_return,
-    agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab, check_tag, code_box,
-    command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading, day_stamp, deal,
-    deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure, figure_band,
-    figure_band_loading, fitted_pages, fitted_row_tag, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line, link,
-    list_row, live_sweep, measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
+    KnotState, NodeMarks, NotesAction, NotesBody, PageSet, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, SweepForm, TabMark, Title, Tone, Type,
+    agenda_return, agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab,
+    check_tag, code_box, command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading,
+    day_stamp, deal, deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure,
+    figure_band, figure_band_loading, fitted_pages, fitted_row_tag, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line,
+    link, list_row, live_sweep, measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
     pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich,
     role_entry, row_tag, ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check,
     setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
@@ -1459,7 +1459,7 @@ const RELEASE_NOTES: &str = "### Features\n\n- **settings**: keep run logs for 3
 const NOTES: ReleaseNotes = ReleaseNotes {
     title: "Jobdesk 0.2.0",
     released: "Released Fri 30 Oct. You have 0.1.0.",
-    notes: RELEASE_NOTES,
+    notes: NotesBody::Markdown(RELEASE_NOTES),
     notes_label: "What changed in 0.2.0",
     trust: "From the GitHub release. Its links and images do not open here.",
     slip: None,

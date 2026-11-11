@@ -8,4 +8,4 @@ mod rail;
 mod screen;
 
 pub use browse::BrowseContext;
-pub use screen::{BUSY, PortalsRequest, PortalsScreen, Segment, show};
+pub use screen::{BUSY, FOLDER_UPDATING, PortalsRequest, PortalsScreen, Segment, show};

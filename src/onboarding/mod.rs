@@ -15,7 +15,8 @@ use crate::onboarding::application::Arch;
 use crate::onboarding::application::{HelperSetup, Onboarding};
 #[cfg(target_os = "macos")]
 use crate::onboarding::infrastructure::{HomeInstaller, ProgramProbe};
-use crate::onboarding::infrastructure::{HttpsFetcher, ProgressFile, ZipUnpacker};
+use crate::onboarding::infrastructure::{ProgressFile, ZipUnpacker};
+use crate::shared_kernel::download::HttpsFetcher;
 use crate::shared_kernel::https::HttpsTransport;
 
 /// The folder in the app's data folder that holds each running Jobdesk's downloads, `onboarding/<pid>/`.

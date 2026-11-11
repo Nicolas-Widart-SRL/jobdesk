@@ -12,6 +12,7 @@ use crate::profile::application::{
 use crate::profile::ui::cv::{CvScreen, cv_paper};
 use crate::profile::ui::editor::{Answer, Ask, Edit, Hold, Noun, ONE_AT_A_TIME, ROLE_STUB, discard_ask, save, slip, take_theirs};
 use crate::profile::ui::rail::{Pick, UPDATED_HOVER, loading_rail, rail};
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{BUTTON_GAP, DEAL_PADDING, GUTTER, ITEM_GAP, ROLE_DATES, ROLE_PADDING, RUN_SIDE, SCREEN_GAP, SKELETON_GAP, SKELETON_LINE};
 use crate::ui_kit::{
@@ -105,11 +106,13 @@ pub enum ProfileRequest {
 
 /// The moment the screen draws in: whether a run works, so Save and Update with Claude… wait, whether Jobdesk is still
 /// reading what a run that ended changed, so Save waits for that too, and the time, which ages the head line and the
-/// foot's Changed on disk.
+/// foot's Changed on disk. `folder_wait` is why Save waits on the folder update, if it does: Jobdesk updates the job
+/// search folder, or undoes its update, or cannot lock it.
 #[derive(Debug, Clone, Copy)]
 pub struct Moment {
     pub busy: bool,
     pub reading: bool,
+    pub folder_wait: Option<FolderWait>,
     pub now: NaiveDateTime,
 }
 
@@ -117,6 +120,8 @@ impl Moment {
     fn hold(self) -> Option<Hold> {
         if self.busy {
             Some(Hold::Run)
+        } else if let Some(wait) = self.folder_wait {
+            Some(Hold::FolderUpdate(wait))
         } else if self.reading {
             Some(Hold::Reading)
         } else {

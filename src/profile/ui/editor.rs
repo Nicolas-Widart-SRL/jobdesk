@@ -4,6 +4,8 @@ use egui_commonmark::CommonMarkCache;
 
 use crate::profile::application::{ProfileEditor, SaveOutcome, TopicId};
 use crate::profile::ui::rail::Pick;
+use crate::shared_kernel::FolderWait;
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::ITEM_GAP;
 use crate::ui_kit::{
@@ -25,6 +27,14 @@ const READING: EditorBusy = EditorBusy {
     why: "Jobdesk is reading the files the task changed. Save once that is done.",
     line: "Reading the files the task changed, so Save waits a moment. Your text stays here.",
 };
+/// Why Save waits, the same two ways, while Jobdesk updates the job search folder or undoes its update.
+const FOLDER_UPDATE: EditorBusy = EditorBusy {
+    why: "Jobdesk is updating your job search folder and may change this file. Save once it ends.",
+    line: "Jobdesk is updating your job search folder, so Save waits until it ends. Your text stays here.",
+};
+/// Why Save waits, the same two ways, while Jobdesk cannot lock the job search folder. This Jobdesk holds nothing then,
+/// though another might hold the folder.
+const FOLDER_UNLOCKABLE: EditorBusy = EditorBusy { why: UNLOCKABLE, line: UNLOCKABLE };
 const SAVE_OVER: &str = "Save mine over it";
 /// The discard ask's width, as End session's popover has.
 const ASK_WIDTH: f32 = 320.0;
@@ -36,6 +46,9 @@ pub(super) enum Hold {
     Run,
     /// A run has ended, and the folder's load after it, which marks what it changed, has not arrived.
     Reading,
+    /// Jobdesk updates the job search folder, or undoes its update, and may write the same file, or it cannot lock the
+    /// folder, and cannot tell whether another Jobdesk does.
+    FolderUpdate(FolderWait),
 }
 
 /// What an edit is of, in the words the editor uses.
@@ -193,6 +206,8 @@ pub(super) fn slip(ui: &mut Ui, cache: &mut CommonMarkCache, editor: &mut Profil
         busy: hold.map(|hold| match hold {
             Hold::Run => RUN,
             Hold::Reading => READING,
+            Hold::FolderUpdate(FolderWait::Updating) => FOLDER_UPDATE,
+            Hold::FolderUpdate(FolderWait::Unlockable) => FOLDER_UNLOCKABLE,
         }),
         changed: on_disk.as_ref(),
         focus: edit.focus,

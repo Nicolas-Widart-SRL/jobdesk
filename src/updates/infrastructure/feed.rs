@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::shared_kernel::https::{Fetch, Transport, read_failure};
-use crate::updates::domain::{FEED_URL, Failure, Platform, Release, SourcePin, Version, source_zip_name};
+use crate::updates::domain::{FEED_URL, Failure, Platform, Release, SignedPin, SourcePin, Version, source_zip_name};
 use crate::updates::infrastructure::signature::{UpdateKey, signs};
 
 /// The most of the feed that is read. A longer one is refused whole.
@@ -48,9 +48,13 @@ struct Pin {
     signature: String,
 }
 
-/// Reads the feed from GitHub and gives the release it names, for `platform`'s build.
-pub fn read_feed(transport: &dyn Transport, platform: Option<Platform>) -> Result<Release, Failure> {
-    parse_feed(&fetch_feed(transport)?, platform)
+/// Reads the feed from GitHub once and gives the release it names, for `platform`'s build, with the `ai-job-search`
+/// release the same bytes pin when `key` signed it. With no `key`, the pin is never read. A pin that does not check
+/// never spoils the release.
+pub fn read_feed(transport: &dyn Transport, platform: Option<Platform>, key: Option<&UpdateKey>) -> Result<Release, Failure> {
+    let bytes = fetch_feed(transport)?;
+    let release = parse_feed(&bytes, platform)?;
+    Ok(Release { pin: key.and_then(|key| parse_pin(&bytes, key)).map(SignedPin::checked), ..release })
 }
 
 /// Reads the feed from GitHub and gives the `ai-job-search` release it pins, when `key` signed it.
@@ -69,7 +73,8 @@ fn fetch_feed(transport: &dyn Transport) -> Result<Vec<u8>, Failure> {
     Ok(bytes)
 }
 
-/// A feed whose version or date cannot be read is `BadFeed`, and one with no build for `platform` is `NoBuild`.
+/// A feed whose version or date cannot be read is `BadFeed`, and one with no build for `platform` is `NoBuild`. The
+/// release it gives has no pin: `read_feed` adds it.
 pub fn parse_feed(bytes: &[u8], platform: Option<Platform>) -> Result<Release, Failure> {
     let feed: Feed = serde_json::from_slice(bytes).map_err(|_| Failure::BadFeed)?;
     let version = Version::parse(&feed.version).ok_or(Failure::BadFeed)?;
@@ -83,7 +88,7 @@ pub fn parse_feed(bytes: &[u8], platform: Option<Platform>) -> Result<Release, F
     if build.size == 0 || build.signature.trim().is_empty() {
         return Err(Failure::BadFeed);
     }
-    Ok(Release { version, released, notes: cut(feed.notes), size: build.size, signature: build.signature })
+    Ok(Release { version, released, notes: cut(feed.notes), size: build.size, signature: build.signature, pin: None })
 }
 
 /// The pin in the feed, once `key` signed it. Jobdesk rebuilds the signed text from the version and the hash, and the
@@ -256,10 +261,10 @@ pub mod tests {
     fn an_oversized_feed_is_refused_whole() {
         let padding = " ".repeat(FEED_LIMIT as usize);
         let oversized = feed(r#"{"darwin-aarch64": {"signature": "sig", "size": 10}}"#).replacen('{', &format!("{{{padding}"), 1);
-        assert_eq!(read_feed(&Serves(oversized.clone().into_bytes()), mac()), Err(Failure::BadFeed));
+        assert_eq!(read_feed(&Serves(oversized.clone().into_bytes()), mac(), Some(&fixture_key())), Err(Failure::BadFeed));
         assert_eq!(read_pin(&Serves(oversized.into_bytes()), &fixture_key()), Err(Failure::BadFeed));
         let fits = fs::read(fixture("latest.json")).unwrap();
-        assert!(read_feed(&Serves(fits), mac()).is_ok());
+        assert!(read_feed(&Serves(fits), mac(), Some(&fixture_key())).is_ok());
     }
 
     #[test]
@@ -282,8 +287,8 @@ pub mod tests {
                 Err(io::Error::new(io::ErrorKind::TimedOut, "slow"))
             }
         }
-        assert_eq!(read_feed(&Down, mac()), Err(Failure::Refused(503)));
-        assert_eq!(read_feed(&Drops, mac()), Err(Failure::TimedOut));
+        assert_eq!(read_feed(&Down, mac(), Some(&fixture_key())), Err(Failure::Refused(503)));
+        assert_eq!(read_feed(&Drops, mac(), Some(&fixture_key())), Err(Failure::TimedOut));
         assert_eq!(read_pin(&Down, &fixture_key()), Err(Failure::Refused(503)));
         assert_eq!(read_pin(&Drops, &fixture_key()), Err(Failure::TimedOut));
     }
@@ -293,6 +298,37 @@ pub mod tests {
         let bytes = fs::read(fixture("latest.json")).unwrap();
         assert_eq!(parse_pin(&bytes, &fixture_key()), Some(fixture_pin()));
         assert_eq!(read_pin(&Serves(bytes), &fixture_key()), Ok(Some(fixture_pin())));
+    }
+
+    /// Serves `bytes` as the feed and counts the requests.
+    struct Counts(Vec<u8>, std::sync::atomic::AtomicUsize);
+
+    impl Transport for Counts {
+        fn open(&self, url: &str, fetch: Fetch) -> Result<Body, HttpsFailure> {
+            assert_eq!((url, fetch), (FEED_URL, Fetch::Feed));
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(Cursor::new(self.0.clone())))
+        }
+    }
+
+    #[test]
+    fn the_check_carries_the_pin_of_the_same_read() {
+        let feed = Counts(fs::read(fixture("latest.json")).unwrap(), Default::default());
+        let release = read_feed(&feed, mac(), Some(&fixture_key())).unwrap();
+        assert_eq!(release.pin.as_ref().map(SignedPin::pin), Some(&fixture_pin()));
+        assert_eq!(Release { pin: None, ..release }, parse_feed(&feed.0, mac()).unwrap(), "the release is what it was without the pin");
+        assert_eq!(feed.1.load(std::sync::atomic::Ordering::SeqCst), 1, "one request gives both");
+    }
+
+    #[test]
+    fn a_check_with_no_key_or_a_bad_pin_carries_no_pin_and_the_same_release() {
+        let feed = Counts(fs::read(fixture("latest.json")).unwrap(), Default::default());
+        let plain = parse_feed(&feed.0, mac()).unwrap();
+        assert_eq!(read_feed(&feed, mac(), None), Ok(plain.clone()), "a build with no update key reads no pin");
+        let other = UpdateKey::decode(&fs::read_to_string(fixture("other.pub")).unwrap()).unwrap();
+        assert_eq!(read_feed(&feed, mac(), Some(&other)), Ok(plain.clone()), "a pin another key signed");
+        let unpinned = Counts(with_pin(None), Default::default());
+        assert_eq!(read_feed(&unpinned, mac(), Some(&fixture_key())), Ok(plain), "no pin in the feed");
     }
 
     #[test]

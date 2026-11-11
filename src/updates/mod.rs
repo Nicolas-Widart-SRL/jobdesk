@@ -152,7 +152,8 @@ mod tests {
     use crate::updates::application::{DownloadEnd, DownloadId, Release, Version};
 
     fn ready_slip(platform: Platform) -> String {
-        let release = Release { version: Version { major: 0, minor: 2, patch: 0 }, released: None, notes: String::new(), size: 10, signature: "sig".into() };
+        let release =
+            Release { version: Version { major: 0, minor: 2, patch: 0 }, released: None, notes: String::new(), size: 10, signature: "sig".into(), pin: None };
         let script =
             vec![ServiceEvent::Checked(Ok(release)), ServiceEvent::Ended { id: DownloadId(0), end: DownloadEnd::Done(PathBuf::from("/updates/Jobdesk")) }];
         let mut updates = scripted_updates("0.1.0", script, None, true, Some(platform));

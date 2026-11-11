@@ -15,8 +15,9 @@ pub const DIR: &str = ".jobdesk";
 /// The largest release zip setup downloads, and so the largest kept one that reads.
 pub const MAX_ZIP: u64 = 100 * 1024 * 1024;
 
-const ZIP: &str = "source.zip";
-const RECORD: &str = "source.json";
+/// The kept zip and its record, in `DIR`.
+pub const ZIP: &str = "source.zip";
+pub const RECORD: &str = "source.json";
 /// The largest record that reads: a version and 64 hex digits need far less.
 const MAX_RECORD: u64 = 4 * 1024;
 
@@ -43,9 +44,13 @@ pub fn write_into(staging: &Path, source: &InstalledSource, bytes: &[u8]) -> io:
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder.create(&dir)?;
-    let record = serde_json::to_vec_pretty(source).map_err(io::Error::other)?;
     write_new(&dir.join(ZIP), bytes)?;
-    write_new(&dir.join(RECORD), &record)
+    write_new(&dir.join(RECORD), &record(source)?)
+}
+
+/// The bytes of the record of `source`, as `RECORD` holds them.
+pub fn record(source: &InstalledSource) -> io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(source).map_err(io::Error::other)
 }
 
 /// The release `folder` was set up from and its zip's bytes. `None` when either file is missing, a link, or larger than
@@ -61,17 +66,23 @@ pub fn read(folder: &Path) -> Option<(InstalledSource, Vec<u8>)> {
     if !fs::symlink_metadata(&dir).ok()?.is_dir() {
         return None;
     }
-    let record: InstalledSource = serde_json::from_slice(&read_file(&dir.join(RECORD), MAX_RECORD)?).ok()?;
-    if !plain_version(&record.version) || !lowercase_sha256(&record.sha256) {
-        return None;
-    }
+    let record = read_record(&dir.join(RECORD))?;
     let bytes = read_file(&dir.join(ZIP), MAX_ZIP)?;
     (sha256_hex(&bytes) == record.sha256).then_some((record, bytes))
 }
 
+/// A record as `record` writes it, from the plain file at `path`. `None` when it is missing, a link, larger than a
+/// record may be, or does not read, or when its version is not exactly three numbers or its hash not 64 lowercase hex
+/// digits. The folders above `path` are the caller's to check.
+pub fn read_record(path: &Path) -> Option<InstalledSource> {
+    let record: InstalledSource = serde_json::from_slice(&read_file(path, MAX_RECORD)?).ok()?;
+    (plain_version(&record.version) && lowercase_sha256(&record.sha256)).then_some(record)
+}
+
 /// Exactly three dot-separated whole numbers, such as `1.7.5`: the pin's rule for a version, without its `v` prefix,
-/// which setup never writes. Written here because the shared kernel does not reach into the `updates` feature.
-fn plain_version(version: &str) -> bool {
+/// which setup never writes. Written here because the shared kernel does not reach into the `updates` feature. A record
+/// whose version breaks it never reads, so nothing writes one.
+pub fn plain_version(version: &str) -> bool {
     let parts: Vec<&str> = version.split('.').collect();
     parts.len() == 3 && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()) && part.parse::<u32>().is_ok())
 }

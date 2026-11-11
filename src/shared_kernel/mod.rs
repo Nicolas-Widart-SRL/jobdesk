@@ -7,6 +7,8 @@ pub mod file_text;
 pub mod folder_wait;
 pub mod host_path;
 pub mod https;
+#[cfg(test)]
+pub mod in_child;
 pub mod installed_source;
 pub mod key_mask;
 pub mod load_error;

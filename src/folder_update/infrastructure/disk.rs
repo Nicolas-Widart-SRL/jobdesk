@@ -202,19 +202,20 @@ mod tests {
     }
 
     /// A file gets its whole mode whatever the umask, so a file shared with a group keeps that when the update writes
-    /// it, backs it up or saves a copy beside it. The umask is the process's: it is set only around the write.
+    /// it, backs it up or saves a copy beside it. The umask is the whole process's, so the test runs in its own process,
+    /// where no other test makes a file meanwhile.
     #[cfg(unix)]
     #[test]
     fn a_new_file_gets_its_whole_mode_whatever_the_umask() {
-        use std::os::unix::fs::PermissionsExt;
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("shared.md");
-        // SAFETY: `umask` only swaps the process's mask, and it is put back at once.
-        let old = unsafe { libc::umask(0o077) };
-        let written = write_new(&path, b"text", 0o660);
-        unsafe { libc::umask(old) };
-        written.unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o660);
+        crate::shared_kernel::in_child::in_child(module_path!(), "a_new_file_gets_its_whole_mode_whatever_the_umask", || {
+            use std::os::unix::fs::PermissionsExt;
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("shared.md");
+            // SAFETY: `umask` only swaps the mask of this process, which runs this test alone.
+            unsafe { libc::umask(0o077) };
+            write_new(&path, b"text", 0o660).unwrap();
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o660);
+        });
     }
 
     #[test]

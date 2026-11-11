@@ -366,28 +366,31 @@ mod tests {
 
     /// Another user who opens the copy while the text goes in would keep reading it, so it is private until then. The
     /// umask is `022` for the write, so a copy opened with the default mode would read `644`, not `600`, whatever the
-    /// umask of the shell. Files other tests make meanwhile may get `022` too, and none of them checks a default mode.
+    /// umask of the shell. The umask is the whole process's, so the test runs in its own process, where no other test
+    /// makes a file or sets the umask meanwhile.
     #[cfg(unix)]
     #[test]
     fn the_copy_is_private_until_its_text_is_in() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_dir, target) = notes();
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
-        let mut while_written = Vec::new();
-        let copy = {
-            // SAFETY: umask takes a mask and always succeeds.
-            let _umask = Umask(unsafe { libc::umask(0o022) });
-            write_copy(&target, next_copy, |file| {
-                while_written.push(file.metadata()?.permissions().mode() & 0o777);
-                file.write_all(b"new")?;
-                while_written.push(file.metadata()?.permissions().mode() & 0o777);
-                Ok(())
-            })
-            .unwrap()
-        };
-        assert_eq!(while_written, [0o600, 0o600]);
-        // The target's own bits come back once the text is in.
-        assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o640);
-        assert_eq!(fs::read_to_string(&copy).unwrap(), "new");
+        crate::shared_kernel::in_child::in_child(module_path!(), "the_copy_is_private_until_its_text_is_in", || {
+            use std::os::unix::fs::PermissionsExt;
+            let (_dir, target) = notes();
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+            let mut while_written = Vec::new();
+            let copy = {
+                // SAFETY: umask takes a mask and always succeeds.
+                let _umask = Umask(unsafe { libc::umask(0o022) });
+                write_copy(&target, next_copy, |file| {
+                    while_written.push(file.metadata()?.permissions().mode() & 0o777);
+                    file.write_all(b"new")?;
+                    while_written.push(file.metadata()?.permissions().mode() & 0o777);
+                    Ok(())
+                })
+                .unwrap()
+            };
+            assert_eq!(while_written, [0o600, 0o600]);
+            // The target's own bits come back once the text is in.
+            assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o640);
+            assert_eq!(fs::read_to_string(&copy).unwrap(), "new");
+        });
     }
 }

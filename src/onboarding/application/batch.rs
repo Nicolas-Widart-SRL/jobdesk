@@ -90,7 +90,8 @@ pub fn read_message(message: &str) -> Message {
     }
     // "Apply all except 2." would be ambiguous to Claude when a sub-list repeats the numbers, so that is never a proposal.
     let asks = !scan.nested && scan.closing.as_deref().is_some_and(asks_to_apply);
-    let proposal = asks && scan.groups.iter().flat_map(|group| group.items.iter()).all(|item| !item.text.contains('?'));
+    // A change is never optional, so an item marked "(optional)" asks something.
+    let proposal = asks && scan.groups.iter().flat_map(|group| group.items.iter()).all(|item| !item.text.contains('?') && !item.optional);
     let ask = if proposal { scan.closing_range.clone() } else { None };
     let batch = Batch { blocks: blocks(&text, &scan.spans, ask), groups: scan.groups };
     if proposal { Message::Proposal(batch) } else { Message::Questions(batch) }
@@ -136,12 +137,13 @@ fn blocks(text: &str, spans: &[(Range<usize>, Span)], ask: Option<Range<usize>>)
     found
 }
 
-/// Whether the closing paragraph holds the word "apply" and one of "skip", "number" or "numbers", in any case. That is
-/// the form of a proposal, "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not
-/// make one, and neither does a mention of applying, because "Yes, apply these changes." answers only a proposal.
+/// Whether the closing paragraph holds the whole words "apply" and "skip", in any case. That is the form of a proposal,
+/// "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not make one, and neither does
+/// a mention of applying, even beside "number", as in "Reply with the number and your answer for each, and I'll apply
+/// them.", because "Yes, apply these changes." answers only a proposal.
 fn asks_to_apply(closing: &str) -> bool {
-    let has = |any: &[&str]| closing.split(|c: char| !c.is_alphanumeric()).any(|word| any.iter().any(|ask| word.eq_ignore_ascii_case(ask)));
-    has(&["apply"]) && has(&["skip", "number", "numbers"])
+    let has = |ask: &str| closing.split(|c: char| !c.is_alphanumeric()).any(|word| word.eq_ignore_ascii_case(ask));
+    has("apply") && has("skip")
 }
 
 struct Scan {
@@ -860,6 +862,21 @@ mod tests {
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I APPLY these?\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nTell me when you are ready.\n"), Message::Questions(_)));
+    }
+
+    /// Follow-ups written as noun phrases hold no "?", and their closing line may say "number" and "apply". Only "apply"
+    /// and "skip" together make a proposal, and an item marked "(optional)" is a question.
+    #[test]
+    fn noun_phrase_follow_ups_are_questions_and_upstreams_closing_is_a_proposal() {
+        let follow_ups = "A few more things:\n\n1. Career goals and target role types\n2. Deal-breakers and must-haves\n3. Salary expectations (optional)\n\nReply with the number and your answer for each, and I'll apply them to your profile.";
+        assert!(matches!(read_message(follow_ups), Message::Questions(_)));
+        let without_optional = "1. Career goals and target role types\n2. Deal-breakers and must-haves\n\nReply with the number and your answer for each, and I'll apply them to your profile.";
+        assert!(matches!(read_message(without_optional), Message::Questions(_)), "\"number\" is not \"skip\"");
+        let optional = "1. Add the Harbor certification.\n2. Add a salary floor (optional)\n\nReply yes to apply all, or list the numbers to skip.";
+        assert!(matches!(read_message(optional), Message::Questions(_)), "an optional item asks");
+        let upstream = "1. Add the Harbor certification.\n2. Add the Lowmere office.\n\nReply **yes** to apply all, or list the numbers you want to skip.";
+        assert!(matches!(read_message(upstream), Message::Proposal(_)));
+        assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
     }
 
     #[test]

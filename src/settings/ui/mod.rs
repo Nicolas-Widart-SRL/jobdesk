@@ -465,7 +465,8 @@ fn rail_foot(ui: &mut Ui, settings: &Settings, hits: Option<&SearchHits>) {
         Some(found) if found.total == 1 => ("1 setting matches. Esc clears the search.".to_owned(), Ink::Muted),
         Some(found) if found.total > 1 => (format!("{} settings match. Esc clears the search.", found.total), Ink::Muted),
         Some(_) => ("Esc clears the search.".to_owned(), Ink::Muted),
-        None => ("Changes apply at once and stay on this computer. Your job search folder is never changed here.".to_owned(), Ink::Muted),
+        // Check now on About can start a folder update, so the folder is not out of Settings' reach.
+        None => ("Changes apply at once and stay on this computer. Settings changes nothing in your job search folder. A Jobdesk update can.".to_owned(), Ink::Muted),
     };
     Frame::new().inner_margin(Margin::symmetric(INSET, BODY_PADDING)).show(ui, |ui| {
         ui.set_width(ui.available_width());

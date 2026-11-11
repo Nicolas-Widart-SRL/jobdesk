@@ -174,9 +174,9 @@ jobs:
       APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
   # Checks the ai-job-search releases this one is compatible with: assets/update/ai-job-search.json at the built commit,
-  # 1 to 5 releases, each with the SHA-256 of its source zip. scripts/ai-job-search.sh builds each address from the
-  # repository and the tag only, as the app builds it. A list that is not valid, a zip that does not download or a hash
-  # that does not match fails the run. The job runs code from the repository, so it holds only a token that reads it,
+  # 1 to 5 releases, each with the SHA-256 of its source zip. scripts/ai-job-search.sh check, then the step itself,
+  # downloads and hashes each zip, from an address built from the repository and the tag only, as the app builds it.
+  # A list that is not valid, a zip that does not download or a hash that does not match fails the run. The job runs code from the repository, so it holds only a token that reads it,
   # which the checkout does not keep, and no secret.
   source:
     name: Check the compatible ai-job-search releases
@@ -194,9 +194,15 @@ jobs:
           persist-credentials: false
 
       # The script prints the list as compact JSON, one line, on stdout, and every other message on stderr.
+      # The key signs what this step outputs, so the step does not trust the script alone: the printed list must be the
+      # file at the built commit, exactly one JSON array of 1 to 5 releases, and this step downloads and hashes every
+      # zip again itself. Nothing reaches the sign job unless this workflow's own code saw GitHub serve each hash.
       - name: Download and hash every compatible ai-job-search release
         id: check
         shell: bash
+        env:
+          REPOSITORY: ai-job-search-dev/ai-job-search
+          SHA: ${{ needs.version.outputs.sha }}
         run: |
           if ! releases=$(scripts/ai-job-search.sh check); then
             echo "::error::The compatible ai-job-search releases in assets/update/ai-job-search.json do not check, as the lines above say. Nothing is published."
@@ -206,6 +212,56 @@ jobs:
             echo "::error::scripts/ai-job-search.sh check did not print the list on one line. Nothing is published."
             exit 1
           fi
+          list=$(jq -c . assets/update/ai-job-search.json)
+          if [ "$releases" != "$list" ]; then
+            echo "::error::scripts/ai-job-search.sh check did not print assets/update/ai-job-search.json at $SHA. Nothing is published."
+            exit 1
+          fi
+          if ! jq -n -e '
+              [inputs] | length == 1 and (.[0]
+                | type == "array" and length >= 1 and length <= 5
+                and all(.[]; type == "object" and keys == ["sha256", "version"]
+                  and (.version | type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
+                  and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
+                and (map(.version) | unique | length) == length)
+            ' <<<"$releases" > /dev/null 2>&1; then
+            echo "::error::The ai-job-search releases are not one list of 1 to 5, each a version X.Y.Z and a SHA-256. Nothing is published."
+            exit 1
+          fi
+          count=$(jq 'length' <<<"$releases")
+          if ! [[ $count =~ ^[1-5]$ ]]; then
+            echo "::error::The ai-job-search releases do not count 1 to 5. Nothing is published."
+            exit 1
+          fi
+          mapfile -t lines < <(jq -r '.[] | .version + " " + .sha256' <<<"$releases")
+          if [ "${#lines[@]}" -ne "$count" ]; then
+            echo "::error::The ai-job-search releases did not read as $count lines. Nothing is published."
+            exit 1
+          fi
+          for line in "${lines[@]}"; do
+            if ! [[ $line =~ ^([0-9]+\.[0-9]+\.[0-9]+)\ ([0-9a-f]{64})$ ]]; then
+              echo "::error::An ai-job-search release is not a version X.Y.Z and a SHA-256. Nothing is published."
+              exit 1
+            fi
+            version=${BASH_REMATCH[1]}
+            expected=${BASH_REMATCH[2]}
+            zip="$RUNNER_TEMP/ai-job-search-v$version.zip"
+            if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 300 \
+              --output "$zip" "https://codeload.github.com/$REPOSITORY/zip/refs/tags/v$version"; then
+              echo "::error::The source zip of $REPOSITORY v$version did not download. Nothing is published."
+              exit 1
+            fi
+            if ! unzip -tq "$zip" > /dev/null; then
+              echo "::error::The source zip of $REPOSITORY v$version is not a whole zip. Nothing is published."
+              exit 1
+            fi
+            sha256=$(sha256sum "$zip" | cut -d ' ' -f 1)
+            rm -f "$zip"
+            if [ "$sha256" != "$expected" ]; then
+              echo "::error::The source zip of $REPOSITORY v$version hashes to $sha256, not the listed $expected. Nothing is published."
+              exit 1
+            fi
+          done
           echo "Compatible ai-job-search releases: $releases"
           echo "releases=$releases" >> "$GITHUB_OUTPUT"
 
@@ -242,8 +298,8 @@ jobs:
 
       # The key file is written to a folder only this user can read, and deleted when the step ends.
       # minisign reads the password from stdin. The trusted comment names the file, which the app checks.
-      # Before the key is written, the ai-job-search releases are checked to be a list of 1 to 5, no version twice, each
-      # a plain version and a lowercase SHA-256, by jq and again by bash on each line it prints.
+      # Before the key is written, the ai-job-search releases are checked to be exactly one JSON list of 1 to 5, no
+      # version twice, each a plain version and a lowercase SHA-256, by jq and again by bash on each line it prints.
       - name: Sign
         env:
           UPDATE_KEY: ${{ secrets.JOBDESK_UPDATE_KEY }}
@@ -253,17 +309,22 @@ jobs:
             echo "::error::A release needs the update key. Set the JOBDESK_UPDATE_KEY and JOBDESK_UPDATE_KEY_PASSWORD secrets, as the Release section of CONTRIBUTING.md says."
             exit 1
           fi
-          if ! jq -e '
-              type == "array" and length >= 1 and length <= 5
-              and all(.[]; type == "object" and keys == ["sha256", "version"]
-                and (.version | type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
-                and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
-              and (map(.version) | unique | length) == length
+          if ! jq -n -e '
+              [inputs] | length == 1 and (.[0]
+                | type == "array" and length >= 1 and length <= 5
+                and all(.[]; type == "object" and keys == ["sha256", "version"]
+                  and (.version | type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
+                  and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
+                and (map(.version) | unique | length) == length)
             ' <<<"$RELEASES" > /dev/null 2>&1; then
-            echo "::error::The ai-job-search releases are not a list of 1 to 5, each a version X.Y.Z and a SHA-256."
+            echo "::error::The ai-job-search releases are not one list of 1 to 5, each a version X.Y.Z and a SHA-256."
             exit 1
           fi
           count=$(jq 'length' <<<"$RELEASES")
+          if ! [[ $count =~ ^[1-5]$ ]]; then
+            echo "::error::The ai-job-search releases do not count 1 to 5."
+            exit 1
+          fi
           mapfile -t lines < <(jq -r '.[] | .version + " " + .sha256' <<<"$RELEASES")
           if [ "${#lines[@]}" -ne "$count" ]; then
             echo "::error::The ai-job-search releases did not read as $count lines."
@@ -373,17 +434,22 @@ jobs:
             echo "::error::The ai-job-search releases the sign job signed are not assets/update/ai-job-search.json at $SHA."
             exit 1
           fi
-          if ! jq -e '
-              type == "array" and length >= 1 and length <= 5
-              and all(.[]; type == "object" and keys == ["sha256", "version"]
-                and (.version | type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
-                and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
-              and (map(.version) | unique | length) == length
+          if ! jq -n -e '
+              [inputs] | length == 1 and (.[0]
+                | type == "array" and length >= 1 and length <= 5
+                and all(.[]; type == "object" and keys == ["sha256", "version"]
+                  and (.version | type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
+                  and (.sha256 | type == "string" and test("\\A[0-9a-f]{64}\\z")))
+                and (map(.version) | unique | length) == length)
             ' <<<"$RELEASES" > /dev/null 2>&1; then
-            echo "::error::The ai-job-search releases are not a list of 1 to 5, each a version X.Y.Z and a SHA-256."
+            echo "::error::The ai-job-search releases are not one list of 1 to 5, each a version X.Y.Z and a SHA-256."
             exit 1
           fi
           count=$(jq 'length' <<<"$RELEASES")
+          if ! [[ $count =~ ^[1-5]$ ]]; then
+            echo "::error::The ai-job-search releases do not count 1 to 5."
+            exit 1
+          fi
           mapfile -t lines < <(jq -r '.[] | .version + " " + .sha256' <<<"$RELEASES")
           if [ "${#lines[@]}" -ne "$count" ]; then
             echo "::error::The ai-job-search releases did not read as $count lines."

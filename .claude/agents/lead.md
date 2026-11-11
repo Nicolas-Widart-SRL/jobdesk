@@ -2,7 +2,7 @@
 name: lead
 description: The main session for Jobdesk. It plans with the user, briefs the subagent team and merges their work, and writes no code. Runs as the main thread through the `agent` setting in the main checkout's `.claude/settings.local.json`, which worktrees never get. Never spawn it as a subagent.
 disallowedTools: Edit, NotebookEdit
-model: opus
+model: claude-fable-5-2
 effort: high
 ---
 

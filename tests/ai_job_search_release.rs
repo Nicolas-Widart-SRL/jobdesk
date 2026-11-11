@@ -111,14 +111,13 @@ fn needs() -> Vec<Need> {
 /// byte order mark, parsed as YAML.
 #[derive(Debug, PartialEq)]
 enum FrontMatter {
-    /// No block, or a block that does not parse and has no line that starts with `name:` or `user-invocable:`, so it
-    /// gives none of the fields the check reads.
+    /// No block.
     Absent,
-    /// A block that is one YAML mapping.
+    /// A block that parses as one YAML mapping, or as nothing at all, such as an empty block or one of comments only.
     Fields(Hash),
-    /// A block that does not parse as one YAML mapping, or has no closing line, with a line that starts with `name:` or
-    /// `user-invocable:`. Claude Code may still read that field from it, so the file is in doubt. It holds the raw text
-    /// of each `name:` line, trimmed and out of one pair of matching quotes.
+    /// A block that does not parse as one YAML mapping, or has no closing line, whatever keys it seems to hold: the file
+    /// is in doubt. It holds the raw value of each line whose key reads `name`, trimmed and out of one pair of matching
+    /// quotes, as `raw_names` reads them.
     Doubtful(Vec<String>),
 }
 
@@ -137,24 +136,32 @@ fn front_matter(bytes: &[u8]) -> FrontMatter {
         }
         block.push(line);
     }
-    if closed
-        && let Ok(mut documents) = YamlLoader::load_from_str(&block.join("\n"))
-        && let (Some(Yaml::Hash(fields)), true) = (documents.pop(), documents.is_empty())
-    {
-        return FrontMatter::Fields(fields);
+    if closed && let Ok(mut documents) = YamlLoader::load_from_str(&block.join("\n")) {
+        match (documents.pop(), documents.is_empty()) {
+            (None, _) => return FrontMatter::Fields(Hash::new()),
+            (Some(Yaml::Hash(fields)), true) => return FrontMatter::Fields(fields),
+            _ => {}
+        }
     }
-    let lines = block.iter().map(|line| line.trim());
-    if !lines.clone().any(|line| line.starts_with("name:") || line.starts_with("user-invocable:")) {
-        return FrontMatter::Absent;
-    }
-    FrontMatter::Doubtful(lines.filter_map(|line| line.strip_prefix("name:")).map(raw_name).filter(|name| !name.is_empty()).collect())
+    FrontMatter::Doubtful(raw_names(&block))
 }
 
-/// The raw value of a `name:` line that did not parse: trimmed, and out of one pair of matching quotes.
-fn raw_name(value: &str) -> String {
-    let value = value.trim();
-    let unquoted = ['"', '\''].iter().find_map(|quote| value.strip_prefix(*quote).and_then(|rest| rest.strip_suffix(*quote)));
-    unquoted.unwrap_or(value).trim().to_owned()
+/// The raw names a block that does not parse gives: on each line whose key, before its first `:`, reads `name` once any
+/// spaces before the colon and one pair of matching quotes around the key are gone, the value, trimmed and out of one
+/// pair of matching quotes. Empty values are left out.
+fn raw_names(block: &[&str]) -> Vec<String> {
+    block
+        .iter()
+        .filter_map(|line| line.trim().split_once(':'))
+        .filter(|(key, _)| unquoted(key.trim_end()) == "name")
+        .map(|(_, value)| unquoted(value.trim()).trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// `text` out of one pair of matching quotes, or `text` itself when it is not quoted.
+fn unquoted(text: &str) -> &str {
+    ['"', '\''].iter().find_map(|quote| text.strip_prefix(*quote).and_then(|rest| rest.strip_suffix(*quote))).unwrap_or(text)
 }
 
 /// The field `key` of a front matter.
@@ -165,13 +172,16 @@ fn field<'a>(fields: &'a Hash, key: &str) -> Option<&'a Yaml> {
 /// What a skill is named by, as Claude Code names it.
 #[derive(Debug, PartialEq, Eq)]
 enum SkillName {
-    /// The `name:` of its front matter, trimmed.
+    /// The `name:` of its front matter: plain, non-empty text with no spaces around it.
     Given(String),
     /// Its folder: the file has no front matter, or the front matter gives no `name:`.
     Folder,
     /// A `name:` that is not plain, non-empty text, so the name Claude Code gives the skill is not known.
     Unknown,
-    /// Front matter that is in doubt, with the raw names its `name:` lines give: the skill could be named by its folder
+    /// A `name:` of plain text with spaces around it, held here trimmed: the skill could be the command of that name,
+    /// or could not, so it is in doubt.
+    Padded(String),
+    /// Front matter that is in doubt, with the raw names its `name` lines give: the skill could be named by its folder
     /// or by any of them, and could be one the user cannot invoke.
     Doubtful(Vec<String>),
 }
@@ -182,40 +192,54 @@ fn skill_name(bytes: &[u8]) -> SkillName {
         FrontMatter::Doubtful(names) => SkillName::Doubtful(names),
         FrontMatter::Fields(fields) => match field(&fields, "name") {
             None => SkillName::Folder,
-            Some(Yaml::String(name)) if !name.trim().is_empty() => SkillName::Given(name.trim().to_owned()),
+            Some(Yaml::String(name)) if name.trim().is_empty() => SkillName::Unknown,
+            Some(Yaml::String(name)) if name.trim() != name => SkillName::Padded(name.trim().to_owned()),
+            Some(Yaml::String(name)) => SkillName::Given(name.clone()),
             Some(_) => SkillName::Unknown,
         },
     }
 }
 
-/// Whether the user can start a skill or a command file as a slash command, failing closed: not when its front matter
-/// sets `user-invocable` to boolean false, to text that is, in any case and with spaces around it, `false`, `no` or
-/// `off`, or to a number, or text that reads as one, equal to zero. Any other value, or none, counts as invocable.
-fn user_invocable(fields: &Hash) -> bool {
-    let refused = |text: &str| {
-        let text = text.trim();
-        ["false", "no", "off"].iter().any(|word| text.eq_ignore_ascii_case(word)) || zero(&Yaml::from_str(text))
-    };
+/// Whether the user can start a skill or a command file as a slash command, failing closed: only when its front matter
+/// gives no `user-invocable`, or sets it to boolean true, or to text that reads `true` in any case with any spaces
+/// around it. Any other value fails, with the value as the error, shown as `shown` shows it.
+fn user_invocable(fields: &Hash) -> Result<(), String> {
     match field(fields, "user-invocable") {
-        Some(Yaml::Boolean(value)) => *value,
-        Some(Yaml::String(text)) => !refused(text),
-        Some(value) => !zero(value),
-        None => true,
+        None | Some(Yaml::Boolean(true)) => Ok(()),
+        Some(Yaml::String(text)) if text.trim().eq_ignore_ascii_case("true") => Ok(()),
+        Some(value) => Err(shown(value)),
     }
 }
 
-/// Whether `value` is a number equal to zero.
-fn zero(value: &Yaml) -> bool {
+/// A front matter value as a line of the check shows it.
+fn shown(value: &Yaml) -> String {
     match value {
-        Yaml::Integer(number) => *number == 0,
-        Yaml::Real(_) => value.as_f64() == Some(0.0),
-        _ => false,
+        Yaml::Boolean(value) => value.to_string(),
+        Yaml::Integer(number) => number.to_string(),
+        Yaml::Real(number) => number.clone(),
+        Yaml::String(text) => format!("{text:?}"),
+        Yaml::Null => "an empty value".to_owned(),
+        Yaml::Array(_) => "a list".to_owned(),
+        Yaml::Hash(_) => "a mapping".to_owned(),
+        other => format!("{other:?}"),
     }
 }
 
 /// Every skill `SKILL.md` right under `CLAUDE_SKILLS`, with its folder and name, in path order.
 fn skills(files: &Files) -> impl Iterator<Item = (&str, &str, SkillName)> {
     files.iter().filter_map(|(path, bytes)| skill_folder(path).map(|folder| (path.as_str(), folder, skill_name(bytes))))
+}
+
+/// Every command file right in the commands folder whose front matter is in doubt, with its path, its command and the
+/// raw names its `name` lines give, in path order.
+fn doubtful_command_files(files: &Files) -> impl Iterator<Item = (&str, &str, Vec<String>)> {
+    files.iter().filter_map(|(path, bytes)| {
+        let command = path.strip_prefix(commands_folder())?.strip_prefix('/')?.strip_suffix(".md").filter(|name| !name.is_empty() && !name.contains('/'))?;
+        match front_matter(bytes) {
+            FrontMatter::Doubtful(names) => Some((path.as_str(), command, names)),
+            _ => None,
+        }
+    })
 }
 
 /// Each skill whose `name:` is not plain, non-empty text, one line each: it could be any command, so the check fails.
@@ -232,29 +256,38 @@ fn unknown_names(files: &Files) -> Vec<String> {
 /// A skill of that name wins over the command file, as it does at run time: a skill named by its front matter's
 /// `name:`, or by its folder when it gives none, so a skill whose `name:` names another command is not this one,
 /// whatever its folder. The file that wins must be one the user can invoke, and when it is not, the command is missing:
-/// the other file does not count. Failing closed, the command is missing too when more than one skill is named `name`,
-/// or when a skill's front matter is in doubt and its folder or a raw `name:` line is `name`, or when the command
-/// file's front matter is in doubt, since which file runs, or whether the user can invoke it, is then not known.
+/// the other file does not count. Failing closed, the command is missing too, since which file runs, or whether the
+/// user can invoke it, is then not known: when a skill's or a command file's front matter is in doubt and its folder,
+/// its command or a raw `name` line is `name`; when a skill's `name:` is `name` with spaces around it; or when more
+/// than one skill is named `name`.
 fn command_file<'a>(files: &'a Files, name: &str) -> Result<(&'a str, &'a [u8]), String> {
     let command = command_path(name);
-    let doubtful: Vec<&str> = skills(files)
+    let mut doubtful: Vec<&str> = skills(files)
         .filter(|(_, folder, named)| match named {
             SkillName::Doubtful(names) => *folder == name || names.iter().any(|given| given == name),
             _ => false,
         })
         .map(|(path, _, _)| path)
         .collect();
+    doubtful.extend(doubtful_command_files(files).filter(|(_, own, names)| *own == name || names.iter().any(|given| given == name)).map(|(path, _, _)| path));
     if !doubtful.is_empty() {
         return Err(format!(
-            "/{name} is missing: the front matter of {} does not parse as one YAML mapping, or has no closing ---, yet gives name: or user-invocable:, so whether Claude Code runs it for /{name}, and whether the user can invoke it, is not known",
+            "/{name} is missing: the front matter of {} does not parse as one YAML mapping, or has no closing ---, so whether Claude Code runs it for /{name}, and whether the user can invoke it, is not known",
             doubtful.join(" and ")
+        ));
+    }
+    let padded: Vec<&str> = skills(files).filter(|(_, _, named)| *named == SkillName::Padded(name.to_owned())).map(|(path, _, _)| path).collect();
+    if !padded.is_empty() {
+        return Err(format!(
+            "/{name} is missing: {} gives name: {name} with spaces around it, so whether Claude Code runs it for /{name} is not known",
+            padded.join(" and ")
         ));
     }
     let named: Vec<&str> = skills(files)
         .filter(|(_, folder, named)| match named {
             SkillName::Given(given) => given == name,
             SkillName::Folder => *folder == name,
-            SkillName::Unknown | SkillName::Doubtful(_) => false,
+            SkillName::Unknown | SkillName::Padded(_) | SkillName::Doubtful(_) => false,
         })
         .map(|(path, _, _)| path)
         .collect();
@@ -278,12 +311,15 @@ fn command_file<'a>(files: &'a Files, name: &str) -> Result<(&'a str, &'a [u8]),
     };
     match front_matter(bytes) {
         FrontMatter::Doubtful(_) => Err(format!(
-            "/{name} is missing: the front matter of the {kind} {path} does not parse as one YAML mapping, or has no closing ---, yet gives name: or user-invocable:, so whether the user can invoke it is not known{shadows}"
+            "/{name} is missing: the front matter of the {kind} {path} does not parse as one YAML mapping, or has no closing ---, so whether the user can invoke it is not known{shadows}"
         )),
-        FrontMatter::Fields(fields) if !user_invocable(&fields) => {
-            Err(format!("/{name} is missing: the {kind} {path} sets user-invocable to false in its front matter, so the user cannot invoke it{shadows}"))
-        }
-        _ => Ok((path.as_str(), bytes.as_slice())),
+        FrontMatter::Fields(fields) => match user_invocable(&fields) {
+            Ok(()) => Ok((path.as_str(), bytes.as_slice())),
+            Err(value) => Err(format!(
+                "/{name} is missing: the {kind} {path} sets user-invocable to {value} in its front matter, and only true, or no user-invocable, is one the user can invoke{shadows}"
+            )),
+        },
+        FrontMatter::Absent => Ok((path.as_str(), bytes.as_slice())),
     }
 }
 
@@ -460,44 +496,47 @@ fn a_skill_with_no_name_is_the_command_of_its_folder() {
     assert_eq!(unmet(&files).len(), 1, "only a SKILL.md right in the skill's folder counts");
 }
 
-/// A skill with `user-invocable: false` is not a slash command the user can start, so the launcher cannot start it,
-/// whatever its name.
+/// Only a skill with no `user-invocable`, or one set to true, is a slash command the user can surely start: any other
+/// value leaves the command missing, whatever the skill's name, and the line quotes the value.
 #[test]
-fn a_skill_the_user_cannot_invoke_is_not_the_command() {
+fn a_skill_the_user_cannot_surely_invoke_is_not_the_command() {
     let mut files = complete();
     files.remove(&command_path("scrape"));
-    for (bytes, why) in [
-        (&b"---\nname: scrape\nuser-invocable: false\n---\n"[..], "named for the command"),
-        (&b"---\nuser-invocable: false\ndescription: Finds jobs.\n---\n"[..], "named by its folder"),
-        (&b"\xef\xbb\xbf---\nuser-invocable:   false  \nname: scrape\n---\n"[..], "after a BOM, with spaces around the value"),
-        (&b"---\nname: scrape\nuser-invocable: false  # internal\n---\n"[..], "a trailing comment"),
-        (&b"---\nname: scrape\nuser-invocable: false\t# internal\n---\n"[..], "a trailing comment after a tab"),
-        (&b"---\nname: scrape\nuser-invocable: False\n---\n"[..], "False"),
-        (&b"---\nname: scrape\nuser-invocable: FALSE\n---\n"[..], "FALSE"),
-        (&b"---\nname: scrape\nuser-invocable: \"false\"\n---\n"[..], "double quotes"),
-        (&b"---\nname: scrape\nuser-invocable: 'False' # internal\n---\n"[..], "single quotes and a comment"),
-        (&b"---\nname: scrape\nuser-invocable: no\n---\n"[..], "no"),
-        (&b"---\nname: scrape\nuser-invocable: Off\n---\n"[..], "Off"),
-        (&b"---\nname: scrape\nuser-invocable: NO\n---\n"[..], "NO"),
-        (&b"---\nname: scrape\nuser-invocable: 0\n---\n"[..], "0"),
-        (&b"---\nname: scrape\nuser-invocable: 0.0\n---\n"[..], "0.0, the number 0"),
-        (&b"---\nname: scrape\nuser-invocable: '0'\n---\n"[..], "0 as text"),
-        (&b"---\nname: scrape\nuser-invocable: 'false '\n---\n"[..], "false with a space inside the quotes"),
-        (&b"---\nname: scrape\nuser-invocable: ' no'\n---\n"[..], "no with a space inside the quotes"),
-        (&b"---\nname: scrape\nuser-invocable: '0.0'\n---\n"[..], "0.0 as text"),
-        (&b"---\nname: scrape\nuser-invocable: \" -0 \"\n---\n"[..], "-0 as text with spaces"),
-        (&b"---\nname: scrape\nuser-invocable: '0x0'\n---\n"[..], "0x0 as text"),
-        (&b"---\nname: ' scrape '\nuser-invocable: false\n---\n"[..], "a name with spaces inside the quotes"),
-        (&b"---\r\nname: scrape\r\nuser-invocable: false\r\n---\r\n"[..], "CRLF line ends"),
-        (&b"---\nname: \"scrape\"\nuser-invocable:\n  false\n---\n"[..], "a value on the next line"),
+    for (bytes, value, why) in [
+        (&b"---\nname: scrape\nuser-invocable: false\n---\n"[..], "false", "named for the command"),
+        (&b"---\nuser-invocable: false\ndescription: Finds jobs.\n---\n"[..], "false", "named by its folder"),
+        (&b"\xef\xbb\xbf---\nuser-invocable:   false  \nname: scrape\n---\n"[..], "false", "after a BOM, with spaces around the value"),
+        (&b"---\nname: scrape\nuser-invocable: false  # internal\n---\n"[..], "false", "a trailing comment"),
+        (&b"---\nname: scrape\nuser-invocable: false\t# internal\n---\n"[..], "false", "a trailing comment after a tab"),
+        (&b"---\nname: scrape\nuser-invocable: False\n---\n"[..], "false", "False, which YAML reads as the boolean"),
+        (&b"---\nname: scrape\nuser-invocable: \"false\"\n---\n"[..], "\"false\"", "double quotes"),
+        (&b"---\nname: scrape\nuser-invocable: 'False' # internal\n---\n"[..], "\"False\"", "single quotes and a comment"),
+        (&b"---\nname: scrape\nuser-invocable: no\n---\n"[..], "\"no\"", "no"),
+        (&b"---\nname: scrape\nuser-invocable: Off\n---\n"[..], "\"Off\"", "Off"),
+        (&b"---\nname: scrape\nuser-invocable: 0\n---\n"[..], "0", "0"),
+        (&b"---\nname: scrape\nuser-invocable: 0.0\n---\n"[..], "0.0", "0.0, the number 0"),
+        (&b"---\nname: scrape\nuser-invocable: '0'\n---\n"[..], "\"0\"", "0 as text"),
+        (&b"---\nname: scrape\nuser-invocable: yes\n---\n"[..], "\"yes\"", "yes"),
+        (&b"---\nname: scrape\nuser-invocable: 1\n---\n"[..], "1", "1"),
+        (&b"---\nname: scrape\nuser-invocable: on\n---\n"[..], "\"on\"", "on"),
+        (&b"---\nname: scrape\nuser-invocable: falsehood\n---\n"[..], "\"falsehood\"", "another word"),
+        (&b"---\nname: scrape\nuser-invocable: truthy\n---\n"[..], "\"truthy\"", "a word that only starts with true"),
+        (&b"---\nname: scrape\nuser-invocable:\n---\n"[..], "an empty value", "empty"),
+        (&b"---\nname: scrape\nuser-invocable: null\n---\n"[..], "an empty value", "null"),
+        (&b"---\nname: scrape\nuser-invocable: \"\"\n---\n"[..], "\"\"", "empty text"),
+        (&b"---\nname: scrape\nuser-invocable: [true]\n---\n"[..], "a list", "a list that holds true"),
+        (&b"---\nname: scrape\nuser-invocable: [false]\n---\n"[..], "a list", "a list that holds false"),
+        (&b"---\nname: scrape\nuser-invocable: {value: true}\n---\n"[..], "a mapping", "a mapping"),
+        (&b"---\r\nname: scrape\r\nuser-invocable: false\r\n---\r\n"[..], "false", "CRLF line ends"),
+        (&b"---\nname: \"scrape\"\nuser-invocable:\n  false\n---\n"[..], "false", "a value on the next line"),
     ] {
         files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
         let lines = unmet(&files);
         assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
         assert!(lines[0].starts_with("/scrape is missing"), "{why}: {}", lines[0]);
         assert!(
-            lines[0].contains("the skill .claude/skills/scrape/SKILL.md sets user-invocable to false"),
-            "{why}: the line names the skill the user cannot invoke: {}",
+            lines[0].contains(&format!("the skill .claude/skills/scrape/SKILL.md sets user-invocable to {value} in its front matter")),
+            "{why}: the line names the skill and quotes the value: {}",
             lines[0]
         );
     }
@@ -510,27 +549,25 @@ fn a_skill_the_user_cannot_invoke_is_not_the_command() {
         lines[0]
     );
     for (bytes, why) in [
-        (&b"---\nname: scrape\nuser-invocable: true\n---\n"[..], "invocable"),
-        (&b"---\nname: scrape\nuser-invocable: falsehood\n---\n"[..], "another word"),
+        (&b"---\nname: scrape\nuser-invocable: true\n---\n"[..], "true"),
+        (&b"---\nname: scrape\nuser-invocable: True\n---\n"[..], "True"),
+        (&b"---\nname: scrape\nuser-invocable: \"True\"\n---\n"[..], "True in double quotes"),
+        (&b"---\nname: scrape\nuser-invocable: ' TRUE '\n---\n"[..], "TRUE with spaces inside single quotes"),
         (&b"---\nname: scrape\nuser-invocable: true  # false\n---\n"[..], "false only in the comment"),
         (&b"---\nname: scrape\n---\n"[..], "no user-invocable"),
         (&b"---\nname: scrape\n---\nuser-invocable: false\n"[..], "user-invocable outside the front matter"),
         (&b"# Scrape\n\nuser-invocable: false\n"[..], "no front matter"),
-        (&b"---\nname: scrape\nuser-invocable: yes\n---\n"[..], "yes"),
-        (&b"---\nname: scrape\nuser-invocable: 1\n---\n"[..], "1"),
-        (&b"---\nname: scrape\nuser-invocable: [false]\n---\n"[..], "a list"),
-        (&b"---\nname: scrape\nuser-invocable: 'no way'\n---\n"[..], "text that only starts with no"),
-        (&b"---\nname: scrape\nuser-invocable: '0.1'\n---\n"[..], "a number other than zero as text"),
-        (&b"---\ndescription: Use when: the user asks\n---\n"[..], "front matter that does not parse, with neither key"),
+        (&b"---\n---\n"[..], "an empty front matter"),
+        (&b"---\n# Finds jobs.\n---\n"[..], "a front matter of a comment only"),
     ] {
         files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
         assert_eq!(unmet(&files), Vec::<String>::new(), "{why}");
     }
 }
 
-/// Front matter that does not parse, or has no closing line, may still be read by Claude Code, so when it has a line
-/// that gives `name:` or `user-invocable:`, the skill is in doubt: the command of its folder and the command its raw
-/// `name:` line names are missing, even beside a command file.
+/// Front matter that does not parse as one YAML mapping, or has no closing line, is in doubt whatever keys it seems to
+/// hold: the command of the skill's folder and every command a raw `name` line names are missing, even beside a
+/// command file.
 #[test]
 fn front_matter_in_doubt_fails_closed() {
     let doubtful = [
@@ -540,6 +577,10 @@ fn front_matter_in_doubt_fails_closed() {
         (&b"---\nname: scrape\n"[..], "a block with no closing line"),
         (&b"---\nname: 'scrape'\ndescription: Use when: the user asks\n---\n"[..], "a colon in a plain value, and a quoted name"),
         (&b"---\n  name: \" scrape \"  \ndescription: Use when: the user asks\n---\n"[..], "an indented name with spaces inside the quotes"),
+        (&b"---\n\"name\": scrape\ndescription: [unclosed\n---\n"[..], "a key in double quotes"),
+        (&b"---\n'name' : 'scrape'\ndescription: [unclosed\n---\n"[..], "a key in single quotes with a space before the colon"),
+        (&b"---\nname : scrape\ndescription: Use when: the user asks\n---\n"[..], "a space before the colon"),
+        (&b"---\nname\t: scrape\n"[..], "a tab before the colon, with no closing line"),
     ];
     for (bytes, why) in doubtful {
         assert!(
@@ -564,6 +605,12 @@ fn front_matter_in_doubt_fails_closed() {
         (&b"---\ndescription: Use when: the user asks\nuser-invocable: false\n---\n"[..], "a colon in a plain value"),
         (&b"---\nuser-invocable: false\ndescription: [unclosed\n---\n"[..], "an unclosed list"),
         (&b"---\nuser-invocable: false\n"[..], "a block with no closing line"),
+        (&b"---\ndescription: Use when: the user asks\n---\n"[..], "a colon in a plain value, with no key the check reads"),
+        (&b"---\ndescription: [unclosed\n---\n"[..], "an unclosed list, with no key the check reads"),
+        (&b"---\n- name: scrape\n---\n"[..], "a list, not a mapping"),
+        (&b"---\njust text\n---\n"[..], "text, not a mapping"),
+        (&b"---\ndescription: Finds jobs.\n"[..], "a block with no closing line, with no key the check reads"),
+        (&b"---\nnames: scrape\nmy-name: scrape\nname-x: scrape\n  bad: indent\n---\n"[..], "keys that only hold name"),
     ] {
         assert_eq!(front_matter(bytes), FrontMatter::Doubtful(Vec::new()), "{why}");
         let mut files = complete();
@@ -571,34 +618,25 @@ fn front_matter_in_doubt_fails_closed() {
         let lines = unmet(&files);
         assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
         assert!(lines[0].starts_with("/scrape is missing: the front matter of .claude/skills/scrape/SKILL.md does not parse"), "{why}: {}", lines[0]);
+        files.remove(&command_path("scrape"));
+        assert_eq!(unmet(&files), lines, "{why}: with no command file, the skill in doubt is still what fails");
+        files.insert(command_path("scrape"), b"Scrapes.".to_vec());
         files.remove(".claude/skills/scrape/SKILL.md");
         files.insert(".claude/skills/other/SKILL.md".to_owned(), bytes.to_vec());
-        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}: a doubtful skill in another folder with no name: line is not /scrape");
+        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}: a skill in doubt in another folder with no name line is not /scrape");
     }
 }
 
-/// Front matter that does not parse, or is not a mapping, and has no line that gives `name:` or `user-invocable:`
-/// gives none of the fields the check reads: the skill is named by its folder, and the user can invoke it.
+/// A command file whose front matter is in doubt blocks its own command and every command a raw `name` line names.
 #[test]
-fn front_matter_that_does_not_parse_with_neither_key_names_the_folder() {
+fn a_command_file_in_doubt_blocks_the_commands_it_could_be() {
     let mut files = complete();
-    files.remove(&command_path("scrape"));
-    for (bytes, why) in [
-        (&b"---\ndescription: Use when: the user asks\n---\n"[..], "a colon in a plain value"),
-        (&b"---\ndescription: [unclosed\n---\n"[..], "an unclosed list"),
-        (&b"---\n- name: scrape\n---\n"[..], "a list, not a mapping"),
-        (&b"---\ndescription: Finds jobs.\n"[..], "a block with no closing line"),
-    ] {
-        assert_eq!(front_matter(bytes), FrontMatter::Absent, "{why}: no front matter");
-        files.insert(".claude/skills/other/SKILL.md".to_owned(), bytes.to_vec());
-        let lines = unmet(&files);
-        assert_eq!(lines.len(), 1, "{why}: the skill in other is not /scrape: {lines:#?}");
-        assert!(lines[0].starts_with("/scrape is missing: no .claude/commands/scrape.md"), "{why}: {}", lines[0]);
-        files.remove(".claude/skills/other/SKILL.md");
-        files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
-        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}: the skill in scrape is /scrape by its folder");
-        files.remove(".claude/skills/scrape/SKILL.md");
-    }
+    files.insert(command_path("helper"), b"---\nname : scrape\ndescription: Use when: the user asks\n---\n".to_vec());
+    let lines = unmet(&files);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert!(lines[0].starts_with("/scrape is missing: the front matter of .claude/commands/helper.md does not parse"), "{}", lines[0]);
+    files.insert(command_path("helper"), b"---\ndescription: Use when: the user asks\n---\n".to_vec());
+    assert_eq!(unmet(&files), Vec::<String>::new(), "a command file in doubt with no name line blocks only its own command");
 }
 
 /// A `name:` that is not plain, non-empty text leaves the command Claude Code makes of the skill unknown, and it could
@@ -628,33 +666,41 @@ fn a_name_that_is_not_text_fails_the_check() {
 #[test]
 fn a_command_file_the_user_cannot_invoke_is_not_the_command() {
     let mut files = complete();
-    for (bytes, why) in [
-        (&b"---\nuser-invocable: false\n---\nScrapes.\n"[..], "false"),
-        (&b"---\ndescription: Scrapes.\nuser-invocable: off # internal\n---\n"[..], "off and a comment"),
-        (&b"\xef\xbb\xbf---\nuser-invocable: 0\n---\n"[..], "0 after a BOM"),
-    ] {
-        files.insert(command_path("scrape"), bytes.to_vec());
-        let lines = unmet(&files);
-        assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
-        assert!(lines[0].starts_with("/scrape is missing: the command file .claude/commands/scrape.md sets user-invocable to false"), "{why}: {}", lines[0]);
-    }
-    for (bytes, why) in [
-        (&b"---\ndescription: [unclosed\nuser-invocable: false\n---\n"[..], "front matter that does not parse"),
-        (&b"---\ndescription: Use when: the user asks\nuser-invocable: true\n---\n"[..], "a colon in a plain value"),
-        (&b"---\nuser-invocable: false\n"[..], "a block with no closing line"),
+    for (bytes, value, why) in [
+        (&b"---\nuser-invocable: false\n---\nScrapes.\n"[..], "false", "false"),
+        (&b"---\ndescription: Scrapes.\nuser-invocable: off # internal\n---\n"[..], "\"off\"", "off and a comment"),
+        (&b"\xef\xbb\xbf---\nuser-invocable: 0\n---\n"[..], "0", "0 after a BOM"),
+        (&b"---\nuser-invocable: yes\n---\n"[..], "\"yes\"", "yes"),
+        (&b"---\nuser-invocable: ''\n---\n"[..], "\"\"", "empty text"),
     ] {
         files.insert(command_path("scrape"), bytes.to_vec());
         let lines = unmet(&files);
         assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
         assert!(
-            lines[0].starts_with("/scrape is missing: the front matter of the command file .claude/commands/scrape.md does not parse as one YAML mapping"),
+            lines[0]
+                .starts_with(&format!("/scrape is missing: the command file .claude/commands/scrape.md sets user-invocable to {value} in its front matter")),
+            "{why}: {}",
+            lines[0]
+        );
+    }
+    for (bytes, why) in [
+        (&b"---\ndescription: [unclosed\nuser-invocable: false\n---\n"[..], "front matter that does not parse"),
+        (&b"---\ndescription: Use when: the user asks\nuser-invocable: true\n---\n"[..], "a colon in a plain value"),
+        (&b"---\nuser-invocable: false\n"[..], "a block with no closing line"),
+        (&b"---\ndescription: Use when: the user asks\n---\n"[..], "front matter that does not parse, with neither key"),
+    ] {
+        files.insert(command_path("scrape"), bytes.to_vec());
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
+        assert!(
+            lines[0].starts_with("/scrape is missing: the front matter of .claude/commands/scrape.md does not parse as one YAML mapping"),
             "{why}: {}",
             lines[0]
         );
     }
     for (bytes, why) in [
         (&b"---\nuser-invocable: true\n---\n"[..], "true"),
-        (&b"---\ndescription: Use when: the user asks\n---\n"[..], "front matter that does not parse, with neither key"),
+        (&b"---\nuser-invocable: \"True\"\n---\n"[..], "True as text"),
         (&b"Scrapes.\n\nuser-invocable: false\n"[..], "no front matter"),
     ] {
         files.insert(command_path("scrape"), bytes.to_vec());
@@ -685,31 +731,37 @@ fn a_skill_wins_over_a_command_file_of_its_name() {
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert!(
         lines[0].starts_with(&format!(
-            "/add-template is missing: the skill .claude/skills/templates/SKILL.md sets user-invocable to false in its front matter, so the user cannot invoke it, and it is what runs in place of {command}"
+            "/add-template is missing: the skill .claude/skills/templates/SKILL.md sets user-invocable to false in its front matter, and only true, or no user-invocable, is one the user can invoke, and it is what runs in place of {command}"
         )),
         "{}",
         lines[0]
     );
 }
 
-/// A `name:` with spaces around it names the command it holds, so it wins over that command's file too.
+/// A `name:` with spaces around it is in doubt: the command its trimmed text names is missing, whichever file would
+/// otherwise run for it, and the line names the skill.
 #[test]
-fn a_padded_name_is_the_command_it_holds() {
+fn a_padded_name_blocks_the_command_it_holds() {
+    let skill = ".claude/skills/templates/SKILL.md";
+    for bytes in [
+        format!("---\nname: \" add-template \"\n---\n{ACTIVE_TEMPLATE}\n"),
+        format!("---\nname: 'add-template '\n---\n{ACTIVE_TEMPLATE}\n"),
+        format!("---\nname: \"\\tadd-template\"\n---\n{ACTIVE_TEMPLATE}\n"),
+        "---\nname: \" add-template \"\nuser-invocable: false\n---\n".to_owned(),
+    ] {
+        let mut files = complete();
+        assert!(String::from_utf8_lossy(&files[&command_path("add-template")]).contains(ACTIVE_TEMPLATE), "the command file is sound");
+        files.insert(skill.to_owned(), bytes.clone().into_bytes());
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{bytes:?}: {lines:#?}");
+        assert!(lines[0].starts_with(&format!("/add-template is missing: {skill} gives name: add-template with spaces around it")), "{bytes:?}: {}", lines[0]);
+        files.insert(".claude/skills/add-template/SKILL.md".to_owned(), format!("{ACTIVE_TEMPLATE}\n").into_bytes());
+        assert_eq!(unmet(&files), lines, "{bytes:?}: a sound skill of that name does not stand in for it");
+    }
     let mut files = complete();
-    let command = command_path("add-template");
-    files.insert(".claude/skills/templates/SKILL.md".to_owned(), b"---\nname: \" add-template \"\nuser-invocable: false\n---\n".to_vec());
-    let lines = unmet(&files);
-    assert_eq!(lines.len(), 1, "{lines:#?}");
-    assert!(
-        lines[0].starts_with(&format!(
-            "/add-template is missing: the skill .claude/skills/templates/SKILL.md sets user-invocable to false in its front matter, so the user cannot invoke it, and it is what runs in place of {command}"
-        )),
-        "{}",
-        lines[0]
-    );
-    files.insert(".claude/skills/templates/SKILL.md".to_owned(), format!("---\nname: \" add-template \"\n---\n{ACTIVE_TEMPLATE}\n").into_bytes());
-    files.insert(command, b"Writes no block.".to_vec());
-    assert_eq!(unmet(&files), Vec::<String>::new(), "the padded skill is what is read");
+    files.insert(skill.to_owned(), format!("---\nname: add-template\n---\n{ACTIVE_TEMPLATE}\n").into_bytes());
+    files.insert(command_path("add-template"), b"Writes no block.".to_vec());
+    assert_eq!(unmet(&files), Vec::<String>::new(), "an exact name is the command it holds, and wins over the command file");
 }
 
 /// Two skills of one name leave which one runs unknown, so the command is missing.

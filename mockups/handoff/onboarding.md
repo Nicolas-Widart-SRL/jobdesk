@@ -124,10 +124,11 @@ ai-job-search keeps its name, as the user may already know it.
 
 ### Documents
 
-- The drop zone takes several files at once, by drop or Choose files…: the CV, a LinkedIn profile saved as a PDF, diplomas, reference letters, as PDF or Word files. A link opens the user guide's part on saving a LinkedIn profile as a PDF.
-- Added files show in a `file_list`: a mini page, the file name as plain text with hidden characters removed, its page count, and Remove. A slim drop zone under it takes more.
+- The drop zone takes several files at once, by drop or Choose files…: the CV, a LinkedIn profile saved as a PDF, diplomas, reference letters, as PDF files. A Word file is refused with a line that says to save it as a PDF. A link opens the user guide's part on saving a LinkedIn profile as a PDF.
+- Added files show in a `file_list`: a mini page, the file name as plain text with hidden characters removed, a kind menu, its page count, and Remove. A slim drop zone under it takes more.
+- The kind menu says what each file is: CV, LinkedIn profile, Diploma, Reference letter or Project. Jobdesk guesses it from the file's name, and the user can change it until the file is copied. Once copied, the menu and Remove are disabled.
 - Read my documents stays disabled until one file is added. The muted line counts them.
-- Jobdesk copies the files into the folder's `documents/`, never moves them. A name that already exists there gets a number added.
+- Jobdesk copies each file into the matching subfolder of `documents/` (`cv/`, `linkedin/`, `diplomas/`, `references/` or `projects/`), never moves them. A name that already exists there gets a number added.
 - The side column says what comes next in plain words: rounds of questions, answered on the user's own time and in any order, and that setup took one tester about 40 minutes, most of it writing answers.
 
 ### The profile run
@@ -226,7 +227,7 @@ All sheets share:
 | `step_dots` | One square per step with its name, joined by a hairline | `STATUS_DOT`; `text`, `off`, `line`, `muted`; `Type::SMALL` |
 | setup stamp | `day_stamp` drawn with four ticks and the step inside, or the date on the welcome and the recap | `DAY_STAMP_RINGS`, `DAY_STAMP_TICK`; `text`, `off`, `line`, `sheet` |
 | `drop_zone` | Paper with a dashed `line` edge, stacked mini pages, the words, Choose files…; a slim form under a file list | `card`, `line`; `SWEEP_DASH`; `MINI_PAGE_SIZE`, `page`, `page_line`, `page_head`; `button` |
-| `file_list` | One row per added file: a mini page, the name as plain text, the page count, Remove | `paper`, `line`; `ROW_PADDING`, `INSET`; `Type::MONO`, `Type::NOTE`; small `button` |
+| `file_list` | One row per added file: a mini page, the name as plain text, a kind menu, the page count, Remove. A copied row's menu and Remove are disabled | `paper`, `line`; `ROW_PADDING`, `INSET`; `Type::MONO`, `Type::NOTE`; egui `ComboBox` at `KIND_MENU_WIDTH`; small `button` |
 | `setup_line` | A line on paper: a knot, a title, a line under it, and a tag or bar at the right, with an optional bar row | `knot`, `tag`, `bar`; `ROW_PADDING`, `INSET`; `live_sweep` on the working line |
 | `question_sheet` | Claude's message as a `document`, each numbered item followed by a growing field, sub-items kept inside their item; falls back to the message beside one large field | `markdown`, `DOC_MEASURE`; `field`, `FIELD_HEIGHT`, `FIELD_GAP`; `Type::TAKE`, `muted` for the numbers |
 | answers slip | The side slip of the sheet: count and `tally`, Short answers, Draft saved, Show all Claude wrote | `panel`; `Type::SECTION`; `TALLY_FAT`; `link_button` |

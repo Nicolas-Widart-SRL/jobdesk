@@ -226,6 +226,8 @@ pub const DROP_PAGE: (f32, f32) = (66.0, 92.0);
 pub const DROP_PAGE_OFFSET: (f32, f32) = (22.0, 10.0);
 /// The page at the start of a row in a file list.
 pub const FILE_PAGE: (f32, f32) = (26.0, 34.0);
+/// The menu in a file list's row that says what the file is: wide enough for its longest kind.
+pub const KIND_MENU_WIDTH: f32 = 140.0;
 /// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
 pub const TRAY_RAIL: f32 = 292.0;
 /// The room between the slips in the rail.

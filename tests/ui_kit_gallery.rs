@@ -1605,10 +1605,11 @@ fn setup(ui: &mut Ui, bench: &mut SetupBench) {
                     file_list(
                         ui,
                         &[
-                            AddedFile { name: "Sample_Candidate_CV.pdf", pages: Some(2) },
-                            AddedFile { name: "Profile.pdf", pages: Some(4) },
-                            AddedFile { name: "Reference_letter_Tessel_Group_2023_signed_and_scanned_copy_final.docx", pages: None },
+                            AddedFile { name: "Sample_Candidate_CV.pdf", pages: Some(2), kind: 0, copied: false },
+                            AddedFile { name: "Profile.pdf", pages: Some(4), kind: 1, copied: false },
+                            AddedFile { name: "Reference_letter_Tessel_Group_2023_signed_and_scanned_copy_final.pdf", pages: Some(1), kind: 3, copied: false },
                         ],
+                        &["CV", "LinkedIn profile", "Diploma", "Reference letter", "Project"],
                     );
                     drop_zone(ui, DropForm::Slim { sentence: "Drop more here: diplomas, reference letters." });
                     copied(ui);

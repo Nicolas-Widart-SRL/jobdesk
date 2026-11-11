@@ -8,13 +8,13 @@ use std::path::PathBuf;
 
 use egui::text::LayoutJob;
 use egui::{
-    Align, Color32, Frame, Id, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextWrapMode, Ui,
-    UiBuilder, Vec2, WidgetInfo, pos2, vec2,
+    Align, Color32, ComboBox, Frame, Id, Layout, Margin, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextWrapMode,
+    Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use egui_commonmark::CommonMarkCache;
 
 use crate::ui_kit::Palette;
-use crate::ui_kit::controls::{button, link, small_button};
+use crate::ui_kit::controls::{button, enabled_when, hand, link, small_button};
 use crate::ui_kit::marks::tally_spoken;
 use crate::ui_kit::pages::{PageSet, fitted_pages, paint_mini_page};
 use crate::ui_kit::palette::Ink;
@@ -22,9 +22,9 @@ use crate::ui_kit::surfaces::{Choice, divider, folder_fill, paint_choice, paper}
 use crate::ui_kit::text::{add_cut_text, add_job, add_text, claude_markdown, copyable, inline_job, line, paint_text, plain_name, wrapped_height};
 use crate::ui_kit::tokens::{
     BODY_PADDING, CHANGE_GAP, CHANGE_PADDING, CHECK_BOX, DISABLED_OPACITY, DOC_MEASURE, DROP_GAP, DROP_PADDING, DROP_PAGE, DROP_PAGE_OFFSET, DROP_SLIM_GAP,
-    DROP_SLIM_PADDING, FALLBACK_SHARE, FIELD_HEIGHT, FIELD_PADDING, FILE_PAGE, GROUP_GAP, GUTTER, HAIRLINE, INSET, ITEM_GAP, ITEM_NUMBER, PICK_PADDING,
-    PROSE_GAP, QUESTION_GAP, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SPLIT_GAP, SUB_ITEM_LETTER, SWEEP_DASH, TALLY_FAT,
-    Type,
+    DROP_SLIM_PADDING, FALLBACK_SHARE, FIELD_HEIGHT, FIELD_PADDING, FILE_PAGE, GROUP_GAP, GUTTER, HAIRLINE, INSET, ITEM_GAP, ITEM_NUMBER, KIND_MENU_WIDTH,
+    PICK_PADDING, PROSE_GAP, QUESTION_GAP, RADIUS_BUTTON, RADIUS_CARD, RADIUS_PANEL, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SPLIT_GAP, SUB_ITEM_LETTER,
+    SWEEP_DASH, TALLY_FAT, Type,
 };
 use crate::ui_kit::wizard::well;
 
@@ -525,14 +525,31 @@ pub struct AddedFile<'a> {
     pub name: &'a str,
     /// How many pages it has, when known.
     pub pages: Option<usize>,
+    /// What it is, as an index into the kinds the list is given.
+    pub kind: usize,
+    /// Whether it is already in the folder, so its kind and its place in the list are settled.
+    pub copied: bool,
 }
 
+/// What the user did with the file list this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FileListAction {
+    /// The row whose Remove was clicked.
+    pub removed: Option<usize>,
+    /// A row whose kind was picked, and the index of the kind picked.
+    pub kind: Option<(usize, usize)>,
+}
+
+/// What a copied row's kind menu and Remove say while they cannot be used.
+const ALREADY_COPIED: &str = "Already copied into your folder.";
+
 /// The files added so far, on paper, one row each: a small page, the name in `mono` as plain text with its hidden
-/// characters removed, cut at the right with the whole name on hover, its page count in `muted`, and a small Remove,
-/// which a screen reader hears as Remove and the name. Rows are ruled off from each other. Returns the row whose Remove
-/// was clicked.
-pub fn file_list(ui: &mut Ui, files: &[AddedFile]) -> Option<usize> {
-    let mut removed = None;
+/// characters removed, cut at the right with the whole name on hover, a menu of `kinds` that says what the file is,
+/// its page count in `muted`, and a small Remove. A screen reader hears the menu as Kind of and the name, and Remove as
+/// Remove and the name. A row already copied keeps its menu and Remove disabled, and says why on hover. Rows are ruled
+/// off from each other. Returns the row whose Remove was clicked, and the kind picked on a row.
+pub fn file_list(ui: &mut Ui, files: &[AddedFile], kinds: &[&str]) -> FileListAction {
+    let mut action = FileListAction::default();
     paper(ui, false, |ui| {
         for (index, file) in files.iter().enumerate() {
             if index > 0 {
@@ -547,14 +564,35 @@ pub fn file_list(ui: &mut Ui, files: &[AddedFile]) -> Option<usize> {
                         let (page, _) = ui.allocate_exact_size(Vec2::from(FILE_PAGE), Sense::hover());
                         paint_mini_page(ui, page, true);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let enabled = ui.is_enabled();
-                            let remove = small_button(ui, "Remove");
-                            remove.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, format!("Remove {name}")));
+                            let remove = enabled_when(ui, !file.copied, ALREADY_COPIED, |ui| {
+                                let enabled = ui.is_enabled();
+                                let remove = small_button(ui, "Remove");
+                                remove.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, format!("Remove {name}")));
+                                remove
+                            });
                             if remove.clicked() {
-                                removed = Some(index);
+                                action.removed = Some(index);
                             }
                             if let Some(pages) = file.pages {
                                 add_text(ui, if pages == 1 { "1 page".to_owned() } else { format!("{pages} pages") }, Type::NOTE, Ink::Muted);
+                            }
+                            if !kinds.is_empty() {
+                                let mut at = file.kind.min(kinds.len() - 1);
+                                let menu =
+                                    enabled_when(ui, !file.copied, ALREADY_COPIED, |ui| {
+                                        ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
+                                        let combo = ComboBox::from_id_salt(("added_file_kind", index))
+                                            .width(KIND_MENU_WIDTH)
+                                            .selected_text(kinds[at])
+                                            .show_index(ui, &mut at, kinds.len(), |kind| kinds[kind]);
+                                        // The row says what the file is, so the box is named by the file here.
+                                        let spoken = format!("Kind of {name}");
+                                        ui.ctx().accesskit_node_builder(combo.id, |node| node.set_label(spoken));
+                                        hand(combo)
+                                    });
+                                if menu.changed() && at != file.kind {
+                                    action.kind = Some((index, at));
+                                }
                             }
                             ui.with_layout(Layout::left_to_right(Align::Center), |ui| add_cut_text(ui, name.as_str(), Type::MONO, Ink::Text));
                         });
@@ -563,7 +601,7 @@ pub fn file_list(ui: &mut Ui, files: &[AddedFile]) -> Option<usize> {
             });
         }
     });
-    removed
+    action
 }
 
 /// The CV's pages for the user to check, as Profile's CV documents draw them: page images only, fitted to the room left,
@@ -736,22 +774,56 @@ mod tests {
         assert_eq!(listed(&[3, 7, 9]), "3, 7 and 9");
     }
 
-    /// A file's name loses its hidden characters, and its Remove names it for a screen reader.
+    const KINDS: [&str; 3] = ["CV", "LinkedIn profile", "Reference letter"];
+
+    /// A file's name loses its hidden characters, and its Remove and its kind menu name it for a screen reader.
     #[test]
     fn a_file_name_shows_without_hidden_characters() {
         let removed = Rc::new(Cell::new(None));
         let seen = Rc::clone(&removed);
         let mut harness = Harness::builder().with_size([700.0, 200.0]).with_context_setup(setup).build_ui(move |ui| {
-            let files = [AddedFile { name: "Sample\u{202E}fdp.CV.pdf", pages: Some(2) }, AddedFile { name: "Profile.pdf", pages: Some(1) }];
-            if let Some(index) = file_list(ui, &files) {
+            let files = [
+                AddedFile { name: "Sample\u{202E}fdp.CV.pdf", pages: Some(2), kind: 0, copied: false },
+                AddedFile { name: "Profile.pdf", pages: Some(1), kind: 1, copied: false },
+            ];
+            if let Some(index) = file_list(ui, &files, &KINDS).removed {
                 seen.set(Some(index));
             }
         });
         harness.run();
         assert!(harness.query_by_label("Samplefdp.CV.pdf").is_some(), "the reordering mark is gone");
+        assert!(harness.query_by_label("Kind of Samplefdp.CV.pdf").is_some(), "the menu is named without it too");
         assert!(harness.query_by_label("1 page").is_some());
         harness.get_by_label("Remove Profile.pdf").click();
         harness.run();
         assert_eq!(removed.get(), Some(1));
+    }
+
+    /// Each row's kind menu is a combo box named by its file, showing its kind, and picking another kind says which.
+    /// A copied row's menu and Remove cannot be used.
+    #[test]
+    fn a_kind_menu_names_its_file_and_a_copied_row_is_settled() {
+        let picked = Rc::new(Cell::new(None));
+        let seen = Rc::clone(&picked);
+        let mut harness = Harness::builder().with_size([700.0, 400.0]).with_context_setup(setup).build_ui(move |ui| {
+            let files = [
+                AddedFile { name: "Mira_Hale_CV.pdf", pages: Some(2), kind: 0, copied: true },
+                AddedFile { name: "Profile.pdf", pages: Some(1), kind: 1, copied: false },
+            ];
+            if let Some(kind) = file_list(ui, &files, &KINDS).kind {
+                seen.set(Some(kind));
+            }
+        });
+        harness.run();
+        let menu = harness.get_by_label("Kind of Profile.pdf");
+        assert_eq!(menu.accesskit_node().role(), egui::accesskit::Role::ComboBox);
+        assert_eq!(menu.accesskit_node().value().as_deref(), Some("LinkedIn profile"));
+        assert!(harness.get_by_label("Kind of Mira_Hale_CV.pdf").accesskit_node().is_disabled(), "a copied file keeps its kind");
+        assert!(harness.get_by_label("Remove Mira_Hale_CV.pdf").accesskit_node().is_disabled(), "and stays");
+        harness.get_by_label("Kind of Profile.pdf").click();
+        harness.run();
+        harness.get_by_label("Reference letter").click();
+        harness.run();
+        assert_eq!(picked.get(), Some((1, 2)));
     }
 }

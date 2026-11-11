@@ -854,6 +854,10 @@ impl Shell {
             desk.poll();
         }
         self.follow_profile_setup();
+        // No input may come while the chapter waits for a snapshot read after the turn ended.
+        if let Some(wait) = self.profile_setup.as_ref().and_then(|setup| setup.run.snapshot_wait(Instant::now())) {
+            ui.ctx().request_repaint_after(wait);
+        }
         self.follow_runs();
         self.settle_run_end(ui.ctx());
         if let Some(pages) = &mut self.pages {
@@ -958,7 +962,8 @@ impl Shell {
 
     /// Polls the Profile chapter's run after the desk, with the rules Read my documents is checked against, and opens
     /// the recap once the run is done. Without PDFs holds once the user went on without LaTeX, or the tool check finds
-    /// none.
+    /// none. The end of a turn waits for a snapshot read after it, which the run's end asks for, so the CV check and the
+    /// recap read what the turn wrote.
     fn follow_profile_setup(&mut self) {
         let cap = self.cap();
         let testing = self.providers.test_gate(false) == TestGate::Testing;
@@ -966,7 +971,15 @@ impl Shell {
         let no_latex = self.environment.as_ref().is_some_and(|checks| checks.results().is_some() && checks.version_of("lualatex").is_none());
         let (Some(setup), Some(desk)) = (&mut self.profile_setup, &mut self.desk) else { return };
         let rules = StartRules { defaults: &self.settings.preferences().run_defaults, cap: &cap, testing };
-        let input = PollInput { cv: &self.snapshot.cv_documents, without_pdfs: setup.without_pdfs || no_latex, rules, now: Instant::now(), wall };
+        let input = PollInput {
+            cv: &self.snapshot.cv_documents,
+            read_at: self.snapshot.read_at,
+            rereads: self.snapshots.is_some(),
+            without_pdfs: setup.without_pdfs || no_latex,
+            rules,
+            now: Instant::now(),
+            wall,
+        };
         setup.run.poll(desk, &input);
         if setup.recap.is_none() && *setup.run.phase() == ProfilePhase::Done {
             let took = setup.run.run(desk).map_or(Duration::ZERO, |run| run.elapsed.total(desk.now()));

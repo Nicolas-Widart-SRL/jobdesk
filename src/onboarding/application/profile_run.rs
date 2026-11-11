@@ -31,6 +31,10 @@ pub const DRAFT_SAVE_EVERY: Duration = Duration::from_secs(1);
 /// The longest a draft that could not be written waits before it is tried again.
 pub const DRAFT_RETRY_MOST: Duration = Duration::from_secs(60);
 
+/// The longest the end of a turn waits for a snapshot read after it ended, before the CV check or the end of setup is
+/// decided from the snapshot on show.
+pub const SNAPSHOT_WAIT: Duration = Duration::from_secs(2);
+
 /// What `/setup`'s closing summary says, in any case: ai-job-search v1.7.5, `.claude/commands/setup.md`, Step 4
 /// ("Confirm & Next Steps"), opens it with "**Setup complete!**". No other message of `/setup` ends the chapter.
 const SETUP_COMPLETE: &str = "setup complete";
@@ -91,6 +95,10 @@ pub struct StartRules<'a> {
 pub struct PollInput<'a> {
     /// The snapshot's CV documents.
     pub cv: &'a CvShelf,
+    /// When the snapshot's read of the folder began, on the window's clock. `None` before the first read.
+    pub read_at: Option<Instant>,
+    /// Whether a newer snapshot can come. Without a worker to read the folder again, the one on show is the newest.
+    pub rereads: bool,
     /// The user went on without LaTeX, so no CV check can come.
     pub without_pdfs: bool,
     /// The rules a run starting once its documents are copied is checked against.
@@ -218,6 +226,8 @@ pub struct ProfileRun {
     last_draft_save: Option<Instant>,
     /// The turn `poll` last saw, and when it began, known only when `poll` saw it working.
     turn: Option<TurnSeen>,
+    /// The phase waits for a snapshot read after the turn ended, until this time at the latest.
+    snapshot_due: Option<Instant>,
     /// The user pressed Finish setup, after a turn of the run said setup is complete.
     finished: bool,
     /// The recap opened and the record is gone, so nothing writes it again.
@@ -234,6 +244,8 @@ struct TurnSeen {
     /// `Run::current_turn_start` of the turn.
     start: usize,
     began: Option<NaiveDateTime>,
+    /// When `poll` first saw the turn not working, on the window's clock.
+    ended: Option<Instant>,
 }
 
 impl ProfileRun {
@@ -261,6 +273,7 @@ impl ProfileRun {
             last_draft_try: None,
             last_draft_save: None,
             turn: None,
+            snapshot_due: None,
             finished: false,
             cleared: false,
             held: false,
@@ -427,27 +440,47 @@ impl ProfileRun {
             self.start_failure = started.err();
         }
         self.send_path_a(desk);
-        let began = self.see_turn(desk, input.wall);
+        let began = self.see_turn(desk, input.wall, input.now);
+        let due = self.turn.as_ref().and_then(|seen| seen.ended).map(|ended| ended + SNAPSHOT_WAIT);
+        let read_since = |ended: Instant| !input.rereads || input.read_at.is_some_and(|read| read >= ended);
+        let settled = self.turn.as_ref().and_then(|seen| seen.ended).is_none_or(read_since) || due.is_some_and(|due| input.now >= due);
+        let mut waits = false;
         self.phase = if self.finished {
             ProfilePhase::Done
         } else if self.starting {
             ProfilePhase::Copying
         } else {
-            phase_of(self.run(desk), self.progress.path_a_sent, &self.folder, input.cv, input.without_pdfs, began)
+            let read = phase_of(self.run(desk), self.progress.path_a_sent, &self.folder, input.cv, input.without_pdfs, began, settled);
+            waits = read.waits;
+            read.phase
         };
+        self.snapshot_due = due.filter(|_| waits);
         self.save_draft_if_due(input.now);
     }
 
+    /// How long the phase still waits for a snapshot read after the turn ended, so the window can look again then even
+    /// with no input. `None` when it does not wait.
+    pub fn snapshot_wait(&self, now: Instant) -> Option<Duration> {
+        self.snapshot_due.map(|due| due.saturating_duration_since(now))
+    }
+
     /// When the run's current turn began, as far as this window saw. A turn first seen while it works began now, to the
-    /// second. One first seen after it ended, as after a restore, has no known start.
-    fn see_turn(&mut self, desk: &RunDesk, wall: NaiveDateTime) -> Option<NaiveDateTime> {
+    /// second. One first seen after it ended, as after a restore, has no known start. The turn's end is noted at `now`
+    /// the first time it is seen not working.
+    fn see_turn(&mut self, desk: &RunDesk, wall: NaiveDateTime, now: Instant) -> Option<NaiveDateTime> {
         let run = self.run(desk)?;
-        let start = run.current_turn_start();
+        let (start, busy) = (run.current_turn_start(), run.is_busy());
         if !self.turn.as_ref().is_some_and(|seen| seen.run == run.id && seen.start == start) {
-            let began = run.is_busy().then(|| wall.with_nanosecond(0).unwrap_or(wall));
-            self.turn = Some(TurnSeen { run: run.id.clone(), start, began });
+            let began = busy.then(|| wall.with_nanosecond(0).unwrap_or(wall));
+            self.turn = Some(TurnSeen { run: run.id.clone(), start, began, ended: None });
         }
-        self.turn.as_ref().and_then(|seen| seen.began)
+        let seen = self.turn.as_mut()?;
+        if busy {
+            seen.ended = None;
+        } else if seen.ended.is_none() {
+            seen.ended = Some(now);
+        }
+        seen.began
     }
 
     /// Jobdesk's one reply of its own. It goes when a turn that names Path A ended cleanly on its live session, with
@@ -684,54 +717,88 @@ fn gate(desk: &RunDesk, rules: &StartRules) -> Option<StartRefusal> {
     }
 }
 
+/// The phase a poll found, and whether it shows Claude working only while it waits for a snapshot read after the turn
+/// ended.
+struct PhaseRead {
+    phase: ProfilePhase,
+    waits: bool,
+}
+
+impl From<ProfilePhase> for PhaseRead {
+    fn from(phase: ProfilePhase) -> Self {
+        Self { phase, waits: false }
+    }
+}
+
 /// The phase `run` is in. `path_a_sent` says whether the documents path went, `root` is the job search folder, `cv`
-/// the snapshot's CV documents, `without_pdfs` holds when no CV can be built, and `turn_began` is when the current turn
-/// began, when it was seen beginning.
-pub fn phase_of(run: Option<&Run>, path_a_sent: bool, root: &Path, cv: &CvShelf, without_pdfs: bool, turn_began: Option<NaiveDateTime>) -> ProfilePhase {
-    let Some(run) = run else { return ProfilePhase::Documents };
+/// the snapshot's CV documents, `without_pdfs` holds when no CV can be built, `turn_began` is when the current turn
+/// began, when it was seen beginning, and `settled` says the snapshot was read after the turn ended, or need not be.
+fn phase_of(
+    run: Option<&Run>,
+    path_a_sent: bool,
+    root: &Path,
+    cv: &CvShelf,
+    without_pdfs: bool,
+    turn_began: Option<NaiveDateTime>,
+    settled: bool,
+) -> PhaseRead {
+    let Some(run) = run else { return ProfilePhase::Documents.into() };
     if run.needs_user() {
-        return ProfilePhase::Choice;
+        return ProfilePhase::Choice.into();
     }
     if run.is_busy() {
-        return if jobdesk_started_the_turn(run, path_a_sent) { ProfilePhase::Reading } else { ProfilePhase::Working };
+        return working(run, path_a_sent).into();
     }
     match &run.status {
-        RunStatus::Failed(reason) => return ProfilePhase::Stopped { reason: notice_text(reason).full },
-        RunStatus::Stopped => return ProfilePhase::Stopped { reason: YOU_STOPPED.to_owned() },
+        RunStatus::Failed(reason) => return ProfilePhase::Stopped { reason: notice_text(reason).full }.into(),
+        RunStatus::Stopped => return ProfilePhase::Stopped { reason: YOU_STOPPED.to_owned() }.into(),
         _ => {}
     }
     // A turn with no result in the run was cut off, by a quit or a crash. Whatever it said last, it never ended.
     if !run.has_turn_result() {
-        return ProfilePhase::Stopped { reason: STOPPED_PARTWAY.to_owned() };
+        return ProfilePhase::Stopped { reason: STOPPED_PARTWAY.to_owned() }.into();
     }
     let closed = run.status == RunStatus::Closed;
     if waits_for_path(run, path_a_sent) {
         // A live run is answered on this poll. One whose process ended waits for the user to pick it up.
-        return if closed { ProfilePhase::Stopped { reason: STOPPED_BEFORE_READING.to_owned() } } else { ProfilePhase::Reading };
+        return if closed { ProfilePhase::Stopped { reason: STOPPED_BEFORE_READING.to_owned() } } else { ProfilePhase::Reading }.into();
     }
-    at_turn_end(run, root, cv, without_pdfs, turn_began)
+    match at_turn_end(run, root, cv, without_pdfs, turn_began, settled) {
+        Some(phase) => phase.into(),
+        None => PhaseRead { phase: working(run, path_a_sent), waits: true },
+    }
+}
+
+/// What shows while Claude works: Reading on the turns Jobdesk started, Working on the user's.
+fn working(run: &Run, path_a_sent: bool) -> ProfilePhase {
+    if jobdesk_started_the_turn(run, path_a_sent) { ProfilePhase::Reading } else { ProfilePhase::Working }
 }
 
 /// The phase of a turn that ended cleanly with nothing open. A turn that asks numbered questions or proposes changes is
 /// never the end, whatever else it says. The CV check shows only for a turn whose message has no numbered items, so "The CV looks good." never answers
 /// questions or a proposal.
-fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool, turn_began: Option<NaiveDateTime>) -> ProfilePhase {
+///
+/// The CV check and the end of setup read the snapshot, which may predate the turn's last write. Unless `settled`, they
+/// wait: `None` while the CV check is in question or setup would end.
+fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool, turn_began: Option<NaiveDateTime>, settled: bool) -> Option<ProfilePhase> {
     let message = last_message(run).unwrap_or_default();
     match read_message(&message) {
-        Message::Proposal(batch) => return ProfilePhase::Review { message, batch },
-        Message::Questions(batch) => return ProfilePhase::Sheet { message, batch },
+        Message::Proposal(batch) => return Some(ProfilePhase::Review { message, batch }),
+        Message::Questions(batch) => return Some(ProfilePhase::Sheet { message, batch }),
         Message::Free => {}
     }
-    if !without_pdfs
-        && built_cv(run, root)
-        && let Some(pdf) = fresh_pdf(run, cv, turn_began)
-    {
-        return ProfilePhase::CvCheck { message, pdf };
+    let checks_cv = !without_pdfs && built_cv(run, root);
+    let complete = setup_complete(run, &message);
+    if !settled && (checks_cv || complete) {
+        return None;
     }
-    if setup_complete(run, &message) {
-        return ProfilePhase::Done;
+    if checks_cv && let Some(pdf) = fresh_pdf(run, cv, turn_began) {
+        return Some(ProfilePhase::CvCheck { message, pdf });
     }
-    ProfilePhase::FallbackSheet { message }
+    if complete {
+        return Some(ProfilePhase::Done);
+    }
+    Some(ProfilePhase::FallbackSheet { message })
 }
 
 /// Whether the turn closes on a question, as Tasks reads one. A run read back from its log reads as its turn ended.
@@ -987,6 +1054,8 @@ mod tests {
         rules_testing: bool,
         /// The local time each poll reads.
         wall: NaiveDateTime,
+        /// When the snapshot on show was read. `None` reads it on each poll, as a watcher that never lags would.
+        read_at: Option<Instant>,
     }
 
     fn today() -> NaiveDate {
@@ -1007,7 +1076,7 @@ mod tests {
         let shelf = Arc::new(Shelf::default());
         let copier = Arc::clone(&shelf) as Arc<dyn DocumentCopier>;
         let profile = ProfileRun::new(Arc::clone(&store) as Arc<dyn ProgressStore>, progress, PathBuf::from(ROOT), copier, Arc::new(|| {}), today());
-        Fixture { desk, script, store, shelf, profile, cv: CvShelf::default(), without_pdfs: false, rules_testing: false, wall: now() }
+        Fixture { desk, script, store, shelf, profile, cv: CvShelf::default(), without_pdfs: false, rules_testing: false, wall: now(), read_at: None }
     }
 
     fn fixture() -> Fixture {
@@ -1043,7 +1112,15 @@ mod tests {
         fn poll_at(&mut self, at: Instant) {
             let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
             let rules = StartRules { defaults: &defaults, cap: &cap, testing: self.rules_testing };
-            let input = PollInput { cv: &self.cv, without_pdfs: self.without_pdfs, rules, now: at, wall: self.wall };
+            let input = PollInput {
+                cv: &self.cv,
+                read_at: Some(self.read_at.unwrap_or(at)),
+                rereads: true,
+                without_pdfs: self.without_pdfs,
+                rules,
+                now: at,
+                wall: self.wall,
+            };
             self.desk.poll();
             self.profile.poll(&mut self.desk, &input);
         }
@@ -1139,7 +1216,15 @@ mod tests {
                 assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(2));
                 f.desk.poll();
-                let input = PollInput { cv: &cv, without_pdfs: false, rules: rules(&defaults, &cap), now: Instant::now(), wall: now() };
+                let input = PollInput {
+                    cv: &cv,
+                    read_at: Some(Instant::now()),
+                    rereads: true,
+                    without_pdfs: false,
+                    rules: rules(&defaults, &cap),
+                    now: Instant::now(),
+                    wall: now(),
+                };
                 f.profile.poll(&mut f.desk, &input);
             }
             let request = &f.script.borrow().requests[0];
@@ -1454,6 +1539,59 @@ mod tests {
         f.ends_turn();
         f.poll();
         assert_eq!(f.profile.phase(), &ProfilePhase::Done, "the CV check answered the turn that said setup is complete");
+    }
+
+    /// At the end of a turn that built the CV and said setup is complete, before any poll saw it end. The snapshot on
+    /// show was read at `read`, and holds no PDF.
+    fn complete_after_a_build(f: &mut Fixture, read: Instant) {
+        f.at(FIVE);
+        f.profile.send_answers(&mut f.desk, &[]).unwrap();
+        f.poll();
+        f.read_at = Some(read);
+        f.tool("b", "Bash", "cd cv && lualatex main_example.tex");
+        f.says(COMPLETE);
+        f.ends_turn();
+    }
+
+    /// The snapshot on show may predate the turn's last write, as when the watcher lags. Done, and the CV check that
+    /// comes before it, wait for a snapshot read after the turn ended, or for `SNAPSHOT_WAIT` at most.
+    #[test]
+    fn the_end_waits_for_a_snapshot_read_after_the_turn_ended() {
+        let base = Instant::now();
+        let mut f = fixture();
+        complete_after_a_build(&mut f, base);
+        f.poll_at(base + Duration::from_millis(10));
+        assert_eq!(f.profile.phase(), &ProfilePhase::Working, "the snapshot was read before the turn ended");
+        assert_eq!(f.profile.snapshot_wait(base + Duration::from_millis(10)), Some(SNAPSHOT_WAIT));
+        // The next snapshot, read after the turn ended, holds the PDF the turn built.
+        f.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(30));
+        f.read_at = Some(base + Duration::from_millis(20));
+        f.poll_at(base + Duration::from_millis(30));
+        assert!(matches!(f.profile.phase(), ProfilePhase::CvCheck { .. }), "{:?}", f.profile.phase());
+        assert_eq!(f.profile.snapshot_wait(base + Duration::from_millis(30)), None);
+
+        let mut late = fixture();
+        complete_after_a_build(&mut late, base);
+        late.poll_at(base + Duration::from_millis(10));
+        late.poll_at(base + Duration::from_millis(10) + SNAPSHOT_WAIT - Duration::from_millis(1));
+        assert_eq!(late.profile.phase(), &ProfilePhase::Working);
+        late.poll_at(base + Duration::from_millis(10) + SNAPSHOT_WAIT);
+        assert_eq!(late.profile.phase(), &ProfilePhase::Done, "never longer than SNAPSHOT_WAIT");
+    }
+
+    /// With no worker to read the folder again, the snapshot on show is the newest, and the end comes at once.
+    #[test]
+    fn with_no_worker_to_read_again_the_end_comes_at_once() {
+        let base = Instant::now();
+        let mut f = fixture();
+        complete_after_a_build(&mut f, base);
+        f.desk.poll();
+        let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
+        let rules = StartRules { defaults: &defaults, cap: &cap, testing: false };
+        let at = base + Duration::from_millis(10);
+        let input = PollInput { cv: &f.cv, read_at: Some(base), rereads: false, without_pdfs: false, rules, now: at, wall: f.wall };
+        f.profile.poll(&mut f.desk, &input);
+        assert_eq!(f.profile.phase(), &ProfilePhase::Done);
     }
 
     #[test]

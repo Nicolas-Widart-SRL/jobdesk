@@ -228,6 +228,8 @@ The chapter shows the first of these that holds:
 4. the end of setup, when the turn does not close on a question and its message says "Setup complete", as `/setup`'s closing summary opens, or the turn answers "The CV looks good." after an earlier turn said so. A "Setup complete" that closes on a question, such as an offer to compile the CV, waits on the user's answer;
 5. the fallback sheet otherwise: the message beside one field.
 
+The CV check and the end of setup read the workspace snapshot, which may predate the turn's last write. So when either is in question, the card keeps showing Claude at work until a snapshot read after the turn ended arrives, 2 seconds at most, and decides from that one.
+
 The end of setup opens the recap, which removes the progress record. A fallback sheet shows a Finish setup link once any top-level message of the run said setup is complete, as when the user asked for a change after it. Only the user's press on it ends setup there, and it sends nothing.
 
 The sheet and the review card show the whole message, its blocks in order, with each numbered item where Claude put it, from `Batch::blocks`. The review card leaves out a proposal's closing paragraph, the one that asks to apply, because the boxes build that reply.

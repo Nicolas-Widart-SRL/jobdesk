@@ -3,6 +3,8 @@
 
 use std::process::Command;
 
+use crate::shared_kernel::process_tree::no_window;
+
 /// The variable that tells the child which test it runs.
 const CHILD: &str = "JOBDESK_TEST_IN_CHILD";
 
@@ -15,11 +17,10 @@ pub fn in_child(module: &str, name: &str, body: impl FnOnce()) {
         body();
         return;
     }
-    let output = Command::new(std::env::current_exe().expect("the test binary"))
-        .args([test.as_str(), "--exact", "--test-threads=1"])
-        .env(CHILD, &test)
-        .output()
-        .expect("the child test runs");
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    command.args([test.as_str(), "--exact", "--test-threads=1"]).env(CHILD, &test);
+    no_window(&mut command);
+    let output = command.output().expect("the child test runs");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success() && stdout.contains("1 passed"), "{test} in its own process:\n{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
 }

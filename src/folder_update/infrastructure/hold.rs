@@ -24,8 +24,9 @@ pub enum Open {
     /// stays open.
     Held(File),
     /// The folder could not be held, and nothing may write it until it is. `Updating` when another Jobdesk holds it
-    /// alone, to update, undo or roll it back now. `Unlockable` when the lock file is a link, not a file, or does not
-    /// open or lock for any other reason: then nothing updates the folder.
+    /// alone, to update, undo or roll it back now. `Unlockable` when `.jobdesk` cannot be looked at, or the lock file is
+    /// a link, not a file, or does not open or lock for any other reason: then this Jobdesk holds nothing, though
+    /// another Jobdesk might still hold the folder.
     KeptOut(FolderWait),
     /// Nothing is to be held: the folder has no `.jobdesk` folder, or one that is a link or not a folder, so no update,
     /// Undo or rollback ever runs in it.

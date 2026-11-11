@@ -434,9 +434,10 @@ impl FolderUpdate {
 
     /// Why the folder's writers wait on the folder update, if they do: `Updating` while this Jobdesk's worker, or
     /// another Jobdesk that holds the folder alone, updates, undoes or rolls it back, and `Unlockable` while this
-    /// Jobdesk cannot lock the folder for any other reason, when nothing updates it. Meanwhile the caller starts no
-    /// task and sends no reply, and every other writer of the folder, Test connection, Restart to update and Change
-    /// folder wait, each saying why.
+    /// Jobdesk cannot lock the folder or look at its `.jobdesk` for any other reason, when this Jobdesk holds nothing.
+    /// On either, the caller starts no task and sends no reply, and every other writer of the folder and Test
+    /// connection wait, each saying why. Restart to update and Change folder wait only on `Updating`: on `Unlockable`
+    /// they are the ways out.
     pub fn folder_wait(&self) -> Option<FolderWait> {
         if self.working { Some(FolderWait::Updating) } else { self.kept_out.map(|(_, wait)| wait) }
     }

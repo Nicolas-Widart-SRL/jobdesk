@@ -323,7 +323,7 @@ mod tests {
         fs::write(&lock, b"").unwrap();
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o000)).unwrap();
         let disk = DiskFolder::default();
-        assert_eq!(disk.open(folder.path()), Some(FolderWait::Unlockable), "kept out, though nothing updates it");
+        assert_eq!(disk.open(folder.path()), Some(FolderWait::Unlockable), "kept out, though this Jobdesk holds nothing");
         assert_eq!(disk.hold_again(folder.path()), Some(FolderWait::Unlockable), "and still while it does not open");
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(disk.hold_again(folder.path()), None, "held once it opens");

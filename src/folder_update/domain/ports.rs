@@ -69,9 +69,10 @@ pub trait FolderUpdater: Send + Sync {
     /// folder whose `.jobdesk` is not there is held by nothing, and nothing is made in it.
     ///
     /// Returns why it is kept out, if it is, so this one cannot hold the folder open now: `Updating` while another
-    /// Jobdesk holds it alone, to update, undo or roll it back, and `Unlockable` while the lock does not open or lock for
-    /// any other reason. Only a folder with no `.jobdesk` folder, where no update ever runs, is never kept out. While it
-    /// is kept out, nothing may write the folder until `hold_again` takes the hold.
+    /// Jobdesk holds it alone, to update, undo or roll it back, and `Unlockable` while `.jobdesk` cannot be looked at or
+    /// the lock does not open or lock for any other reason. Only a folder with no `.jobdesk` folder, or one that is a link
+    /// or a file, where no update ever runs, is never kept out. While it is kept out, nothing may write the folder until
+    /// `hold_again` takes the hold.
     fn open(&self, folder: &Path) -> Option<FolderWait>;
     /// Tries again to hold `folder` open, after `open` or the end of an update, Undo or rollback of this Jobdesk's own
     /// found it kept out. Returns why it is still kept out, if it is. `None` when `folder` is not the one open, or when

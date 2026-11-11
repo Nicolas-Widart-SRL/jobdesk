@@ -647,8 +647,8 @@ impl Shell {
 
     /// A running task keeps its folder: a new one would replace the desk and drop the task's live session. A folder
     /// update keeps it too, so its notice and Undo stay with the folder it changed, and so does another Jobdesk's that
-    /// holds the folder alone. A folder Jobdesk cannot lock keeps nothing: nothing holds it, and another folder is the
-    /// way out.
+    /// holds the folder alone. A folder Jobdesk cannot lock keeps nothing: this Jobdesk holds nothing there, and another
+    /// folder is the way out.
     fn folder_locked(&self) -> bool {
         self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.folder_wait() == Some(FolderWait::Updating)
     }
@@ -780,7 +780,7 @@ impl Shell {
     fn folder_wait(&self) -> Option<&'static str> {
         match self.folder_update.folder_wait() {
             Some(FolderWait::Updating) => Some(FOLDER_WAITS),
-            // Nothing holds a folder Jobdesk cannot lock, and another folder is the way out.
+            // This Jobdesk holds nothing in a folder it cannot lock, and another folder is the way out.
             Some(FolderWait::Unlockable) | None => self.folder_locked().then_some(FOLDER_BUSY),
         }
     }
@@ -1042,7 +1042,7 @@ impl Shell {
 
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
-        // A folder Jobdesk cannot lock holds nothing, so a fixed Jobdesk may apply.
+        // This Jobdesk holds nothing in a folder it cannot lock, so a fixed Jobdesk may apply.
         restart_wait(self.session_state()).or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
     }
 
@@ -3243,8 +3243,8 @@ mod tests {
     }
 
     /// A lock file that does not open, here a link planted where it goes, keeps every writer waiting as another
-    /// Jobdesk's update does, but nothing is updating: each says that Jobdesk cannot lock the folder, never that it
-    /// updates it. Nothing is written through the link.
+    /// Jobdesk's update does, but this Jobdesk holds nothing: each says that Jobdesk cannot lock the folder, never that
+    /// it updates it. Nothing is written through the link.
     #[cfg(unix)]
     #[test]
     fn every_writer_waits_and_says_so_while_the_folder_lock_does_not_open() {
@@ -3269,7 +3269,7 @@ mod tests {
         assert_eq!(shell.desk.as_ref().unwrap().folder_wait(), Some(FolderWait::Unlockable), "the launcher and the reply say so");
         assert!(!outside.path().join("planted").exists(), "nothing is written through the link");
 
-        // Nothing holds the folder, so the ways out stay open: Restart to update, and Change folder.
+        // This Jobdesk holds nothing, so the ways out stay open: Restart to update, and Change folder.
         assert_eq!((shell.restart_wait(), shell.folder_wait()), (None, None));
         shell.updates = ready_updates();
         assert!(restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close), "Restart to update goes");

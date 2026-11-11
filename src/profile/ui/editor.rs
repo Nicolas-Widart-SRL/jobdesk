@@ -32,7 +32,8 @@ const FOLDER_UPDATE: EditorBusy = EditorBusy {
     why: "Jobdesk is updating your job search folder and may change this file. Save once it ends.",
     line: "Jobdesk is updating your job search folder, so Save waits until it ends. Your text stays here.",
 };
-/// Why Save waits, the same two ways, while Jobdesk cannot lock the job search folder. Nothing updates it then.
+/// Why Save waits, the same two ways, while Jobdesk cannot lock the job search folder. This Jobdesk holds nothing then,
+/// though another might hold the folder.
 const FOLDER_UNLOCKABLE: EditorBusy = EditorBusy { why: UNLOCKABLE, line: UNLOCKABLE };
 const SAVE_OVER: &str = "Save mine over it";
 /// The discard ask's width, as End session's popover has.

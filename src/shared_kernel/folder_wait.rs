@@ -7,11 +7,12 @@
 pub enum FolderWait {
     /// Jobdesk updates the folder, undoes its update or rolls one back: this Jobdesk, or another that holds it alone.
     Updating,
-    /// Jobdesk cannot lock the folder: its lock file, `.jobdesk/.open`, does not open or lock, for a reason other than
-    /// another Jobdesk's update, such as a link in its place or its permissions. Nothing updates the folder.
+    /// Jobdesk cannot lock the folder: its `.jobdesk` cannot be looked at, or its lock file, `.jobdesk/.open`, does not
+    /// open or lock, for a reason other than another Jobdesk's update, such as a link in its place or its permissions.
+    /// This Jobdesk holds nothing, so it updates nothing. Another Jobdesk might still hold the folder.
     Unlockable,
 }
 
 /// What the notice and every waiting writer say while Jobdesk cannot lock the folder, with the ways out: Change folder
-/// and Restart to update never wait on it, since nothing holds the folder. Plain text, never Markdown.
+/// and Restart to update never wait on it, since this Jobdesk holds nothing. Plain text, never Markdown.
 pub const UNLOCKABLE: &str = "Jobdesk cannot lock your job search folder, so tasks and saves wait. Open another folder, or check that this one can be written.";

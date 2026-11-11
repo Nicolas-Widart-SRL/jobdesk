@@ -51,9 +51,14 @@ pub trait ZipFetcher: Send + Sync {
     fn clear_leftovers(&self);
 }
 
-/// Updates, recovers and undoes a folder on the disk. Every call but `can_undo` writes the folder: none may run while
-/// a task or a Claude session is open.
+/// Updates, recovers and undoes a folder on the disk. `recover`, `update` and `undo` write the folder: none may run while
+/// a task or a Claude session is open. Each holds the folder alone, so each is `Busy` while another Jobdesk has it open.
 pub trait FolderUpdater: Send + Sync {
+    /// `folder` opened in this Jobdesk: it holds the folder open, alongside any other Jobdesk that has it open, until
+    /// another folder opens or Jobdesk quits, and lets go of the folder it held before. While it holds a folder, another
+    /// Jobdesk's `recover`, `update` and `undo` of it are `Busy`, and its own let go of the hold while they run. A
+    /// folder whose `.jobdesk` is not there is held by nothing, and nothing is made in it.
+    fn open(&self, folder: &Path);
     /// Rolls back an update of `folder` that stopped midway. `None` when none did.
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError>;
     /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`.

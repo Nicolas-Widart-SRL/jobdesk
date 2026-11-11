@@ -1,7 +1,7 @@
 //! Runs a folder update on the disk, and undoes it.
 //!
-//! An update holds the lock of the folder's `.jobdesk` from start to end, so two Jobdesks never update one folder at
-//! once. It writes every new file into a hidden staging folder beside the job search folder, on the same disk, and
+//! An update holds the folder's lock, `.jobdesk/.open`, alone from start to end, so it runs only while no other
+//! Jobdesk has the folder open, and two Jobdesks never update one folder at once: see `hold`. It writes every new file into a hidden staging folder beside the job search folder, on the same disk, and
 //! copies the original of every file it replaces or deletes, and the old base, into a backup there too. Only then does
 //! it touch the folder: the backup takes the place of the last update's in `.jobdesk/backup`, the journal is written,
 //! and each staged file is renamed into place. Anything that fails before the first rename leaves the folder as it was;
@@ -14,17 +14,17 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 
 use crate::folder_update::domain::{Action, Plan, Report, Reverted, Update, UpdateError};
 use crate::folder_update::infrastructure::disk::{Found, exists, is_real_dir, joined, look, remove, sync_dir, write_new};
+use crate::folder_update::infrastructure::hold::hold_alone;
 use crate::folder_update::infrastructure::journal::{self, BACKUP, FILES, JOURNAL, Journal, Op, RECORD};
 use crate::folder_update::infrastructure::planner::plan;
 use crate::shared_kernel::installed_source::{self, InstalledSource, sha256_hex};
-use crate::shared_kernel::own_folder::{LOCK, lock_folder};
 
 /// Where `recover` sets aside, in `.jobdesk`, a journal it could not roll back in full or could not read.
 const STOPPED: &str = "update-stopped.json";
@@ -62,7 +62,7 @@ pub fn update(folder: &Path, update: &Update) -> Result<Report, UpdateError> {
 /// `update`, with `hook` heard at each `Moment`. An error from it fails the update there.
 pub fn update_with(folder: &Path, update: &Update, hook: &mut dyn FnMut(Moment) -> io::Result<()>) -> Result<Report, UpdateError> {
     let jobdesk = jobdesk_of(folder)?;
-    let _lock = lock(&jobdesk)?;
+    let _alone = hold_alone(&jobdesk)?;
     if exists(&jobdesk.join(JOURNAL)) {
         return Err(UpdateError::Interrupted);
     }
@@ -90,7 +90,7 @@ pub fn recover(folder: &Path) -> Result<Option<Reverted>, UpdateError> {
     if !is_real_dir(&jobdesk) {
         return Ok(None);
     }
-    let _lock = lock(&jobdesk)?;
+    let _alone = hold_alone(&jobdesk)?;
     clear_stagings(folder);
     let journal = match journal::read(&jobdesk.join(JOURNAL)) {
         Ok(Some(journal)) => journal,
@@ -132,7 +132,7 @@ pub fn can_undo(folder: &Path) -> bool {
 /// only" allows.
 pub fn undo(folder: &Path) -> Result<Reverted, UpdateError> {
     let jobdesk = jobdesk_of(folder)?;
-    let _lock = lock(&jobdesk)?;
+    let _alone = hold_alone(&jobdesk)?;
     if exists(&jobdesk.join(JOURNAL)) {
         return Err(UpdateError::Interrupted);
     }
@@ -217,14 +217,6 @@ fn set_aside(jobdesk: &Path) -> Result<(), UpdateError> {
 fn jobdesk_of(folder: &Path) -> Result<PathBuf, UpdateError> {
     let jobdesk = folder.join(installed_source::DIR);
     if is_real_dir(&jobdesk) { Ok(jobdesk) } else { Err(UpdateError::NoBase) }
-}
-
-/// Locks `jobdesk` for as long as the returned file stays open. Another Jobdesk that holds it is `Busy`.
-fn lock(jobdesk: &Path) -> Result<File, UpdateError> {
-    if fs::symlink_metadata(jobdesk.join(LOCK)).is_ok_and(|meta| !meta.is_file()) {
-        return Err(UpdateError::Disk);
-    }
-    lock_folder(jobdesk).map_err(|error| if error.kind() == io::ErrorKind::WouldBlock { UpdateError::Busy } else { UpdateError::Disk })
 }
 
 /// Every file the plan writes or deletes, then the new base, in the order the update does them.
@@ -435,7 +427,7 @@ fn staging_prefix(folder: &Path) -> Option<String> {
     Some(format!(".{}.jobdesk-update-", folder.file_name()?.to_str()?))
 }
 
-/// Removes the staging folders of updates of `folder` left beside it. Only while the folder's lock is held: then no
+/// Removes the staging folders of updates of `folder` left beside it. Only while the folder's lock is held alone: then no
 /// other Jobdesk is updating it, so none of them is in use. Links are removed, never followed. A stopped update's
 /// staging folder may hold the backup of the update before it, which goes with it: see `recover`.
 fn clear_stagings(folder: &Path) {
@@ -479,10 +471,12 @@ impl Staging {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs::File;
     use std::panic::{self, AssertUnwindSafe};
 
     use super::*;
     use crate::folder_update::domain::{Release, SideCopy, SkipReason, Skipped};
+    use crate::folder_update::infrastructure::hold::hold_open;
     use crate::shared_kernel::release_zip::fixtures::{Entry, zip_of};
 
     const OLD: &str = "1.7.5";
@@ -553,7 +547,7 @@ mod tests {
                 } else if kind.is_dir() {
                     found.insert(format!("{name}/"), Vec::new());
                     walk(root, &path, found);
-                } else if name != ".jobdesk/.lock" {
+                } else if name != ".jobdesk/.open" {
                     found.insert(name, fs::read(&path).unwrap());
                 }
             }
@@ -1041,8 +1035,10 @@ mod tests {
 
         let mut fixture = Fixture::edited();
         let serve = Arc::new(Serve(Mutex::new((fixture.new.clone(), 0))));
-        let disk = Arc::new(DiskFolder);
+        let disk = Arc::new(DiskFolder::default());
         let mut desk = FolderUpdate::new(disk.clone(), disk.clone(), serve.clone(), disk, "0.2.0", Arc::new(|| {}));
+        // This Jobdesk holds the folder open, which keeps out only other Jobdesks.
+        desk.opened(fixture.folder.clone());
         let jobdesk = Version::parse("0.2.0").unwrap();
         let feed = |version: &str, sha256: &str| LatestFeed::for_tests(jobdesk, Some(SourcePin::parse(version, sha256).unwrap()));
         let settle = |desk: &mut FolderUpdate| {
@@ -1177,11 +1173,30 @@ mod tests {
     fn a_second_jobdesk_is_busy() {
         let fixture = Fixture::edited();
         let before = tree(&fixture.folder);
-        let _held = lock_folder(&fixture.jobdesk()).unwrap();
+        let _held = hold_alone(&fixture.jobdesk()).unwrap();
         assert_eq!(fixture.run(), Err(UpdateError::Busy));
         assert_eq!(undo(&fixture.folder), Err(UpdateError::Busy));
         assert_eq!(recover(&fixture.folder), Err(UpdateError::Busy));
         assert_eq!(tree(&fixture.folder), before);
+    }
+
+    /// Another Jobdesk that has the folder open holds its lock shared, as a second handle of the lock file does here:
+    /// its tasks, Profile's Save and portal changes may write the folder at any moment, so nothing updates, undoes or
+    /// rolls it back meanwhile.
+    #[test]
+    fn a_folder_another_jobdesk_has_open_is_busy() {
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        let other = File::options().read(true).write(true).create(true).truncate(false).open(fixture.jobdesk().join(".open")).unwrap();
+        other.lock_shared().unwrap();
+        assert!(hold_open(&fixture.folder).is_some(), "a Jobdesk opens it beside the other");
+        let before = tree(&fixture.folder);
+        assert_eq!(fixture.run(), Err(UpdateError::Busy));
+        assert_eq!(undo(&fixture.folder), Err(UpdateError::Busy));
+        assert_eq!(recover(&fixture.folder), Err(UpdateError::Busy));
+        assert_eq!(tree(&fixture.folder), before);
+        drop(other);
+        assert!(undo(&fixture.folder).is_ok(), "once it has closed the folder");
     }
 
     #[test]

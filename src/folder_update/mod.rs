@@ -23,7 +23,7 @@ use crate::shared_kernel::https::HttpsTransport;
 /// No update, undo or rollback may run while a task or a Claude session is open: see `FolderUpdate`.
 pub fn folder_update(data: &Path, current: &str, repaint: Arc<dyn Fn() + Send + Sync>) -> FolderUpdate {
     let fetcher = HttpsFetcher::new(Arc::new(HttpsTransport::new(current)), data.join("onboarding"));
-    let folder = Arc::new(DiskFolder);
+    let folder = Arc::new(DiskFolder::default());
     FolderUpdate::new(folder.clone(), folder.clone(), Arc::new(fetcher), folder, current, repaint)
 }
 

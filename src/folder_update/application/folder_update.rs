@@ -232,10 +232,12 @@ impl FolderUpdate {
         &self.stage
     }
 
-    /// `folder` opened as the job search folder: its rollback is due, and what the notice, Undo and About said was of
+    /// `folder` opened as the job search folder: this Jobdesk holds it open until the next open, so no other Jobdesk
+    /// updates, undoes or rolls it back meanwhile, its rollback is due, and what the notice, Undo and About said was of
     /// the last folder, so it goes. Call it at every open, a launch's, a switch's and first-run setup's hand-over, and
     /// open no folder while `is_working`.
     pub fn opened(&mut self, folder: PathBuf) {
+        self.ports.updater.open(&folder);
         self.folder = Some(folder);
         self.recover_due = true;
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
@@ -660,6 +662,9 @@ mod tests {
     }
 
     impl FolderUpdater for Fake {
+        fn open(&self, folder: &Path) {
+            self.note(format!("open {}", folder.display()));
+        }
         fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
             self.note("recover".into());
             self.recover.clone()
@@ -971,8 +976,9 @@ mod tests {
         assert_eq!(fake.asked(), ["clear"], "no folder is open, so nothing runs");
 
         desk.opened(PathBuf::from(FOLDER));
+        assert_eq!(fake.asked(), ["clear", "open /Users/sam/Job search"], "the open holds the folder at once");
         follow(&mut desk, Some((1, &feed)), false);
-        assert_eq!(fake.asked(), ["clear"], "not while a task or a session is open");
+        assert_eq!(fake.asked(), ["clear", "open /Users/sam/Job search"], "nothing runs while a task or a session is open");
         follow(&mut desk, None, true);
         assert_eq!((rollbacks(&fake), passes(&fake)), (1, 0), "the rollback runs at the open, with no feed");
         follow(&mut desk, None, true);

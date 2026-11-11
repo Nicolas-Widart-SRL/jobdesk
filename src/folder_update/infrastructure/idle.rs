@@ -38,6 +38,8 @@ impl ZipFetcher for IdleFolder {
 }
 
 impl FolderUpdater for IdleFolder {
+    fn open(&self, _folder: &Path) {}
+
     fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
         Ok(None)
     }

@@ -169,7 +169,8 @@ fn front_matter(bytes: &[u8]) -> FrontMatter {
 /// quotes around the key are gone. Its value loses a trailing comment, a space or tab then `#` and all after it, then
 /// spaces and tabs around it, one pair of matching quotes, and spaces and tabs around what they held. A value that is
 /// then empty, or holds a character outside printable ASCII, is not known, nor is one that was in no pair of quotes and
-/// starts as no plain YAML text does.
+/// starts as no plain YAML text does, nor is one in double quotes that holds a backslash, because YAML reads an escape
+/// there and this recovery does not decode it. Inside single quotes a backslash is itself, so it stays in the name.
 fn raw_names(block: &[&str]) -> (Vec<String>, bool) {
     let mut names = Vec::new();
     let mut unknown = false;
@@ -181,7 +182,8 @@ fn raw_names(block: &[&str]) -> (Vec<String>, bool) {
         let value = blank_trimmed(uncommented(value));
         let quoted = unquoted(value).len() != value.len();
         let name = blank_trimmed(unquoted(value));
-        if name.is_empty() || !printable_ascii(name) || (!quoted && starts_as_no_plain_text(name)) {
+        let escaped = value.starts_with('"') && quoted && name.contains('\\');
+        if name.is_empty() || !printable_ascii(name) || escaped || (!quoted && starts_as_no_plain_text(name)) {
             unknown = true;
         } else {
             names.push(name.to_owned());
@@ -302,7 +304,7 @@ fn doubtful_command_files(files: &Files) -> impl Iterator<Item = (&str, &str, Do
 }
 
 /// What a `name` line in front matter in doubt gives when its name is not known, worded to follow "gives a name:".
-const NOT_KNOWN_IN_DOUBT: &str = "with no value on its line, one outside printable ASCII, or one out of quotes that starts with a YAML indicator, such as [, { or >, and so is no plain text";
+const NOT_KNOWN_IN_DOUBT: &str = "with no value on its line, one outside printable ASCII, one with an escape in double quotes, or one out of quotes that starts with a YAML indicator, such as [, { or >, and so is no plain text";
 
 /// One line for each skill whose `name:` is not plain, non-empty text in printable ASCII, and for each skill or command
 /// file in doubt with a `name` line whose name is not known: it could be any command, so the check fails.
@@ -844,6 +846,8 @@ fn a_name_line_in_doubt_with_no_known_value_fails_the_check() {
         &b"---\nname: 'add-template\ndescription: [unclosed\n---\n"[..],
         &b"---\nname: \"add-template\" x\ndescription: [unclosed\n---\n"[..],
         &b"---\nname: ? add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: \"add\\x2dtemplate\"\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: \"x\\\"y\"\ndescription: [unclosed\n---\n"[..],
     ] {
         assert!(
             matches!(front_matter(bytes), FrontMatter::Doubtful(Doubt { unknown_name: true, .. })),
@@ -871,6 +875,7 @@ fn a_name_line_in_doubt_with_plain_text_is_a_known_name() {
         (&b"---\nname: -add-template\ndescription: [unclosed\n---\n"[..], "-add-template"),
         (&b"---\nname: ?add-template\ndescription: [unclosed\n---\n"[..], "?add-template"),
         (&b"---\nname: add-[template]\ndescription: [unclosed\n---\n"[..], "add-[template]"),
+        (&b"---\nname: 'add\\template'\ndescription: [unclosed\n---\n"[..], "add\\template"),
     ] {
         assert!(
             matches!(front_matter(bytes), FrontMatter::Doubtful(Doubt { ref names, unknown_name: false, .. }) if names == &[name.to_owned()]),

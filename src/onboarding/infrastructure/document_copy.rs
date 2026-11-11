@@ -136,8 +136,9 @@ fn clear_stray_parts(folder: &Path, claims: &Path) {
 
 /// Gives the copy in `part` its name, `name` or the first free numbered one, in one step and never over a file. `link`
 /// makes the name a hard link to the part file. Once it fails for any reason but a taken name, as on a disk without
-/// hard links, every name is tried with `rename` instead. When that fails too for any reason but a taken name, the
-/// disk is refused: a file the bytes were copied into would sit under its real name while it fills.
+/// hard links, every name is tried with `rename` instead. When the disk cannot do that rename either, the disk is
+/// refused: a file the bytes were copied into would sit under its real name while it fills. Any other failure, such as
+/// a refused permission or a full disk, is the copy failing. Either way the caller removes the part file.
 fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: Naming, rename: Naming) -> Result<String, CopyFailure> {
     let mut linking = true;
     for number in 1..=MAX_NUMBER {
@@ -161,11 +162,22 @@ fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: Nami
                 return Err(CopyFailure::NoDocumentsFolder);
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(_) if !linking => return Err(CopyFailure::UnsafeDisk),
+            Err(error) if !linking && cannot_rename_exclusively(&error) => return Err(CopyFailure::UnsafeDisk),
             Err(_) => return Err(CopyFailure::Failed),
         }
     }
     Err(CopyFailure::NoFreeName)
+}
+
+/// Whether a failed rename says the disk cannot rename without writing over a file: `renamex_np` gives `ENOTSUP`,
+/// `EINVAL` or `ENOSYS` for a disk or a system without `RENAME_EXCL`, and a system with no such rename at all gives
+/// `Unsupported`. A refused permission, a full disk or a failed read is not that.
+fn cannot_rename_exclusively(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    if let Some(code) = error.raw_os_error() {
+        return [libc::ENOTSUP, libc::EOPNOTSUPP, libc::EINVAL, libc::ENOSYS].contains(&code);
+    }
+    error.kind() == ErrorKind::Unsupported
 }
 
 /// Renames `from` to `to` in one step, with `renamex_np` and `RENAME_EXCL`, which fails when `to` exists, a link
@@ -578,6 +590,61 @@ mod tests {
             }
         }
         assert_eq!(CopyFailure::UnsafeDisk.line(), "This disk cannot take the copy safely. Choose a job search folder on your Mac's own disk.");
+    }
+
+    /// A stand-in for a rename that refuses a taken name, on any system, for the tests.
+    fn rename_unless_taken(from: &Path, to: &Path) -> io::Result<()> {
+        if fs::symlink_metadata(to).is_ok() { Err(io::Error::from(ErrorKind::AlreadyExists)) } else { fs::rename(from, to) }
+    }
+
+    /// The copy of `cv.pdf` beside a `cv.pdf` already there, on a disk without hard links whose rename is `rename`.
+    /// Gives what the copy said, and the subfolder's names after it.
+    fn copy_renaming(rename: Naming) -> (Result<String, CopyFailure>, Vec<String>) {
+        let (_root, folder, desktop) = places();
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        fs::write(cv_folder(&folder).join("cv.pdf"), b"the one already there").unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
+        let copied = FileCopier { rename, ..linkless(&folder) }.copy(&desktop.join("cv.pdf"), &folder, Cv);
+        (copied, names(&cv_folder(&folder)))
+    }
+
+    /// Only a rename the disk cannot do without writing over a file refuses the disk. A taken name gets the next
+    /// number, and any other failure is the copy failing, with its part file removed.
+    #[test]
+    fn only_a_rename_the_disk_cannot_do_refuses_the_disk() {
+        let (copied, names) = copy_renaming(rename_unless_taken);
+        assert_eq!((copied.as_deref(), names.as_slice()), (Ok("cv (2).pdf"), ["cv (2).pdf".to_owned(), "cv.pdf".to_owned()].as_slice()));
+        let (copied, names) = copy_renaming(|_, _| Err(io::Error::from(ErrorKind::Unsupported)));
+        assert_eq!((copied, names), (Err(CopyFailure::UnsafeDisk), vec!["cv.pdf".to_owned()]), "no fallback on this system");
+        let (copied, names) = copy_renaming(|_, _| Err(io::Error::from(ErrorKind::PermissionDenied)));
+        assert_eq!((copied, names), (Err(CopyFailure::Failed), vec!["cv.pdf".to_owned()]), "a refused write is the copy failing");
+    }
+
+    /// The errors `renamex_np` gives for a disk that cannot rename without writing over a file refuse the disk. Any
+    /// other, such as a refused permission, a full disk or a failed read, is the copy failing.
+    #[cfg(unix)]
+    #[test]
+    fn the_rename_errors_of_a_disk_that_cannot_refuse_it_and_others_fail_the_copy() {
+        let unsafe_disk: [Naming; 4] = [
+            |_, _| Err(io::Error::from_raw_os_error(libc::ENOTSUP)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::EINVAL)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::ENOSYS)),
+        ];
+        for rename in unsafe_disk {
+            let (copied, names) = copy_renaming(rename);
+            assert_eq!((copied, names), (Err(CopyFailure::UnsafeDisk), vec!["cv.pdf".to_owned()]));
+        }
+        let failed: [Naming; 4] = [
+            |_, _| Err(io::Error::from_raw_os_error(libc::EACCES)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::EPERM)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::ENOSPC)),
+            |_, _| Err(io::Error::from_raw_os_error(libc::EIO)),
+        ];
+        for rename in failed {
+            let (copied, names) = copy_renaming(rename);
+            assert_eq!((copied, names), (Err(CopyFailure::Failed), vec!["cv.pdf".to_owned()]), "no part file is left");
+        }
     }
 
     #[cfg(unix)]

@@ -29,8 +29,9 @@ pub enum Stage {
     Done { folder: PathBuf, version: String },
     /// The Computer step: each helper's line, in `HELPERS` order, and what runs now.
     Computer { folder: PathBuf, lines: [HelperLine; 3], work: Work },
-    /// The Folder and Computer steps are done: the folder opens as the job search.
-    Finished { folder: PathBuf },
+    /// The Folder and Computer steps are done: the folder opens, and the Profile chapter follows. `without_pdfs` holds
+    /// when the user went on without LaTeX this time.
+    Finished { folder: PathBuf, without_pdfs: bool },
 }
 
 /// Where one helper stands on the Computer step.
@@ -162,8 +163,8 @@ impl Onboarding {
         }
     }
 
-    /// Continue setup, on the welcome back: the Computer step, as the record is cleared once it is done. A folder that
-    /// no longer holds ai-job-search starts the Folder step again on it.
+    /// Continue setup, on the welcome back: the Computer step, or once it is done the Profile chapter, whose run picks
+    /// up where it stood. A folder that no longer holds ai-job-search starts the Folder step again on it.
     pub fn resume(&mut self) {
         if self.stage != Stage::Welcome {
             return;
@@ -172,6 +173,11 @@ impl Onboarding {
         if !self.progress.is_done(Step::Folder) || self.ports.unpacker.look(&folder) != Contents::AiJobSearch {
             self.progress.done.clear();
             return self.look_at(folder);
+        }
+        if self.progress.is_done(Step::Computer) {
+            // Whether LaTeX was left out is the tool check's to say on this open.
+            self.stage = Stage::Finished { folder, without_pdfs: false };
+            return;
         }
         self.check_helpers(folder);
     }
@@ -278,10 +284,10 @@ impl Onboarding {
         }
     }
 
-    /// Continue, once every helper works: the Computer step is done. Continue without PDFs, when only LaTeX does not
-    /// work, ends it too, with LaTeX left out, which the tool check then finds missing. For now the record is then
-    /// cleared, as nothing follows these steps yet.
-    pub fn finish(&mut self, without_pdfs: bool) {
+    /// Continue, once every helper works: the Computer step is done, and the record says so, so the Profile chapter
+    /// follows, now or at the next open. Continue without PDFs, when only LaTeX does not work, ends it too, with LaTeX
+    /// left out, which the tool check then finds missing.
+    pub fn finish(&mut self, without_pdfs: bool, today: NaiveDate) {
         let Stage::Computer { folder, lines, work: Work::Idle } = &self.stage else { return };
         let ready = |helper: Helper| HELPERS.into_iter().zip(lines).any(|(each, line)| each == helper && line.ready());
         let may = if without_pdfs { ready(Helper::Python) && ready(Helper::Bun) && !ready(Helper::Latex) } else { lines.iter().all(|line| line.ready()) };
@@ -289,9 +295,9 @@ impl Onboarding {
             return;
         }
         let folder = folder.clone();
-        // A record that cannot be removed costs only a welcome back at the next open, which checks the helpers again.
-        let _ = self.store.clear();
-        self.stage = Stage::Finished { folder };
+        self.progress.done.insert(Step::Computer);
+        self.save(today);
+        self.stage = Stage::Finished { folder, without_pdfs };
     }
 
     /// Stops the worker, if one runs, without waiting for it, and gives back its thread to join once it has finished.
@@ -814,18 +820,34 @@ mod tests {
     }
 
     #[test]
-    fn the_helpers_are_checked_then_only_the_missing_ones_install_and_continue_clears_the_record() {
+    fn the_helpers_are_checked_then_only_the_missing_ones_install_and_continue_records_the_step() {
         let store = Arc::new(Memory::default());
         let mut onboarding = on_the_computer_step(Arc::clone(&store), installer(&[Helper::Python]));
         assert_eq!(lines(&onboarding), [HelperLine::Here, HelperLine::Missing, HelperLine::Missing]);
-        onboarding.finish(false);
+        onboarding.finish(false, today());
         assert!(matches!(onboarding.stage(), Stage::Computer { .. }), "Continue waits for every helper");
         onboarding.install();
         settle(&mut onboarding);
         assert_eq!(lines(&onboarding), [HelperLine::Here, HelperLine::Installed, HelperLine::Installed]);
-        onboarding.finish(false);
-        assert_eq!(onboarding.stage(), &Stage::Finished { folder: PathBuf::from("/Users/sam/Documents/Job search") });
-        assert_eq!(store.load().unwrap(), None, "the record is cleared");
+        onboarding.finish(false, today());
+        let folder = PathBuf::from("/Users/sam/Documents/Job search");
+        assert_eq!(onboarding.stage(), &Stage::Finished { folder: folder.clone(), without_pdfs: false });
+        let kept = store.load().unwrap().expect("the record stays for the Profile chapter");
+        assert!(kept.is_done(Step::Folder) && kept.is_done(Step::Computer));
+        assert_eq!(kept.folder, Some(folder));
+    }
+
+    /// The next open after the Computer step offers the Profile chapter, and Finish my profile goes straight to it.
+    #[test]
+    fn a_resume_after_the_computer_step_leads_to_the_profile_chapter() {
+        let folder = PathBuf::from("/Users/sam/Documents/Job search");
+        let record = Progress { folder: Some(folder.clone()), done: [Step::Folder, Step::Computer].into(), ..Progress::default() };
+        let store = Arc::new(Memory(Mutex::new(Some(record))));
+        let mut onboarding = onboarding(store, pinned(), Arc::default(), Arc::new(Folders::holding(Contents::AiJobSearch)));
+        assert_eq!(onboarding.stage(), &Stage::Welcome);
+        onboarding.resume();
+        assert_eq!(onboarding.stage(), &Stage::Finished { folder, without_pdfs: false });
+        assert!(!onboarding.is_working(), "no helper is checked again");
     }
 
     #[test]
@@ -836,17 +858,17 @@ mod tests {
         onboarding.install();
         settle(&mut onboarding);
         assert_eq!(lines(&onboarding), [HelperLine::Installed, HelperLine::Installed, HelperLine::Failed(Failure::Offline)]);
-        onboarding.finish(false);
+        onboarding.finish(false, today());
         assert!(matches!(onboarding.stage(), Stage::Computer { .. }));
-        onboarding.finish(true);
-        assert!(matches!(onboarding.stage(), Stage::Finished { .. }));
+        onboarding.finish(true, today());
+        assert!(matches!(onboarding.stage(), Stage::Finished { without_pdfs: true, .. }));
 
         let bun = installer(&[]);
         bun.fails.lock().unwrap().insert(Helper::Bun, Failure::Mismatch);
         let mut onboarding = on_the_computer_step(Arc::default(), Arc::clone(&bun));
         onboarding.install();
         settle(&mut onboarding);
-        onboarding.finish(true);
+        onboarding.finish(true, today());
         assert!(matches!(onboarding.stage(), Stage::Computer { .. }), "Bun is needed");
         bun.fails.lock().unwrap().clear();
         onboarding.install();

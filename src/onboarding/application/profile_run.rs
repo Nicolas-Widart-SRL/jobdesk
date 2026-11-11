@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, NaiveDateTime, Timelike};
 
+use crate::onboarding::application::work::{SoFar, WorkLine, so_far, work_lines};
 use crate::onboarding::application::{Batch, CopyStop, Documents, Message, read_message};
 use crate::onboarding::domain::{
     CV_LOOKS_GOOD, DocumentCopier, DocumentKind, Draft, PATH_A_REPLY, PICK_UP_REPLY, Progress, ProgressStore, Saved, joined_reply, review_reply, tool_line,
@@ -203,6 +204,10 @@ pub struct ProfileRun {
     last_draft_save: Option<Instant>,
     /// The turn `poll` last saw, and when it began, known only when `poll` saw it working.
     turn: Option<TurnSeen>,
+    /// The user pressed Finish setup, after a turn of the run said setup is complete.
+    finished: bool,
+    /// The recap opened and the record is gone, so nothing writes it again.
+    cleared: bool,
 }
 
 /// A turn of the run as `poll` first saw it. Kept in memory only.
@@ -238,7 +243,45 @@ impl ProfileRun {
             last_draft_try: None,
             last_draft_save: None,
             turn: None,
+            finished: false,
+            cleared: false,
         }
+    }
+
+    /// Whether a turn of this setup's run said setup is complete, in its last top-level message or any other. `/setup`
+    /// may say so and then take a change the user asks for, and end that turn with no clean end of its own.
+    pub fn complete_seen(&self, desk: &RunDesk) -> bool {
+        self.run(desk).is_some_and(|run| run.activity.iter().any(|row| matches!(&row.kind, ActivityKind::Claude(text) if !row.nested && says_complete(text))))
+    }
+
+    /// The progress lines for the run as it stands, or for the copy before it.
+    pub fn work_lines(&self, desk: &RunDesk) -> Vec<WorkLine> {
+        work_lines(self.run(desk), &self.folder)
+    }
+
+    /// The rounds answered and the changes approved so far in this setup's run.
+    pub fn so_far(&self, desk: &RunDesk) -> SoFar {
+        so_far(self.run(desk))
+    }
+
+    /// Finish setup, which the user pressed on a sheet with no numbered questions, once a turn said setup is complete.
+    /// Setup never ends this way on its own. Gives whether it ended.
+    pub fn finish(&mut self, desk: &RunDesk) -> bool {
+        if !matches!(self.phase, ProfilePhase::FallbackSheet { .. }) || !self.complete_seen(desk) {
+            return false;
+        }
+        self.finished = true;
+        self.phase = ProfilePhase::Done;
+        true
+    }
+
+    /// The recap opened: the record is removed, and nothing writes it again, so the next open shows no setup. A record
+    /// that cannot be removed costs only a welcome back, whose run then shows as done.
+    pub fn clear_record(&mut self) {
+        let _ = self.store.clear();
+        self.cleared = true;
+        self.unsaved = false;
+        self.trouble = None;
     }
 
     pub fn progress(&self) -> &Progress {
@@ -363,7 +406,9 @@ impl ProfileRun {
         }
         self.send_path_a(desk);
         let began = self.see_turn(desk, input.wall);
-        self.phase = if self.starting {
+        self.phase = if self.finished {
+            ProfilePhase::Done
+        } else if self.starting {
             ProfilePhase::Copying
         } else {
             phase_of(self.run(desk), self.progress.path_a_sent, &self.folder, input.cv, input.without_pdfs, began)
@@ -553,6 +598,9 @@ impl ProfileRun {
     /// Keeps the record. Only a write that holds everything, the draft included, clears `unsaved`. One that fails costs
     /// only the resume, so setup goes on with what it holds, and the trouble says what is missing.
     fn save(&mut self) -> Result<(), SaveTrouble> {
+        if self.cleared {
+            return Ok(());
+        }
         self.progress.stopped = Some(self.today);
         let saved = match self.store.save(&self.progress) {
             Ok(Saved::Whole) => Ok(()),
@@ -1669,6 +1717,45 @@ mod tests {
         assert_eq!(again.profile.draft(&again.desk), None);
         f.profile.record_draft(&f.desk, vec![(1, " ".into())], "\n".into(), Instant::now());
         assert_eq!(f.record().draft, None, "an emptied draft is dropped");
+    }
+
+    /// A change asked at the CV check that Claude answers without a build leaves no clean end. Finish setup ends it then,
+    /// only when the user presses it, and only once a turn said setup is complete.
+    #[test]
+    fn finish_setup_ends_only_on_the_users_press_after_setup_said_complete() {
+        let mut f = fixture();
+        f.at(UNNUMBERED);
+        assert!(!f.profile.complete_seen(&f.desk));
+        assert!(!f.profile.finish(&f.desk), "nothing said setup is complete");
+        assert!(matches!(f.profile.phase(), ProfilePhase::FallbackSheet { .. }));
+
+        let mut f = fixture();
+        at_complete_with_a_cv(&mut f);
+        assert!(!f.profile.finish(&f.desk), "not from the CV check");
+        f.profile.send_text(&mut f.desk, "Put my phone number on the first line.").unwrap();
+        f.tool("w", "Edit", &format!("{ROOT}/cv/main_example.tex"));
+        f.says("I moved it in the source. Anything else?");
+        f.ends_turn();
+        f.poll();
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::FallbackSheet { .. }), "setup never ends on its own");
+        assert!(f.profile.complete_seen(&f.desk));
+        assert!(f.profile.finish(&f.desk));
+        f.poll();
+        assert_eq!(f.profile.phase(), &ProfilePhase::Done, "and it stays done");
+        assert_eq!(f.sent().last().unwrap(), "Put my phone number on the first line.", "Finish setup sends nothing");
+    }
+
+    #[test]
+    fn the_recap_clears_the_record_and_nothing_writes_it_again() {
+        let mut f = fixture();
+        f.at(FIVE);
+        f.profile.clear_record();
+        assert!(f.store.record.lock().unwrap().is_none());
+        f.profile.record_draft(&f.desk, vec![(1, "Design Lead".into())], String::new(), Instant::now() + Duration::from_secs(5));
+        f.profile.flush();
+        f.poll();
+        assert!(f.store.record.lock().unwrap().is_none(), "the record stays gone");
     }
 
     #[test]

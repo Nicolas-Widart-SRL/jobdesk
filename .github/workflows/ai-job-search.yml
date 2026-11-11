@@ -6,9 +6,18 @@
 # against the releases already listed, not only the ones it adds. Run it by hand on a version to check a release before
 # `scripts/ai-job-search.sh add`. The maintainer still tests a new release with Jobdesk and signs it off on the pull
 # request.
+# tag-release.yml calls it with the full SHA of the commit it releases, and its sign job needs this call, so nothing is
+# signed, tagged or published unless every release the list holds at that commit passed. A call checks out that commit,
+# checks that it did, and checks every listed release. It gets only a token that reads the repository, and no secret.
 name: ai-job-search release
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The full SHA of the commit to check every listed release at.
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -57,22 +66,37 @@ jobs:
         # bash -eo pipefail: a failing command in a pipe fails the step.
         shell: bash
     steps:
-      # The test comes from the pull request, so it gets no token in the Git config.
+      # The test comes from the pull request, so it gets no token in the Git config. Only a call gives a ref: any other
+      # run checks out the commit it started on.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
 
-      # The versions to check, one a line: the input on a run by hand, or every release the list holds.
+      # The versions to check, one a line: the input on a run by hand, or every release the list holds. A call runs
+      # under the caller's event, which can be workflow_dispatch too, so a call is told by its ref, which it must give
+      # as a full SHA that the checkout holds, and it always checks every release the list holds.
       - name: Find the releases to check
         env:
           EVENT: ${{ github.event_name }}
           INPUT: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
         run: |
           versions="$RUNNER_TEMP/versions"
-          if [[ $EVENT == workflow_dispatch ]]; then
+          if [ -n "$REF" ]; then
+            if ! [[ $REF =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::'$REF' is not the full SHA of a commit."
+              exit 1
+            fi
+            if [ "$(git rev-parse HEAD)" != "$REF" ]; then
+              echo "::error::The checkout is not $REF."
+              exit 1
+            fi
+          fi
+          if [ -z "$REF" ] && [[ $EVENT == workflow_dispatch ]]; then
             printf '%s\n' "${INPUT#v}" > "$versions"
           else
             list=assets/update/ai-job-search.json

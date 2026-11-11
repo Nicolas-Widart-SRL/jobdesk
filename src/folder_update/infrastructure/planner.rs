@@ -54,6 +54,14 @@ pub fn plan(folder: &Path, update: &Update) -> Result<Plan, UpdateError> {
         let theirs = new.get(path.as_str());
         let action =
             decide(path, base.get(path.as_str()).map(|(bytes, _)| bytes.as_slice()), ours.as_deref(), theirs.map(|(bytes, _)| bytes.as_slice()), parent_kept);
+        let base_mode = base.get(path.as_str()).map(|(_, mode)| *mode);
+        // Bytes that need no change still take a mode the release changed, on a file whose mode the user left: the
+        // user's own bytes go back with it. Else the base moves on, and a later update takes the old mode for the user's.
+        let mode_only = cfg!(unix) && base_mode == Some(ours_mode) && theirs.is_some_and(|(_, mode)| *mode != ours_mode);
+        let action = match (action, &ours) {
+            (Action::Keep, Some(bytes)) if mode_only => Action::Write(bytes.clone()),
+            (action, _) => action,
+        };
         let side = match &action {
             Action::Keep => continue,
             Action::Skip => {
@@ -74,7 +82,6 @@ pub fn plan(folder: &Path, update: &Update) -> Result<Plan, UpdateError> {
             }
             Action::Write(_) | Action::Delete | Action::Restore(_) => None,
         };
-        let base_mode = base.get(path.as_str()).map(|(_, mode)| *mode);
         let mode = kept_mode(ours.is_some().then_some(ours_mode), base_mode, theirs.map(|(_, mode)| *mode));
         plan.steps.push(Step { path: path.clone(), action, ours, mode, side, folders: seen.missing });
     }

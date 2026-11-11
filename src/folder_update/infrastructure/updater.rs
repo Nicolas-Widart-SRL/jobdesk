@@ -391,6 +391,11 @@ fn stage(folder: &Path, staged: &Path, files: &Path, changes: &[Change]) -> Resu
         if current.as_ref().map(|(bytes, _)| bytes) != change.before.as_ref() {
             return Err(UpdateError::Changed);
         }
+        // The same bytes with another mode: only the modes tell the original from what the update wrote.
+        let modes = match (&current, &change.write) {
+            (Some((bytes, mode)), Some((wrote, new_mode))) if bytes == wrote && mode != new_mode => Some((*mode, *new_mode)),
+            _ => None,
+        };
         let saved = match current {
             Some((bytes, mode)) => {
                 write_new(&files.join(index.to_string()), &bytes, mode).map_err(disk)?;
@@ -402,7 +407,7 @@ fn stage(folder: &Path, staged: &Path, files: &Path, changes: &[Change]) -> Resu
             write_new(&staged.join(index.to_string()), bytes, *mode).map_err(disk)?;
         }
         let wrote = change.write.as_ref().map(|(bytes, _)| sha256_hex(bytes));
-        ops.push(Op { path: change.path.clone(), before: change.before.as_deref().map(sha256_hex), backup: saved, wrote });
+        ops.push(Op { path: change.path.clone(), before: change.before.as_deref().map(sha256_hex), backup: saved, wrote, modes });
     }
     for dir in [files, files.parent().unwrap_or(files), staged] {
         sync_dir(dir).map_err(disk)?;
@@ -795,6 +800,25 @@ mod tests {
         fixture.run().unwrap();
         assert_eq!(fixture.read("tools/run.py").as_deref(), Some("print(2)\n"));
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
+    /// A release that changes only a file's mode, with the same bytes, applies it to a file whose mode the user left,
+    /// so a later update never takes the old mode for the user's. Undo puts the old mode back.
+    #[cfg(unix)]
+    #[test]
+    fn a_mode_only_change_applies_and_undoes() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut fixture = Fixture::new(&[("tools/run.py", "print(1)\n")], &[("tools/run.py", "print(1)\n")]);
+        fixture.new = zip_of(&[Entry::Mode("ai-job-search-1.8.0/tools/run.py", b"print(1)\n", 0o755)]);
+        fixture.new_sha256 = sha256_hex(&fixture.new);
+        let path = joined(&fixture.folder, "tools/run.py");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let mode = || fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let report = fixture.run().unwrap();
+        assert_eq!((mode(), report.updated), (0o755, strings(&["tools/run.py"])));
+        assert_eq!(fixture.read("tools/run.py").as_deref(), Some("print(1)\n"));
+        assert_eq!(undo(&fixture.folder).unwrap().reverted, strings(&["tools/run.py"]));
+        assert_eq!(mode(), 0o644, "Undo puts the old mode back");
     }
 
     #[test]
@@ -1615,6 +1639,7 @@ mod tests {
             before: Some(sha256_hex(SECRET.as_bytes())),
             backup: Some(backup.to_owned()),
             wrote: Some(sha256_hex(PLANTED.as_bytes())),
+            modes: None,
         };
         let record = Journal { version: NEW.to_owned(), sha256: None, undone: false, folders: Vec::new(), ops: vec![op] };
         journal::write(&fixture.jobdesk().join(BACKUP), RECORD, &record).unwrap();
@@ -1664,7 +1689,7 @@ mod tests {
         fs::write(outside.path().join("x.md"), PLANTED).unwrap();
         symlink(outside.path(), fixture.folder.join("linked")).unwrap();
         // The update made the file, so an undo would remove it.
-        let op = Op { path: "linked/x.md".to_owned(), before: None, backup: None, wrote: Some(sha256_hex(PLANTED.as_bytes())) };
+        let op = Op { path: "linked/x.md".to_owned(), before: None, backup: None, wrote: Some(sha256_hex(PLANTED.as_bytes())), modes: None };
         journal::write(
             &fixture.jobdesk().join(BACKUP),
             RECORD,

@@ -57,6 +57,10 @@ pub struct Op {
     pub backup: Option<String>,
     /// The SHA-256 of what the update wrote. `None` for a delete.
     pub wrote: Option<String>,
+    /// For a file the update wrote with the bytes it held and only a new mode: its mode before, and the one written.
+    /// The bytes alone cannot tell the two apart. `None` for any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<(u32, u32)>,
 }
 
 /// What putting back one file did.
@@ -113,6 +117,7 @@ impl Journal {
                     && op.backup.is_some() == op.before.is_some()
                     && hash(&op.before)
                     && hash(&op.wrote)
+                    && op.modes.is_none_or(|(before, wrote)| before <= 0o777 && wrote <= 0o777 && op.before.is_some())
             })
     }
 }
@@ -254,15 +259,17 @@ pub fn files_of(jobdesk: &Path) -> io::Result<Option<PathBuf>> {
 /// link or a save that lands between the two is not seen.
 fn revert(folder: &Path, files: Option<&Path>, op: &Op) -> io::Result<Outcome> {
     let seen = look(folder, &op.path)?;
-    let current = match &seen.found {
-        Found::File(bytes, _) => Some(sha256_hex(bytes)),
-        Found::Missing => None,
+    let (current, mode) = match &seen.found {
+        Found::File(bytes, mode) => (Some(sha256_hex(bytes)), Some(*mode)),
+        Found::Missing => (None, None),
         Found::Link | Found::Other => return Ok(Outcome::Kept),
     };
-    if current == op.before {
+    // A change of mode alone has the same bytes before and after: the mode tells which the file holds.
+    let (mode_before, mode_wrote) = op.modes.map_or((mode, mode), |(before, wrote)| (Some(before), Some(wrote)));
+    if current == op.before && mode == mode_before {
         return Ok(Outcome::Already);
     }
-    if current != op.wrote {
+    if current != op.wrote || mode != mode_wrote {
         return Ok(Outcome::Kept);
     }
     let target = joined(folder, &op.path);
@@ -304,7 +311,7 @@ mod tests {
 
     fn journal(path: &str, backup: Option<&str>) -> Journal {
         let hash = sha256_hex(b"x");
-        let op = Op { path: path.to_owned(), before: backup.map(|_| hash.clone()), backup: backup.map(str::to_owned), wrote: Some(hash.clone()) };
+        let op = Op { path: path.to_owned(), before: backup.map(|_| hash.clone()), backup: backup.map(str::to_owned), wrote: Some(hash.clone()), modes: None };
         Journal { version: "1.8.0".to_owned(), sha256: None, undone: false, folders: Vec::new(), ops: vec![op] }
     }
 

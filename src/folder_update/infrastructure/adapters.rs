@@ -3,7 +3,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError, TryLockError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
 use crate::folder_update::infrastructure::disk::is_real_dir;
@@ -41,21 +41,35 @@ impl Opened {
     }
 }
 
+/// Takes this Jobdesk's hold on its open folder back when it drops, as `DiskFolder::alone` ends: after the job, and also
+/// when the job panics, since the drop runs as the panic unwinds. When the hold cannot be taken back, `Opened::hold`
+/// leaves this Jobdesk kept out, so every writer waits and the hold is tried again.
+struct TakeBack<'a> {
+    open: MutexGuard<'a, Opened>,
+    held: bool,
+}
+
+impl Drop for TakeBack<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            self.open.hold();
+        }
+    }
+}
+
 impl DiskFolder {
     /// Runs `job` on `folder` with this Jobdesk's own hold on it let go, so the job can hold the folder alone, then
-    /// takes the hold again. The hold is let go of only while `job` runs, and taken again even when the job failed, or
-    /// when it could not be taken at the open because another Jobdesk held the folder alone then.
+    /// takes the hold again. The hold is let go of only while `job` runs, and taken again even when the job failed or
+    /// panicked, or when it could not be taken at the open because another Jobdesk held the folder alone then.
     fn alone<T>(&self, folder: &Path, job: impl FnOnce() -> T) -> T {
+        // A panic in an earlier job poisoned the lock: what it guards is whole, as `TakeBack` took the hold back.
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         let held = open.folder.as_deref() == Some(folder);
         if held {
             open.hold = None;
         }
-        let done = job();
-        if held {
-            open.hold();
-        }
-        done
+        let _take_back = TakeBack { open, held };
+        job()
     }
 }
 
@@ -265,6 +279,35 @@ mod tests {
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds it open now");
         assert!(!disk.hold_again(folder.path()));
+    }
+
+    /// A job that panics, as the zip crate or the planner might on bytes a run's tools wrote, still leaves this Jobdesk
+    /// holding the folder open, or kept out and trying again when another Jobdesk took it meanwhile.
+    #[test]
+    fn a_job_that_panics_leaves_the_folder_held_or_kept_out() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let folder = set_up();
+        let lock = folder.path().join(installed_source::DIR).join(".open");
+        let disk = DiskFolder::default();
+        assert!(!disk.open(folder.path()));
+        let panicked = catch_unwind(AssertUnwindSafe(|| disk.alone(folder.path(), || panic!("a fictional panic in the job"))));
+        assert!(panicked.is_err());
+        let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
+        assert!(other.try_lock().is_err(), "this Jobdesk holds the folder open again");
+        assert!(!disk.hold_again(folder.path()), "and is not kept out");
+
+        // Another Jobdesk takes the folder alone while the job runs, and the job panics.
+        let panicked = catch_unwind(AssertUnwindSafe(|| {
+            disk.alone(folder.path(), || {
+                other.lock().unwrap();
+                panic!("a fictional panic in the job")
+            })
+        }));
+        assert!(panicked.is_err());
+        assert!(disk.hold_again(folder.path()), "kept out, and trying again");
+        other.unlock().unwrap();
+        assert!(!disk.hold_again(folder.path()), "the hold is taken once the other lets go");
+        assert!(other.try_lock().is_err());
     }
 
     struct Serves(Vec<u8>);

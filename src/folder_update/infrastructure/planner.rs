@@ -74,20 +74,23 @@ pub fn plan(folder: &Path, update: &Update) -> Result<Plan, UpdateError> {
             }
             Action::Write(_) | Action::Delete | Action::Restore(_) => None,
         };
-        let mode = kept_mode(ours.is_some().then_some(ours_mode), theirs.map(|(_, mode)| *mode));
+        let base_mode = base.get(path.as_str()).map(|(_, mode)| *mode);
+        let mode = kept_mode(ours.is_some().then_some(ours_mode), base_mode, theirs.map(|(_, mode)| *mode));
         plan.steps.push(Step { path: path.clone(), action, ours, mode, side, folders: seen.missing });
     }
     Ok(plan)
 }
 
-/// The mode a file the update writes gets: on Unix, the folder's file's own, `ours`, when it is there, so a merge never
-/// widens who may read a private file, and else the new release's, `theirs`. Windows keeps no such bits, so there it is
-/// always the release's, as before.
-fn kept_mode(ours: Option<u32>, theirs: Option<u32>) -> u32 {
+/// The mode a file the update writes gets, merged as its text is: on Unix, the folder's file's own, `ours`, when the
+/// user changed it from the base release's, `base`, so a merge never widens who may read a private file, and else the
+/// new release's, `theirs`, so a script the release makes runnable runs. Windows keeps no such bits, so there it is
+/// always the release's.
+fn kept_mode(ours: Option<u32>, base: Option<u32>, theirs: Option<u32>) -> u32 {
     match (ours, theirs) {
-        (Some(ours), _) if cfg!(unix) => ours,
+        (Some(ours), _) if cfg!(unix) && base != Some(ours) => ours,
         (_, Some(theirs)) => theirs,
-        _ => 0o644,
+        (Some(ours), None) => ours,
+        (None, None) => 0o644,
     }
 }
 

@@ -113,15 +113,19 @@ fn mode_of(meta: &fs::Metadata) -> u32 {
 }
 
 /// Writes a new file of `bytes` at `path` with `mode`, and waits until it is on the disk. A file or link already there
-/// fails it.
+/// fails it. On Unix the file is made with no more than `mode` allows, then set to the whole of its read, write and run
+/// bits, so the umask takes none away: a file shared with a group stays so.
 pub fn write_new(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode & 0o777);
     #[cfg(not(unix))]
     let _ = mode;
     let mut file = options.open(path)?;
+    // On the open file, so nothing that took its name meanwhile gets the mode.
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(mode & 0o777))?;
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -195,6 +199,22 @@ mod tests {
         assert_eq!(look(folder.path(), "linked/c.md").unwrap().found, Found::Link);
         assert_eq!(look(folder.path(), "c.md").unwrap().found, Found::Link);
         assert!(read_plain(&folder.path().join("c.md")).is_err());
+    }
+
+    /// A file gets its whole mode whatever the umask, so a file shared with a group keeps that when the update writes
+    /// it, backs it up or saves a copy beside it. The umask is the process's: it is set only around the write.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_gets_its_whole_mode_whatever_the_umask() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("shared.md");
+        // SAFETY: `umask` only swaps the process's mask, and it is put back at once.
+        let old = unsafe { libc::umask(0o077) };
+        let written = write_new(&path, b"text", 0o660);
+        unsafe { libc::umask(old) };
+        written.unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o660);
     }
 
     #[test]

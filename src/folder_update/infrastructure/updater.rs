@@ -742,13 +742,15 @@ mod tests {
     fn an_added_file_takes_the_mode_of_its_entry() {
         use std::os::unix::fs::PermissionsExt;
         let fixture = Fixture::new(BASE, NEW_FILES);
+        // The base release's mode, whatever the umask made of it, so the file reads as one the user left.
+        fs::set_permissions(fixture.folder.join("CLAUDE.md"), fs::Permissions::from_mode(0o644)).unwrap();
         fixture.run().unwrap();
         let mode = |path: &str| fs::metadata(joined(&fixture.folder, path)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode("scripts/run.sh"), 0o755);
         assert_eq!(mode("CLAUDE.md"), 0o644);
     }
 
-    /// A file the update writes over keeps its own permissions, so a private one stays private. A file it adds takes the
+    /// A file the update writes over keeps the permissions the user gave it, so a private one stays private. A file it adds takes the
     /// release's, and each side copy the permissions of the file it copies.
     #[cfg(unix)]
     #[test]
@@ -767,6 +769,23 @@ mod tests {
         assert_eq!(mode(".claude/settings.json.yours-1.8.0"), 0o600, "the copy of the user's file");
         assert_eq!(mode("docs/guide.md.update-1.8.0"), 0o644, "the copy of upstream's");
         assert_eq!(mode("scripts/run.sh"), 0o755, "a file the update adds");
+    }
+
+    /// A mode the release changes, such as a script made runnable, applies to a file whose mode the user left as the
+    /// base had it, along with the release's text.
+    #[cfg(unix)]
+    #[test]
+    fn a_mode_upstream_changes_applies_to_a_file_whose_mode_the_user_left() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut fixture = Fixture::new(&[("tools/run.py", "print(1)\n")], &[("tools/run.py", "print(2)\n")]);
+        fixture.new = zip_of(&[Entry::Mode("ai-job-search-1.8.0/tools/run.py", b"print(2)\n", 0o755)]);
+        fixture.new_sha256 = sha256_hex(&fixture.new);
+        let path = joined(&fixture.folder, "tools/run.py");
+        // The base release's mode, whatever the umask made of it.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fixture.run().unwrap();
+        assert_eq!(fixture.read("tools/run.py").as_deref(), Some("print(2)\n"));
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o755);
     }
 
     #[test]

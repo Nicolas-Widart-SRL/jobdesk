@@ -192,7 +192,7 @@ The first three add "Install 0.2.0 from the release page." and offer Open the re
 
 Each Jobdesk release comes with newer versions of the files in your job search folder. Once a check for updates finds that the Jobdesk you run is the latest, Jobdesk brings your folder up to date with them, so it usually happens just after Restart to update. It is not a task: it costs nothing and needs no git. With Check for updates automatically off, it waits until you choose Check now.
 
-Jobdesk updates only a folder that keeps the hidden `.jobdesk` folder of [first run](#your-folder). It leaves a folder under git to you. It never starts while a task runs or a Claude session is open, even one only waiting on your reply, or while another Jobdesk window has the same folder open. Jobdesk compares the download with its own record of that version before it changes anything.
+Jobdesk updates only a folder that keeps the hidden `.jobdesk` folder of [first run](#your-folder). It leaves a folder under git to you. It never starts while a task runs or a Claude session is open, even one only waiting on your reply, or while another Jobdesk window has the same folder open. While another window updates the folder, this one waits as for its own update. Jobdesk compares the download with its own record of that version before it changes anything.
 
 Your changes come first:
 

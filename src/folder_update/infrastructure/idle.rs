@@ -36,7 +36,13 @@ impl ZipFetcher for IdleFolder {
 }
 
 impl FolderUpdater for IdleFolder {
-    fn open(&self, _folder: &Path) {}
+    fn open(&self, _folder: &Path) -> bool {
+        false
+    }
+
+    fn hold_again(&self, _folder: &Path) -> bool {
+        false
+    }
 
     fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
         Ok(None)

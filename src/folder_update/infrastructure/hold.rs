@@ -16,13 +16,27 @@ use crate::shared_kernel::installed_source;
 /// The lock file, in `.jobdesk`.
 pub const OPEN: &str = ".open";
 
-/// Holds `folder` open, shared with every other Jobdesk that has it open, for as long as the returned file stays open.
-/// `None` when its `.jobdesk` is not a real folder, when the lock file is a link or not a file, or when another
-/// Jobdesk updates, undoes or rolls back the folder now.
-pub fn hold_open(folder: &Path) -> Option<File> {
-    let file = open(&folder.join(installed_source::DIR)).ok()?;
-    file.try_lock_shared().ok()?;
-    Some(file)
+/// What trying to hold a folder open found.
+#[derive(Debug)]
+pub enum Open {
+    /// This Jobdesk holds the folder open, shared with every other Jobdesk that has it open, for as long as the file
+    /// stays open.
+    Held(File),
+    /// Another Jobdesk holds the folder alone: it updates, undoes or rolls it back now.
+    Elsewhere,
+    /// Nothing can be held: the folder's `.jobdesk` is not a real folder, or the lock file is a link, not a file or does
+    /// not open.
+    Nothing,
+}
+
+/// Holds `folder` open, shared with every other Jobdesk that has it open.
+pub fn hold_open(folder: &Path) -> Open {
+    let Ok(file) = open(&folder.join(installed_source::DIR)) else { return Open::Nothing };
+    match file.try_lock_shared() {
+        Ok(()) => Open::Held(file),
+        Err(TryLockError::WouldBlock) => Open::Elsewhere,
+        Err(TryLockError::Error(_)) => Open::Nothing,
+    }
 }
 
 /// Holds the folder of `jobdesk` alone, for as long as the returned file stays open. `Busy` while any Jobdesk holds it,
@@ -70,23 +84,23 @@ mod tests {
     fn any_number_of_jobdesks_hold_a_folder_open_and_none_holds_it_alone_meanwhile() {
         let folder = folder();
         let jobdesk = folder.path().join(installed_source::DIR);
-        let first = hold_open(folder.path()).unwrap();
-        let second = hold_open(folder.path()).expect("a second Jobdesk opens it too");
+        let Open::Held(first) = hold_open(folder.path()) else { panic!("not held") };
+        let Open::Held(second) = hold_open(folder.path()) else { panic!("a second Jobdesk opens it too") };
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy));
         drop(first);
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy), "while one still has it open");
         drop(second);
         let alone = hold_alone(&jobdesk).unwrap();
-        assert!(hold_open(folder.path()).is_none(), "no Jobdesk holds it open while one holds it alone");
+        assert!(matches!(hold_open(folder.path()), Open::Elsewhere), "no Jobdesk holds it open while one holds it alone");
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy));
         drop(alone);
-        assert!(hold_open(folder.path()).is_some());
+        assert!(matches!(hold_open(folder.path()), Open::Held(_)));
     }
 
     #[test]
     fn a_folder_with_no_jobdesk_gets_none() {
         let folder = tempfile::tempdir().unwrap();
-        assert!(hold_open(folder.path()).is_none());
+        assert!(matches!(hold_open(folder.path()), Open::Nothing));
         assert!(!folder.path().join(installed_source::DIR).exists(), "no .jobdesk is made for the lock");
     }
 
@@ -96,7 +110,7 @@ mod tests {
         let folder = folder();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path().join("elsewhere"), folder.path().join(installed_source::DIR).join(OPEN)).unwrap();
-        assert!(hold_open(folder.path()).is_none());
+        assert!(matches!(hold_open(folder.path()), Open::Nothing));
         assert_eq!(hold_alone(&folder.path().join(installed_source::DIR)).map(|_| ()), Err(UpdateError::Disk));
         assert!(!outside.path().join("elsewhere").exists());
     }

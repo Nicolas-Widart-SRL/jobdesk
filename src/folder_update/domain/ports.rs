@@ -57,7 +57,15 @@ pub trait FolderUpdater: Send + Sync {
     /// another folder opens or Jobdesk quits, and lets go of the folder it held before. While it holds a folder, another
     /// Jobdesk's `recover`, `update` and `undo` of it are `Busy`, and its own let go of the hold while they run. A
     /// folder whose `.jobdesk` is not there is held by nothing, and nothing is made in it.
-    fn open(&self, folder: &Path);
+    ///
+    /// Returns whether it is kept out: another Jobdesk holds the folder alone, to update, undo or roll it back, so this
+    /// one cannot hold it open now. Then nothing may write the folder until `hold_again` takes the hold.
+    fn open(&self, folder: &Path) -> bool;
+    /// Tries again to hold `folder` open, after `open` or the end of an update, Undo or rollback of this Jobdesk's own
+    /// found it kept out. Returns whether it is still kept out. False when `folder` is not the one open, or when this
+    /// Jobdesk holds it already or could never hold it, as for a folder with no `.jobdesk`. It never waits: while this
+    /// Jobdesk's own update, Undo or rollback runs, it is false.
+    fn hold_again(&self, folder: &Path) -> bool;
     /// Rolls back an update of `folder` that stopped midway. `None` when none did.
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError>;
     /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`. Once it holds

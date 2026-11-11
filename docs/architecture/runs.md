@@ -131,7 +131,7 @@ The folder update, its Undo and its rollback write the job search folder, so the
 - While it works, `RunDesk::set_folder_updating` keeps `start` and `reply` refused with `StartError::FolderUpdating`, on a live session or a new process. The launcher's Run and the reply field say why.
 - Every other writer of the folder waits too: Profile's Save, and a portal's switch and Remove. They write on the window's thread within one frame, so none is under way when the folder update starts.
 - Test connection, Restart to update and Change folder wait as well, each with its reason.
-- These rules hold in one window. Another Jobdesk with the folder open knows nothing of them, so the folder update, its Undo and its rollback also wait until no other Jobdesk has the folder open, as [trust](trust.md#folder-update) says.
+- These rules hold in one window. Another Jobdesk with the folder open knows nothing of them, so the folder update, its Undo and its rollback also wait until no other Jobdesk has the folder open, as [trust](trust.md#folder-update) says. The other way round, while another Jobdesk updates the folder, `FolderUpdate::is_busy` holds in this one, and every rule above applies as for its own update, until it holds the folder again.
 
 ## When Claude waits on the user
 

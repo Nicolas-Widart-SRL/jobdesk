@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::folder_update::application::notice::{self, Notice, Quiet};
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Release, Report, Reverted, Update, UpdateError, ZipFetcher};
@@ -11,6 +12,10 @@ use crate::shared_kernel::download::DownloadFailure;
 use crate::shared_kernel::installed_source::InstalledSource;
 use crate::shared_kernel::release_zip::ZipFailure;
 use crate::updates::application::{LatestFeed, Version, source_zip_name, source_zip_url};
+
+/// How often `follow` tries again to hold the open folder while another Jobdesk holds it alone. The window repaints at
+/// least this often meanwhile, so the try comes even with no input.
+pub const HOLD_RETRY: Duration = Duration::from_secs(1);
 
 /// Where an update or an undo is while its worker runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +175,9 @@ pub struct FolderUpdate {
     tried: HashSet<(PathBuf, u64)>,
     /// The folder the worker runs on, while one does.
     working_on: Option<PathBuf>,
+    /// Another Jobdesk held the open folder alone, to update, undo or roll it back, at this Jobdesk's last try to hold
+    /// it, made at this moment. While it is set, nothing writes the folder, as while this Jobdesk's own worker runs.
+    kept_out: Option<Instant>,
     /// Each folder whose rollback ran or failed this launch, at an open or in a pass. No pass starts for it again until
     /// the next launch, so the notice of the rollback stays, and so does the backup that holds the originals of any
     /// file it kept, which an update would replace.
@@ -216,6 +224,7 @@ impl FolderUpdate {
             recover_due: false,
             tried: HashSet::new(),
             working_on: None,
+            kept_out: None,
             held_back: HashSet::new(),
             told: None,
             undo_offered: false,
@@ -246,7 +255,7 @@ impl FolderUpdate {
     /// the last folder, so it goes. Call it at every open, a launch's, a switch's and first-run setup's hand-over, and
     /// open no folder while `is_working`.
     pub fn opened(&mut self, folder: PathBuf) {
-        self.ports.updater.open(&folder);
+        self.kept_out = self.ports.updater.open(&folder).then(Instant::now);
         self.folder = Some(folder);
         self.recover_due = true;
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
@@ -259,9 +268,17 @@ impl FolderUpdate {
     /// rollback of the folder ran or failed this launch, at an open or in a pass: `feed` is
     /// how many checks have read the feed, and what the last one found. `runs_idle` is false while a task or a Claude
     /// session is open, even one only waiting on a reply, and while anything else may write the folder.
+    ///
+    /// While another Jobdesk holds the open folder alone, it tries to hold the folder again every `HOLD_RETRY`, and
+    /// starts nothing until it does: see `is_busy`.
     pub fn follow(&mut self, feed: Option<(u64, &LatestFeed)>, runs_idle: bool) {
         self.poll();
-        if self.working || !runs_idle {
+        if let (Some(tried), Some(folder), false) = (self.kept_out, &self.folder, self.working)
+            && tried.elapsed() >= HOLD_RETRY
+        {
+            self.kept_out = self.ports.updater.hold_again(folder).then(Instant::now);
+        }
+        if self.working || !runs_idle || self.kept_out.is_some() {
             return;
         }
         let Some(folder) = self.folder.clone() else { return };
@@ -314,9 +331,10 @@ impl FolderUpdate {
     }
 
     /// Undoes the update the notice offers Undo for, of the open folder, as `undo` does. Ignored when none is offered.
+    /// While another Jobdesk holds the folder alone, it is refused as while a task is open.
     pub fn undo_update(&mut self, runs_idle: bool) {
         if let (true, Some(folder)) = (self.undo_offered && self.can_undo(), self.folder.clone()) {
-            self.undo(folder, runs_idle);
+            self.undo(folder, runs_idle && self.kept_out.is_none());
         }
     }
 
@@ -355,6 +373,19 @@ impl FolderUpdate {
     /// Whether a worker is still running, so the window keeps polling and the caller starts no run.
     pub fn is_working(&self) -> bool {
         self.working
+    }
+
+    /// Whether another Jobdesk held the open folder alone, to update, undo or roll it back, when this one last tried to
+    /// hold it open. `follow` tries again every `HOLD_RETRY`, so the window should repaint at least that often meanwhile.
+    pub fn kept_out(&self) -> bool {
+        self.kept_out.is_some()
+    }
+
+    /// Whether the job search folder is being updated, undone or rolled back, by this Jobdesk's worker or by another
+    /// Jobdesk that holds it alone. While it holds, the caller starts no task and sends no reply, and every other writer
+    /// of the folder, Test connection, Restart to update and Change folder wait, as for this Jobdesk's own update.
+    pub fn is_busy(&self) -> bool {
+        self.working || self.kept_out.is_some()
     }
 
     /// Whether the last update of the folder can be undone, as the last update pass or undo found it on its worker.
@@ -447,6 +478,11 @@ impl FolderUpdate {
                     self.stage = stage;
                     self.undoable = undoable;
                     self.working = false;
+                    // The worker let go of this Jobdesk's hold while it ran, and another Jobdesk may hold the folder
+                    // alone now, before this one took the hold again.
+                    if let Some(folder) = &self.folder {
+                        self.kept_out = self.ports.updater.hold_again(folder).then(Instant::now);
+                    }
                 }
             }
         }
@@ -597,7 +633,7 @@ fn failure_of(error: UpdateError) -> Failure {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
     use crate::shared_kernel::installed_source::InstalledSource;
@@ -624,6 +660,8 @@ mod tests {
         unfinished: bool,
         /// `update` and `undo` panic, as the zip crate or the planner might on bytes a run's tools wrote.
         panics: bool,
+        /// Another Jobdesk holds the folder alone, so this one cannot hold it open.
+        kept_out: AtomicBool,
     }
 
     impl Fake {
@@ -642,6 +680,7 @@ mod tests {
                 undoable: true,
                 unfinished: false,
                 panics: false,
+                kept_out: AtomicBool::new(false),
             }
         }
 
@@ -689,8 +728,12 @@ mod tests {
     }
 
     impl FolderUpdater for Fake {
-        fn open(&self, folder: &Path) {
+        fn open(&self, folder: &Path) -> bool {
             self.note(format!("open {}", folder.display()));
+            self.kept_out.load(Ordering::SeqCst)
+        }
+        fn hold_again(&self, _folder: &Path) -> bool {
+            self.kept_out.load(Ordering::SeqCst)
         }
         fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
             self.note("recover".into());
@@ -1062,6 +1105,28 @@ mod tests {
             follow(&mut opened, Some((3, &feed())), true);
             assert_eq!(passes(&fake), 0, "{recover:?}: nor after the folder opens again in this launch");
         }
+    }
+
+    /// While another Jobdesk holds the open folder alone, this one is busy as while its own worker runs, starts no
+    /// rollback or pass, and tries to hold the folder again every `HOLD_RETRY`. Once it does, the rollback due runs.
+    #[test]
+    fn a_folder_another_jobdesk_holds_alone_is_busy_until_this_one_holds_it() {
+        let fake = Arc::new(Fake { kept_out: AtomicBool::new(true), ..Fake::ready() });
+        let mut opened = desk(&fake, "0.2.0");
+        assert!(!opened.is_busy());
+        opened.opened(PathBuf::from(FOLDER));
+        assert!(opened.is_busy() && opened.kept_out() && !opened.is_working());
+        follow(&mut opened, Some((1, &feed())), true);
+        assert_eq!((rollbacks(&fake), passes(&fake)), (0, 0), "nothing starts");
+        assert!(opened.is_busy());
+
+        fake.kept_out.store(false, Ordering::SeqCst);
+        follow(&mut opened, None, true);
+        assert!(opened.is_busy(), "not tried again before HOLD_RETRY");
+        thread::sleep(HOLD_RETRY + Duration::from_millis(50));
+        follow(&mut opened, None, true);
+        assert!(!opened.kept_out(), "held once tried again");
+        assert_eq!(rollbacks(&fake), 1, "and the rollback due at the open runs");
     }
 
     /// A rollback another Jobdesk kept out ran nothing and says nothing, so it holds no update back.

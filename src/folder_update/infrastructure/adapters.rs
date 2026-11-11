@@ -3,11 +3,11 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError, TryLockError};
 
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
 use crate::folder_update::infrastructure::disk::is_real_dir;
-use crate::folder_update::infrastructure::hold::hold_open;
+use crate::folder_update::infrastructure::hold::{Open, hold_open};
 use crate::folder_update::infrastructure::updater;
 use crate::shared_kernel::download::{DownloadFailure, HttpsFetcher};
 use crate::shared_kernel::installed_source::{self, InstalledSource, MAX_ZIP};
@@ -15,8 +15,30 @@ use crate::shared_kernel::installed_source::{self, InstalledSource, MAX_ZIP};
 /// A job search folder on the disk, and the one this Jobdesk has open.
 #[derive(Default)]
 pub struct DiskFolder {
-    /// The folder `open` named last, and this Jobdesk's hold on it while it has one.
-    open: Mutex<(Option<PathBuf>, Option<File>)>,
+    open: Mutex<Opened>,
+}
+
+/// The folder `open` named last, and this Jobdesk's hold on it.
+#[derive(Default)]
+struct Opened {
+    folder: Option<PathBuf>,
+    /// The hold, while this Jobdesk has one.
+    hold: Option<File>,
+    /// Another Jobdesk held the folder alone at the last try, so this one could not hold it.
+    kept_out: bool,
+}
+
+impl Opened {
+    /// Tries to hold the open folder, and says whether another Jobdesk keeps this one out.
+    fn hold(&mut self) -> bool {
+        let Some(folder) = &self.folder else { return false };
+        (self.hold, self.kept_out) = match hold_open(folder) {
+            Open::Held(file) => (Some(file), false),
+            Open::Elsewhere => (None, true),
+            Open::Nothing => (None, false),
+        };
+        self.kept_out
+    }
 }
 
 impl DiskFolder {
@@ -25,13 +47,13 @@ impl DiskFolder {
     /// when it could not be taken at the open because another Jobdesk held the folder alone then.
     fn alone<T>(&self, folder: &Path, job: impl FnOnce() -> T) -> T {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        let held = open.0.as_deref() == Some(folder);
+        let held = open.folder.as_deref() == Some(folder);
         if held {
-            open.1 = None;
+            open.hold = None;
         }
         let done = job();
         if held {
-            open.1 = hold_open(folder);
+            open.hold();
         }
         done
     }
@@ -68,11 +90,24 @@ impl BaseReader for DiskFolder {
 }
 
 impl FolderUpdater for DiskFolder {
-    fn open(&self, folder: &Path) {
+    fn open(&self, folder: &Path) -> bool {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         // The folder held before is let go of first: it may be this one.
-        *open = (None, None);
-        *open = (Some(folder.to_owned()), hold_open(folder));
+        *open = Opened { folder: Some(folder.to_owned()), ..Opened::default() };
+        open.hold()
+    }
+
+    fn hold_again(&self, folder: &Path) -> bool {
+        // A worker of this Jobdesk's own that holds the folder alone holds this too: never wait on it.
+        let mut open = match self.open.try_lock() {
+            Ok(open) => open,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return false,
+        };
+        if open.folder.as_deref() != Some(folder) || !open.kept_out {
+            return false;
+        }
+        open.hold()
     }
 
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError> {
@@ -207,8 +242,29 @@ mod tests {
     #[test]
     fn opening_a_folder_with_no_jobdesk_makes_nothing() {
         let folder = tempfile::tempdir().unwrap();
-        DiskFolder::default().open(folder.path());
+        let disk = DiskFolder::default();
+        assert!(!disk.open(folder.path()), "never kept out");
+        assert!(!disk.hold_again(folder.path()));
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
+    }
+
+    /// A Jobdesk that opens a folder while another holds it alone, as a second handle does here, is kept out until it
+    /// takes the hold, and holds it from then on.
+    #[test]
+    fn a_folder_another_jobdesk_holds_alone_keeps_this_one_out_until_it_holds_it() {
+        let folder = set_up();
+        let lock = folder.path().join(installed_source::DIR).join(".open");
+        let other = fs::File::options().read(true).write(true).create(true).truncate(false).open(&lock).unwrap();
+        other.lock().unwrap();
+        let disk = DiskFolder::default();
+        assert!(disk.open(folder.path()), "kept out at the open");
+        assert!(disk.hold_again(folder.path()), "and while the other holds it");
+        assert!(!disk.hold_again(&folder.path().join("another")), "of the open folder only");
+        drop(other);
+        assert!(!disk.hold_again(folder.path()), "the hold is taken");
+        let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
+        assert!(other.try_lock().is_err(), "this Jobdesk holds it open now");
+        assert!(!disk.hold_again(folder.path()));
     }
 
     struct Serves(Vec<u8>);

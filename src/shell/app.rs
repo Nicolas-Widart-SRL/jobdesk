@@ -15,7 +15,7 @@ use crate::dossier;
 use crate::dossier::application::{Dossier, PageStore, RunTranscript, compose_dossier};
 use crate::dossier::ui::DossierScreen;
 use crate::folder_update;
-use crate::folder_update::application::{FOLDER_WAITS, FolderUpdate, RESTART_WAITS};
+use crate::folder_update::application::{FOLDER_WAITS, FolderUpdate, HOLD_RETRY, RESTART_WAITS};
 use crate::folder_update::ui::{NoticeRequest, NoticeScreen};
 use crate::insights;
 use crate::intray;
@@ -645,9 +645,10 @@ impl Shell {
     }
 
     /// A running task keeps its folder: a new one would replace the desk and drop the task's live session. A folder
-    /// update keeps it too, so its notice and Undo stay with the folder it changed.
+    /// update keeps it too, so its notice and Undo stay with the folder it changed, and so does another Jobdesk's that
+    /// holds the folder alone.
     fn folder_locked(&self) -> bool {
-        self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.is_working()
+        self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.is_busy()
     }
 
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
@@ -768,7 +769,7 @@ impl Shell {
 
     /// Why Change folder waits, if it does.
     fn folder_wait(&self) -> Option<&'static str> {
-        if self.folder_update.is_working() {
+        if self.folder_update.is_busy() {
             return Some(FOLDER_WAITS);
         }
         self.folder_locked().then_some(FOLDER_BUSY)
@@ -801,6 +802,10 @@ impl Shell {
         self.follow_updates(ui.ctx(), now);
         // After the desk's news and the updates', and before any screen can start a task.
         self.follow_folder_update();
+        // While another Jobdesk holds the folder alone, the hold is tried again even with no input.
+        if self.folder_update.kept_out() {
+            ui.ctx().request_repaint_after(HOLD_RETRY);
+        }
         if self.community.poll(self.now_utc()) {
             self.name_community_portals();
         }
@@ -968,14 +973,15 @@ impl Shell {
         }
     }
 
-    /// Who else writes the job search folder now, if anyone: a task that works, or the folder update or its Undo. Every
-    /// other writer of the folder waits on it: a new task and a reply, through the desk, Profile's Save, and Portals'
-    /// switch and Remove. The folder update waits the other way round in `folder_writable`. Profile and Portals write on
-    /// the window's thread within one frame, so none is under way when `follow_folder_update` starts the update.
+    /// Who else writes the job search folder now, if anyone: a task that works, or the folder update or its Undo, this
+    /// Jobdesk's or another's that holds the folder alone. Every other writer of the folder waits on it: a new task and
+    /// a reply, through the desk, Profile's Save, and Portals' switch and Remove. The folder update waits the other way
+    /// round in `folder_writable`. Profile and Portals write on the window's thread within one frame, so none is under
+    /// way when `follow_folder_update` starts the update.
     fn folder_writer(&self) -> Option<FolderWriter> {
         if self.desk.as_ref().is_some_and(RunDesk::is_busy) {
             Some(FolderWriter::Task)
-        } else if self.folder_update.is_working() {
+        } else if self.folder_update.is_busy() {
             Some(FolderWriter::FolderUpdate)
         } else {
             None
@@ -998,13 +1004,13 @@ impl Shell {
     }
 
     /// Takes the folder update's news, then starts the open folder's rollback once after it opened, or an update once
-    /// for each answer of the feed, while the folder may be written. While one works, the desk starts no task and sends
-    /// no turn, set before any screen draws.
+    /// for each answer of the feed, while the folder may be written. While one works, here or in another Jobdesk that
+    /// holds the folder alone, the desk starts no task and sends no turn, set before any screen draws.
     fn follow_folder_update(&mut self) {
         let writable = self.folder_writable();
         let feed = self.updates.latest_feed().map(|feed| (self.updates.feed_answers(), feed));
         self.folder_update.follow(feed, writable);
-        let updating = self.folder_update.is_working();
+        let updating = self.folder_update.is_busy();
         if let Some(desk) = &mut self.desk {
             desk.set_folder_updating(updating);
         }
@@ -1024,7 +1030,7 @@ impl Shell {
 
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
-        restart_wait(self.session_state()).or_else(|| self.folder_update.is_working().then_some(RESTART_WAITS))
+        restart_wait(self.session_state()).or_else(|| self.folder_update.is_busy().then_some(RESTART_WAITS))
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -1430,7 +1436,7 @@ impl Shell {
                 Some(NoticeRequest::Undo) => {
                     let writable = self.folder_writable();
                     self.folder_update.undo_update(writable);
-                    let updating = self.folder_update.is_working();
+                    let updating = self.folder_update.is_busy();
                     if let Some(desk) = &mut self.desk {
                         desk.set_folder_updating(updating);
                     }
@@ -3137,6 +3143,50 @@ mod tests {
         assert!(shell.folder_update.is_working(), "the rollback starts");
         assert!(shell.desk.as_ref().unwrap().folder_updating(), "and every task waits for it");
         assert_eq!(shell.folder_wait(), Some(FOLDER_WAITS), "and so does Change folder");
+    }
+
+    /// Another Jobdesk that updates the folder holds its lock alone, as a second handle does here, so this one cannot
+    /// hold it open: every writer of the folder waits as for its own update, until the hold is taken.
+    #[test]
+    fn every_writer_waits_while_another_jobdesk_updates_the_folder() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let path = checkout(&folder);
+        fs::create_dir(path.join(".jobdesk")).unwrap();
+        let other = fs::File::options().read(true).write(true).create(true).truncate(false).open(path.join(".jobdesk/.open")).unwrap();
+        other.lock().unwrap();
+        let mut shell = launch(&ctx, Some(path.clone()), data.path());
+        shell.folder_update = folder_update::folder_update(data.path(), "0.1.0", Arc::new(|| {}));
+        shell.open(&ctx, &path);
+        // A gateway that starts no real process, should the guard fail.
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        let options = StartOptions { model: None, budget_usd: 5.0 };
+        // Whatever worker the open starts has ended, so only the other Jobdesk's hold can keep a writer waiting.
+        shell.follow_folder_update();
+        while shell.folder_update.is_working() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            shell.follow_folder_update();
+        }
+        let start = |shell: &mut Shell| shell.desk.as_mut().unwrap().start("/apply https://kestrel.example/jobs/2", &options, Local::now().naive_local());
+        assert!(start(&mut shell).is_err(), "no task starts");
+        assert_eq!(shell.folder_writer(), Some(FolderWriter::FolderUpdate), "Profile's Save and the portal changes wait");
+        assert_eq!(shell.restart_wait(), Some(RESTART_WAITS));
+        assert_eq!(shell.folder_wait(), Some(FOLDER_WAITS));
+        assert_eq!(shell.providers.test_gate(false), TestGate::FolderUpdating);
+
+        drop(other);
+        // The hold is tried again about once a second.
+        std::thread::sleep(HOLD_RETRY + std::time::Duration::from_millis(100));
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.kept_out(), "the hold is taken");
+        // Then the rollback due at the open runs, and ends.
+        while shell.folder_update.is_working() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            shell.follow_folder_update();
+        }
+        assert_eq!(shell.folder_writer(), None);
+        assert_eq!((shell.restart_wait(), shell.folder_wait()), (None, None));
+        assert!(start(&mut shell).is_ok(), "the task starts once this Jobdesk holds the folder");
     }
 
     /// Keep working in the quit dialog, by click or by Esc, keeps the window, so a Restart to update that waited on it is off.

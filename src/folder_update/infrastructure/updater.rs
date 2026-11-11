@@ -503,7 +503,7 @@ mod tests {
 
     use super::*;
     use crate::folder_update::domain::{Release, SideCopy, SkipReason, Skipped};
-    use crate::folder_update::infrastructure::hold::hold_open;
+    use crate::folder_update::infrastructure::hold::{Open, hold_open};
     use crate::shared_kernel::release_zip::fixtures::{Entry, zip_of};
 
     const OLD: &str = "1.7.5";
@@ -1266,7 +1266,7 @@ mod tests {
         fixture.run().unwrap();
         let other = File::options().read(true).write(true).create(true).truncate(false).open(fixture.jobdesk().join(".open")).unwrap();
         other.lock_shared().unwrap();
-        assert!(hold_open(&fixture.folder).is_some(), "a Jobdesk opens it beside the other");
+        assert!(matches!(hold_open(&fixture.folder), Open::Held(_)), "a Jobdesk opens it beside the other");
         let before = tree(&fixture.folder);
         assert_eq!(fixture.run(), Err(UpdateError::Busy));
         assert_eq!(undo(&fixture.folder), Err(UpdateError::Busy));

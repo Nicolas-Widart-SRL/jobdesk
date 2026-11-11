@@ -2,6 +2,9 @@
 //! a proposal of numbered changes that ends by asking to confirm, or a few short follow-ups. This finds the numbered
 //! items, so a sheet can put a field under each and the reply can be built from their numbers.
 
+use std::collections::HashSet;
+use std::ops::Range;
+
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::shared_kernel::markdown;
@@ -29,6 +32,11 @@ impl Batch {
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.groups.iter().flat_map(|group| group.items.iter())
     }
+
+    /// Every item's number, in Claude's order, for the replies.
+    pub fn numbers(&self) -> Vec<u32> {
+        self.items().map(|item| item.number).collect()
+    }
 }
 
 /// Items under one title: a heading or a bold-only line that came before them. The items before any title have none.
@@ -41,7 +49,7 @@ pub struct Group {
 /// One numbered item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
-    /// The number Claude wrote: the list's start plus the item's place in it.
+    /// The number Claude wrote, which is also the list's start plus the item's place in it.
     pub number: u32,
     /// The item as Markdown, without its number, nested lists and lettered lines included, to show as Claude wrote it.
     pub body: String,
@@ -51,9 +59,12 @@ pub struct Item {
     pub optional: bool,
 }
 
-/// Reads `message`. Hidden characters are removed first, so one inside a number cannot hide the item.
+/// Reads `message`. Every kind of line break splits a line, then hidden characters are removed from each, so one inside
+/// a number cannot hide the item. The message is `Free` unless each item's typed number is its list's start plus its
+/// place, and the numbers run 1 to N across the whole message.
 pub fn read_message(message: &str) -> Message {
-    let text = message.lines().map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n");
+    let unified = message.replace("\r\n", "\n").replace(['\r', '\u{85}', '\u{2028}', '\u{2029}'], "\n");
+    let text = unified.lines().map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n");
     let Some(scan) = scan(&text) else { return Message::Free };
     let numbered = scan.groups.iter().flat_map(|group| group.items.iter()).enumerate().all(|(at, item)| u64::from(item.number) == at as u64 + 1);
     let batch = Batch { groups: scan.groups };
@@ -64,9 +75,10 @@ pub fn read_message(message: &str) -> Message {
     if asks && batch.items().all(|item| !item.text.contains('?')) { Message::Proposal(batch) } else { Message::Questions(batch) }
 }
 
-/// Whether the closing paragraph holds "apply", "confirm" or "yes" as a word, in any case.
+/// Whether the closing paragraph holds "apply" as a word, in any case. "Confirm" and "yes" alone do not make a proposal,
+/// because a batch of questions can ask to confirm too, and "Yes, apply these changes." answers only a proposal.
 fn asks_to_apply(closing: &str) -> bool {
-    closing.split(|c: char| !c.is_alphanumeric()).any(|word| ["apply", "confirm", "yes"].iter().any(|ask| word.eq_ignore_ascii_case(ask)))
+    closing.split(|c: char| !c.is_alphanumeric()).any(|word| word.eq_ignore_ascii_case("apply"))
 }
 
 struct Scan {
@@ -79,6 +91,7 @@ struct Scan {
 #[derive(Default)]
 struct Block {
     heading: bool,
+    range: Range<usize>,
     text: String,
     strong: usize,
     /// Text outside bold, so a bold-only line is told from a line that only holds some bold.
@@ -110,11 +123,16 @@ fn scan(text: &str) -> Option<Scan> {
     let mut depth = 0usize;
     // The number the next item of the top-level ordered list gets, while inside one.
     let mut next: Option<u64> = None;
+    // Whether the last block was a numbered list, so lettered lines that come next belong to its last item.
+    let mut after_item = false;
+    let mut code: Vec<Range<usize>> = Vec::new();
+    let mut item_starts: HashSet<usize> = HashSet::new();
     for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
         match event {
             Event::Start(Tag::List(start)) => {
                 if depth == 0 {
                     next = start;
+                    after_item = false;
                     if start.is_some() {
                         closing = None;
                         match title.take() {
@@ -133,15 +151,20 @@ fn scan(text: &str) -> Option<Scan> {
             Event::End(TagEnd::List(_)) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    next = None;
+                    after_item = next.take().is_some();
                 }
             }
             Event::Start(Tag::Item) => {
+                item_starts.insert(marker_at(text, range.start));
                 if depth == 1
                     && let Some(number) = next.as_mut()
                 {
                     let at = *number;
                     *number += 1;
+                    // Markdown numbers a list by its first number alone, so the number Claude typed is read from the text.
+                    if typed_number(text, range.start) != Some(at) {
+                        return None;
+                    }
                     open = Some(Open {
                         number: u32::try_from(at).ok(),
                         start: range.start,
@@ -166,19 +189,36 @@ fn scan(text: &str) -> Option<Scan> {
                     group.items.push(finish(item, text)?);
                 }
             }
+            Event::Start(Tag::CodeBlock(_)) => code.push(range),
             Event::Start(tag) if holds_blocks(&tag) => depth += 1,
             Event::End(tag) if ends_blocks(&tag) => depth = depth.saturating_sub(1),
             Event::Start(Tag::Paragraph) | Event::Start(Tag::Heading { .. }) if depth == 0 => {
-                block = Some(Block { heading: !matches!(event, Event::Start(Tag::Paragraph)), ..Block::default() });
+                block = Some(Block { heading: !matches!(event, Event::Start(Tag::Paragraph)), range, ..Block::default() });
             }
             Event::End(TagEnd::Paragraph) | Event::End(TagEnd::Heading(_)) if depth == 0 => {
                 if let Some(done) = block.take() {
                     let line = done.text.split_whitespace().collect::<Vec<_>>().join(" ");
-                    if done.heading || (done.bold_text && !done.plain_text) {
-                        title = Some(line.clone()).filter(|line| !line.is_empty()).or(title);
-                    }
-                    if !done.heading {
-                        closing = Some(line);
+                    let source = text[done.range.clone()].trim();
+                    let last = groups.last_mut().and_then(|group| group.items.last_mut());
+                    match last {
+                        // Lettered lines set apart from their question by a blank line still belong to it.
+                        Some(item) if after_item && !done.heading && lettered(source) => {
+                            item.body.push_str("\n\n");
+                            item.body.push_str(source);
+                            item.text.push(' ');
+                            item.text.push_str(&line);
+                        }
+                        _ => {
+                            after_item = false;
+                            if done.heading || (done.bold_text && !done.plain_text) {
+                                title = Some(line.clone()).filter(|line| !line.is_empty()).or(title);
+                            } else {
+                                title = None;
+                            }
+                            if !done.heading {
+                                closing = Some(line);
+                            }
+                        }
                     }
                 }
             }
@@ -230,7 +270,49 @@ fn scan(text: &str) -> Option<Scan> {
             _ => {}
         }
     }
+    if hides_numbered_line(text, &code, &item_starts) {
+        return None;
+    }
     Some(Scan { groups, closing })
+}
+
+/// Where the item that starts at `at` has its marker: its range may begin on the indent before it.
+fn marker_at(text: &str, at: usize) -> usize {
+    let rest = &text[at..];
+    at + rest.len() - rest.trim_start_matches([' ', '\t']).len()
+}
+
+/// The number typed at the start of the item at `at`.
+fn typed_number(text: &str, at: usize) -> Option<u64> {
+    let rest = &text[marker_at(text, at)..];
+    rest[..rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len()].parse().ok()
+}
+
+/// Whether every line of `source` is a letter, a "." or ")" and some text, as in "a. Individual contributor".
+fn lettered(source: &str) -> bool {
+    source.lines().all(|line| {
+        let mut chars = line.trim().chars();
+        chars.next().is_some_and(|letter| letter.is_ascii_alphabetic()) && matches!(chars.next(), Some('.' | ')')) && chars.next() == Some(' ')
+    })
+}
+
+/// Whether a line outside any code starts like a numbered item and yet is no item the parser found, nested or not. One is
+/// hiding inside a paragraph, where Markdown does not start a list at a number but 1.
+fn hides_numbered_line(text: &str, code: &[Range<usize>], item_starts: &HashSet<usize>) -> bool {
+    let mut at = 0;
+    for line in text.split('\n') {
+        let marker = at + line.len() - line.trim_start_matches([' ', '\t']).len();
+        at += line.len() + 1;
+        let rest = &text[marker..at.min(text.len())];
+        let rest = rest.trim_end_matches('\n');
+        let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        let numbered =
+            after_digits.len() < rest.len() && after_digits.strip_prefix(['.', ')']).is_some_and(|tail| tail.is_empty() || tail.starts_with([' ', '\t']));
+        if numbered && !item_starts.contains(&marker) && !code.iter().any(|block| block.contains(&marker)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The item read, or `None` when its number does not fit.
@@ -405,9 +487,78 @@ mod tests {
     }
 
     #[test]
-    fn inside_one_list_an_item_is_numbered_by_the_lists_start_and_its_place() {
-        let batch = batch(read_message("1. First?\n2. Second?\n4. Third?\n"));
+    fn a_gap_or_a_repeat_inside_one_list_is_free() {
+        assert_eq!(read_message("1. First?\n2. Second?\n4. Third?\n"), Message::Free);
+        assert_eq!(read_message("1. First?\n1. Second?\n1. Third?\n"), Message::Free);
+        assert_eq!(read_message("1. First?\n2. Second?\n2. Third?\n"), Message::Free);
+        assert_eq!(read_message("1. First?\n3. Second?\n"), Message::Free);
+    }
+
+    #[test]
+    fn the_number_is_the_one_claude_typed() {
+        let batch = batch(read_message("1. First?\n2. Second?\n\nThen.\n\n3. Third?\n4. Fourth?\n"));
+        assert_eq!(numbers(&batch), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn under_indented_sub_items_that_become_siblings_are_free() {
+        let message = "1. One?\n2. Which?\n  1. sub\n  2. sub\n3. Next?\n";
+        assert_eq!(read_message(message), Message::Free);
+        let tens = "9. Nine?\n10. Which?\n  1. sub\n  2. sub\n11. Next?\n";
+        assert_eq!(read_message(tens), Message::Free);
+    }
+
+    #[test]
+    fn a_numbered_line_that_hides_in_a_paragraph_makes_the_message_free() {
+        let proposal = "**CLAUDE.md**\n1. A\n2. B\n\n**cv/**\n3. C\n4. D\n\nReply yes to apply all, or list the numbers to skip.\n";
+        assert_eq!(read_message(proposal), Message::Free);
+        let questions = "**About pay**\n1. A?\n2. B?\n\n**About the rest**\n10. C?\n11. D?\n";
+        assert_eq!(read_message(questions), Message::Free);
+        assert_eq!(read_message("1. A?\n2. B?\n\nSee note\n3) not a list.\n"), Message::Free);
+    }
+
+    #[test]
+    fn numbered_lines_in_code_or_as_nested_sub_items_do_not_count_as_hidden() {
+        let fenced = "1. A?\n2. B?\n\n```\n3. in a fence\n```\n";
+        assert_eq!(numbers(&batch(read_message(fenced))), [1, 2]);
+        let indented = "1. A?\n2. B?\n\nExample:\n\n    3. in an indented block\n";
+        assert_eq!(numbers(&batch(read_message(indented))), [1, 2]);
+        let nested = "1. A?\n   1. sub one\n   2. sub two\n2. B?\n";
+        let batch = batch(read_message(nested));
+        assert_eq!(numbers(&batch), [1, 2]);
+        assert_eq!(batch.items().next().unwrap().text, "A? sub one sub two");
+    }
+
+    #[test]
+    fn every_kind_of_line_break_splits_a_line() {
+        for sep in ["\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}", "\n"] {
+            let message = format!("1. A?{sep}2. B?\n3. C?\n4. D?");
+            let batch = batch(read_message(&message));
+            assert_eq!(numbers(&batch), [1, 2, 3, 4], "separator {sep:?}");
+            assert_eq!(batch.items().next().unwrap().text, "A?", "separator {sep:?}");
+        }
+    }
+
+    #[test]
+    fn a_plain_paragraph_after_a_title_clears_it() {
+        let batch = batch(read_message("**Note**\n\nSome plain text.\n\n1. A?\n2. B?\n"));
+        assert_eq!(batch.groups[0].title, None);
+    }
+
+    #[test]
+    fn lettered_lines_after_a_blank_line_stay_inside_their_item() {
+        let batch = batch(read_message("1. First?\n2. Which?\n\na. IC\nb. Lead\n\n3. Third?\n"));
         assert_eq!(numbers(&batch), [1, 2, 3]);
+        let two = batch.items().nth(1).unwrap();
+        assert_eq!(two.text, "Which? a. IC b. Lead");
+        assert_eq!(two.body, "Which?\n\na. IC\nb. Lead");
+        assert_eq!(batch.items().nth(2).unwrap().text, "Third?");
+    }
+
+    #[test]
+    fn an_ordinary_paragraph_between_items_is_not_pulled_into_one() {
+        let batch = batch(read_message("1. First?\n2. Second?\n\nAnd now the next part.\n\n3. Third?\n"));
+        assert_eq!(batch.items().nth(1).unwrap().text, "Second?");
     }
 
     #[test]
@@ -452,10 +603,18 @@ mod tests {
     #[test]
     fn a_proposal_needs_a_closing_paragraph_that_asks() {
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all.\n"), Message::Proposal(_)));
-        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I CONFIRM these?\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I APPLY these?\n"), Message::Proposal(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or list the numbers to skip.\n"), Message::Proposal(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nTell me when you are ready.\n"), Message::Questions(_)));
+    }
+
+    #[test]
+    fn a_confirming_question_batch_is_not_a_proposal() {
+        let message = "1. Your title is Design Lead.\n2. Your notice period is three months.\n\nCan you confirm these are right?\n";
+        assert!(matches!(read_message(message), Message::Questions(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes if you agree.\n"), Message::Questions(_)));
+        assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
     }
 
     #[test]

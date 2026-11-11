@@ -21,12 +21,13 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
-use crate::onboarding::application::{Onboarding, Stage as SetupStage};
-use crate::onboarding::ui::{FirstRunRequest, FirstRunScreen};
+use crate::onboarding::application::{Onboarding, PollInput, ProfilePhase, ProfileRun, Stage as SetupStage, StartRules};
+use crate::onboarding::ui::{Chapter, ChapterRequest, FirstRunRequest, FirstRunScreen, ProfileChapter, Recap, RecapRequest};
 use crate::portals;
 use crate::portals::application::{Community, PortalChanges};
 use crate::portals::ui::{BrowseContext, PortalsRequest, PortalsScreen};
 use crate::profile;
+use crate::profile::application::{CvShelf, Shelf, home_country, topic_counts};
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
@@ -66,6 +67,10 @@ const WORKSPACE_KEY: &str = "workspace";
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
 /// Why Change folder waits: a session stays open after its turn ends, until its process exits or the user ends it.
 const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Tasks to change the folder.";
+/// Why Change folder waits while first-run setup's Profile chapter copies documents into the folder.
+const FOLDER_COPYING: &str = "Jobdesk is copying your documents into your job search folder. Change folder once it finishes.";
+/// Why Restart to update waits while first-run setup's Profile chapter copies documents into the folder.
+const RESTART_COPYING: &str = "Jobdesk is copying your documents into your job search folder. Restart once it finishes.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
@@ -229,12 +234,29 @@ pub struct Shell {
     setup_stopping: Option<JoinHandle<()>>,
     /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
     window: Option<WindowSize>,
+    /// First-run setup's Profile chapter, then its recap, over the folder it opened, in the window grown to the app's.
+    profile_setup: Option<ProfileSetup>,
+    /// The folder opened for first-run setup, whose profile is not built yet. While it is open it is not remembered, so
+    /// the next open shows the welcome back and its Finish my profile.
+    setup_pending: Option<PathBuf>,
     /// The update of the open job search folder that comes with each Jobdesk update, its rollback at every open, and
     /// its Undo. Not a run: no Claude, no run log, nothing counted in Usage. While it works no run starts, Restart to
     /// update waits and the folder stays.
     folder_update: FolderUpdate,
     /// Whether the folder update's details are open over the desk.
     notice_screen: NoticeScreen,
+}
+
+/// The Profile chapter of first-run setup, and its recap once the run is done.
+struct ProfileSetup {
+    run: ProfileRun,
+    screen: ProfileChapter,
+    /// The user went on without LaTeX this time.
+    without_pdfs: bool,
+    /// The job search folder as the screens show it, such as `Documents/Job search`.
+    shown: String,
+    /// The recap shows, with the seconds Claude worked in setup's run, read when it opened.
+    recap: Option<u64>,
 }
 
 /// What Restart to update applies once the window has closed, and the arguments the new copy opens with. `run` reads it.
@@ -344,6 +366,8 @@ impl Shell {
             setup_stopping: None,
             // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
             window: Some(WindowSize::App),
+            profile_setup: None,
+            setup_pending: None,
             // Folders that are never there, so a preview or a test never writes a folder or reaches the network.
             folder_update: folder_update::idle_folder_update(env!("CARGO_PKG_VERSION")),
             notice_screen: NoticeScreen::default(),
@@ -401,6 +425,30 @@ impl Shell {
     /// `home` show from it.
     pub fn with_first_run(self, onboarding: Onboarding, home: PathBuf) -> Self {
         Self { first_run: Some(FirstRun { onboarding, screen: FirstRunScreen::new(home) }), window: None, ..self }
+    }
+
+    /// Shows first-run setup's Profile chapter through `run` over the folder open, which shows as `shown`, as setup does
+    /// once the Computer step is done, for tests and snapshots. `without_pdfs` says the user went on without LaTeX.
+    pub fn with_profile_setup(self, run: ProfileRun, without_pdfs: bool, shown: &str) -> Self {
+        let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown: shown.to_owned(), recap: None };
+        let pending = Some(setup.run.folder().to_owned());
+        Self { profile_setup: Some(setup), setup_pending: pending, screen: Screen::InTray, ..self }
+    }
+
+    /// Keeps the shell's own files, and first-run setup's Profile chapter, in `data`, as a launch does, for tests that
+    /// give a fictional data folder.
+    pub fn with_data_folder(self, data: PathBuf) -> Self {
+        Self { data: Some(data), ..self }
+    }
+
+    /// The Profile chapter's run while it shows, for tests that act on it as its screens would.
+    pub fn profile_setup_mut(&mut self) -> Option<&mut ProfileRun> {
+        self.profile_setup.as_mut().map(|setup| &mut setup.run)
+    }
+
+    /// Whether first-run setup's Profile chapter or its recap shows.
+    pub fn in_profile_setup(&self) -> bool {
+        self.profile_setup.is_some()
     }
 
     /// First-run setup while it shows, for tests that act as its folder picker would.
@@ -653,8 +701,19 @@ impl Shell {
         self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.folder_wait() == Some(FolderWait::Updating)
     }
 
+    /// Whether first-run setup's Profile chapter copies documents into the folder for its run. Its worker writes
+    /// `documents/` until the copy ends, so the folder stays, as for a running task.
+    fn copying_documents(&self) -> bool {
+        self.profile_setup.as_ref().is_some_and(|setup| setup.run.is_starting())
+    }
+
+    /// Whether another folder may not open now: a task, a folder update or the Profile chapter's copy holds this one.
+    fn folder_held(&self) -> bool {
+        self.folder_locked() || self.copying_documents()
+    }
+
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
-        if self.folder_locked() {
+        if self.folder_held() {
             return;
         }
         match workspace::open(path) {
@@ -698,8 +757,16 @@ impl Shell {
                 ctx.request_repaint();
                 self.workspace = Some(root);
                 self.folder_error = None;
-                // However the folder opened, first-run setup has nothing left to do.
+                // However the folder opened, first-run setup has nothing left to do. Its Profile chapter, when this is
+                // its folder, starts again once it has opened.
                 self.leave_first_run();
+                self.leave_profile_setup();
+                // Another folder the user opened is remembered. The setup folder opened again stays pending, so the next
+                // open still offers Finish my profile.
+                let opened = self.workspace.as_ref().map(|workspace| workspace.path().to_owned());
+                if !self.setup_pending.as_deref().zip(opened.as_deref()).is_some_and(|(setup, opened)| same_folder(setup, opened)) {
+                    self.setup_pending = None;
+                }
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }
@@ -711,7 +778,7 @@ impl Shell {
 
     /// The dialog opens only when the folder may change. Unsaved profile text asks first, once a folder is picked.
     fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
-        if self.folder_locked() {
+        if self.folder_held() {
             return;
         }
         match pick() {
@@ -781,7 +848,8 @@ impl Shell {
         match self.folder_update.folder_wait() {
             Some(FolderWait::Updating) => Some(FOLDER_WAITS),
             // This Jobdesk holds nothing in a folder it cannot lock, and another folder is the way out.
-            Some(FolderWait::Unlockable) | None => self.folder_locked().then_some(FOLDER_BUSY),
+            Some(FolderWait::Unlockable) | None if self.folder_locked() => Some(FOLDER_BUSY),
+            Some(FolderWait::Unlockable) | None => self.copying_documents().then_some(FOLDER_COPYING),
         }
     }
 
@@ -800,6 +868,11 @@ impl Shell {
         if let Some(desk) = &mut self.desk {
             desk.set_testing(testing);
             desk.poll();
+        }
+        self.follow_profile_setup();
+        // No input may come while the chapter waits for a snapshot read after the turn ended.
+        if let Some(wait) = self.profile_setup.as_ref().and_then(|setup| setup.run.snapshot_wait(Instant::now())) {
+            ui.ctx().request_repaint_after(wait);
         }
         self.follow_runs();
         self.settle_run_end(ui.ctx());
@@ -837,6 +910,8 @@ impl Shell {
             egui::CentralPanel::default().frame(sheet_frame()).show(ui, |ui| {
                 if self.settings_open {
                     self.settings(ui);
+                } else if self.profile_setup.is_some() {
+                    self.profile_setup_screen(ui);
                 } else if self.workspace.is_some() {
                     self.content(ui, &queue);
                 } else if self.first_run.is_some() {
@@ -872,16 +947,153 @@ impl Shell {
     }
 
     /// Takes what first-run setup's worker said. Once the Folder and Computer steps are done, the folder opens as the
-    /// job search.
+    /// job search, and the Profile chapter shows over it in the window grown to the app's size.
     fn follow_first_run(&mut self, ctx: &egui::Context) {
         self.join_stopped_setup(ctx);
         let Some(first) = &mut self.first_run else { return };
         first.onboarding.poll(self.snapshot.today);
-        if let SetupStage::Finished { folder } = first.onboarding.stage() {
-            let folder = folder.clone();
+        if let SetupStage::Finished { folder, without_pdfs } = first.onboarding.stage() {
+            let (folder, without_pdfs) = (folder.clone(), *without_pdfs);
+            let (progress, shown) = (first.onboarding.progress().clone(), first.screen.shown(&folder));
             self.open(ctx, &folder);
             // A folder that failed to open leaves setup too, and shows on the welcome.
             self.leave_first_run();
+            if let (Some(_), Some(data)) = (&self.workspace, &self.data) {
+                let repaint = ctx.clone();
+                let pending = Some(folder.clone());
+                let run = crate::onboarding::profile_run(data, folder, progress, Arc::new(move || repaint.request_repaint()), self.snapshot.today);
+                let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown, recap: None };
+                (self.profile_setup, self.setup_pending) = (Some(setup), pending);
+            }
+        }
+    }
+
+    /// Leaves the Profile chapter or its recap, with the draft written first. Its record stays, unless the recap
+    /// cleared it.
+    fn leave_profile_setup(&mut self) {
+        if let Some(mut setup) = self.profile_setup.take() {
+            setup.run.flush();
+        }
+    }
+
+    /// Polls the Profile chapter's run after the desk, with the rules Read my documents is checked against, and opens
+    /// the recap once the run is done. Without PDFs holds once the user went on without LaTeX, or the tool check finds
+    /// none. The end of a turn waits for a snapshot read after it, which the run's end asks for, so the CV check and the
+    /// recap read what the turn wrote.
+    fn follow_profile_setup(&mut self) {
+        let cap = self.cap();
+        let testing = self.providers.test_gate(false) == TestGate::Testing;
+        let wall = self.now();
+        let no_latex = self.environment.as_ref().is_some_and(|checks| checks.results().is_some() && checks.version_of("lualatex").is_none());
+        let (Some(setup), Some(desk)) = (&mut self.profile_setup, &mut self.desk) else { return };
+        let rules = StartRules { defaults: &self.settings.preferences().run_defaults, cap: &cap, testing };
+        let input = PollInput {
+            cv: &self.snapshot.cv_documents,
+            read_at: self.snapshot.read_at,
+            rereads: self.snapshots.is_some(),
+            without_pdfs: setup.without_pdfs || no_latex,
+            rules,
+            now: Instant::now(),
+            wall,
+        };
+        setup.run.poll(desk, &input);
+        if setup.recap.is_none() && *setup.run.phase() == ProfilePhase::Done {
+            let took = setup.run.run(desk).map_or(Duration::ZERO, |run| run.elapsed.total(desk.now()));
+            setup.recap = Some(took.as_secs());
+            // The recap opens: the record goes, and the folder is remembered from now on.
+            setup.run.clear_record();
+            setup.without_pdfs |= no_latex;
+            self.setup_pending = None;
+            (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+        }
+    }
+
+    /// The recap's facts, from the snapshot.
+    fn recap_facts(&self, setup: &ProfileSetup, worked: u64) -> Recap {
+        let snapshot = &self.snapshot;
+        let counts = topic_counts(&snapshot.profile);
+        let cv = match &snapshot.cv_documents {
+            CvShelf::Read { documents, .. } => {
+                documents.iter().filter(|doc| doc.shelf == Shelf::Master).find_map(|doc| doc.pdf.as_ref().map(|pdf| pdf.name.clone()))
+            }
+            CvShelf::Unread => None,
+        };
+        let sites = snapshot.portals.portals.iter().filter(|portal| portal.on).map(|portal| portal.name.clone()).collect();
+        Recap {
+            folder: setup.shown.clone(),
+            without_pdfs: setup.without_pdfs,
+            topics: (counts.filled, counts.total),
+            cv,
+            sites,
+            country: home_country(&snapshot.profile),
+            worked,
+            today: snapshot.today,
+        }
+    }
+
+    /// The Profile chapter's screen for where its run stands, or the recap, then what the user asked for there.
+    fn profile_setup_screen(&mut self, ui: &mut Ui) {
+        if let Some(worked) = self.profile_setup.as_ref().and_then(|setup| setup.recap) {
+            let facts = self.profile_setup.as_ref().map(|setup| self.recap_facts(setup, worked));
+            if let Some(asked) = facts.and_then(|facts| crate::onboarding::ui::recap(ui, &facts).map(|asked| (asked, facts))) {
+                self.follow_recap(asked.0, asked.1.cv.as_deref());
+            }
+            return;
+        }
+        let cap = self.cap();
+        let testing = self.providers.test_gate(false) == TestGate::Testing;
+        let wall = self.now();
+        let (Some(setup), Some(desk)) = (&mut self.profile_setup, &mut self.desk) else { return };
+        let rules = StartRules { defaults: &self.settings.preferences().run_defaults, cap: &cap, testing };
+        let ProfileSetup { run, screen, shown, .. } = setup;
+        let mut chapter = Chapter { desk, rules, pages: self.pages.as_mut(), wall, now: Instant::now(), folder: shown };
+        let asked = screen.show(ui, run, &mut chapter);
+        match asked {
+            Some(ChapterRequest::ChooseFiles) => {
+                if let Some(files) = rfd::FileDialog::new().set_title("Choose your documents").add_filter("PDF", &["pdf"]).pick_files() {
+                    run.add_documents(files);
+                }
+            }
+            // Checked again against `cv/` before the system's viewer gets the file.
+            Some(ChapterRequest::OpenPdf(name)) => {
+                if let Some(workspace) = &self.workspace {
+                    profile::open_cv_pdf(workspace.path(), &name);
+                }
+            }
+            Some(ChapterRequest::FinishLater) => {
+                // The record stays, and the folder is not remembered, so the next open offers to pick up.
+                self.leave_profile_setup();
+                (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+            }
+            None => {}
+        }
+    }
+
+    /// Does what the recap asked. Each leaves it but Show in Finder and Open PDF.
+    fn follow_recap(&mut self, asked: RecapRequest, cv: Option<&str>) {
+        let root = self.workspace.as_ref().map(|workspace| workspace.path().to_owned());
+        match asked {
+            RecapRequest::ShowFolder => {
+                if let Some(root) = root {
+                    settings::reveal_folder(&root);
+                }
+            }
+            RecapRequest::OpenPdf => {
+                if let (Some(root), Some(name)) = (root, cv) {
+                    profile::open_cv_pdf(&root, name);
+                }
+            }
+            // It only opens the launcher: the user starts the run there.
+            RecapRequest::AddPortal => {
+                self.leave_profile_setup();
+                if self.launcher.prefill("/add-portal") {
+                    self.open_launcher();
+                }
+            }
+            RecapRequest::OpenJobdesk => {
+                self.leave_profile_setup();
+                (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+            }
         }
     }
 
@@ -940,8 +1152,8 @@ impl Shell {
             FirstRunRequest::Cancel => onboarding.cancel(),
             FirstRunRequest::GoOn => onboarding.go_on(),
             FirstRunRequest::Install => onboarding.install(),
-            FirstRunRequest::Finish => onboarding.finish(false),
-            FirstRunRequest::WithoutPdfs => onboarding.finish(true),
+            FirstRunRequest::Finish => onboarding.finish(false, today),
+            FirstRunRequest::WithoutPdfs => onboarding.finish(true, today),
         }
         // The worker may already have news, and a finished setup opens its folder at once.
         ui.ctx().request_repaint();
@@ -1004,9 +1216,11 @@ impl Shell {
 
     /// Whether the job search folder may be written by a folder update now: no task works and no Claude session is
     /// open, even one only waiting on a reply, as Restart to update waits for, first-run setup has handed over and its
-    /// worker has ended, and the window is not closing for Restart to update.
+    /// worker has ended, the Profile chapter is not copying documents into the folder for its run, and the window is not
+    /// closing for Restart to update.
     fn folder_writable(&self) -> bool {
-        self.session_state() == SessionState::None && self.first_run.is_none() && self.setup_stopping.is_none() && !self.restart_pending
+        let copying = self.copying_documents();
+        self.session_state() == SessionState::None && self.first_run.is_none() && self.setup_stopping.is_none() && !copying && !self.restart_pending
     }
 
     /// Takes the folder update's news, then starts the open folder's rollback once after it opened, or an update once
@@ -1043,7 +1257,10 @@ impl Shell {
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
         // This Jobdesk holds nothing in a folder it cannot lock, so a fixed Jobdesk may apply.
-        restart_wait(self.session_state()).or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
+        restart_wait(self.session_state())
+            .or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
+            // Closing the window would cut the Profile chapter's copy off halfway.
+            .or_else(|| self.copying_documents().then_some(RESTART_COPYING))
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -1071,7 +1288,7 @@ impl Shell {
     /// What Restart to update applies, for `run` once the window has closed, with the folder open now. Only a restart the
     /// user chose, with no session open, leaves one.
     fn leave_restart(&mut self) {
-        if !self.restart_pending || self.folder_locked() {
+        if !self.restart_pending || self.folder_held() {
             return;
         }
         let Some(plan) = self.updates.restart_plan() else { return };
@@ -1236,6 +1453,7 @@ impl Shell {
 
     /// Opens the launcher and keeps where it came from, for Esc. It closes Settings, which keeps its page for next time.
     fn open_launcher(&mut self) {
+        self.leave_recap();
         self.settings_open = false;
         if self.screen != Screen::Launcher {
             self.launcher_from = self.screen;
@@ -1297,7 +1515,9 @@ impl Shell {
         if open_settings {
             self.settings_open = true;
         }
-        if ask && self.workspace.is_some() {
+        // The Profile chapter offers no task of its own until its recap.
+        let chapter = self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_none());
+        if ask && self.workspace.is_some() && !chapter {
             self.new_task();
         }
     }
@@ -1328,8 +1548,9 @@ impl Shell {
     /// Before a folder is open, only the lit Today tab answers: the rest have nothing to show yet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
-        // First-run setup has no menu: nothing else is usable yet.
-        if self.first_run.is_some() && self.workspace.is_none() {
+        // First-run setup has no menu until its recap: nothing else is usable yet.
+        let chapter = self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_none());
+        if (self.first_run.is_some() && self.workspace.is_none()) || chapter {
             ui.allocate_ui_with_layout(vec2(ui.available_width(), NAV_TAB_HEIGHT), Layout::left_to_right(Align::Center), brand);
             return;
         }
@@ -1371,8 +1592,16 @@ impl Shell {
         }
     }
 
+    /// Leaves first-run setup's recap, if it shows, for the screen the user picked.
+    fn leave_recap(&mut self) {
+        if self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_some()) {
+            self.leave_profile_setup();
+        }
+    }
+
     /// Shows `screen`. Leaving Profile with unsaved text asks first, and the screen changes only once the user drops it.
     fn leave_for(&mut self, screen: Screen) {
+        self.leave_recap();
         let asks = self.screen == Screen::Profile
             && screen != Screen::Profile
             && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
@@ -2143,13 +2372,18 @@ impl eframe::App for Shell {
         self.show(ui);
     }
 
+    /// A folder whose first-run profile is not built yet is not remembered, so the next open offers to finish it.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(workspace) = &self.workspace {
+        if let Some(workspace) = self.workspace.as_ref().filter(|_| self.setup_pending.is_none()) {
             storage.set_string(WORKSPACE_KEY, workspace.path().display().to_string());
         }
     }
 
+    /// The Profile chapter's draft is written as the window closes.
     fn on_exit(&mut self) {
+        if let Some(setup) = &mut self.profile_setup {
+            setup.run.flush();
+        }
         self.leave_restart();
     }
 }
@@ -2167,6 +2401,11 @@ fn requested_workspace() -> Option<PathBuf> {
 /// Takes `OsString`s, so a path that is not Unicode arrives whole.
 fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Option<OsString>) -> Option<PathBuf> {
     args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
+}
+
+/// Whether two paths name the same folder: equal, or equal once links and `..` are resolved on disk.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
 }
 
 /// The data folder `JOBDESK_DATA_DIR` names, if it names one. Only an absolute path counts: an empty or relative one
@@ -3160,6 +3399,135 @@ mod tests {
         assert!(shell.folder_update.is_working(), "the rollback starts");
         assert!(shell.desk.as_ref().unwrap().folder_updating(), "and every task waits for it");
         assert_eq!(shell.folder_wait(), Some(FOLDER_WAITS), "and so does Change folder");
+    }
+
+    /// First-run setup's Profile chapter writes the folder as any task does. While the folder updates, Read my
+    /// documents copies nothing and starts nothing. Once Read my documents is pressed, the folder update waits for the
+    /// copy into `documents/`, then for the run's session.
+    #[test]
+    fn the_profile_chapter_and_the_folder_update_wait_on_each_other() {
+        use crate::onboarding::application::{Progress, StartRefusal};
+        use crate::runs::application::{CapCheck, RunDefaults};
+
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let root = checkout(&folder);
+        let cv = desktop.path().join("Sam Rivera CV.pdf");
+        fs::write(&cv, b"%PDF-1.4\nnothing else").unwrap();
+        let mut shell = launch(&ctx, Some(root.clone()), data.path());
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        let progress = Progress { folder: Some(root.clone()), ..Progress::default() };
+        let run = crate::onboarding::profile_run(data.path(), root.clone(), progress, Arc::new(|| {}), Local::now().date_naive());
+        shell = shell.with_profile_setup(run, true, "Documents/Job search");
+        shell.profile_setup_mut().unwrap().add_documents([cv]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.profile_setup.as_ref().unwrap().run.documents().is_looking() {
+            assert!(Instant::now() < deadline, "the document was never looked at");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
+        let rules = StartRules { defaults: &defaults, cap: &cap, testing: false };
+        let read = |shell: &mut Shell| {
+            let (Some(setup), Some(desk)) = (&mut shell.profile_setup, &mut shell.desk) else { panic!("the chapter shows") };
+            setup.run.read_documents(desk, &rules, Local::now().naive_local())
+        };
+
+        shell.folder_update = working_folder_update();
+        shell.follow_folder_update();
+        assert_eq!(read(&mut shell), Err(StartRefusal::FolderWait(FolderWait::Updating)));
+        assert!(!root.join("documents").exists(), "nothing is copied while the folder updates");
+        assert!(shell.desk.as_ref().unwrap().runs().is_empty(), "and no run starts");
+
+        shell.folder_update = folder_update::idle_folder_update("0.1.0");
+        shell.follow_folder_update();
+        read(&mut shell).unwrap();
+        // The folder is opened again, so its rollback is due.
+        shell.folder_update.opened(root.clone());
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.is_working(), "not while the documents are copied into the folder");
+        while shell.profile_setup.as_ref().unwrap().run.is_starting() {
+            assert!(Instant::now() < deadline, "the copy never ended");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        assert!(root.join("documents").exists(), "the copy went into the folder");
+        assert_eq!(shell.desk.as_ref().unwrap().runs().len(), 1, "and setup's run started");
+        shell.follow_folder_update();
+        assert!(!shell.folder_update.is_working(), "nor while setup's session is open");
+    }
+
+    /// A shell on first-run setup's Profile chapter over a checkout in `folder`, whose copy of one document into the
+    /// folder has started and not been polled to its end. Gives the shell and the checkout's path.
+    fn copying_documents(ctx: &egui::Context, data: &Path, folder: &tempfile::TempDir, desktop: &Path) -> (Shell, PathBuf) {
+        use crate::onboarding::application::Progress;
+        use crate::runs::application::{CapCheck, RunDefaults};
+
+        let root = checkout(folder);
+        let cv = desktop.join("Sam Rivera CV.pdf");
+        fs::write(&cv, b"%PDF-1.4\nnothing else").unwrap();
+        let mut shell = launch(ctx, Some(root.clone()), data);
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        let progress = Progress { folder: Some(root.clone()), ..Progress::default() };
+        let run = crate::onboarding::profile_run(data, root.clone(), progress, Arc::new(|| {}), Local::now().date_naive());
+        shell = shell.with_profile_setup(run, true, "Documents/Job search");
+        shell.profile_setup_mut().unwrap().add_documents([cv]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.profile_setup.as_ref().unwrap().run.documents().is_looking() {
+            assert!(Instant::now() < deadline, "the document was never looked at");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
+        let rules = StartRules { defaults: &defaults, cap: &cap, testing: false };
+        let (Some(setup), Some(desk)) = (&mut shell.profile_setup, &mut shell.desk) else { panic!("the chapter shows") };
+        setup.run.read_documents(desk, &rules, Local::now().naive_local()).unwrap();
+        assert!(shell.profile_setup.as_ref().unwrap().run.is_starting(), "the copy runs");
+        (shell, root)
+    }
+
+    /// While the Profile chapter copies documents into the folder, Change folder waits and says why, as it does while a
+    /// task runs: the copy's worker still writes `documents/`, and the chapter would be dropped under it.
+    #[test]
+    fn change_folder_waits_while_the_profile_chapter_copies() {
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let (mut shell, root) = copying_documents(&ctx, data.path(), &folder, desktop.path());
+        let asked = Cell::new(false);
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(!asked.get(), "no dialog while the copy runs");
+        assert_eq!(shell.folder_wait(), Some(FOLDER_COPYING));
+        let other = checkout_named(&folder, "other-search");
+        shell.open(&ctx, &other);
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(root.as_path()), "the folder stays");
+        assert!(shell.in_profile_setup(), "and so does the chapter");
+    }
+
+    /// While the Profile chapter copies documents into the folder, Restart to update waits and says why, as it waits
+    /// for a live session: closing the window would cut the copy off halfway. Once the copy has ended, it goes.
+    #[test]
+    fn restart_to_update_waits_while_the_profile_chapter_copies() {
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let (mut shell, _) = copying_documents(&ctx, data.path(), &folder, desktop.path());
+        shell.updates = ready_updates();
+        assert_eq!(shell.restart_wait(), Some(RESTART_COPYING));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending, "nothing closes");
+        shell.restart_pending = true;
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None, "the copy never leaves a plan, whatever asked");
+        shell.restart_pending = false;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.profile_setup.as_ref().unwrap().run.is_starting() {
+            assert!(Instant::now() < deadline, "the copy never ended");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        assert_ne!(shell.restart_wait(), Some(RESTART_COPYING), "the copy no longer holds it");
     }
 
     /// Another Jobdesk that updates the folder holds its lock alone, as a second handle does here, so this one cannot

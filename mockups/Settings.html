@@ -535,7 +535,7 @@ function a_defaults(o = {}) {
     .map(([c, m, b]) => `<tr><td class="path">${c}</td><td>${cmb(m, 170)}</td><td><span class="fd num" style="width: 110px"><span class="unit">$</span>${b}</span></td><td class="r">${B('Remove', 'sm')}</td></tr>`).join('');
   const body = sec('Every task', 'The launcher starts with these. You can still change them before you press Run.',
       sr('Model', 'Claude default leaves the choice to Claude Code.', cmb('Claude default', 200)) +
-      sr(hl('Spend at most, USD'), 'Empty starts each command at its suggested budget, $1 to $5. An amount here starts every task there.', `<span class="fd" style="width: 120px"><span class="hint">Suggested</span></span>`)) +
+      sr(hl('Spend at most, USD'), 'Empty starts each command at its suggested budget, $1 to $25. An amount here starts every task there.', `<span class="fd" style="width: 120px"><span class="hint">Suggested</span></span>`)) +
     sec('Per command', 'A command listed here starts with its own model and budget.',
       `<table class="tb2 ov"><tr><th>Command</th><th>Model</th><th>${hl('Spend at most')}</th><th></th></tr>${ov}</table>
        <div style="padding-top: 8px">${B('Add a command', 'sm')}</div>`) +

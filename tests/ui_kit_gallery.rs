@@ -8,6 +8,10 @@ use jobdesk::shared_kernel::placeholders::{self, Piece};
 use jobdesk::shell::install_look;
 use jobdesk::ui_kit::tokens::{GUTTER, KNOT_SIZE, KNOT_SIZE_SMALL, MARK_RULE, ROW_GAP, RUN_SIDE, TRAY_RAIL};
 use jobdesk::ui_kit::{
+    AddedFile, AnswersSlip, Change, DropForm, ProposalPart, Question, SheetPart, SubItem, answers_slip, command_chord, cv_check, cv_slip, drop_zone, file_list,
+    primary_shortcut_button, question_fallback, question_sheet, reply_slip, review_changes, review_slip, side_slip, slip_text, split_card, wide_card,
+};
+use jobdesk::ui_kit::{
     AgendaEnd, BandCell, BlockEditor, CardLook, CellLook, ChangedOnDisk, CheckMark, Confirm, DayHeatmap, DealLook, EditorBusy, Figure, FlowNode, HeatDay, Ink,
     KnotState, NodeMarks, NotesAction, NotesBody, PageSet, Palette, ReleaseNotes, RoleEntry, Secret, Subtitle, SweepForm, TabMark, Title, Tone, Type,
     agenda_return, agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab,
@@ -1342,6 +1346,344 @@ fn ui_kit_gallery_wizard_dark() {
 #[test]
 fn ui_kit_gallery_wizard_light() {
     wizard_sheet(Theme::Light, "ui_kit_gallery_wizard_light");
+}
+
+/// The Profile chapter's room: the window at the app's size, 1280x820, less its brand row.
+const SETUP_ROOM: [f32; 2] = [1280.0, 778.0];
+/// A Profile chapter card with little in it, such as the documents step.
+const SETUP_SHORT: [f32; 2] = [1280.0, 470.0];
+/// The documents step with three files listed, tall enough that its main column needs no scroll.
+const SETUP_DROPPED: [f32; 2] = [1280.0, 530.0];
+const SETUP_SHEET: [f32; 2] = [1328.0, 4390.0];
+
+/// Claude's second round of questions: a lead, then 13 questions in five groups, question 3 with two sub-items.
+const SETUP_QUESTIONS: [SheetPart<'static>; 19] = [
+    SheetPart::Prose(
+        "## Questions on what's missing\n\nYour profile now has the changes you approved. A few things your documents don't say yet. Answer in any order. Short answers are fine, and you can skip any you like.",
+    ),
+    SheetPart::Group("Career direction"),
+    question(1, "What kind of role do you want next, and what would you rather leave behind?"),
+    question(2, "Would you take a step into leading a small team, or stay hands-on for now?"),
+    SheetPart::Group("How you work"),
+    SheetPart::Question(Question {
+        number: 3,
+        text: "How would the people you worked with describe you, in a sentence each?",
+        sub_items: &[SubItem { letter: 'a', text: "A former manager" }, SubItem { letter: 'b', text: "A designer on your team" }],
+        optional: false,
+    }),
+    optional(4, "Which kind of team brings out your best? (optional)"),
+    SheetPart::Group("Constraints"),
+    question(5, "Which cities or regions work for you, and how many office days a week?"),
+    optional(6, "Is there a salary range you want Jobdesk to filter by? (optional)"),
+    question(7, "Is there a notice period or a start date to plan around?"),
+    SheetPart::Group("Numbers for stronger CVs"),
+    question(8, "For the checkout redesign at **Tessel Group**, do you know the effect on support tickets or sales?"),
+    optional(9, "Roughly how many designers used the design system you built? (optional)"),
+    optional(10, "Any talk, award or article worth naming? (optional)"),
+    SheetPart::Group("Search setup"),
+    question(11, "Which job sites do you use today, besides LinkedIn?"),
+    question(12, "Which language should your CVs be in: English, German, or both?"),
+    question(13, "Which job titles should Jobdesk search for? Three to eight is a good number."),
+];
+
+const fn question(number: u32, text: &'static str) -> SheetPart<'static> {
+    SheetPart::Question(Question { number, text, sub_items: &[], optional: false })
+}
+
+const fn optional(number: u32, text: &'static str) -> SheetPart<'static> {
+    SheetPart::Question(Question { number, text, sub_items: &[], optional: true })
+}
+
+/// The answers typed so far, one per question: 8 of 13.
+const SETUP_ANSWERS: [&str; 13] = [
+    "Senior product designer in a product company. Less agency work, more time with users.",
+    "",
+    "a. Calm and careful. b. Quick to test an idea with real users.",
+    "",
+    "Berlin, or remote in Germany. Two office days at most.",
+    "",
+    "Three months' notice.",
+    "Support tickets went down about a third after launch.",
+    "",
+    "",
+    "LinkedIn, and a local board for designers.",
+    "English, and German when the ad is in German.",
+    "Product designer, UX designer, Service designer",
+];
+
+/// Claude's proposal: 16 numbered changes in five groups, between its lead and its closing line.
+const SETUP_PROPOSAL: [ProposalPart<'static>; 23] = [
+    ProposalPart::Prose("## Proposed additive changes\n\nHere is what I would add to your profile. Nothing is removed unless you asked for it."),
+    ProposalPart::Group("Profile summary"),
+    change(1, "Lead with product design for payments and banking apps, which both documents stress."),
+    change(2, "Use the title from your CV, Senior Product Designer, not the shorter one from LinkedIn."),
+    change(3, "Add the years from your LinkedIn profile: 2016 to now."),
+    ProposalPart::Group("Experience"),
+    change(4, "Tessel Group: add the checkout redesign and the design system, from the reference letter."),
+    change(5, "Harbor Studio: use the end date from your CV, March 2021, as you confirmed."),
+    change(6, "Leave out the 2014 internship, as you asked."),
+    change(7, "Lumen Telecom: add the research work listed only on LinkedIn."),
+    change(8, "Group the two freelance years under one heading."),
+    ProposalPart::Group("Skills and languages"),
+    change(9, "Add usability testing, service blueprints and accessibility reviews."),
+    change(10, "German at B2, as you confirmed. English stays fluent."),
+    change(11, "Drop two tools your CV lists but LinkedIn no longer does."),
+    change(12, "List prototyping tools in one line, not three."),
+    ProposalPart::Group("Education"),
+    change(13, "BA in Communication Design, with the year from your diploma."),
+    change(14, "Add the accessibility course certificate."),
+    ProposalPart::Group("Writing style"),
+    change(15, "Keep cover letters short: one page, plain words."),
+    change(16, "Write in the first person, without buzzwords."),
+    ProposalPart::Prose("Reply yes to apply all, or list the numbers to skip."),
+];
+
+const fn change(number: u32, text: &'static str) -> ProposalPart<'static> {
+    ProposalPart::Change(Change { number, text })
+}
+
+/// The change the pointer and the focus rest on in the snapshots, unticked as 3 is.
+const FOCUSED_CHANGE: &str = "7. Lumen Telecom: add the research work listed only on LinkedIn.";
+
+/// Claude's message with no numbered questions, for the fallback sheet.
+const SETUP_FALLBACK: &str = "## A few more things\n\nThanks, that fills most of the gaps. Before I write the search setup, I'd like to know a bit more about where you want to work.\n\n- Which cities or regions work for you, and how many office days a week?\n- Is there a notice period or a start date to plan around?\n- Which job sites do you use today, besides LinkedIn?\n\nAny detail helps, but short answers are fine.";
+
+const SETUP_STEPS: [&str; 4] = ["Folder", "Computer", "Profile", "Done"];
+
+/// What the user typed and ticked on the setup sheet, kept across frames as a screen keeps it.
+struct SetupBench {
+    cache: CommonMarkCache,
+    answers: Vec<String>,
+    ticked: Vec<bool>,
+    fallback: String,
+}
+
+impl SetupBench {
+    fn new() -> Self {
+        let mut ticked = vec![true; 16];
+        ticked[2] = false;
+        ticked[6] = false;
+        Self {
+            cache: CommonMarkCache::default(),
+            answers: SETUP_ANSWERS.iter().map(|answer| (*answer).to_owned()).collect(),
+            ticked,
+            fallback: "Berlin, or remote in Germany. Two office days at most.\n\nThree months' notice.\n\nLinkedIn, and a local board for designers."
+                .to_owned(),
+        }
+    }
+}
+
+/// One Profile chapter card in a room the size of `room`.
+fn setup_in(ui: &mut Ui, room: [f32; 2], add: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui_with_layout(egui::vec2(room[0], room[1]), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_size(egui::vec2(room[0], room[1]));
+        add(ui);
+    });
+}
+
+/// The steps a Profile chapter card stands at, under its title and lead.
+fn profile_step(title: &'static str, lead: &'static str) -> WizardStep<'static> {
+    WizardStep { steps: &SETUP_STEPS, at: 2, title, lead }
+}
+
+/// The Profile chapter's parts: the question sheet, the review card, the fallback sheet, the documents step before and
+/// after files are added, and the CV check, each in its card.
+fn setup(ui: &mut Ui, bench: &mut SetupBench) {
+    desk_label(
+        ui,
+        "Split card at 1280x820: the question sheet, with a field under each question and sub-items inside 3, and the answers slip",
+        Type::NOTE,
+        Ink::Muted,
+    );
+    setup_in(ui, SETUP_ROOM, |ui| {
+        let step = profile_step("Claude has 13 questions", "Writing your profile. Your second round of answers.");
+        let answered: Vec<bool> = bench.answers.iter().map(|answer| !answer.trim().is_empty()).collect();
+        split_card(
+            ui,
+            &step,
+            |ui| question_sheet(ui, &mut bench.cache, &SETUP_QUESTIONS, &mut bench.answers),
+            |ui| {
+                answers_slip(ui, &AnswersSlip { answered: &answered, saved_at: Some("14:32"), short: false, unsaved: false });
+            },
+            |ui| {
+                primary_shortcut_button(ui, "Send answers", &command_chord("Enter"));
+                button(ui, "Stop setup");
+            },
+            "Elapsed 18:40",
+        );
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "The review card: a change_check per change, 3 and 7 unticked and 7 focused, then the review slip and its reply", Type::NOTE, Ink::Muted);
+    setup_in(ui, SETUP_ROOM, |ui| {
+        let step = profile_step("Claude proposes changes to your profile", "From your documents and your first answers. Nothing changes until you say so.");
+        let numbers: Vec<(u32, bool)> = (1..=16).zip(bench.ticked.iter().copied()).collect();
+        split_card(
+            ui,
+            &step,
+            |ui| review_changes(ui, &mut bench.cache, &SETUP_PROPOSAL, &mut bench.ticked),
+            |ui| {
+                review_slip(ui, &numbers, "Apply all except 3 and 7.");
+                side_slip(ui, "", "", |ui| slip_text(ui, "", "Something to fix? Change something opens a field. Say what to change in your own words."));
+            },
+            |ui| {
+                primary_button(ui, "Apply these changes");
+                button(ui, "Change something");
+            },
+            "Elapsed 11:05",
+        );
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "The fallback sheet in a wide card: Claude's message beside one large field", Type::NOTE, Ink::Muted);
+    setup_in(ui, SETUP_ROOM, |ui| {
+        let step = profile_step("Claude has a few questions", "Writing your profile. Your third round of answers.");
+        wide_card(
+            ui,
+            &step,
+            |ui| {
+                question_fallback(
+                    ui,
+                    &mut bench.cache,
+                    SETUP_FALLBACK,
+                    &mut bench.fallback,
+                    "Claude asked in its own words this time, so your answer is one reply. Answer in any order; short answers are fine.\nDraft saved as you type, last at 14:51. You can close Jobdesk and come back.",
+                )
+            },
+            |ui| {
+                primary_shortcut_button(ui, "Send answer", &command_chord("Enter"));
+                button(ui, "Stop setup");
+            },
+            "Elapsed 24:12",
+        );
+    });
+    ui.add_space(14.0);
+    let next = |ui: &mut Ui| {
+        side_slip(ui, "What comes next", "", |ui| {
+            slip_text(ui, "", "Claude reads your documents, then writes to you in a few rounds of questions. Answer them on your own time, in any order.");
+            slip_text(ui, "", "Setup took one tester about 40 minutes, most of it writing answers. Your answers are saved as you type.");
+        });
+    };
+    let lead = "Add your CV and anything else that says what you have done. Claude reads it all, then asks about what is missing.";
+    let copied = |ui: &mut Ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            desk_label(ui, "Jobdesk copies them into the documents folder inside ", Type::NOTE, Ink::Muted);
+            path_label(ui, "Documents/", "Job search");
+            desk_label(ui, ". The originals stay where they are.", Type::NOTE, Ink::Muted);
+        });
+    };
+    desk_label(ui, "The documents step: the full drop zone, then the file list over the slim zone", Type::NOTE, Ink::Muted);
+    setup_in(ui, SETUP_SHORT, |ui| {
+        split_card(
+            ui,
+            &profile_step("Tell Jobdesk about you", lead),
+            |ui| {
+                drop_zone(
+                    ui,
+                    DropForm::Full {
+                        title: "Drop your documents here",
+                        sentence: "Your CV, and any of these: a LinkedIn profile saved as a PDF, diplomas, reference letters. PDF or Word files.",
+                    },
+                );
+                copied(ui);
+            },
+            next,
+            |ui| {
+                enabled_when(ui, false, "Add at least your CV first.", |ui| primary_button(ui, "Read my documents"));
+                button(ui, "Back");
+            },
+            "Add at least your CV first.",
+        );
+    });
+    ui.add_space(14.0);
+    // Its own id, as the screen's next step would have, so the two cards of one title keep their own scroll.
+    ui.push_id("dropped", |ui| {
+        setup_in(ui, SETUP_DROPPED, |ui| {
+            split_card(
+                ui,
+                &profile_step("Tell Jobdesk about you", lead),
+                |ui| {
+                    file_list(
+                        ui,
+                        &[
+                            AddedFile { name: "Sample_Candidate_CV.pdf", pages: Some(2), kind: 0, copied: false },
+                            AddedFile { name: "Profile.pdf", pages: Some(4), kind: 1, copied: false },
+                            AddedFile { name: "Reference_letter_Tessel_Group_2023_signed_and_scanned_copy_final.pdf", pages: Some(1), kind: 3, copied: false },
+                        ],
+                        &["CV", "LinkedIn profile", "Diploma", "Reference letter", "Project"],
+                    );
+                    drop_zone(ui, DropForm::Slim { sentence: "Drop more here: diplomas, reference letters." });
+                    copied(ui);
+                },
+                next,
+                |ui| {
+                    primary_button(ui, "Read my documents");
+                    button(ui, "Back");
+                },
+                "3 documents added",
+            );
+        })
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "The CV check: the CV's pages, its slip with Open PDF, and the reply Looks good sends", Type::NOTE, Ink::Muted);
+    // The pages load once and are kept, as the screen keeps a document's.
+    let id = egui::Id::NULL.with("gallery_setup_cv_pages");
+    let pages = ui.ctx().data(|data| data.get_temp::<Vec<egui::TextureHandle>>(id)).unwrap_or_else(|| {
+        let loaded: Vec<egui::TextureHandle> =
+            (0..2).map(|index| ui.ctx().load_texture(format!("gallery_setup_cv_page_{index}"), cv_page(index == 0), egui::TextureOptions::LINEAR)).collect();
+        ui.ctx().data_mut(|data| data.insert_temp(id, loaded.clone()));
+        loaded
+    });
+    setup_in(ui, [1280.0, 640.0], |ui| {
+        split_card(
+            ui,
+            &profile_step("Check your CV", "Claude made it from your profile. Have a look before setup finishes."),
+            |ui| cv_check(ui, PageSet::Ready { pages: &pages, of: 2, alt: "Sample_Candidate_CV" }),
+            |ui| {
+                cv_slip(ui, "Sample_Candidate_CV", "English, 2 pages. Saved in the cv folder of your job search folder.");
+                side_slip(ui, "", "", |ui| {
+                    slip_text(ui, "", "Spotted something? Ask for a change opens a field. Say it in your own words, such as \"Put the design system first\".")
+                });
+                reply_slip(ui, "Looks good sends Claude this reply:", "The CV looks good.");
+            },
+            |ui| {
+                primary_button(ui, "Looks good");
+                button(ui, "Ask for a change");
+            },
+            "Elapsed 31:12",
+        );
+    });
+    ui.add_space(14.0);
+    desk_label(ui, "The short answers slip of a round of follow-ups", Type::NOTE, Ink::Muted);
+    ui.allocate_ui(egui::vec2(340.0, 120.0), |ui| {
+        paper(ui, false, |ui| {
+            egui::Frame::new().inner_margin(12).show(ui, |ui| {
+                answers_slip(ui, &AnswersSlip { answered: &[true, true], saved_at: None, short: true, unsaved: false });
+            });
+        });
+    });
+}
+
+fn setup_sheet(theme: Theme, name: &str) {
+    let mut bench = SetupBench::new();
+    let mut harness = with_renderer(Harness::builder().with_size(SETUP_SHEET).with_pixels_per_point(1.0).with_theme(theme).with_context_setup(install_look))
+        .build_ui(move |ui| {
+            jobdesk::ui_kit::desk(ui, |ui| jobdesk::ui_kit::sheet_frame().inner_margin(24).show(ui, |ui| setup(ui, &mut bench)));
+        });
+    harness.run_steps(3);
+    // The focus rests on an unticked change, so the sheet shows its ring round the box.
+    harness.get_by_label(FOCUSED_CHANGE).focus();
+    harness.run_steps(2);
+    compare(&mut harness, name);
+}
+
+#[test]
+fn ui_kit_gallery_setup_dark() {
+    setup_sheet(Theme::Dark, "ui_kit_gallery_setup_dark");
+}
+
+#[test]
+fn ui_kit_gallery_setup_light() {
+    setup_sheet(Theme::Light, "ui_kit_gallery_setup_light");
 }
 
 /// The settings sheet's size: room for every row and the open popover under the last one.

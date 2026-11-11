@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use jobdesk::onboarding::application::{DocumentKind, PATH_A, PROPOSAL_WORDS, SETUP, SETUP_COMPLETE};
 use jobdesk::portals::application::{BUILT_IN, MANIFEST, SKILLS};
 use jobdesk::profile::application::ProfileFile;
 use jobdesk::runs::application::CATALOG;
@@ -56,14 +57,79 @@ enum Place {
 #[derive(Debug)]
 struct Need {
     place: Place,
-    /// Text the file must hold (`true`) or must not hold (`false`).
-    text: Option<(&'static str, bool)>,
+    /// What the file must hold, or must not, each with why Jobdesk needs that. For a command, the file is the one Claude
+    /// Code runs for it.
+    texts: Vec<(Text, &'static str)>,
     why: &'static str,
 }
 
 impl Need {
     fn file(path: impl Into<String>, why: &'static str) -> Self {
-        Self { place: Place::File(path.into()), text: None, why }
+        Self { place: Place::File(path.into()), texts: Vec::new(), why }
+    }
+}
+
+/// What a needed file must hold, or must not.
+#[derive(Debug, Clone, Copy)]
+enum Text {
+    /// This text as it is: held (`true`) or never held (`false`).
+    Exact(&'static str, bool),
+    /// This phrase in any case, as whole words, the way `/setup`'s messages are read.
+    Phrase(&'static str),
+    /// The folder of this name, as `<folder>/`, not right after a letter or digit.
+    Folder(&'static str),
+    /// One line that holds each of these words, whole and in any case.
+    Line(&'static [&'static str]),
+}
+
+impl Text {
+    fn met_by(self, text: &str) -> bool {
+        match self {
+            Self::Exact(wanted, held) => text.contains(wanted) == held,
+            Self::Phrase(phrase) => holds_whole(&text.to_lowercase(), &phrase.to_lowercase()),
+            Self::Folder(folder) => holds_whole(text, &format!("{folder}/")),
+            Self::Line(words) => {
+                text.lines().any(|line| words.iter().all(|word| line.split(|c: char| !c.is_alphanumeric()).any(|found| found.eq_ignore_ascii_case(word))))
+            }
+        }
+    }
+
+    /// What the file does wrong, after its path in the line that names an unmet need.
+    fn unmet(self) -> String {
+        match self {
+            Self::Exact(text, true) => format!("does not hold `{text}`"),
+            Self::Exact(text, false) => format!("holds `{text}`"),
+            Self::Phrase(phrase) => format!("does not hold `{phrase}` in any case, as whole words"),
+            Self::Folder(folder) => format!("does not name the folder `{folder}/`"),
+            Self::Line(words) => format!("has no line that holds {}, each a whole word in any case", listed(words)),
+        }
+    }
+
+    /// Text that meets it, for a fictional release, or `None` for text a file must not hold.
+    fn sample(self) -> Option<String> {
+        match self {
+            Self::Exact(text, true) => Some(text.to_owned()),
+            Self::Exact(_, false) => None,
+            Self::Phrase(phrase) => Some(phrase.to_owned()),
+            Self::Folder(folder) => Some(format!("{folder}/")),
+            Self::Line(words) => Some(words.join(" ")),
+        }
+    }
+}
+
+/// Whether `text` holds `phrase` with no letter or digit running on at an end of it that is a letter or digit itself.
+fn holds_whole(text: &str, phrase: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    let (starts, ends) = (word(phrase.chars().next()), word(phrase.chars().next_back()));
+    text.match_indices(phrase).any(|(at, _)| !(starts && word(text[..at].chars().next_back())) && !(ends && word(text[at + phrase.len()..].chars().next())))
+}
+
+/// `words` in backticks, as "`a`, `b` and `c`".
+fn listed(words: &[&str]) -> String {
+    let quoted: Vec<String> = words.iter().map(|word| format!("`{word}`")).collect();
+    match quoted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => quoted.concat(),
     }
 }
 
@@ -84,25 +150,42 @@ fn needs() -> Vec<Need> {
     let mut needs = vec![Need::file(MARKER, "Jobdesk opens a folder as a job search folder only when it holds this file")];
     for spec in CATALOG.iter().filter(|spec| !OPTIONAL.iter().any(|(name, _)| *name == spec.name)) {
         let name = spec.name.strip_prefix('/').expect("a command starts with /");
-        let text = (spec.name == TEMPLATE_WRITER).then_some((ACTIVE_TEMPLATE, true));
-        let why =
-            if text.is_some() { "the launcher starts it, and it writes the block that says a custom template is active" } else { "the launcher starts it" };
-        needs.push(Need { place: Place::Command(name), text, why });
+        let mut need = Need { place: Place::Command(name), texts: Vec::new(), why: "the launcher starts it" };
+        if spec.name == TEMPLATE_WRITER {
+            need.why = "the launcher starts it, and it writes the block that says a custom template is active";
+            need.texts.push((Text::Exact(ACTIVE_TEMPLATE, true), need.why));
+        }
+        if spec.name == SETUP {
+            need.why = "the launcher starts it, and first-run setup's Profile chapter runs it";
+            need.texts = setup_texts();
+        }
+        needs.push(need);
     }
     for file in ProfileFile::ALL {
         needs.push(Need::file(file.relative_path(), "Profile reads and saves it"));
     }
     for guide in [CV_TEMPLATES, LETTER_TEMPLATES] {
-        needs.push(Need {
-            place: Place::File(format!("{ASSISTANT}/{guide}")),
-            text: Some((ACTIVE_TEMPLATE, false)),
-            why: "Setup reads it for a custom template, so a stock one must not say a custom template is active",
-        });
+        let why = "Setup reads it for a custom template, so a stock one must not say a custom template is active";
+        needs.push(Need { place: Place::File(format!("{ASSISTANT}/{guide}")), texts: vec![(Text::Exact(ACTIVE_TEMPLATE, false), why)], why });
     }
     for (folder, _) in BUILT_IN {
         needs.push(Need::file(format!("{SKILLS}/{folder}/{MANIFEST}"), "Portals lists it as built in"));
     }
     needs
+}
+
+/// What `/setup` must hold, in the file Claude Code runs for it, for first-run setup's Profile chapter to follow its
+/// run.
+fn setup_texts() -> Vec<(Text, &'static str)> {
+    let mut texts = vec![
+        (Text::Phrase(PATH_A), "first-run setup answers the question that names it with the documents path"),
+        (Text::Phrase(SETUP_COMPLETE), "first-run setup's Profile chapter is done only on a message that says it"),
+        (Text::Line(&PROPOSAL_WORDS), "first-run setup shows a review card only for a proposal that closes with these words"),
+    ];
+    for kind in DocumentKind::ALL {
+        texts.push((Text::Folder(kind.folder()), "first-run setup copies the user's documents into this folder of documents/ for /setup to read"));
+    }
+    texts
 }
 
 /// The front matter of a skill or command file: the block between a first line `---` and the next line `---`, after a
@@ -437,11 +520,11 @@ fn unmet(files: &Files) -> Vec<String> {
                 continue;
             }
         };
-        if let Some((text, wanted)) = need.text {
-            let holds = String::from_utf8_lossy(bytes).contains(text);
-            if holds != wanted {
-                let says = if wanted { "does not hold" } else { "holds" };
-                lines.push(format!("{path} {says} `{text}` ({})", need.why));
+        // For a command, `path` is the file that wins, so every content rule runs on the file Claude Code runs.
+        let text = String::from_utf8_lossy(bytes);
+        for (want, why) in &need.texts {
+            if !want.met_by(&text) {
+                lines.push(format!("{path} {} ({why})", want.unmet()));
             }
         }
     }
@@ -514,6 +597,8 @@ fn the_required_paths_cover_every_catalog_entry() {
         assert!(CATALOG.iter().any(|spec| spec.name == *name), "{name} is optional but not in the catalog");
     }
     assert!(CATALOG.iter().any(|spec| spec.name == TEMPLATE_WRITER), "{TEMPLATE_WRITER} is in the catalog");
+    assert!(CATALOG.iter().any(|spec| spec.name == SETUP), "{SETUP} is in the catalog");
+    assert!(!OPTIONAL.iter().any(|(name, _)| *name == SETUP), "{SETUP} is needed, so what its file must hold is checked");
 }
 
 #[test]
@@ -530,11 +615,11 @@ fn complete() -> Files {
             Place::File(path) => path,
             Place::Command(name) => command_path(name),
         };
-        let text = match need.text {
-            Some((text, true)) => text,
-            _ => "fictional",
-        };
-        files.entry(path).or_default().extend_from_slice(text.as_bytes());
+        let file = files.entry(path).or_default();
+        file.extend_from_slice(b"fictional\n");
+        for sample in need.texts.iter().filter_map(|(text, _)| text.sample()) {
+            file.extend_from_slice(format!("{sample}\n").as_bytes());
+        }
     }
     files
 }
@@ -1111,6 +1196,65 @@ fn apply_is_held_to_the_command_rules_as_well() {
     let lines = unmet(&files);
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert!(lines[0].starts_with(".claude/commands/apply.md is missing"), "the marker is needed even when a skill runs for /apply: {}", lines[0]);
+}
+
+/// A fictional `/setup` command file in the shape the Profile chapter reads: the path question, the documents
+/// subfolders, the proposal's closing ask and the closing summary.
+const SETUP_MD: &str = "# /setup\n\n## Step 0\n\n> **Path A: Read my documents folder** - read what is there.\n\n## Step A1\n\n**cv/**, **linkedin/**, **diplomas/**, **references/** and **projects/**.\n\n## Step A6\n\n> **Apply these?**\n> Reply **yes** to apply all, or list the numbers you want to skip.\n\n## Step 4\n\n> **Setup complete!** Here is what changed.\n";
+
+/// The Profile chapter answers the question that names Path A, ends on the message that says setup is complete, copies
+/// documents into the subfolders `/setup` reads, and shows a review card for a proposal that closes with its words. A
+/// release whose `/setup` drops one of them fails the check, with a line that names it.
+#[test]
+fn setup_holds_what_the_profile_chapter_reads() {
+    let setup = command_path("setup");
+    let mut files = complete();
+    files.insert(setup.clone(), SETUP_MD.as_bytes().to_vec());
+    assert_eq!(unmet(&files), Vec::<String>::new());
+    let path_a = format!("does not hold `{PATH_A}`");
+    let complete = format!("does not hold `{SETUP_COMPLETE}`");
+    let proposal = format!("has no line that holds `{}`, `{}` and `{}`", PROPOSAL_WORDS[0], PROPOSAL_WORDS[1], PROPOSAL_WORDS[2]);
+    for (from, to, says) in [
+        ("**Path A: Read", "**PATH A: Read", None),
+        ("**Setup complete!**", "**SETUP COMPLETE!**", None),
+        ("**Path A: Read", "**Path Alpha: Read", Some(path_a.as_str())),
+        ("**Path A: Read", "**Pathway: Read", Some(path_a.as_str())),
+        ("**Setup complete!**", "**Setup completed.**", Some(complete.as_str())),
+        ("**Setup complete!**", "**All done!**", Some(complete.as_str())),
+        ("**diplomas/**", "**degrees/**", Some("does not name the folder `diplomas/`")),
+        ("**cv/**", "**mycv/**", Some("does not name the folder `cv/`")),
+        ("**cv/**", "**cv**", Some("does not name the folder `cv/`")),
+        ("to apply all, or list", "to apply all, or\n> list", Some(proposal.as_str())),
+        ("Reply **yes**", "Reply **yesterday**", Some(proposal.as_str())),
+    ] {
+        files.insert(setup.clone(), SETUP_MD.replacen(from, to, 1).into_bytes());
+        let lines = unmet(&files);
+        match says {
+            None => assert_eq!(lines, Vec::<String>::new(), "{to}"),
+            Some(says) => {
+                assert_eq!(lines.len(), 1, "{to}: {lines:#?}");
+                assert!(lines[0].starts_with(&format!("{setup} {says}")), "{to}: {}", lines[0]);
+            }
+        }
+    }
+}
+
+/// `/setup`'s content rules run on the file Claude Code runs for it: a skill named `setup` wins over its command file, so
+/// a sound command file does not stand in for a skill that lacks what the Profile chapter reads, and a sound skill
+/// passes beside a command file that lacks it.
+#[test]
+fn setup_content_is_read_from_the_file_that_wins() {
+    let setup = command_path("setup");
+    let skill = ".claude/skills/setup/SKILL.md";
+    let mut files = complete();
+    files.insert(setup.clone(), SETUP_MD.as_bytes().to_vec());
+    files.insert(skill.to_owned(), SETUP_MD.replacen("**Setup complete!**", "**All done!**", 1).into_bytes());
+    let lines = unmet(&files);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert!(lines[0].starts_with(&format!("{skill} does not hold `{SETUP_COMPLETE}`")), "{}", lines[0]);
+    files.insert(setup.clone(), b"Writes nothing the Profile chapter reads.".to_vec());
+    files.insert(skill.to_owned(), format!("---\nname: setup\n---\n{SETUP_MD}").into_bytes());
+    assert_eq!(unmet(&files), Vec::<String>::new(), "the skill that wins holds it all, so the command file is not read");
 }
 
 #[test]

@@ -361,6 +361,28 @@ mod tests {
         assert!(RunLogs::new(dir.path().to_owned(), Path::new("/other")).recent(10).is_empty());
     }
 
+    #[test]
+    fn a_turn_read_back_has_a_result_only_when_its_log_holds_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Path::new("/w");
+        let mut ended = RunLog::open(dir.path(), workspace, &request("a", "/setup")).unwrap();
+        ended.append(r#"{"type":"system","subtype":"init","session_id":"s","model":"m"}"#);
+        ended.append(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Which would you like?"}]}}"#);
+        ended.append(r#"{"type":"result","subtype":"success","total_cost_usd":0.5,"duration_ms":3}"#);
+        drop(ended);
+        let mut cut = RunLog::open(dir.path(), workspace, &request("b", "/setup")).unwrap();
+        cut.append(r#"{"type":"system","subtype":"init","session_id":"t","model":"m"}"#);
+        cut.append(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me update the skill files."}]}}"#);
+        drop(cut);
+
+        let runs = RunLogs::new(dir.path().to_owned(), workspace).recent(10);
+
+        let by_id = |id: &str| runs.iter().find(|run| run.id == id).unwrap();
+        assert!(by_id("a").has_turn_result());
+        assert!(!by_id("b").has_turn_result(), "the quit cut the turn");
+        assert_eq!(by_id("b").status, RunStatus::Closed);
+    }
+
     /// The log keeps no sign-in, so a run read back from it claims none, though its init line names a source.
     #[test]
     fn a_replayed_run_does_not_know_its_sign_in() {

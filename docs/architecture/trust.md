@@ -1,6 +1,6 @@
 # Trust
 
-This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder and its helpers, reads the community portal list, checks its own updates and updates the job search folder with them, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers how Jobdesk renders untrusted text, keeps tracker paths and CV files inside the workspace, guards the API key, handles tool permissions, sets up a first folder, its helpers and the profile, reads the community portal list, checks its own updates and updates the job search folder with them, and which residuals it accepts. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 Posting text, notes and reports are third-party or generated data. On this page, "hidden characters" means control, escape, bidi and zero-width characters, which `visible_text` in `shared_kernel` drops.
 
@@ -20,6 +20,9 @@ Posting text, notes and reports are third-party or generated data. On this page,
 | A community portal's name and sentence, from its `SKILL.md` on GitHub | Plain text on one line: line breaks and runs of space become one space, hidden characters and variation selectors are removed, a name keeps at most 60 characters and a sentence 200, and the screen cuts what does not fit with an ellipsis |
 | A community portal's owners, from `CODEOWNERS` | Plain words, never links: only GitHub handles such as `@name` or `@org/team` are kept, at most 10 a line, cut with an ellipsis |
 | An installed portal's name and sentence, from its own `SKILL.md` | Plain text on one line, with Markdown markup and hidden characters removed, cut with an ellipsis |
+| `/setup`'s messages in first run's question sheet, review card and CV check, a proposal's changes included | Markdown with no image loading and no link that opens, headings capped at the section size. Hidden characters are removed before parsing: see [Setup's messages](#setups-messages) |
+| A document's name in first run's Profile chapter | Plain text, with hidden characters removed |
+| Why first run's profile run stopped | Plain text, with hidden characters removed, as for [Notices](#notices) |
 | Release notes from the update feed | Markdown with no image loading and no links, through `release_markdown`. A link shows as its words in body ink and never opens, an image as its alt text, and raw HTML as its text. Headings render at the section size, and hidden characters are removed before parsing. |
 | File paths in the folder update's notice and details, from both release zips and the user's folder | Plain text on one line, never Markdown or a link: line breaks, tabs, hidden characters and variation selectors are removed, a path keeps at most 160 characters, cut with an ellipsis, and a list shows at most 40 paths and counts the rest. Nothing in the details opens. |
 
@@ -123,7 +126,7 @@ The story keeps a notice's last 8 lines, because a stderr tail ends on its error
 
 ## First-run setup
 
-On macOS, the `onboarding` feature makes the job search folder, fills it with the `ai-job-search` release, and installs the helpers its commands call. None of it is a run: it starts no `claude`, writes no run log and is not counted in Usage statistics. Every download goes through `HttpsTransport`, under the rules of [Addresses and the network](#addresses-and-the-network).
+On macOS, the `onboarding` feature makes the job search folder, fills it with the `ai-job-search` release, installs the helpers its commands call, and builds the profile from the user's documents. The Folder and Computer steps are not runs: they start no `claude`, write no run log and are not counted in Usage statistics. The Profile chapter's `/setup` is a run, as [runs](runs.md#the-first-run-profile-run) says. Every download goes through `HttpsTransport`, under the rules of [Addresses and the network](#addresses-and-the-network).
 
 ### The folder
 
@@ -146,12 +149,34 @@ On macOS, the `onboarding` feature makes the job search folder, fills it with th
 - A `~/.jobdesk` that is a link, even to a folder, or anything but a real folder, is refused before any download, install, replace or cleanup: the install fails as something else taking its place, and setup writes nothing there, removes nothing there and never looks through it.
 - The helpers' folders come first on the `PATH` of every task, Test connection, the tool check and Runtime status, before every other copy, as [runs](runs.md#the-path) says. So once setup installs a helper, tasks use its copy, not one the user had.
 
+### The documents
+
+- The Profile chapter takes only regular PDF files of up to 100 MB each. A folder, a special file, a link or a Word file is refused with a line of its own. A file is looked at, and its pages counted, on a worker.
+- A document's name shows with hidden characters removed, so it cannot look like another file's.
+- Read my documents copies each file into the subfolder of `documents/` its kind names: `cv/`, `linkedin/`, `diplomas/`, `references/` or `projects/`, as `/setup` reads them. Nothing is written in the `documents/` root.
+- The copy's name is the shown name with folder separators and characters a disk refuses replaced by `-`, no leading dot, at most 200 bytes before `.pdf`, and `Document.pdf` when nothing is left. A name already taken in that subfolder gets a number, such as `CV (2).pdf`.
+- The copy reads the user's file once, through a handle checked to be the regular file that was looked at, and never moves or changes it. It writes the bytes to a hidden part file in the subfolder first, then gives them their name in one step, only where no file or link holds that name, so it never writes over a file and never leaves a cut copy under a real name: a hard link, or on a disk without hard links a rename that refuses a taken name, `renamex_np` with `RENAME_EXCL`. A disk that can do neither refuses the copy and keeps no part file. Any other failure there, such as a refused permission or a full disk, is the copy failing, and its part file goes too. The job search folder, `documents/` and the subfolder must each be a real folder, never a link.
+- A copy that stops names the file, and says whether the files before it are in the folder. A copy, once made, is never moved or deleted later, and its kind no longer changes.
+- The copy and the [folder update](#folder-update) wait for each other: Read my documents copies nothing while the folder updates, and the folder update does not start while the copy works, as [runs](runs.md#while-the-folder-updates) says. Settings › Change folder and Restart to update wait for the copy too, as they wait for a running task, so the copy's worker never writes a folder the chapter has left and is never cut off halfway by the window closing.
+- Before each copy, part files that stopped copies left in every kind's subfolder of `documents/` are removed, because `/setup` reads every file there. A subfolder is entered only when it is a real folder, not a link, directly inside `documents/` once links are resolved. What goes: this Jobdesk's own and those of a Jobdesk that no longer runs at once, another running Jobdesk's once they are old. Only regular files of that name go, never a link.
+
+### Setup's messages
+
+`/setup`'s messages are Claude's text, shaped by the user's documents, so they are untrusted like any reply.
+
+- The question sheet, the review card and the CV check render them as the table above says, the whole message in order. The review card leaves out only a proposal's closing ask, because the boxes build that reply. Show all Claude wrote, on each, opens the whole message, so nothing Claude said is hidden.
+- Jobdesk counts numbered items only by the rules in [runs](runs.md#reading-claudes-message). When it is unsure, the message opens in the question sheet, which still reaches the user, never in the review card.
+- Every reply Jobdesk sends is fixed text, the user's own words, or built from the numbers Claude wrote and the user's fields and ticks, as [runs](runs.md#jobdesks-replies) says. Claude's words never go into a reply. A change with no tick, or with two that differ, gives no reply, because a change left out would count as applied.
+- The one reply Jobdesk sends on its own picks Path A, and goes at most once per run.
+- An `AskUserQuestion` question and a permission prompt always reach the user, as in [Tool permissions](#tool-permissions).
+
 ### The progress record
 
 - Setup keeps `onboarding.json` in the data folder, readable only by the user. It holds the chosen folder, the steps done, the `ai-job-search` version being set up, and the day of the last change. A record larger than 64 KiB, or one Jobdesk did not write, reads as no record.
+- From the Profile chapter on, it also holds the `/setup` run's id, whether the Path A reply went, and the user's draft answers for Claude's last turn, not sent yet. A draft belongs to one run and one turn, so it never shows under a later turn. It is written as the user types, at most once a second, and when the window closes, and it is cleared once a reply goes. A draft that would make the record pass 64 KiB stays in memory only, and is tried again only once it changes. A record that cannot be written is tried again after a wait that doubles from a second up to a minute. Either way the sheet says the answers are not saved yet. A draft's `Debug` prints only its sizes, so a log line or a panic never carries the user's words.
 - Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
 - The download's worker records the version once the feed pins it, and the folder as made once the release has taken the folder's place, before the window hears. When setup opens on a record that lacks the folder made, but whose folder is an `ai-job-search` folder with a `.jobdesk/` that reads whole for the recorded version, the folder counts as made. A record that cannot be written costs only that resume: setup goes on with what it holds in memory, and says nothing more.
-- The record is removed when the Computer step ends.
+- The record is removed when the recap opens, once the profile is built.
 - Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. The folder update's download waits there too, and is deleted once read, so only one cut off by a quit is left for setup to clear. It removes links and never follows them. Setup's clearing can also delete the folder another running Jobdesk's folder update has just made there, in the moment before that Jobdesk locks it. The download under way then fails with nothing changed, and before its next download the folder update makes and locks that Jobdesk's folder again, so the next check for updates downloads as usual.
 
 ### Accepted residuals

@@ -117,6 +117,8 @@ pub struct Run {
     turn_started_at: usize,
     /// How many `You` rows `activity` holds.
     turn_count: usize,
+    /// Whether the current turn got its result, so it did not end by being cut off.
+    turn_ended: bool,
 }
 
 impl Run {
@@ -139,6 +141,7 @@ impl Run {
             rail_moved_at: 0,
             turn_started_at: activity.len(),
             turn_count: 1,
+            turn_ended: false,
             activity,
             streaming_text: String::new(),
             prompts: VecDeque::new(),
@@ -223,6 +226,12 @@ impl Run {
         self.turn_started_at
     }
 
+    /// Whether the current turn got its result, failed or not. A turn whose process ended before it, by a quit, a crash or
+    /// End session, has none, and neither has one read back from a log that stops partway through it.
+    pub fn has_turn_result(&self) -> bool {
+        self.turn_ended
+    }
+
     pub fn current_prompt(&self) -> Option<&Prompt> {
         self.prompts.front()
     }
@@ -243,6 +252,7 @@ impl Run {
         self.push(ActivityKind::You(text.to_owned()), false);
         self.turn_started_at = self.activity.len();
         self.turn_count += 1;
+        self.turn_ended = false;
         self.status = RunStatus::Working;
     }
 
@@ -317,6 +327,7 @@ impl Run {
                     if self.status != RunStatus::Starting {
                         self.turn_started_at = self.activity.len();
                     }
+                    self.turn_ended = false;
                     self.status = RunStatus::Working;
                 }
             }
@@ -378,6 +389,7 @@ impl Run {
 
     fn turn_ended(&mut self, failed: bool, message: Option<String>, cost_usd: f64, duration_ms: u64) {
         self.streaming_text.clear();
+        self.turn_ended = true;
         self.cost_usd = self.cost_of_ended_processes + cost_usd;
         self.turn_estimates.clear();
         self.duration_ms += duration_ms;
@@ -482,6 +494,24 @@ mod tests {
         assert!(run.allow_automatically("a").is_some());
         assert!(!run.needs_user());
         assert_eq!(run.activity.last().unwrap().kind, ActivityKind::Allowed("Allowed Bash without asking.".into()));
+    }
+
+    #[test]
+    fn a_turn_ends_only_with_its_result() {
+        let mut run = run("/setup");
+        assert!(!run.has_turn_result());
+        run.apply(turn(0.5));
+        assert!(run.has_turn_result());
+        run.note_reply("1. Design Lead");
+        assert!(!run.has_turn_result(), "the reply starts a turn");
+        run.apply(AgentEvent::AssistantText { text: "Let me update the skill files.".into(), nested: false });
+        run.apply(AgentEvent::ProcessExited { failure: None });
+        run.settle_after_restore();
+        assert!(!run.has_turn_result(), "cut off by the process's end");
+        run.apply(turn(0.1));
+        assert!(run.has_turn_result());
+        run.apply(AgentEvent::SessionStarted { session_id: "s".into(), model: "m".into(), api_key_source: "none".into() });
+        assert!(!run.has_turn_result(), "a turn Claude starts on its own");
     }
 
     #[test]

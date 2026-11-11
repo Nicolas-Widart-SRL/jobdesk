@@ -224,7 +224,7 @@ const DEFAULTS: [&str; 12] = [
     "Model",
     "Claude default leaves the choice to Claude Code.",
     "Spend at most, USD",
-    "Empty starts each command at its suggested budget, $1 to $5. An amount here starts every task there.",
+    "Empty starts each command at its suggested budget, $1 to $25. An amount here starts every task there.",
     "Per command",
     "A command listed here starts with its own model and budget.",
     "Monthly cap",

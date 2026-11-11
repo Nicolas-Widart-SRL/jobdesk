@@ -7,11 +7,12 @@ use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{SweepForm, live_sweep, paint_pick_edge, pick_look, pointer_over, pressed};
 use crate::ui_kit::marks::{KnotState, day_stamp, knot, paint_tag, slip_bar, tag, tag_galley};
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{Choice, divider, folder_fill, footed, paint_choice, paper, wizard_scope};
+use crate::ui_kit::surfaces::{Choice, divider, folder_fill, footed, paint_choice, paper, pinned_footer, wizard_scope};
 use crate::ui_kit::text::{add_text, copyable, cut_hover, line, paint_text, rich, wrapped, wrapped_height};
 use crate::ui_kit::tokens::{
     BAR_HEIGHT, BODY_PADDING, BUTTON_GAP, BUTTON_HEIGHT, DEAL_FOOT_PADDING, DEAL_PADDING, FOCUS_RING, GUTTER, HAIRLINE, HEAD_GAP, INSET, ITEM_GAP, KNOT_SIZE,
-    MARK_RULE, NOTE_PADDING, RADIO, RADIUS_PANEL, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SETTING_CHECK_GAP, STATUS_DOT, TAG_HEIGHT, TAG_PADDING, Type,
+    MARK_RULE, NOTE_PADDING, RADIO, RADIUS_PANEL, ROW_GAP, ROW_ITEM_GAP, ROW_PADDING, SETTING_CHECK_GAP, SPLIT_GAP, SPLIT_SIDE_BASIS, STATUS_DOT, TAG_HEIGHT,
+    TAG_PADDING, Type, WELL_GUTTER, WIZARD_WIDE,
 };
 
 /// The room between a choice card's title and its sentence.
@@ -241,6 +242,75 @@ pub struct WizardStep<'a> {
 /// `link`. `why` is the foot's one muted line at the right, such as when a disabled primary opens; empty leaves it out.
 /// On the card, the folder plane takes `folder_fill`: slips, alerts and knots still ahead stay apart from it in dark.
 pub fn wizard_card<R>(ui: &mut Ui, step: &WizardStep, width: f32, body: impl FnOnce(&mut Ui) -> R, actions: impl FnOnce(&mut Ui), why: &str) -> R {
+    card(ui, step, width, true, body, actions, why)
+}
+
+/// A step of the Profile chapter, in the window grown to the app's size: `wizard_card` at `WIZARD_WIDE`, whose body holds
+/// still and takes the height left over the foot, so what it holds can share that height out, such as the fallback
+/// sheet's message beside its field. A part that should scroll puts a scroll area in it.
+pub fn wide_card<R>(ui: &mut Ui, step: &WizardStep, body: impl FnOnce(&mut Ui) -> R, actions: impl FnOnce(&mut Ui), why: &str) -> R {
+    card(ui, step, WIZARD_WIDE, false, body, actions, why)
+}
+
+/// A step of the Profile chapter split in two: `wide_card` with `main` at the left and a side column of slips,
+/// `SPLIT_SIDE_BASIS` wide and `SPLIT_GAP` from it, at the right. `main` scrolls on its own with its bar at its right,
+/// clear of its words. `side` holds still while it fits, and scrolls on its own when it is taller than the room. Each
+/// column starts at the top.
+pub fn split_card<R>(
+    ui: &mut Ui,
+    step: &WizardStep,
+    main: impl FnOnce(&mut Ui) -> R,
+    side: impl FnOnce(&mut Ui),
+    actions: impl FnOnce(&mut Ui),
+    why: &str,
+) -> R {
+    wide_card(
+        ui,
+        step,
+        |ui| {
+            let area = ui.available_rect_before_wrap();
+            let side_width = SPLIT_SIDE_BASIS.min((area.width() - SPLIT_GAP) / 2.0).max(0.0);
+            let main_rect = Rect::from_min_max(area.min, pos2(area.right() - side_width - SPLIT_GAP, area.bottom()));
+            let side_rect = Rect::from_min_max(pos2(area.right() - side_width, area.top()), area.max);
+            let column = |rect: Rect, salt: &str| UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::top_down(Align::Min));
+            let mut main_ui = ui.new_child(column(main_rect, "split_card_main"));
+            main_ui.shrink_clip_rect(main_rect);
+            let inner = well(&mut main_ui, "split_card_main", main);
+            let mut side_ui = ui.new_child(column(side_rect, "split_card_side"));
+            side_ui.shrink_clip_rect(side_rect);
+            // Slips taller than the room scroll on their own, never sideways, so none is cut off under the foot.
+            egui::ScrollArea::vertical().id_salt("split_card_side").auto_shrink([false, false]).show(&mut side_ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = f32::from(GUTTER);
+                side(ui);
+            });
+            ui.advance_cursor_after_rect(area);
+            inner
+        },
+        actions,
+        why,
+    )
+}
+
+/// A column that scrolls on its own, with the room at its right that keeps its floating bar clear of the words.
+pub(in crate::ui_kit) fn well<R>(ui: &mut Ui, salt: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(salt)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            Frame::new()
+                .inner_margin(Margin { right: WELL_GUTTER, ..Margin::ZERO })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    add(ui)
+                })
+                .inner
+        })
+        .inner
+}
+
+/// A wizard card `width` wide at most, whose body `scrolls` over the foot, or holds still and takes the height left.
+fn card<R>(ui: &mut Ui, step: &WizardStep, width: f32, scrolls: bool, body: impl FnOnce(&mut Ui) -> R, actions: impl FnOnce(&mut Ui), why: &str) -> R {
     ui.vertical_centered(|ui| step_dots(ui, step.steps, step.at));
     let room = ui.available_rect_before_wrap();
     let card_width = width.min(room.width());
@@ -263,7 +333,14 @@ pub fn wizard_card<R>(ui: &mut Ui, step: &WizardStep, width: f32, body: impl FnO
                     })
                     .inner
             };
-            footed(ui, true, false, body, |ui| wizard_foot(ui, actions, why))
+            let foot = |ui: &mut Ui| wizard_foot(ui, actions, why);
+            if scrolls {
+                return footed(ui, true, false, body, foot);
+            }
+            let rect = pinned_footer(ui, ui.available_height(), foot);
+            let mut held = ui.new_child(UiBuilder::new().id_salt("wizard_body").max_rect(rect).layout(Layout::top_down(Align::Min)));
+            held.shrink_clip_rect(rect);
+            body(&mut held)
         })
     })
     .inner

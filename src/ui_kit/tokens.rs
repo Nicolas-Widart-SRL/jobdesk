@@ -199,6 +199,35 @@ pub const TABLE_CELL_PADDING: (f32, f32) = (12.0, 9.0);
 pub const SPLIT_GAP: f32 = 28.0;
 pub const SPLIT_MAIN_BASIS: f32 = 520.0;
 pub const SPLIT_SIDE_BASIS: f32 = 340.0;
+/// The first-run wizard's card from the Profile chapter on, in the window grown to the app's size.
+pub const WIZARD_WIDE: f32 = 1120.0;
+/// The room a scrolling column keeps at its right, so its floating bar never runs over the words.
+pub const WELL_GUTTER: i8 = 22;
+/// The answer column beside Claude's message in the fallback sheet, as a share of the message column's width.
+pub const FALLBACK_SHARE: f32 = 0.86;
+/// The least width of a numbered item's number in Claude's message, and of a lettered sub-item's letter.
+pub const ITEM_NUMBER: f32 = 28.0;
+pub const SUB_ITEM_LETTER: f32 = 22.0;
+/// The room above a group's title in Claude's message after something else, and under it.
+pub const GROUP_GAP: (f32, f32) = (14.0, 6.0);
+/// The room under one question with its field, and under a block of Claude's prose.
+pub const QUESTION_GAP: f32 = 12.0;
+pub const PROSE_GAP: f32 = 10.0;
+/// A proposed change's row: the room above and below its words, and between two rows.
+pub const CHANGE_PADDING: f32 = 2.0;
+pub const CHANGE_GAP: f32 = 4.0;
+/// The drop zone, full and slim: its padding (inline, block), and the room between its parts.
+pub const DROP_PADDING: (i8, i8) = (26, 28);
+pub const DROP_SLIM_PADDING: (i8, i8) = (16, 12);
+pub const DROP_GAP: f32 = 20.0;
+pub const DROP_SLIM_GAP: f32 = 14.0;
+/// The two pages stacked in the full drop zone: each page, and how far the front one sits right of and above the back.
+pub const DROP_PAGE: (f32, f32) = (66.0, 92.0);
+pub const DROP_PAGE_OFFSET: (f32, f32) = (22.0, 10.0);
+/// The page at the start of a row in a file list.
+pub const FILE_PAGE: (f32, f32) = (26.0, 34.0);
+/// The menu in a file list's row that says what the file is: wide enough for its longest kind.
+pub const KIND_MENU_WIDTH: f32 = 150.0;
 /// The in-tray's side column. Its slips sit `GUTTER` in from its left edge.
 pub const TRAY_RAIL: f32 = 292.0;
 /// The room between the slips in the rail.
@@ -322,6 +351,8 @@ impl Type {
     pub const BODY: Self = Self { face: Face::Sans, size: 14.0 };
     pub const STRONG: Self = Self { face: Face::Semibold, size: 14.0 };
     pub const TAKE: Self = Self { face: Face::Sans, size: 15.0 };
+    /// A bold line in Claude's message read at `TAKE`, such as a group of questions' title.
+    pub const TAKE_STRONG: Self = Self { face: Face::Semibold, size: 15.0 };
     pub const SMALL: Self = Self { face: Face::Sans, size: 12.5 };
     pub const NOTE: Self = Self { face: Face::Sans, size: 13.0 };
 

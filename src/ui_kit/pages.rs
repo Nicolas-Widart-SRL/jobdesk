@@ -1,10 +1,10 @@
-use egui::{Align, Color32, Direction, Layout, Sense, TextureHandle, Ui, UiBuilder, Vec2, vec2};
+use egui::{Align, Color32, Direction, Layout, Rect, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::palette::Ink;
 use crate::ui_kit::surfaces::{card_skeleton, page_frame};
 use crate::ui_kit::text::add_text;
-use crate::ui_kit::tokens::{HAIRLINE, ITEM_GAP, PAGE_GAP, PAGE_PADDING, PAGE_SIZE, Type};
+use crate::ui_kit::tokens::{HAIRLINE, ITEM_GAP, PAGE_GAP, PAGE_PADDING, PAGE_SIZE, RADIUS_STAMP, Type};
 
 /// The size of a page `aspect` wide for each unit of height, fitted to `room`: it takes the room's height less `caption`,
 /// narrows so two pages sit side by side `PAGE_GAP` apart, and never draws smaller than `PAGE_SIZE`.
@@ -89,6 +89,30 @@ pub fn blank_page(ui: &mut Ui, text: &str) {
             add_text(ui, text, Type::BODY, Ink::Muted);
         });
     });
+}
+
+/// The lines on a mini page, as shares of its text width: the head, then the lines under it. A small page shows the
+/// first six.
+const MINI_PAGE_LINES: [f32; 9] = [0.6, 1.0, 0.7, 1.0, 1.0, 0.7, 1.0, 0.7, 1.0];
+
+/// A page drawn small, as a mark for a document rather than its image: `page` paper in a `line` hairline, a `page_head`
+/// bar, then grey `page_line` lines. `small` draws the one at the start of a file list's row, with fewer lines.
+pub(in crate::ui_kit) fn paint_mini_page(ui: &Ui, rect: Rect, small: bool) {
+    let p = Palette::of(ui);
+    let painter = ui.painter();
+    painter.rect(rect, RADIUS_STAMP, p.page, Stroke::new(HAIRLINE, p.line), StrokeKind::Inside);
+    // Inset, line height, head height, the room between lines, and the extra room under the head.
+    let (inset, line, head, gap, under_head) = if small { (vec2(3.0, 4.0), 2.0, 3.0, 2.0, 1.0) } else { (vec2(7.0, 8.0), 3.0, 6.0, 4.0, 3.0) };
+    let text = rect.shrink2(inset);
+    let mut top = text.top();
+    for (index, share) in MINI_PAGE_LINES.iter().take(if small { 6 } else { 9 }).enumerate() {
+        let (height, ink) = if index == 0 { (head, p.page_head) } else { (line, p.page_line) };
+        if top + height > text.bottom() {
+            break;
+        }
+        painter.rect_filled(Rect::from_min_size(pos2(text.left(), top), vec2(text.width() * share, height)), 0.0, ink);
+        top += height + gap + if index == 0 { under_head } else { 0.0 };
+    }
 }
 
 #[cfg(test)]

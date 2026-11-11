@@ -425,6 +425,13 @@ impl FolderUpdate {
         self.kept_out.is_some()
     }
 
+    /// Whether `follow` tries something again every `HOLD_RETRY`: the hold of a folder this Jobdesk is kept out of, or a
+    /// rollback that waits for another Jobdesk window to close the folder. The window should repaint at least that
+    /// often meanwhile, even with no input.
+    pub fn retrying(&self) -> bool {
+        self.kept_out.is_some() || self.rollback_waits.is_some()
+    }
+
     /// Why the folder's writers wait on the folder update, if they do: `Updating` while this Jobdesk's worker, or
     /// another Jobdesk that holds the folder alone, updates, undoes or rolls it back, and `Unlockable` while this
     /// Jobdesk cannot lock the folder for any other reason, when nothing updates it. Meanwhile the caller starts no

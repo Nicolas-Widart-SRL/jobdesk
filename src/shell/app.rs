@@ -768,6 +768,13 @@ impl Shell {
         }
     }
 
+    /// While the folder update tries something again, the hold or a waiting rollback, it does so even with no input.
+    fn ask_retry_repaint(&self, ctx: &egui::Context) {
+        if self.folder_update.retrying() {
+            ctx.request_repaint_after(HOLD_RETRY);
+        }
+    }
+
     /// Why Change folder waits, if it does.
     fn folder_wait(&self) -> Option<&'static str> {
         match self.folder_update.folder_wait() {
@@ -804,10 +811,7 @@ impl Shell {
         self.follow_updates(ui.ctx(), now);
         // After the desk's news and the updates', and before any screen can start a task.
         self.follow_folder_update();
-        // While another Jobdesk holds the folder alone, the hold is tried again even with no input.
-        if self.folder_update.kept_out() {
-            ui.ctx().request_repaint_after(HOLD_RETRY);
-        }
+        self.ask_retry_repaint(ui.ctx());
         if self.community.poll(self.now_utc()) {
             self.name_community_portals();
         }
@@ -3206,6 +3210,39 @@ mod tests {
         assert_eq!(shell.folder_writer(), None);
         assert_eq!((shell.restart_wait(), shell.folder_wait()), (None, None));
         assert!(start(&mut shell).is_ok(), "the task starts once this Jobdesk holds the folder");
+    }
+
+    /// A stopped update whose rollback waits for another window to close the folder is looked at again every
+    /// `HOLD_RETRY`, so the window asks to repaint that often even when nothing else moves it.
+    #[test]
+    fn a_rollback_that_waits_on_another_window_keeps_the_window_repainting() {
+        let (data, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let path = checkout(&folder);
+        fs::create_dir(path.join(".jobdesk")).unwrap();
+        // A stopped update's journal, and another window that has the folder open.
+        fs::write(path.join(".jobdesk/update.json"), "{}").unwrap();
+        let other = fs::File::options().read(true).write(true).create(true).truncate(false).open(path.join(".jobdesk/.open")).unwrap();
+        other.lock_shared().unwrap();
+        let mut shell = launch(&ctx, Some(path.clone()), data.path());
+        shell.folder_update = folder_update::folder_update(data.path(), "0.1.0", Arc::new(|| {}));
+        shell.open(&ctx, &path);
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        shell.follow_folder_update();
+        while shell.folder_update.is_working() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            shell.follow_folder_update();
+        }
+        let notice = shell.folder_update.notice().map(|notice| notice.words).unwrap_or_default();
+        assert!(notice.contains("another Jobdesk window has it open"), "{notice}");
+        assert!(!shell.folder_update.kept_out(), "this window holds the folder open");
+
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        ctx.set_repaint_observer(move |info| seen.lock().unwrap().push(info.delay));
+        shell.ask_retry_repaint(&ctx);
+        assert!(asked.lock().unwrap().contains(&HOLD_RETRY), "{:?}", asked.lock().unwrap());
+        drop(other);
     }
 
     /// A lock file that does not open, here a link planted where it goes, keeps every writer waiting as another

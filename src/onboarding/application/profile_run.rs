@@ -511,10 +511,15 @@ impl ProfileRun {
         Ok(())
     }
 
-    /// Stop setup, while Claude works. The run keeps its session, and Pick up where it stopped resumes it.
+    /// Stop setup. While Claude works, the turn is stopped. While Claude waits on the user, the session's process is
+    /// ended, so nothing stays open behind the app. Either way the run keeps its session and the draft, and the next
+    /// reply, or Pick up where it stopped, resumes it.
     pub fn stop(&mut self, desk: &mut RunDesk) {
-        if let Some(id) = self.run(desk).filter(|run| run.is_busy()).map(|run| run.id.clone()) {
+        let Some((id, busy)) = self.run(desk).map(|run| (run.id.clone(), run.is_busy())) else { return };
+        if busy {
             desk.stop(&id);
+        } else if desk.has_session(&id) {
+            desk.close(&id);
         }
     }
 
@@ -1744,6 +1749,23 @@ mod tests {
         f.poll();
         assert_eq!(f.profile.phase(), &ProfilePhase::Done, "and it stays done");
         assert_eq!(f.sent().last().unwrap(), "Put my phone number on the first line.", "Finish setup sends nothing");
+    }
+
+    /// Stop setup while Claude waits ends the session's process, keeps the draft, and the next send resumes the session.
+    #[test]
+    fn stop_setup_on_a_waiting_sheet_ends_the_process_and_keeps_the_draft() {
+        let mut f = fixture();
+        let id = f.at(FIVE);
+        f.profile.record_draft(&f.desk, vec![(1, "Design Lead".into())], String::new(), Instant::now());
+        f.profile.stop(&mut f.desk);
+        assert!(!f.desk.has_session(&id), "nothing stays open");
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::Sheet { .. }), "{:?}", f.profile.phase());
+        assert!(f.record().draft.is_some(), "the draft is kept");
+        assert!(f.profile.draft(&f.desk).is_some());
+        f.profile.send_answers(&mut f.desk, &[(1, "Design Lead")]).unwrap();
+        let requests = &f.script.borrow().requests;
+        assert_eq!((requests.len(), requests[1].resume_session.as_deref()), (2, Some("s1")), "the same session, in a new process");
     }
 
     #[test]

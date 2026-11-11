@@ -10,12 +10,14 @@ pub mod ui;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::NaiveDate;
+
 #[cfg(target_os = "macos")]
 use crate::onboarding::application::Arch;
-use crate::onboarding::application::{HelperSetup, Onboarding};
+use crate::onboarding::application::{HelperSetup, Onboarding, ProfileRun, Progress};
+use crate::onboarding::infrastructure::{FileCopier, HttpsFetcher, ProgressFile, ZipUnpacker};
 #[cfg(target_os = "macos")]
 use crate::onboarding::infrastructure::{HomeInstaller, ProgramProbe};
-use crate::onboarding::infrastructure::{HttpsFetcher, ProgressFile, ZipUnpacker};
 use crate::shared_kernel::https::HttpsTransport;
 
 /// The folder in the app's data folder that holds each running Jobdesk's downloads, `onboarding/<pid>/`.
@@ -32,6 +34,13 @@ pub fn first_run(data: &Path, current: &str, documents: PathBuf, helpers: Helper
     let unpacker = ZipUnpacker::new(downloads(data), |folder| crate::workspace::open(folder).is_some());
     let store = Arc::new(ProgressFile::new(data));
     Onboarding::new(store, crate::updates::source_pins(current), Arc::new(fetcher), Arc::new(unpacker), helpers, documents, repaint)
+}
+
+/// The Profile chapter over the job search folder `folder` that first-run setup made, carrying on the record `progress`
+/// that it holds, which stays in `data`. Its documents are copied into the folder's `documents/`, and its `/setup` runs
+/// on the shell's `RunDesk`.
+pub fn profile_run(data: &Path, folder: PathBuf, progress: Progress, today: NaiveDate) -> ProfileRun {
+    ProfileRun::new(Arc::new(ProgressFile::new(data)), progress, folder, Arc::new(FileCopier), today)
 }
 
 /// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, so Python as a task runs

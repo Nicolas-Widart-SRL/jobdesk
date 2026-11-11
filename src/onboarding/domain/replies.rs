@@ -1,6 +1,13 @@
 //! What first-run setup says back to `/setup`, and the plain lines the profile card shows while it works. The replies
 //! are sent to Claude as the user's decision, so each is built from the numbers Claude wrote and nothing else.
 
+/// Jobdesk's one reply of its own: the answer to `/setup`'s opening question, which picks the documents-folder path.
+/// The words are the path's own in ai-job-search v1.7.5, `.claude/commands/setup.md` line 44: "**Path A: Read my
+/// documents folder**". Jobdesk copies the documents straight into `documents/`, not into the subfolders its inventory
+/// lists, so the reply says where they are.
+pub const PATH_A_REPLY: &str =
+    "Path A: Read my documents folder. My documents are the PDF files directly in documents/, not in its subfolders, so please read each of them.";
+
 /// The reply to the CV check that says the PDF is fine.
 pub const CV_LOOKS_GOOD: &str = "The CV looks good.";
 
@@ -287,6 +294,8 @@ mod tests {
     fn the_fixed_replies_read_as_the_user_would_say_them() {
         assert_eq!(CV_LOOKS_GOOD, "The CV looks good.");
         assert_eq!(PICK_UP_REPLY, "Please pick up where you stopped.");
+        assert!(PATH_A_REPLY.starts_with("Path A: Read my documents folder."));
+        assert!(!PATH_A_REPLY.contains('\n'), "one line, as a typed reply");
     }
 
     #[test]

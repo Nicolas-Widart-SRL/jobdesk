@@ -72,3 +72,6 @@ trash = { version = "5.3", default-features = false, features = ["coinit_apartme
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
+# Pure Rust YAML 1.2, for the release check alone: it parses a skill's or command file's front matter as YAML, and
+# a command whose file has front matter that does not parse, a padded name or a user-invocable other than true fails.
+yaml-rust2 = { version = "0.13", default-features = false }

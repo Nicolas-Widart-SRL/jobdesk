@@ -36,8 +36,11 @@
 # the built commit, 1 to 5 releases of ai-job-search-dev/ai-job-search, newest first, each with the SHA-256 of that
 # tag's source zip from GitHub's fixed address, the one the app builds from the version. scripts/ai-job-search.sh check
 # downloads and hashes every one. The sign job checks the list's shape before it writes the key, then signs, for each
-# release, the line `<sha256>  ai-job-search-vA.B.C.zip` under that zip's name.
-# When the list does not check, or one zip does not download or match, nothing is signed, tagged or published.
+# release, the line `<sha256>  ai-job-search-vA.B.C.zip` under that zip's name. The holds job calls ai-job-search.yml
+# for the built commit, which checks that each listed release has what that commit's Jobdesk relies on, and the sign job
+# needs it, on a push and on a run by hand alike.
+# When the list does not check, one zip does not download or match, or one release lacks what Jobdesk relies on,
+# nothing is signed, tagged or published.
 # Before it tags, publish checks the list is the one at the built commit, hashes every zip again, checks every
 # signature against assets/update/jobdesk-update.pub, each ai-job-search one under its own zip's name, and writes
 # latest.json, the feed the app reads, with scripts/update-feed.sh.
@@ -276,13 +279,27 @@ jobs:
           echo "Compatible ai-job-search releases: $releases"
           echo "releases=$releases" >> "$GITHUB_OUTPUT"
 
+  # Checks that every ai-job-search release the list holds at the built commit has what that commit's Jobdesk relies
+  # on, with ai-job-search.yml, the check pull requests run, called for that very commit. A run by hand gets it too.
+  # It runs code from the repository, so it gets only a token that reads it, and no secret.
+  holds:
+    name: Check what each compatible ai-job-search release holds
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ai-job-search.yml
+    with:
+      ref: ${{ needs.version.outputs.sha }}
+
   # Signs the update files. The key reaches only the Sign step, in its environment, never a command line or a log.
   # No checkout and no build, so no code from the repository or its dependencies runs beside it.
   # It also signs each compatible ai-job-search release: the line `<sha256>  ai-job-search-vA.B.C.zip`, with a trusted
   # comment that names that zip alone, so the app can rebuild the line from the feed and check each release by itself.
+  # It needs the holds job, so nothing is signed unless every listed release passed at the commit it signs.
   sign:
     name: Sign the updates
-    needs: [version, installers, source]
+    needs: [version, installers, source, holds]
     runs-on: ubuntu-latest
     permissions: {}
     defaults:

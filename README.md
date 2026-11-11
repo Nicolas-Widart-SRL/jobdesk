@@ -58,7 +58,7 @@ Updates:
 - **Tool permissions are allowed by default and listed in the activity, so a posting written to trick Claude could get a command run before you see it.** Settings › Permissions turns prompts on.
 - The workspace checks postings with `posting_guard` before scoring them.
 - Run logs, which hold the text of your runs, and your decisions stay in the app's data folder, readable only by your user.
-- Jobdesk uses Claude Code's sign-in and keeps no password. An optional Console API key stays in the system keychain and reaches only each task's Claude Code process.
+- Jobdesk uses Claude Code's sign-in and keeps no password. An optional Console API key stays in the system keychain, Jobdesk passes it only to the Claude Code process of a task or of Test connection, and [Trust](docs/architecture/trust.md#the-api-key) says where it goes from there.
 - Jobdesk checks GitHub for updates when it opens and about every 6 hours, sending only its version. Turn this off in Settings › About.
 - Portals › Browse community reads the community portal list from GitHub, sending only Jobdesk's version.
 

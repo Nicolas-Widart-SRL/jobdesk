@@ -67,6 +67,8 @@ const WORKSPACE_KEY: &str = "workspace";
 const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
 /// Why Change folder waits: a session stays open after its turn ends, until its process exits or the user ends it.
 const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Tasks to change the folder.";
+/// Why Change folder waits while first-run setup's Profile chapter copies documents into the folder.
+const FOLDER_COPYING: &str = "Jobdesk is copying your documents into your job search folder. Change folder once it finishes.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
@@ -697,8 +699,19 @@ impl Shell {
         self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.folder_wait() == Some(FolderWait::Updating)
     }
 
+    /// Whether first-run setup's Profile chapter copies documents into the folder for its run. Its worker writes
+    /// `documents/` until the copy ends, so the folder stays, as for a running task.
+    fn copying_documents(&self) -> bool {
+        self.profile_setup.as_ref().is_some_and(|setup| setup.run.is_starting())
+    }
+
+    /// Whether another folder may not open now: a task, a folder update or the Profile chapter's copy holds this one.
+    fn folder_held(&self) -> bool {
+        self.folder_locked() || self.copying_documents()
+    }
+
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
-        if self.folder_locked() {
+        if self.folder_held() {
             return;
         }
         match workspace::open(path) {
@@ -763,7 +776,7 @@ impl Shell {
 
     /// The dialog opens only when the folder may change. Unsaved profile text asks first, once a folder is picked.
     fn choose_folder_with(&mut self, ctx: &egui::Context, pick: impl FnOnce() -> Option<PathBuf>) {
-        if self.folder_locked() {
+        if self.folder_held() {
             return;
         }
         match pick() {
@@ -833,7 +846,8 @@ impl Shell {
         match self.folder_update.folder_wait() {
             Some(FolderWait::Updating) => Some(FOLDER_WAITS),
             // This Jobdesk holds nothing in a folder it cannot lock, and another folder is the way out.
-            Some(FolderWait::Unlockable) | None => self.folder_locked().then_some(FOLDER_BUSY),
+            Some(FolderWait::Unlockable) | None if self.folder_locked() => Some(FOLDER_BUSY),
+            Some(FolderWait::Unlockable) | None => self.copying_documents().then_some(FOLDER_COPYING),
         }
     }
 
@@ -1203,7 +1217,7 @@ impl Shell {
     /// worker has ended, the Profile chapter is not copying documents into the folder for its run, and the window is not
     /// closing for Restart to update.
     fn folder_writable(&self) -> bool {
-        let copying = self.profile_setup.as_ref().is_some_and(|setup| setup.run.is_starting());
+        let copying = self.copying_documents();
         self.session_state() == SessionState::None && self.first_run.is_none() && self.setup_stopping.is_none() && !copying && !self.restart_pending
     }
 
@@ -3432,6 +3446,49 @@ mod tests {
         assert_eq!(shell.desk.as_ref().unwrap().runs().len(), 1, "and setup's run started");
         shell.follow_folder_update();
         assert!(!shell.folder_update.is_working(), "nor while setup's session is open");
+    }
+
+    /// While the Profile chapter copies documents into the folder, Change folder waits and says why, as it does while a
+    /// task runs: the copy's worker still writes `documents/`, and the chapter would be dropped under it.
+    #[test]
+    fn change_folder_waits_while_the_profile_chapter_copies() {
+        use crate::onboarding::application::Progress;
+        use crate::runs::application::{CapCheck, RunDefaults};
+
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let root = checkout(&folder);
+        let cv = desktop.path().join("Sam Rivera CV.pdf");
+        fs::write(&cv, b"%PDF-1.4\nnothing else").unwrap();
+        let mut shell = launch(&ctx, Some(root.clone()), data.path());
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        let progress = Progress { folder: Some(root.clone()), ..Progress::default() };
+        let run = crate::onboarding::profile_run(data.path(), root.clone(), progress, Arc::new(|| {}), Local::now().date_naive());
+        shell = shell.with_profile_setup(run, true, "Documents/Job search");
+        shell.profile_setup_mut().unwrap().add_documents([cv]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.profile_setup.as_ref().unwrap().run.documents().is_looking() {
+            assert!(Instant::now() < deadline, "the document was never looked at");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
+        let rules = StartRules { defaults: &defaults, cap: &cap, testing: false };
+        let (Some(setup), Some(desk)) = (&mut shell.profile_setup, &mut shell.desk) else { panic!("the chapter shows") };
+        setup.run.read_documents(desk, &rules, Local::now().naive_local()).unwrap();
+        assert!(shell.profile_setup.as_ref().unwrap().run.is_starting(), "the copy runs");
+
+        let asked = Cell::new(false);
+        shell.choose_folder_with(&ctx, || {
+            asked.set(true);
+            None
+        });
+        assert!(!asked.get(), "no dialog while the copy runs");
+        assert_eq!(shell.folder_wait(), Some(FOLDER_COPYING));
+        let other = checkout_named(&folder, "other-search");
+        shell.open(&ctx, &other);
+        assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(root.as_path()), "the folder stays");
+        assert!(shell.in_profile_setup(), "and so does the chapter");
     }
 
     /// Another Jobdesk that updates the folder holds its lock alone, as a second handle does here, so this one cannot

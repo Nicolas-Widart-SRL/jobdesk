@@ -69,6 +69,8 @@ const CHOOSE_FOLDER: &str = "Choose your job search folder first.";
 const FOLDER_BUSY: &str = "A Claude session is open. Stop it, then end it, in Tasks to change the folder.";
 /// Why Change folder waits while first-run setup's Profile chapter copies documents into the folder.
 const FOLDER_COPYING: &str = "Jobdesk is copying your documents into your job search folder. Change folder once it finishes.";
+/// Why Restart to update waits while first-run setup's Profile chapter copies documents into the folder.
+const RESTART_COPYING: &str = "Jobdesk is copying your documents into your job search folder. Restart once it finishes.";
 /// The keys that open the launcher.
 const ASK_KEYS: [&str; 2] = command_chord("K");
 /// The keys that open Settings.
@@ -1255,7 +1257,10 @@ impl Shell {
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
         // This Jobdesk holds nothing in a folder it cannot lock, so a fixed Jobdesk may apply.
-        restart_wait(self.session_state()).or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
+        restart_wait(self.session_state())
+            .or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
+            // Closing the window would cut the Profile chapter's copy off halfway.
+            .or_else(|| self.copying_documents().then_some(RESTART_COPYING))
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -1283,7 +1288,7 @@ impl Shell {
     /// What Restart to update applies, for `run` once the window has closed, with the folder open now. Only a restart the
     /// user chose, with no session open, leaves one.
     fn leave_restart(&mut self) {
-        if !self.restart_pending || self.folder_locked() {
+        if !self.restart_pending || self.folder_held() {
             return;
         }
         let Some(plan) = self.updates.restart_plan() else { return };
@@ -3448,22 +3453,19 @@ mod tests {
         assert!(!shell.folder_update.is_working(), "nor while setup's session is open");
     }
 
-    /// While the Profile chapter copies documents into the folder, Change folder waits and says why, as it does while a
-    /// task runs: the copy's worker still writes `documents/`, and the chapter would be dropped under it.
-    #[test]
-    fn change_folder_waits_while_the_profile_chapter_copies() {
+    /// A shell on first-run setup's Profile chapter over a checkout in `folder`, whose copy of one document into the
+    /// folder has started and not been polled to its end. Gives the shell and the checkout's path.
+    fn copying_documents(ctx: &egui::Context, data: &Path, folder: &tempfile::TempDir, desktop: &Path) -> (Shell, PathBuf) {
         use crate::onboarding::application::Progress;
         use crate::runs::application::{CapCheck, RunDefaults};
 
-        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let ctx = egui::Context::default();
-        let root = checkout(&folder);
-        let cv = desktop.path().join("Sam Rivera CV.pdf");
+        let root = checkout(folder);
+        let cv = desktop.join("Sam Rivera CV.pdf");
         fs::write(&cv, b"%PDF-1.4\nnothing else").unwrap();
-        let mut shell = launch(&ctx, Some(root.clone()), data.path());
+        let mut shell = launch(ctx, Some(root.clone()), data);
         shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
         let progress = Progress { folder: Some(root.clone()), ..Progress::default() };
-        let run = crate::onboarding::profile_run(data.path(), root.clone(), progress, Arc::new(|| {}), Local::now().date_naive());
+        let run = crate::onboarding::profile_run(data, root.clone(), progress, Arc::new(|| {}), Local::now().date_naive());
         shell = shell.with_profile_setup(run, true, "Documents/Job search");
         shell.profile_setup_mut().unwrap().add_documents([cv]);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -3477,7 +3479,16 @@ mod tests {
         let (Some(setup), Some(desk)) = (&mut shell.profile_setup, &mut shell.desk) else { panic!("the chapter shows") };
         setup.run.read_documents(desk, &rules, Local::now().naive_local()).unwrap();
         assert!(shell.profile_setup.as_ref().unwrap().run.is_starting(), "the copy runs");
+        (shell, root)
+    }
 
+    /// While the Profile chapter copies documents into the folder, Change folder waits and says why, as it does while a
+    /// task runs: the copy's worker still writes `documents/`, and the chapter would be dropped under it.
+    #[test]
+    fn change_folder_waits_while_the_profile_chapter_copies() {
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let (mut shell, root) = copying_documents(&ctx, data.path(), &folder, desktop.path());
         let asked = Cell::new(false);
         shell.choose_folder_with(&ctx, || {
             asked.set(true);
@@ -3489,6 +3500,30 @@ mod tests {
         shell.open(&ctx, &other);
         assert_eq!(shell.workspace.as_ref().map(WorkspaceRoot::path), Some(root.as_path()), "the folder stays");
         assert!(shell.in_profile_setup(), "and so does the chapter");
+    }
+
+    /// While the Profile chapter copies documents into the folder, Restart to update waits and says why, as it waits
+    /// for a live session: closing the window would cut the copy off halfway. Once the copy has ended, it goes.
+    #[test]
+    fn restart_to_update_waits_while_the_profile_chapter_copies() {
+        let (data, folder, desktop) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let (mut shell, _) = copying_documents(&ctx, data.path(), &folder, desktop.path());
+        shell.updates = ready_updates();
+        assert_eq!(shell.restart_wait(), Some(RESTART_COPYING));
+        assert!(!restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close) && !shell.restart_pending, "nothing closes");
+        shell.restart_pending = true;
+        shell.leave_restart();
+        assert_eq!(slot(&shell), None, "the copy never leaves a plan, whatever asked");
+        shell.restart_pending = false;
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while shell.profile_setup.as_ref().unwrap().run.is_starting() {
+            assert!(Instant::now() < deadline, "the copy never ended");
+            std::thread::sleep(Duration::from_millis(2));
+            shell.follow_profile_setup();
+        }
+        assert_ne!(shell.restart_wait(), Some(RESTART_COPYING), "the copy no longer holds it");
     }
 
     /// Another Jobdesk that updates the folder holds its lock alone, as a second handle does here, so this one cannot

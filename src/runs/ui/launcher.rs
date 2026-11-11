@@ -11,8 +11,8 @@ use crate::shared_kernel::visible_text::all_visible;
 use crate::shared_kernel::{FolderWait, ModelChoice};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
 use crate::ui_kit::{
-    Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, link, muted, page_body, page_head,
-    panel, panel_body, primary_shortcut_button, rich, slip, split, strong,
+    Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, from_note, group_title, hand, link, muted, page_body,
+    page_head, panel, panel_body, primary_shortcut_button, rich, slip, split, strong,
 };
 
 /// The keys that start the run.
@@ -52,12 +52,29 @@ pub enum LauncherRequest {
     OpenRunDefaults,
 }
 
+/// What opened the launcher, named in a note at the top of its form. It changes nothing that Run sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchNote {
+    /// Find new jobs… on Today, before the board holds any job.
+    FirstSearch,
+}
+
+impl LaunchNote {
+    fn words(self) -> (&'static str, &'static str) {
+        match self {
+            Self::FirstSearch => ("Your first search, from Today.", "Leave the box below empty to search for all your job titles."),
+        }
+    }
+}
+
 /// The model and the budget hold only what the user changed. Untouched, they show what the run defaults give the command.
 pub struct Launcher {
     command: &'static CommandSpec,
     /// A task in plain words, which a screen of Jobdesk wrote. While it is set, the form shows it in place of the command,
     /// read only, and Run sends it as it stands. Picking a command clears it.
     words: Option<String>,
+    /// What opened the form, until another line fills it, a command is picked or Run starts it.
+    note: Option<LaunchNote>,
     values: HashMap<&'static str, String>,
     budget: Option<String>,
     model: Option<ModelChoice>,
@@ -72,7 +89,26 @@ impl Default for Launcher {
 
 impl Launcher {
     fn for_command(command: &'static CommandSpec) -> Self {
-        Self { command, words: None, values: HashMap::new(), budget: None, model: None, reset_confirmed: false }
+        Self { command, words: None, note: None, values: HashMap::new(), budget: None, model: None, reset_confirmed: false }
+    }
+
+    /// `prefill` with a note naming what opened the form. A line the form refuses takes no note either.
+    pub fn prefill_noted(&mut self, line: &str, note: LaunchNote) -> bool {
+        let taken = self.prefill(line);
+        if taken {
+            self.note = Some(note);
+        }
+        taken
+    }
+
+    /// The note the form shows, if any.
+    pub fn note(&self) -> Option<LaunchNote> {
+        self.note
+    }
+
+    /// Drops the note, as the launcher opens with no line.
+    pub fn drop_note(&mut self) {
+        self.note = None;
     }
 
     /// Fills the form from a line such as `/outcome followup acme`. A field with a flag, such as `/setup --section goals`,
@@ -182,6 +218,9 @@ impl Launcher {
         panel_body(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = ROW_GAP;
+            if let Some((title, body)) = self.note.map(LaunchNote::words) {
+                from_note(ui, title, body);
+            }
             muted(ui, if self.words.is_some() { WORDS_NOTE } else { self.command.summary });
             for field in self.fields() {
                 let mut value = self.value_of(field);
@@ -296,6 +335,7 @@ impl Launcher {
         });
         if matches!(asked, Some(LauncherRequest::Started(_))) {
             self.clear_words();
+            self.note = None;
         }
         asked
     }
@@ -350,6 +390,21 @@ mod tests {
         assert!(launcher.fields().is_empty() && !launcher.destructive());
         launcher.prefill("/setup --section experience");
         assert_eq!((launcher.words.as_deref(), launcher.line().as_str()), (None, "/setup --section experience"));
+    }
+
+    /// A note names what opened the form until another line fills it, and it changes nothing Run sends.
+    #[test]
+    fn a_note_lasts_until_another_line_fills_the_form() {
+        let mut launcher = Launcher::default();
+        assert!(launcher.prefill_noted("/scrape", LaunchNote::FirstSearch));
+        assert_eq!((launcher.note(), launcher.line().as_str()), (Some(LaunchNote::FirstSearch), "/scrape"));
+        launcher.prefill("/rank");
+        assert_eq!(launcher.note(), None);
+        assert!(!launcher.prefill_noted("/unknown", LaunchNote::FirstSearch), "a refused line takes no note");
+        assert_eq!(launcher.note(), None);
+        launcher.prefill_noted("/scrape", LaunchNote::FirstSearch);
+        launcher.drop_note();
+        assert_eq!((launcher.note(), launcher.line().as_str()), (None, "/scrape"));
     }
 
     /// A `/` line the catalog does not hold, and an empty line, leave the form as it was.

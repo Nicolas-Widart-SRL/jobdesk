@@ -1,17 +1,18 @@
 //! Today's parts: one decision at a time, on top of a visible stack of what is left, beside what is done and what is coming.
 
-use egui::{Area, Color32, CornerRadius, Frame, Margin, Order, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
+use egui::{Align, Area, Color32, CornerRadius, Frame, Layout, Margin, Order, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
 use crate::ui_kit::Palette;
 use crate::ui_kit::controls::{interactive_row, pick_look, pointer_over, pressed, small_button, small_key_button, small_toggle};
 use crate::ui_kit::marks::solid_tag;
 use crate::ui_kit::palette::{Ink, Tone};
-use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, surface};
+use crate::ui_kit::surfaces::{divider, footed, footer_row, inset, offset_shadow, paint_outlined, paper, surface};
 use crate::ui_kit::text::{add_cut_text, add_galley, add_text, cut_hover, line, paint_text};
 use crate::ui_kit::tokens::{
     AGENDA_DAY_WIDTH, AGENDA_TIP_WIDTH, BLANK_TAB_WIDTH, BUTTON_GAP, CARD_TAB_GAP, CARD_TAB_HEIGHT, CARD_TAB_PADDING, DEAL_CORNERS, DEAL_FOOT_PADDING,
-    DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, ITEM_GAP, MOTION_SLIDE, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT,
-    STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type, UNDO_ROW_PADDING,
+    DEAL_GAP, DEAL_PADDING, EDGE_CORNERS, FOOT_CORNERS, HAIRLINE, ITEM_GAP, MOTION_SLIDE, OFFER_GAP, OFFER_PADDING, OFFER_STEP_GAP, OFFER_STEP_NUMBER,
+    OFFER_WIDTH, OFFSET_SHADOW, PICK_ROW_HEIGHT, PICK_ROW_INLINE, STACK_EDGE_HEIGHT, STACK_EDGE_STEP, STACK_EDGES_SHOWN, TAB_TOP, TOGGLE_GAP, Type,
+    UNDO_ROW_PADDING,
 };
 
 /// Where a card's tab sits and what fills it, so the card under it can open its top edge there.
@@ -126,6 +127,34 @@ pub fn departing(ui: &Ui, room: Rect, part: f32, add: impl FnOnce(&mut Ui)) {
 /// The row under a card's body that holds its actions, ruled off on top.
 pub fn deal_footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     footer_row(ui, DEAL_FOOT_PADDING, add);
+}
+
+/// The panel a clear Today offers new work on, in place of a card: paper that takes all the height left, with `body`
+/// padded `OFFER_PADDING` and at most `OFFER_WIDTH` wide, scrolling over `footer`, pinned under a hairline as a deal's is.
+pub fn offer_paper(ui: &mut Ui, body: impl FnOnce(&mut Ui), footer: impl FnOnce(&mut Ui)) {
+    paper(ui, false, |ui| {
+        let body = |ui: &mut Ui| {
+            Frame::new().inner_margin(Margin::same(OFFER_PADDING)).show(ui, |ui| {
+                ui.set_max_width(OFFER_WIDTH);
+                ui.spacing_mut().item_spacing.y = OFFER_GAP;
+                body(ui);
+            });
+        };
+        footed(ui, true, false, body, |ui| deal_footer(ui, footer));
+    });
+}
+
+/// One numbered step of an offer: its number in `text`, in a column of its own so the steps line up, then the step
+/// in `muted`.
+pub fn offer_step(ui: &mut Ui, number: usize, step: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = OFFER_STEP_GAP;
+        ui.allocate_ui_with_layout(vec2(OFFER_STEP_NUMBER, 0.0), Layout::left_to_right(Align::Min), |ui| {
+            ui.set_min_width(OFFER_STEP_NUMBER);
+            add_text(ui, number.to_string(), Type::STRONG, Ink::Text);
+        });
+        add_text(ui, step, Type::BODY, Ink::Muted);
+    });
 }
 
 /// What closes an agenda row.

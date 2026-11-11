@@ -62,6 +62,52 @@ impl JobBoard {
     pub fn count(&self, lane: Lane) -> usize {
         self.jobs_in(lane).len()
     }
+
+    /// How many jobs the board holds, in every list.
+    fn held(&self) -> usize {
+        self.lanes.iter().map(|view| view.jobs.len()).sum()
+    }
+
+    /// Whether the board holds no job at all, so no search has found one yet.
+    pub fn is_empty(&self) -> bool {
+        self.held() == 0
+    }
+
+    /// What the first search found, while every job on the board is still new: none scored, skipped or expired yet.
+    pub fn first_search(&self) -> Option<FirstSearch> {
+        let new = self.jobs_in(Lane::New);
+        if new.is_empty() || new.len() != self.held() {
+            return None;
+        }
+        let mut sites: Vec<&str> = new.iter().filter_map(|job| job.portal.as_deref()).collect();
+        sites.sort_unstable();
+        sites.dedup();
+        Some(FirstSearch { jobs: new.len(), sites: sites.len() })
+    }
+}
+
+/// The jobs the first search found, none of them scored yet, and on how many sites. A job with no site counts on none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstSearch {
+    pub jobs: usize,
+    pub sites: usize,
+}
+
+impl FirstSearch {
+    /// "Your first search found 14 new jobs on 2 sites."
+    pub fn found(&self) -> String {
+        let jobs = if self.jobs == 1 { "1 new job".to_owned() } else { format!("{} new jobs", self.jobs) };
+        match self.sites {
+            0 => format!("Your first search found {jobs}."),
+            1 => format!("Your first search found {jobs} on 1 site."),
+            sites => format!("Your first search found {jobs} on {sites} sites."),
+        }
+    }
+
+    /// "Score 14 new jobs…": the action that opens the scoring task.
+    pub fn score_label(&self) -> String {
+        if self.jobs == 1 { "Score 1 new job…".to_owned() } else { format!("Score {} new jobs…", self.jobs) }
+    }
 }
 
 pub struct JobBoardService<R> {
@@ -162,6 +208,31 @@ mod tests {
         assert_eq!(board.portal_jobs("north-search"), (3, day(30)));
         assert_eq!(board.portal_jobs("south-search"), (1, day(31)));
         assert_eq!(board.portal_jobs("west-search"), (0, None));
+    }
+
+    /// The first search holds while every job is new, and counts each site once.
+    #[test]
+    fn the_first_search_holds_while_every_job_is_new() {
+        let on = |key: &str, portal: Option<&str>| JobView { portal: portal.map(str::to_owned), score: None, verdict: None, ..fixtures::view(key) };
+        let new = vec![on("a", Some("linkedin-search")), on("b", Some("freehire-search")), on("c", Some("linkedin-search")), on("d", None)];
+        let first = fixtures::board(vec![(Lane::New, new.clone())]);
+        assert_eq!(first.first_search(), Some(FirstSearch { jobs: 4, sites: 2 }));
+        assert_eq!(first.first_search().unwrap().found(), "Your first search found 4 new jobs on 2 sites.");
+        assert!(!first.is_empty());
+
+        let scored = fixtures::board(vec![(Lane::New, new), (Lane::Shortlist, vec![fixtures::view("top")])]);
+        assert_eq!(scored.first_search(), None, "a scored job ends the first search");
+        let empty = fixtures::board(vec![(Lane::New, vec![])]);
+        assert!(empty.is_empty() && empty.first_search().is_none());
+    }
+
+    #[test]
+    fn the_first_search_words_count_jobs_and_sites() {
+        let words = |jobs, sites| FirstSearch { jobs, sites }.found();
+        assert_eq!(words(1, 1), "Your first search found 1 new job on 1 site.");
+        assert_eq!(words(3, 0), "Your first search found 3 new jobs.");
+        assert_eq!(FirstSearch { jobs: 1, sites: 1 }.score_label(), "Score 1 new job…");
+        assert_eq!(FirstSearch { jobs: 14, sites: 2 }.score_label(), "Score 14 new jobs…");
     }
 }
 

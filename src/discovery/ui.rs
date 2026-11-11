@@ -2,28 +2,26 @@ use std::collections::HashSet;
 
 use egui::Ui;
 
-use crate::discovery::application::{CheckRow, FitLevel, JobBoard, JobChecks, JobFilters, JobView, Lane, Shown, Signal, Verdict, fit_band, shown_in};
+use crate::discovery::application::{
+    CheckRow, FirstSearch, FitLevel, JobBoard, JobChecks, JobFilters, JobView, Lane, Shown, Signal, Verdict, fit_band, shown_in,
+};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_GAP, ROW_ITEM_GAP, SCREEN_GAP, SEGMENT_HEIGHT};
 use crate::ui_kit::{
     CheckMark, ColumnWidth, Ink, Load, PickTable, ScreenState, Subtitle, TableColumn, Title, Tone, Type, check_tag, command_action, divider, empty_note,
-    empty_state, link, muted, open_link, page_body, page_head, panel, panel_body, paper_with_footer, pick_table, primary_command_action, rich, score,
+    empty_state, link, muted, note, open_link, page_body, page_head, panel, panel_body, paper_with_footer, pick_table, primary_command_action, rich, score,
     segmented, skeleton, skeleton_lines, skeleton_table, stamp, stamp_square, strong, tag, title_over, with_side_column,
 };
 
 /// What the user is looking at on this screen.
+#[derive(Default)]
 pub struct JobsScreen {
-    lane: Lane,
+    /// The list the user picked. Until they pick one, Jobs opens on New after the first search, else on Shortlist.
+    lane: Option<Lane>,
     selected: Option<String>,
     /// Settings › Jobs view: which jobs the lists leave out.
     filters: JobFilters,
     /// Whether the jobs the filters hide show anyway, after the user pressed Show them.
     show_hidden: bool,
-}
-
-impl Default for JobsScreen {
-    fn default() -> Self {
-        Self { lane: Lane::Shortlist, selected: None, filters: JobFilters::default(), show_hidden: false }
-    }
 }
 
 /// The segments in the order a person works through them.
@@ -111,6 +109,18 @@ impl JobsScreen {
         self.filters = filters;
     }
 
+    /// Opens the New list, as the first search's end does, whatever list was open.
+    pub fn open_new(&mut self) {
+        self.lane = Some(Lane::New);
+        self.selected = None;
+    }
+
+    /// The list on show: the one picked while it shows, else New after the first search, else Shortlist.
+    fn lane(&self, board: &JobBoard) -> Lane {
+        let unpicked = if board.first_search().is_some() { Lane::New } else { Lane::Shortlist };
+        self.lane.filter(|lane| lane_shown(*lane, board)).unwrap_or(unpicked)
+    }
+
     /// The jobs a list shows, and how many of them the filters hide. While hidden jobs show, the list shows every job.
     fn shown<'a>(&self, board: &'a JobBoard, lane: Lane, kept: &HashSet<String>) -> Shown<'a> {
         let shown = shown_in(board, lane, &self.filters, kept);
@@ -127,8 +137,12 @@ impl JobsScreen {
             Load::Ready => "Scored from the job ad alone. Drafting an application also checks the company.",
         };
         let new = board.count(Lane::New);
+        // After the first search, the note under the head offers the scoring, so the head keeps only the search.
+        let first = (state.load == Load::Ready).then(|| board.first_search()).flatten();
         page_head(ui, Title::Slab("Jobs"), Some(Subtitle::Text(subtitle)), |ui| {
-            primary_command_action(ui, &score_jobs_label(new), "/rank");
+            if first.is_none() {
+                primary_command_action(ui, &score_jobs_label(new), "/rank");
+            }
             command_action(ui, "Find new jobs", "/scrape");
         });
         page_body(ui, |ui| {
@@ -146,19 +160,21 @@ impl JobsScreen {
     }
 
     fn body(&mut self, ui: &mut Ui, board: &JobBoard, waiting: &HashSet<String>, kept: &HashSet<String>) {
-        if !lane_shown(self.lane, board) {
-            self.lane = Lane::Shortlist;
+        if let Some(found) = board.first_search() {
+            first_search_note(ui, found);
+            ui.add_space(ROW_GAP);
         }
         let options: Vec<_> = LANES
             .into_iter()
             .filter(|lane| lane_shown(*lane, board))
             .map(|lane| (lane, format!("{}  {}", lane_label(lane), self.shown(board, lane, kept).jobs.len())))
             .collect();
-        if let Some(lane) = segmented(ui, self.lane, &options) {
-            self.lane = lane;
+        if let Some(lane) = segmented(ui, self.lane(board), &options) {
+            self.lane = Some(lane);
             self.selected = None;
         }
-        let Shown { jobs, hidden } = self.shown(board, self.lane, kept);
+        let lane = self.lane(board);
+        let Shown { jobs, hidden } = self.shown(board, lane, kept);
         if hidden > 0 {
             ui.add_space(ITEM_GAP);
             self.hidden_line(ui, hidden);
@@ -167,7 +183,7 @@ impl JobsScreen {
 
         if jobs.is_empty() {
             if hidden == 0 {
-                lane_empty(ui, self.lane, board);
+                lane_empty(ui, lane, board);
             }
             return;
         }
@@ -366,6 +382,30 @@ fn loading(ui: &mut Ui) {
         },
     );
 }
+
+/// What the first search found, over the lists, with the scoring it leads to. Score N new jobs… only opens the
+/// launcher on `/rank`, and the user starts the run there. The note gives the time, never a spend.
+fn first_search_note(ui: &mut Ui, found: FirstSearch) {
+    note(ui, |ui| {
+        ui.horizontal(|ui| {
+            // The words leave the button its room, and wrap in a narrow window.
+            let words = (ui.available_width() - NOTE_ACTION_ROOM).max(0.0);
+            ui.vertical(|ui| {
+                ui.set_max_width(words);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(egui::Label::new(rich(ui, found.found(), Type::STRONG, Ink::Text)).wrap());
+                let why = "Scoring reads each ad against your profile and puts the best fits first. It takes about 5 minutes.";
+                ui.add(egui::Label::new(rich(ui, why, Type::BODY, Ink::Muted)).wrap());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                primary_command_action(ui, &found.score_label(), "/rank");
+            });
+        });
+    });
+}
+
+/// The room the first search note keeps at its right for Score N new jobs….
+const NOTE_ACTION_ROOM: f32 = 240.0;
 
 fn lane_empty(ui: &mut Ui, lane: Lane, board: &JobBoard) {
     let new = board.count(Lane::New);

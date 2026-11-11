@@ -31,8 +31,8 @@ use crate::profile::application::{CvShelf, Shelf, home_country, topic_counts};
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
-use crate::runs::application::RunDesk;
-use crate::runs::ui::{LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
+use crate::runs::application::{RunDesk, RunStatus, wants_reply};
+use crate::runs::ui::{LaunchNote, LaunchRules, Launcher, LauncherRequest, RunScreen, RunScreenRequest};
 use crate::settings;
 use crate::settings::application::{
     CapCheck, ClaudeVersion, DataSizes, Page, PermissionMode, Providers, Retention, RuntimeWord, Saved, Settings, SignIn, StartScreen, TermsState, TestGate,
@@ -245,6 +245,9 @@ pub struct Shell {
     folder_update: FolderUpdate,
     /// Whether the folder update's details are open over the desk.
     notice_screen: NoticeScreen,
+    /// The run the launcher started from Today's first-search note, until it ends. Jobs opens at its end only while
+    /// it is open in Tasks.
+    first_search: Option<String>,
 }
 
 /// The Profile chapter of first-run setup, and its recap once the run is done.
@@ -371,6 +374,7 @@ impl Shell {
             // Folders that are never there, so a preview or a test never writes a folder or reaches the network.
             folder_update: folder_update::idle_folder_update(env!("CARGO_PKG_VERSION")),
             notice_screen: NoticeScreen::default(),
+            first_search: None,
         }
     }
 
@@ -875,6 +879,7 @@ impl Shell {
             ui.ctx().request_repaint_after(wait);
         }
         self.follow_runs();
+        self.follow_first_search();
         self.settle_run_end(ui.ctx());
         if let Some(pages) = &mut self.pages {
             pages.poll();
@@ -1413,6 +1418,27 @@ impl Shell {
         self.was_busy = busy;
     }
 
+    /// Once the first search from Today ends, Jobs opens on New, but only while that run is open in Tasks, so the
+    /// screen never moves under a user who went elsewhere. Otherwise Today offers the scoring once the jobs are read.
+    /// A search that failed or was stopped opens nothing. A run that waits on the user has not ended.
+    fn follow_first_search(&mut self) {
+        let Some(id) = &self.first_search else { return };
+        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(id)) else {
+            self.first_search = None;
+            return;
+        };
+        if run.is_busy() || wants_reply(run) {
+            return;
+        }
+        let found = matches!(run.status, RunStatus::AwaitingReply | RunStatus::Closed);
+        let open = self.screen == Screen::Runs && !self.settings_open && self.run_screen.selected() == Some(id.as_str());
+        if found && open {
+            self.jobs.open_new();
+            self.screen = Screen::Jobs;
+        }
+        self.first_search = None;
+    }
+
     /// Runs change between snapshots, so the queue is dealt again each frame.
     fn queue(&mut self) -> Queue {
         let Some(tray) = &mut self.tray else { return Queue::default() };
@@ -1434,6 +1460,12 @@ impl Shell {
                     self.open_launcher();
                 }
             }
+            Request::FirstSearch => {
+                if self.launcher.prefill_noted("/scrape", LaunchNote::FirstSearch) {
+                    self.open_launcher();
+                }
+            }
+            Request::OpenProfile => self.screen = Screen::Profile,
             Request::Dossier(folder) => self.show_dossier(folder),
             Request::Run(id) => {
                 self.run_screen.select(id);
@@ -1448,6 +1480,7 @@ impl Shell {
     /// so Cmd Enter on the fresh form never repeats it.
     fn new_task(&mut self) {
         self.launcher.clear_words();
+        self.launcher.drop_note();
         self.open_launcher();
     }
 
@@ -1768,7 +1801,11 @@ impl Shell {
                     (false, true) => Some("Application dates are missing until the file is fixed."),
                     (false, false) => None,
                 };
-                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts };
+                // The slip stays until every topic is filled. A topic that could not be read may be, so it hides the slip.
+                let topics = profile::application::topic_counts(&snapshot.profile);
+                let partial = topics.any_found && topics.hidden == 0 && topics.filled < topics.total;
+                let profile = partial.then_some((topics.filled, topics.total));
+                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts, profile };
                 if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, &context, keys)) {
                     self.follow(ui.ctx(), request);
                 }
@@ -1908,8 +1945,13 @@ impl Shell {
                     // Test connection is a Claude process too, so Run waits for it to end.
                     let testing = self.providers.test_gate(false) == TestGate::Testing;
                     let rules = LaunchRules { defaults: &preferences.run_defaults, cap: &cap, testing };
+                    // Read before the form drops its note on Run.
+                    let noted = self.launcher.note();
                     match self.launcher.show(ui, desk, &rules) {
                         Some(LauncherRequest::Started(id)) => {
+                            if noted == Some(LaunchNote::FirstSearch) {
+                                self.first_search = Some(id.clone());
+                            }
                             self.run_screen.select(id);
                             self.screen = Screen::Runs;
                         }

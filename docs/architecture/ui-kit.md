@@ -47,6 +47,11 @@ The right of the status bar is Jobdesk's own: the update group, a `status_divide
 - `release_markdown` draws the notes, as [Trust](trust.md#rendering-untrusted-text) says.
 - `small_primary_button` and `setting_row_lines` serve Settings › About: the one step a row offers, and help of several lines, each in its own ink.
 
+## Suggestions that open the launcher
+
+- `from_note` sits at the top of the launcher's slip and names what opened it, such as "Your first search, from Today.", over a line in `muted`. It is the card fill, with `sheet` in dark, where card and panel are one colour. Its words are Jobdesk's own.
+- `offer_paper` is the panel a clear Today offers new work on: paper that takes the height left, its body `OFFER_PADDING` in and at most `OFFER_WIDTH` wide, over a foot pinned under a hairline as a deal's is. `offer_step` is one numbered step in it, its number in a column of its own.
+
 ## Motion
 
 - A looping animation is allowed only for a live run's signal, one per screen, and only while it shows. Everything else moves once, for `motion_time`, and stops.
@@ -103,7 +108,7 @@ Claude's words follow `release_markdown`'s rules, as [Trust](trust.md#rendering-
 
 ## Gallery snapshots
 
-`tests/ui_kit_gallery.rs` snapshots every component in both themes.
+`tests/ui_kit_gallery.rs` snapshots every component in both themes. The main sheet shows `offer_paper` under Today and `from_note` on a launcher slip under Tasks.
 The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.
 The wizard sheet, `ui_kit_gallery_wizard_{light,dark}`, shows three wizard cards with their lines, alert, slip and foot, then the step dots and setup stamps at each step, and the choice cards.
 The setup sheet, `ui_kit_gallery_setup_{light,dark}`, shows the Profile chapter's cards at 1280x820: the question sheet with its answers slip, the review card with two changes unticked and one focused, the fallback sheet, the documents step before and after files are added, and the CV check, then the short answers slip.

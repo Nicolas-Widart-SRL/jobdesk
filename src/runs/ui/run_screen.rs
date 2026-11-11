@@ -319,6 +319,11 @@ fn ticking(run: &Run, view: &View, elapsed_shown: bool) -> Vec<Duration> {
 }
 
 impl RunScreen {
+    /// The run on show, once the screen has picked one.
+    pub fn selected(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+
     pub fn select(&mut self, id: String) {
         self.selected = Some(id);
         self.reply.clear();

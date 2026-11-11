@@ -16,6 +16,9 @@ pub const BODY_PADDING: i8 = 12;
 pub const ROW_PADDING: i8 = 9;
 pub const PICK_ROW_HEIGHT: f32 = 34.0;
 pub const NOTE_PADDING: (i8, i8) = (14, 10);
+/// The note at the top of the launcher's slip that names what opened it: its padding, and the gap between its two lines.
+pub const FROM_NOTE_PADDING: (i8, i8) = (10, 8);
+pub const FROM_NOTE_GAP: f32 = 2.0;
 pub const CODE_PADDING: (i8, i8) = (11, 9);
 pub const PROMPT_PADDING: (i8, i8) = (16, 14);
 pub const PICK_PADDING: (i8, i8) = (10, 7);
@@ -119,6 +122,10 @@ pub const WELCOME_WIDTH: f32 = 620.0;
 pub const OFFER_PADDING: i8 = 32;
 pub const OFFER_WIDTH: f32 = 480.0;
 pub const OFFER_GAP: f32 = 14.0;
+/// The width of a numbered step's number, the room between it and the step's words, and between the steps.
+pub const OFFER_STEP_NUMBER: f32 = 14.0;
+pub const OFFER_STEP_GAP: f32 = 10.0;
+pub const OFFER_STEPS_GAP: f32 = 6.0;
 /// The empty state of a screen: its inset, the width of its sentence and the gap between its parts.
 pub const EMPTY_PADDING: i8 = 24;
 pub const EMPTY_WIDTH: f32 = 560.0;

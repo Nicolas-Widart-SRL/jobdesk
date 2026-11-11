@@ -647,9 +647,10 @@ impl Shell {
 
     /// A running task keeps its folder: a new one would replace the desk and drop the task's live session. A folder
     /// update keeps it too, so its notice and Undo stay with the folder it changed, and so does another Jobdesk's that
-    /// holds the folder alone.
+    /// holds the folder alone. A folder Jobdesk cannot lock keeps nothing: nothing holds it, and another folder is the
+    /// way out.
     fn folder_locked(&self) -> bool {
-        self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.is_busy()
+        self.desk.as_ref().is_some_and(RunDesk::has_live_process) || self.folder_update.folder_wait() == Some(FolderWait::Updating)
     }
 
     fn open(&mut self, ctx: &egui::Context, path: &std::path::Path) {
@@ -779,8 +780,8 @@ impl Shell {
     fn folder_wait(&self) -> Option<&'static str> {
         match self.folder_update.folder_wait() {
             Some(FolderWait::Updating) => Some(FOLDER_WAITS),
-            Some(FolderWait::Unlockable) => Some(UNLOCKABLE),
-            None => self.folder_locked().then_some(FOLDER_BUSY),
+            // Nothing holds a folder Jobdesk cannot lock, and another folder is the way out.
+            Some(FolderWait::Unlockable) | None => self.folder_locked().then_some(FOLDER_BUSY),
         }
     }
 
@@ -1041,12 +1042,8 @@ impl Shell {
 
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
-        restart_wait(self.session_state()).or_else(|| {
-            self.folder_update.folder_wait().map(|wait| match wait {
-                FolderWait::Updating => RESTART_WAITS,
-                FolderWait::Unlockable => UNLOCKABLE,
-            })
-        })
+        // A folder Jobdesk cannot lock holds nothing, so a fixed Jobdesk may apply.
+        restart_wait(self.session_state()).or_else(|| (self.folder_update.folder_wait() == Some(FolderWait::Updating)).then_some(RESTART_WAITS))
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -3251,7 +3248,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn every_writer_waits_and_says_so_while_the_folder_lock_does_not_open() {
-        const CANNOT_LOCK: &str = "Jobdesk cannot lock your job search folder, so tasks and saves wait. Check .jobdesk/.open in the folder.";
+        const CANNOT_LOCK: &str =
+            "Jobdesk cannot lock your job search folder, so tasks and saves wait. Open another folder, or check that this one can be written.";
         let (data, folder, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let ctx = egui::Context::default();
         let path = checkout(&folder);
@@ -3265,13 +3263,22 @@ mod tests {
         let options = StartOptions { model: None, budget_usd: 5.0 };
         assert!(shell.desk.as_mut().unwrap().start("/apply https://kestrel.example/jobs/2", &options, Local::now().naive_local()).is_err());
         assert_eq!(shell.folder_update.notice().map(|notice| notice.words), Some(CANNOT_LOCK.to_owned()));
-        assert_eq!(shell.restart_wait(), Some(CANNOT_LOCK));
-        assert_eq!(shell.folder_wait(), Some(CANNOT_LOCK));
         assert_eq!(shell.portals_wait(), Some(CANNOT_LOCK));
         assert_eq!(shell.providers.test_sign_in(false), Err(CANNOT_LOCK.to_owned()));
         assert_eq!(shell.folder_writer(), Some(FolderWriter::FolderUpdate(FolderWait::Unlockable)), "Profile's Save waits and says so");
         assert_eq!(shell.desk.as_ref().unwrap().folder_wait(), Some(FolderWait::Unlockable), "the launcher and the reply say so");
         assert!(!outside.path().join("planted").exists(), "nothing is written through the link");
+
+        // Nothing holds the folder, so the ways out stay open: Restart to update, and Change folder.
+        assert_eq!((shell.restart_wait(), shell.folder_wait()), (None, None));
+        shell.updates = ready_updates();
+        assert!(restart(&ctx, &mut shell).contains(&egui::ViewportCommand::Close), "Restart to update goes");
+        shell.restart_pending = false;
+        let elsewhere = tempfile::tempdir().unwrap();
+        let other = checkout(&elsewhere);
+        shell.choose_folder_with(&ctx, || Some(other.clone()));
+        assert_eq!(shell.workspace.as_ref().map(|root| root.path().to_owned()), Some(other), "Change folder opens another folder");
+        assert!(!shell.folder_update.is_busy(), "where nothing waits");
     }
 
     /// Keep working in the quit dialog, by click or by Esc, keeps the window, so a Restart to update that waited on it is off.

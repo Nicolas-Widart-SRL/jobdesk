@@ -7,8 +7,6 @@ First run for a non-technical job seeker who has Claude Code installed and signe
 - [Canvases](#canvases)
 - [Rules and why](#rules-and-why): window, words, spend, foot, folder, download, helpers, quitting midway, documents, the profile run, question sheet, review card, CV check, choice card, failure, recap, first search
 - [New widgets](#new-widgets)
-- [Doc changes](#doc-changes)
-- [Build questions](#build-questions)
 
 ## Canvases
 
@@ -109,8 +107,8 @@ ai-job-search keeps its name, as the user may already know it.
 ### Helpers
 
 - Three lines, in this order: Keeps your tracker (Python), Searches job sites (Bun), Makes your CV and cover letter PDFs (LaTeX). The purpose is the headline, so the names never need explaining.
-- All three install in the user's home folder, with no administrator password: a standalone Python build, Bun in its own home folder, and TinyTeX for LaTeX. Each file is checked against a hash Jobdesk pins. The note under the lines says they install for this user only and nothing else on the computer changes. No password note appears anywhere.
-- A missing helper's line names its size and time in plain words: Python "about 40 MB" and Bun "about 30 MB", each under a minute, and LaTeX "about 250 MB, the slow one: 5 to 15 minutes". The lead says LaTeX is the slow one and the user can step away. The figures are placeholders until measured.
+- All three install in `~/.jobdesk`, the one folder of the user's home folder that Jobdesk owns, with no administrator password: a standalone Python build in `~/.jobdesk/python`, Bun in `~/.jobdesk/bun`, and TinyTeX for LaTeX in `~/.jobdesk/TinyTeX`. Each file is checked against the version, SHA-256 and size Jobdesk pins. The note under the lines says they install for this user only and nothing else on the computer changes. No password note appears anywhere.
+- A missing helper's line names its download size and time in plain words, worked out from the pinned files and the install times measured on them: Python "about 30 MB, under a minute", Bun "about 40 MB, 1 to 2 minutes", and LaTeX "about 100 MB, the slow one: 1 to 4 minutes". The lead says LaTeX is the slow one and the user can step away.
 - Each line ends in one tag: Checking… (`Plain`), Already here or Installed (`Hired`), Installing… (`Active`) with a bar and the time left, or Could not install (`Closed`) with the reason under the name. A helper not reached yet says Next in `muted`.
 - Jobdesk checks first, and installs only after Install what is missing.
 - When LaTeX fails: Try again is the primary, Continue without PDFs the quiet link. The paragraph says what still works and that Setup can install it later. Setup goes on to the Profile chapter; the CV check is skipped, since no PDF can be made.
@@ -217,6 +215,7 @@ All sheets share:
 - The launcher opened from that note is the launcher as built: Model and Spend at most side by side, the command, and Run. Only the `from_note` is new.
 - When the search ends, Jobs opens by itself only while that run is still open in Tasks. Otherwise the Today offer turns into Score N new jobs….
 - Jobs shows the New view with each job Not scored, and a note with Score N new jobs… as the primary, which only opens the launcher on `/rank`. The note gives the time only.
+- While the profile is not full, a Your profile slip on Today's rail counts its filled topics, with Open Profile.
 - Card actions never start a run, in every state drawn here.
 
 ## New widgets
@@ -242,22 +241,3 @@ The choice card is `prompt_box_tone(Tone::Turn)` with the choices, field and but
 
 In dark, `panel` and `card` are the same color, so a slip, alert or `ahead` knot on the Profile card takes `sheet` there.
 
-## Doc changes
-
-- `ARCHITECTURE.md`: a feature for first run (or a part of `workspace`): the progress record, download and check the ai-job-search release against the feed's pinned SHA-256, install the helpers into the home folder against pinned hashes, copy the documents, and start `/setup` through runs' application layer. Add it to the Features table and to `FEATURES` in `tests/architecture.rs`. The runtime note for the small first window, the one grow at the Profile chapter, and its sizes.
-- `docs/guide.md`: a First run section before Today, which Get help opens. It covers the documents to add, how to save a LinkedIn profile as a PDF, the question sheet answered on your own time, ticking proposed changes, quitting and resuming, Continue without PDFs, and Add a job site you use…. It says the onboarding screens and Today's and Jobs' first-search suggestions show no spend, the launcher keeps Spend at most, and Settings › Usage holds the spend. Today's sentence on the welcome with three steps is replaced.
-- `docs/architecture/trust.md`: the release zip checked against the feed's pinned SHA-256; each helper checked against a pinned hash; unpacking that stays inside the chosen folder; a non-empty folder refused; the setup messages, proposals and file names as untrusted text; the progress record and its draft answers in the data folder.
-- `docs/architecture/runs.md`: the onboarding run: the fixed first reply that picks Path A, the fixed progress phrases, the joined numbered reply with "Skipped" for an empty field, the review card's built reply ("Yes, apply these changes." or "Apply all except N and M."), the fixed "The CV looks good.", resuming from the progress record, and answers sent on the same session.
-- `AGENTS.md`, Logs: the progress record in the data folder holds the user's draft answers, read only when asked.
-- `docs/architecture/ui-kit.md`: the new widgets above.
-
-## Build questions
-
-The build's planner settles each of these before the step that needs it.
-
-1. **Numbered items and sub-items**: how Jobdesk finds Claude's questions as one ordered list numbered across the message, with lettered sub-items under them; check against the shapes of a few `/setup` transcripts.
-2. **Proposal or question batch**: how Jobdesk tells a proposal from a question batch; a check on Claude's closing words is fragile, and one proposed test is numbered items with no question mark plus a closing request to confirm.
-3. **Helper sizes and times**: measure the 40 MB, 30 MB and 250 MB and the LaTeX time with the chosen standalone Python, Bun and TinyTeX builds and the LaTeX packages the CV templates need.
-4. **Word files**: whether `/setup` reads a `.docx` as is, or Jobdesk turns it into PDF or text first.
-5. **No git in the folder**: a zip download has no `.git`, so `/setup` skips its public-fork check without a remote, and a later ai-job-search update cannot use git.
-6. **Your profile slip on Today**: whether the new slip, with Open Profile, stays until the profile is full, or is dropped.

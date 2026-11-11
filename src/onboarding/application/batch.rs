@@ -71,7 +71,8 @@ pub fn read_message(message: &str) -> Message {
     if batch.items().count() < 2 || !numbered {
         return Message::Free;
     }
-    let asks = scan.closing.as_deref().is_some_and(asks_to_apply);
+    // "Apply all except 2." would be ambiguous to Claude when a sub-list repeats the numbers, so that is never a proposal.
+    let asks = !scan.nested && scan.closing.as_deref().is_some_and(asks_to_apply);
     if asks && batch.items().all(|item| !item.text.contains('?')) { Message::Proposal(batch) } else { Message::Questions(batch) }
 }
 
@@ -87,6 +88,8 @@ struct Scan {
     groups: Vec<Group>,
     /// The last paragraph outside any list since the last numbered list.
     closing: Option<String>,
+    /// Whether a top-level item holds a numbered list of its own.
+    nested: bool,
 }
 
 /// A paragraph or heading outside any list, being read.
@@ -127,6 +130,8 @@ fn scan(text: &str) -> Option<Scan> {
     let mut next: Option<u64> = None;
     // Whether the last block was a numbered list, so lettered lines that come next belong to its last item.
     let mut after_item = false;
+    // Whether a top-level item holds a numbered list of its own, whose numbers would repeat the message's.
+    let mut nested = false;
     // Whether a heading or a paragraph came since the last numbered list, so the next list is a group of its own.
     let mut separated = false;
     let mut code: Vec<Range<usize>> = Vec::new();
@@ -137,6 +142,8 @@ fn scan(text: &str) -> Option<Scan> {
                 if depth == 0 {
                     next = start;
                     after_item = false;
+                    // A bullet list between numbered ones sets them apart.
+                    separated |= start.is_none();
                     if start.is_some() {
                         closing = None;
                         // A heading, a bold line or a plain paragraph before the list starts a group, titled or not.
@@ -145,10 +152,13 @@ fn scan(text: &str) -> Option<Scan> {
                         }
                         separated = false;
                     }
-                } else if start.is_some_and(|start| start != 1 || open.is_none()) {
+                } else if start.is_some() {
                     // Only the numbered list of a top-level item that starts at 1, its sub-steps, may sit deeper. Any other
                     // numbered item would be approved with no box of its own.
-                    return None;
+                    if start != Some(1) || open.is_none() {
+                        return None;
+                    }
+                    nested = true;
                 }
                 if let Some(item) = &mut open {
                     item.first_done = true;
@@ -197,8 +207,24 @@ fn scan(text: &str) -> Option<Scan> {
                     group.items.push(finish(item, text)?);
                 }
             }
-            Event::Start(Tag::CodeBlock(_)) => code.push(range),
-            Event::Start(tag) if holds_blocks(&tag) => depth += 1,
+            Event::Start(Tag::CodeBlock(_)) => {
+                code.push(range);
+                if depth == 0 {
+                    after_item = false;
+                    separated = true;
+                }
+            }
+            Event::Rule | Event::Start(Tag::HtmlBlock) if depth == 0 => {
+                after_item = false;
+                separated = true;
+            }
+            Event::Start(tag) if holds_blocks(&tag) => {
+                if depth == 0 {
+                    after_item = false;
+                    separated = true;
+                }
+                depth += 1;
+            }
             Event::End(tag) if ends_blocks(&tag) => depth = depth.saturating_sub(1),
             Event::Start(Tag::Paragraph) | Event::Start(Tag::Heading { .. }) if depth == 0 => {
                 block = Some(Block { heading: !matches!(event, Event::Start(Tag::Paragraph)), range, ..Block::default() });
@@ -281,7 +307,7 @@ fn scan(text: &str) -> Option<Scan> {
     if hides_numbered_line(text, &code, &item_starts) {
         return None;
     }
-    Some(Scan { groups, closing })
+    Some(Scan { groups, closing, nested })
 }
 
 /// Where the item that starts at `at` has its marker: its range may begin on the indent before it.
@@ -561,6 +587,26 @@ mod tests {
         assert_eq!(read_message(&quoted_in_paragraph), Message::Free);
         let nested_not_at_one = "1. A?\n   2. sub\n   3. sub\n2. B?\n";
         assert_eq!(read_message(nested_not_at_one), Message::Free);
+    }
+
+    #[test]
+    fn nested_sub_steps_never_make_a_proposal() {
+        let message = "1. **CLAUDE.md**\n\n   1. Set the name.\n   2. Add the title.\n\n2. **cv/**\n\n   1. Build the CV.\n\nReply yes to apply all, or list the numbers to skip.";
+        let Message::Questions(batch) = read_message(message) else { panic!("expected questions") };
+        assert_eq!(numbers(&batch), [1, 2]);
+        // Without the sub-steps the same closing paragraph still makes a proposal.
+        let flat = "1. **CLAUDE.md**\n2. **cv/**\n\nReply yes to apply all, or list the numbers to skip.";
+        assert!(matches!(read_message(flat), Message::Proposal(_)));
+    }
+
+    #[test]
+    fn a_block_between_two_lists_starts_a_new_group() {
+        for between in ["- a note", "> a quote", "```\ncode\n```", "---", "| a | b |\n|---|---|\n| 1 | 2 |", "<div>x</div>"] {
+            let batch = batch_of(&format!("## One\n\n1. A?\n2. B?\n\n{between}\n\n3. C?\n"));
+            let groups: Vec<(Option<&str>, Vec<u32>)> =
+                batch.groups.iter().map(|group| (group.title.as_deref(), group.items.iter().map(|item| item.number).collect())).collect();
+            assert_eq!(groups, [(Some("One"), vec![1, 2]), (None, vec![3])], "between: {between:?}");
+        }
     }
 
     #[test]

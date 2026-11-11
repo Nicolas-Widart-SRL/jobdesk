@@ -68,7 +68,7 @@ Stop setup shows while Claude works and on a sheet. It keeps your draft answers:
 - While Claude works, the card shows Setup stopped partway, with Pick up where it stopped and Finish later.
 - On a sheet, Jobdesk ends Claude's session and opens with what is done, as Finish later does. Your next answer picks the same conversation up again.
 
-Setup also stops partway when it reaches its Spend at most, or when Jobdesk quit while Claude worked, and the card says why. Pick up where it stopped carries on from there. Finish later opens Jobdesk with what is done, and the next open offers Finish my profile.
+Setup also stops partway when it reaches its Spend at most, or when Jobdesk quit while Claude worked, and the card says why. Your documents and every change Claude already wrote stay in your folder, and answers you typed but had not sent are kept. Pick up where it stopped carries on in the same conversation with Claude, or, when Claude never started one, starts setup again from your documents. Finish later opens Jobdesk with what is done, and the next open offers Finish my profile.
 
 No setup screen shows what it costs. Building the profile uses the Spend at most of Settings › Run defaults, which suggests $25 for it. When setup stops at that limit, Pick up where it stopped may spend that much again. The launcher still shows Model and Spend at most for every task it opens, and Settings › Usage statistics keeps what setup spent.
 

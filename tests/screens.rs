@@ -8404,6 +8404,31 @@ mod profile_chapter {
         );
     }
 
+    /// The stopped card says only what holds: what stays in the folder, that a draft is kept, and how Pick up goes on.
+    /// With a session it goes on in the same conversation. Without one, it starts setup again from the documents.
+    #[test]
+    fn the_stopped_card_says_how_pick_up_goes_on() {
+        const SAME: &str = "Pick up where it stopped goes on in the same conversation with Claude.";
+        const AGAIN: &str = "Pick up where it stopped starts setup again from your documents.";
+        let mut with = scene("stopped_with_session", Theme::Light, false);
+        with.past_five();
+        let dropped = Some("The connection to Claude dropped.".into());
+        with.emit([AgentEvent::TurnEnded { failed: true, message: dropped, cost_usd: 1.0, duration_ms: 1 }]);
+        with.until_shown("Setup stopped partway");
+        assert!(with.shown(SAME) && !with.shown(AGAIN));
+        assert!(with.shown("Your documents, and every change Claude already wrote, stay in your folder."));
+        assert!(with.shown("Answers you typed but had not sent are kept too."));
+        assert!(!with.shown("Nothing is lost") && !with.shown("your answers"), "sent answers live in the session, not the folder");
+
+        let mut without = scene("stopped_without_session", Theme::Light, false);
+        without.drop_files(&["Mira_Hale_CV.pdf", "Profile.pdf"]);
+        without.click("Read my documents");
+        without.until("the run starting", |scene| scene.calls.lock().unwrap().starts == 1);
+        without.emit([AgentEvent::ProcessExited { failure: Some("The saved API key is gone.".into()) }]);
+        without.until_shown("Setup stopped partway");
+        assert!(without.shown(AGAIN) && !without.shown(SAME));
+    }
+
     /// Setup complete after the five answers, 41 minutes in.
     fn complete(scene: &mut Scene) {
         scene.past_five();

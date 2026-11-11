@@ -663,23 +663,31 @@ impl ProfileChapter {
         }
     }
 
-    /// Setup stopped partway: why, what is kept, Pick up where it stopped and Finish later.
+    /// Setup stopped partway: why, what is kept, Pick up where it stopped and Finish later. It says only what holds: the
+    /// answers sent live in Claude's session and the run log, the draft in Jobdesk's data folder, and a run that never
+    /// reported a session starts setup again.
     fn stopped(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, reason: &str) -> Option<ChapterRequest> {
         let lines = run.work_lines(cx.desk);
         let files = run.documents().added().len();
         let why = self.refusal.clone().unwrap_or_default();
         let reason = plain(reason);
+        let lead = if run.picks_up_in_session(cx.desk) {
+            "Pick up where it stopped goes on in the same conversation with Claude."
+        } else {
+            "Pick up where it stopped starts setup again from your documents."
+        };
         let (pick_up, later) = (Cell::new(false), Cell::new(false));
         split_card(
             ui,
-            &WizardStep { steps: &STEPS, at: AT, title: "Setup stopped partway", lead: "Nothing is lost. Claude picks up where it stopped." },
+            &WizardStep { steps: &STEPS, at: AT, title: "Setup stopped partway", lead },
             |ui| {
                 alert_slip(ui, "Claude stopped before setup finished.", &reason);
                 work_paper(ui, &lines, files, None);
             },
             |ui| {
                 side_slip(ui, "What is kept", "", |ui| {
-                    slip_text(ui, "", "Your documents, your answers and every change Claude already wrote are in your folder.");
+                    slip_text(ui, "", "Your documents, and every change Claude already wrote, stay in your folder.");
+                    slip_text(ui, "", "Answers you typed but had not sent are kept too.");
                     slip_text(ui, "", "Finish later opens Jobdesk. The next time you open it, setup offers to pick up here.");
                 });
             },

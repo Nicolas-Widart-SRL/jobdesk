@@ -201,7 +201,7 @@ All sheets share:
 
 - Every failure names what happened in plain words, what is kept, one way forward and Get help.
 - Get help opens the user guide's First run section, on the product site.
-- Setup stopped partway shows the reason as plain text with hidden characters removed. Pick up where it stopped replies on the same session, which resumes it as any run does. Finish later opens the app with what is done; the next open offers `resume`.
+- Setup stopped partway shows the reason as plain text with hidden characters removed. Pick up where it stopped replies on the same session, which resumes it as any run does, and the lead says it goes on in the same conversation. A run that never began a session has none to resume: Pick up starts `/setup` again from the documents, and the lead says so. What is kept names only what holds: the documents and every change Claude already wrote stay in the folder, and answers typed but not sent are kept. Finish later opens the app with what is done; the next open offers `resume`.
 
 ### Recap
 

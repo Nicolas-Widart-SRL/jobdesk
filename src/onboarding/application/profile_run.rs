@@ -533,6 +533,12 @@ impl ProfileRun {
         self.send(desk, CV_LOOKS_GOOD)
     }
 
+    /// Whether Pick up where it stopped goes on in the run's own conversation: the run reported a session. Without one,
+    /// it starts `/setup` again from the documents.
+    pub fn picks_up_in_session(&self, desk: &RunDesk) -> bool {
+        self.run(desk).is_some_and(|run| run.session_id.is_some())
+    }
+
     /// Pick up where it stopped. A run that never reported a session has nothing to resume, so `/setup` starts anew
     /// under the rules of Read my documents, and the record moves to the new run. Otherwise it is a reply on the run's
     /// own session: the documents path for a run stopped while Claude asked for it, else a plain pick up. A failed run's

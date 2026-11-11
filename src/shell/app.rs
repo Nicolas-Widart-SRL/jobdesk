@@ -1426,10 +1426,16 @@ impl Shell {
     /// got its result and nothing waits on the user, jobs on the board are the ones it found. That holds however the
     /// frames fell, and once the process is gone too: a question Claude closed with, or a session the user ended there,
     /// counts by what the search saved. A search that failed, was stopped, or saved nothing opens nothing and stays
-    /// followed: resumed in Tasks, the same run's end opens Jobs.
+    /// followed: resumed in Tasks, the same run's end opens Jobs. Once another task works, by a newer run or a reply
+    /// in an older one, jobs on the board may be that task's, so the search is followed no more.
     fn follow_first_search(&mut self) {
         let Some(id) = &self.first_search else { return };
-        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(id)) else {
+        let Some(desk) = &self.desk else {
+            self.first_search = None;
+            return;
+        };
+        let other_worked = desk.runs().first().is_some_and(|newest| newest.id != *id) || desk.runs().iter().any(|run| run.id != *id && run.is_busy());
+        let Some(run) = desk.run(id).filter(|_| !other_worked) else {
             self.first_search = None;
             return;
         };

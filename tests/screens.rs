@@ -2544,6 +2544,26 @@ fn a_failed_or_stopped_first_search_opens_nothing_until_its_resume_ends() {
     }
 }
 
+/// A first search that found nothing is followed no more once another task works: jobs that a later `/scrape` saves
+/// are not the first search's, so Jobs stays closed even with the first search open in Tasks.
+#[test]
+fn a_first_search_is_no_longer_followed_once_another_task_works() {
+    let (mut harness, shell, sink, root) = start_first_search("first_search_then_another");
+    first_search_ends(&sink);
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a search that saved nothing opens nothing");
+
+    shell.borrow_mut().desk_slot().as_mut().unwrap().start("/scrape", &StartOptions { model: None, budget_usd: 2.0 }, run_started()).unwrap();
+    harness.run_steps(3);
+    first_search_ends(&sink);
+    fs::write(root.join("job_scraper/seen_jobs.json"), FIRST_FOUND).unwrap();
+    let feed = shell.borrow_mut().snapshot_feed();
+    feed.send(first_search_snapshot(&root)).unwrap();
+    harness.run_steps(3);
+
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "jobs another task saved open nothing");
+}
+
 /// The first-search note belongs to the folder it was offered in. Opening another folder drops it, so a search run
 /// there is no first search.
 #[test]

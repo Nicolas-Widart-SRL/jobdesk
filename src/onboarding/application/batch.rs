@@ -75,10 +75,12 @@ pub fn read_message(message: &str) -> Message {
     if asks && batch.items().all(|item| !item.text.contains('?')) { Message::Proposal(batch) } else { Message::Questions(batch) }
 }
 
-/// Whether the closing paragraph holds "apply" as a word, in any case. "Confirm" and "yes" alone do not make a proposal,
-/// because a batch of questions can ask to confirm too, and "Yes, apply these changes." answers only a proposal.
+/// Whether the closing paragraph holds the word "apply" and one of "skip", "number" or "numbers", in any case. That is
+/// the form of a proposal, "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not
+/// make one, and neither does a mention of applying, because "Yes, apply these changes." answers only a proposal.
 fn asks_to_apply(closing: &str) -> bool {
-    closing.split(|c: char| !c.is_alphanumeric()).any(|word| word.eq_ignore_ascii_case("apply"))
+    let has = |any: &[&str]| closing.split(|c: char| !c.is_alphanumeric()).any(|word| any.iter().any(|ask| word.eq_ignore_ascii_case(ask)));
+    has(&["apply"]) && has(&["skip", "number", "numbers"])
 }
 
 struct Scan {
@@ -125,6 +127,8 @@ fn scan(text: &str) -> Option<Scan> {
     let mut next: Option<u64> = None;
     // Whether the last block was a numbered list, so lettered lines that come next belong to its last item.
     let mut after_item = false;
+    // Whether a heading or a paragraph came since the last numbered list, so the next list is a group of its own.
+    let mut separated = false;
     let mut code: Vec<Range<usize>> = Vec::new();
     let mut item_starts: HashSet<usize> = HashSet::new();
     for (event, range) in Parser::new_ext(text, markdown::options()).into_offset_iter() {
@@ -135,12 +139,16 @@ fn scan(text: &str) -> Option<Scan> {
                     after_item = false;
                     if start.is_some() {
                         closing = None;
-                        match title.take() {
-                            Some(title) => groups.push(Group { title: Some(title), items: Vec::new() }),
-                            None if groups.is_empty() => groups.push(Group { title: None, items: Vec::new() }),
-                            None => {}
+                        // A heading, a bold line or a plain paragraph before the list starts a group, titled or not.
+                        if groups.is_empty() || separated || title.is_some() {
+                            groups.push(Group { title: title.take(), items: Vec::new() });
                         }
+                        separated = false;
                     }
+                } else if start.is_some_and(|start| start != 1 || open.is_none()) {
+                    // Only the numbered list of a top-level item that starts at 1, its sub-steps, may sit deeper. Any other
+                    // numbered item would be approved with no box of its own.
+                    return None;
                 }
                 if let Some(item) = &mut open {
                     item.first_done = true;
@@ -210,10 +218,10 @@ fn scan(text: &str) -> Option<Scan> {
                         }
                         _ => {
                             after_item = false;
+                            separated = true;
+                            // A plain paragraph between a title and its list, such as an intro line, keeps the title.
                             if done.heading || (done.bold_text && !done.plain_text) {
                                 title = Some(line.clone()).filter(|line| !line.is_empty()).or(title);
-                            } else {
-                                title = None;
                             }
                             if !done.heading {
                                 closing = Some(line);
@@ -301,10 +309,11 @@ fn lettered(source: &str) -> bool {
 fn hides_numbered_line(text: &str, code: &[Range<usize>], item_starts: &HashSet<usize>) -> bool {
     let mut at = 0;
     for line in text.split('\n') {
-        let marker = at + line.len() - line.trim_start_matches([' ', '\t']).len();
+        // Quote markers come before the number of a quoted line.
+        let skipped = line.len() - line.trim_start_matches([' ', '\t', '>']).len();
+        let marker = at + skipped;
         at += line.len() + 1;
-        let rest = &text[marker..at.min(text.len())];
-        let rest = rest.trim_end_matches('\n');
+        let rest = &line[skipped..];
         let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
         let numbered =
             after_digits.len() < rest.len() && after_digits.strip_prefix(['.', ')']).is_some_and(|tail| tail.is_empty() || tail.starts_with([' ', '\t']));
@@ -540,9 +549,61 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_paragraph_after_a_title_clears_it() {
+    fn an_ordered_item_anywhere_but_a_top_level_list_makes_the_message_free() {
+        let ask = "\n\nReply yes to apply all, or list the numbers to skip.";
+        let nested = format!("1. Set the name.\n2. **cv/**\n\n   3. Build the CV.\n   4. File the letter.{ask}");
+        assert_eq!(read_message(&nested), Message::Free);
+        let under_bullet = format!("1. A\n2. B\n\n- **cv/**\n\n  3. Build the CV.\n  4. File the letter.{ask}");
+        assert_eq!(read_message(&under_bullet), Message::Free);
+        let quoted = format!("1. A\n2. B\n\n> 3. C\n> 4. D{ask}");
+        assert_eq!(read_message(&quoted), Message::Free);
+        let quoted_in_paragraph = format!("1. A\n2. B\n\n> note\n> 3. C{ask}");
+        assert_eq!(read_message(&quoted_in_paragraph), Message::Free);
+        let nested_not_at_one = "1. A?\n   2. sub\n   3. sub\n2. B?\n";
+        assert_eq!(read_message(nested_not_at_one), Message::Free);
+    }
+
+    #[test]
+    fn a_sub_list_that_starts_at_one_inside_an_item_is_still_parsed() {
+        let message = "1. Steps?\n\n   1. open it\n   2. close it\n\n2. B?\n";
+        let batch = batch_of(message);
+        assert_eq!(numbers(&batch), [1, 2]);
+        assert_eq!(batch.items().next().unwrap().text, "Steps? open it close it");
+    }
+
+    #[test]
+    fn a_plain_paragraph_between_a_title_and_its_list_keeps_the_title() {
         let batch = batch(read_message("**Note**\n\nSome plain text.\n\n1. A?\n2. B?\n"));
-        assert_eq!(batch.groups[0].title, None);
+        assert_eq!(batch.groups[0].title.as_deref(), Some("Note"));
+    }
+
+    #[test]
+    fn a_heading_and_its_intro_title_the_list_for_a_proposal_and_for_questions() {
+        let proposal =
+            "## CLAUDE.md\n\n1. A.\n2. B.\n\n## cv/\n\nThese two touch your CV.\n\n3. C.\n4. D.\n\nReply yes to apply all, or list the numbers to skip.\n";
+        let Message::Proposal(batch) = read_message(proposal) else { panic!("expected a proposal") };
+        let groups: Vec<(Option<&str>, Vec<u32>)> =
+            batch.groups.iter().map(|group| (group.title.as_deref(), group.items.iter().map(|item| item.number).collect())).collect();
+        assert_eq!(groups, [(Some("CLAUDE.md"), vec![1, 2]), (Some("cv/"), vec![3, 4])]);
+        let questions = "**About pay**\n\n1. A?\n2. B?\n\n**About the CV**\n\nThese two are about your CV.\n\n3. C?\n4. D?\n";
+        let Message::Questions(batch) = read_message(questions) else { panic!("expected questions") };
+        let groups: Vec<(Option<&str>, Vec<u32>)> =
+            batch.groups.iter().map(|group| (group.title.as_deref(), group.items.iter().map(|item| item.number).collect())).collect();
+        assert_eq!(groups, [(Some("About pay"), vec![1, 2]), (Some("About the CV"), vec![3, 4])]);
+    }
+
+    #[test]
+    fn a_list_never_joins_the_group_before_a_separator() {
+        let batch = batch(read_message("## One\n\n1. A?\n2. B?\n\nAnd now the rest.\n\n3. C?\n"));
+        let titles: Vec<_> = batch.groups.iter().map(|group| group.title.as_deref()).collect();
+        assert_eq!(titles, [Some("One"), None]);
+        assert_eq!(batch.groups[1].items.iter().map(|item| item.number).collect::<Vec<_>>(), [3]);
+        let batch = batch_of("1. A?\n2. B?\n\n## Two\n\n3. C?\n");
+        assert_eq!(batch.groups.len(), 2);
+    }
+
+    fn batch_of(message: &str) -> Batch {
+        batch(read_message(message))
     }
 
     #[test]
@@ -590,7 +651,8 @@ mod tests {
     #[test]
     fn bold_inside_a_sentence_is_not_a_title() {
         let batch = batch(read_message("1. A?\n2. B?\n\nThis is **important** to know.\n\n3. C?\n"));
-        assert_eq!(batch.groups.len(), 1);
+        let titles: Vec<_> = batch.groups.iter().map(|group| group.title.as_deref()).collect();
+        assert_eq!(titles, [None, None]);
         assert_eq!(numbers(&batch), [1, 2, 3]);
     }
 
@@ -602,9 +664,11 @@ mod tests {
 
     #[test]
     fn a_proposal_needs_a_closing_paragraph_that_asks() {
-        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all.\n"), Message::Proposal(_)));
-        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I APPLY these?\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all, or list the numbers to skip.\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or give a number to SKIP.\n"), Message::Proposal(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or list the numbers to skip.\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all.\n"), Message::Questions(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I APPLY these?\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nTell me when you are ready.\n"), Message::Questions(_)));
     }
@@ -614,6 +678,14 @@ mod tests {
         let message = "1. Your title is Design Lead.\n2. Your notice period is three months.\n\nCan you confirm these are right?\n";
         assert!(matches!(read_message(message), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes if you agree.\n"), Message::Questions(_)));
+        assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
+    }
+
+    #[test]
+    fn instruction_style_questions_that_mention_applying_are_not_a_proposal() {
+        let message =
+            "1. Name three companies you admire.\n2. List the cities you would work from.\n\nOnce you answer, I will apply your answers to your profile.\n";
+        assert!(matches!(read_message(message), Message::Questions(_)));
         assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
     }
 
@@ -641,7 +713,7 @@ mod tests {
 
     #[test]
     fn hidden_characters_cannot_hide_the_closing_word() {
-        let message = read_message("1. Add a skill.\n2. Rename a file.\n\nReply y\u{200B}es to apply all.\n");
+        let message = read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to app\u{200B}ly all, or list the numbers to skip.\n");
         assert!(matches!(message, Message::Proposal(_)));
     }
 

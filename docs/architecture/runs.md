@@ -218,6 +218,10 @@ The chapter shows the first of these that holds:
 4. the end of setup, when the message says "Setup complete", as `/setup`'s closing summary opens, or when the turn answers "The CV looks good." after an earlier turn said so and does not close on a question;
 5. the fallback sheet otherwise: the message beside one field.
 
+The end of setup opens the recap, which removes the progress record. A fallback sheet shows a Finish setup link once any top-level message of the run said setup is complete, as when the user asked for a change after it. Only the user's press on it ends setup there, and it sends nothing.
+
+The sheet and the review card show the whole message, its blocks in order, with each numbered item where Claude put it, from `Batch::blocks`. The review card leaves out a proposal's closing paragraph, the one that asks to apply, because the boxes build that reply.
+
 ### Progress lines
 
 While Claude works, the card shows fixed lines from `PROGRESS_LINES` in `onboarding/domain/replies.rs`, never Claude's text or a tool row. Jobdesk's own events light three of them, and a tool call lights the rest, by tool and by path under the job search folder, or for `Bash` by the program a command runs. A path outside the folder lights nothing.
@@ -234,10 +238,15 @@ While Claude works, the card shows fixed lines from `PROGRESS_LINES` in `onboard
 
 ### Stopping and picking up
 
+Stop setup keeps the run's session and the draft either way:
+
+- While Claude works, it stops the turn, as Stop run does, and the chapter shows Stopped.
+- On a question sheet, where Claude waits on the user, it ends the session's process, so nothing stays open behind the app, and the app opens as Finish later does. The sheet's next reply resumes the session in a new process.
+
 The chapter shows Stopped, with the reason as plain text without hidden characters, when:
 
 - the run failed, as at its budget;
-- the user pressed Stop setup, which interrupts the turn and keeps the session: "You stopped setup.";
+- the user pressed Stop setup while Claude worked: "You stopped setup.";
 - its last turn has no result, as after a quit or a crash: "Setup stopped before it finished.";
 - its process ended while Claude asked for the path: "Setup stopped before Claude read your documents."
 
@@ -248,7 +257,7 @@ Pick up where it stopped goes on in one of two ways:
 
 ### After a restart
 
-The progress record keeps the run's id, `path_a_sent` and the user's draft, as [trust](trust.md#the-progress-record) says. When the chapter opens again, it finds the run by its id among the runs `RunDesk` restored from the run logs, and reads its phase as above. A turn cut short shows Stopped, and one that ended shows its sheet again, with the draft typed for that turn. A reply then starts a new process that resumes the same session with `--resume`, as [The child process](#the-child-process) says.
+The progress record keeps the run's id, `path_a_sent` and the user's draft, as [trust](trust.md#the-progress-record) says. Finish later leaves the chapter with the draft written and the record kept. Until the recap opens, the shell does not remember the setup folder as the app's folder, so the next launch opens first run again, on its welcome back and Finish my profile. When the chapter opens again, it finds the run by its id among the runs `RunDesk` restored from the run logs, and reads its phase as above. A turn cut short shows Stopped, and one that ended shows its sheet again, with the draft typed for that turn. A reply then starts a new process that resumes the same session with `--resume`, as [The child process](#the-child-process) says.
 
 ## Live figures
 

@@ -10,7 +10,8 @@ type Printed = Option<String>;
 /// needs. `version` gives the first line a program printed. `beside` gives all a program printed when run, with the
 /// given arguments, from the folder of another program or of the file it links to, so both belong to one install. The
 /// wiring gives both the tool check's own prober, so they look the same way: on the resolved `PATH`, helper folders
-/// first, and never through a developer stub that would open a dialog.
+/// first, and never through a developer stub that would open a dialog. On macOS that prober asks Python as a task's
+/// own command runs it: the first `python3` on the `PATH`, and nothing when that one is a stub with no tools behind it.
 pub struct ProgramProbe {
     version: fn(&str) -> Printed,
     beside: fn(&str, &str, &[&str]) -> Printed,

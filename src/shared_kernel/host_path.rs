@@ -98,6 +98,11 @@ fn candidates(dir: &Path, name: &str, extensions: &[&str]) -> Vec<PathBuf> {
     if extensions.is_empty() { vec![dir.join(name)] } else { extensions.iter().map(|extension| dir.join(format!("{name}.{extension}"))).collect() }
 }
 
+/// What a program's file name may end in here, in the order Jobdesk tries them.
+fn extensions() -> &'static [&'static str] {
+    if cfg!(windows) { &WINDOWS_EXTENSIONS } else { &[] }
+}
+
 /// The folders the Claude installer and npm put `claude` in. On Windows the profile is `USERPROFILE`, `HOME` only stands
 /// in for it, and npm's global installs go in `%APPDATA%\npm`. An empty variable counts as unset.
 fn usual_folders(home: Option<&OsStr>, userprofile: Option<&OsStr>, appdata: Option<&OsStr>, windows: bool) -> Vec<PathBuf> {
@@ -111,14 +116,38 @@ fn usual_folders(home: Option<&OsStr>, userprofile: Option<&OsStr>, appdata: Opt
     folders
 }
 
+/// `usual_folders` for this process's environment.
+fn usual_folders_here() -> Vec<PathBuf> {
+    usual_folders(env::var_os("HOME").as_deref(), env::var_os("USERPROFILE").as_deref(), env::var_os("APPDATA").as_deref(), cfg!(windows))
+}
+
 /// Looks through `path`, then the folders the Claude installer and npm use. On macOS a `/usr/bin` stub with no
-/// developer tools behind it is not a program: running it would open a dialog, so the search goes on past it.
+/// developer tools behind it, or a link to one, is not a program: running it would open a dialog, so the search goes
+/// on past it.
 pub fn find_executable(path: &str, name: &str) -> Option<PathBuf> {
-    let windows = cfg!(windows);
-    let usual = usual_folders(env::var_os("HOME").as_deref(), env::var_os("USERPROFILE").as_deref(), env::var_os("APPDATA").as_deref(), windows);
-    let extensions: &[&str] = if windows { &WINDOWS_EXTENSIONS } else { &[] };
-    let dead = |candidate: &Path| cfg!(target_os = "macos") && is_dead_stub(candidate, Path::new("/usr/bin"), &developer_dirs);
-    first_found(env::split_paths(path).chain(usual), name, extensions, &dead)
+    found_past_dead(path, name, &usual_folders_here(), &dead_stub)
+}
+
+/// The program the tool check runs for the tool `name`. On macOS, `python3` is the one a task's own command runs: the
+/// first `python3` on `path` a shell may run, and none when that one is a dead stub, since ai-job-search's tools call
+/// `python3` by name and never reach a working copy past it, or a `python`. Every other tool, and `python3` elsewhere,
+/// is found as `find_executable` finds it, and off macOS a `python` stands in for a missing `python3`, as a python.org
+/// install on Windows ships only that and ai-job-search tells Windows users to run it.
+pub fn tool_program(path: &str, name: &str) -> Option<PathBuf> {
+    tool_program_with(path, name, cfg!(target_os = "macos"), &usual_folders_here(), &dead_stub)
+}
+
+fn tool_program_with(path: &str, name: &str, macos: bool, usual: &[PathBuf], dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    match name {
+        "python3" if macos => first_on_path(path, name, dead),
+        "python3" => found_past_dead(path, name, usual, dead).or_else(|| found_past_dead(path, "python", usual, dead)),
+        _ => found_past_dead(path, name, usual, dead),
+    }
+}
+
+/// The first file `name` could be on `path`, then in `usual`, that is not `dead`.
+fn found_past_dead(path: &str, name: &str, usual: &[PathBuf], dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    first_found(env::split_paths(path).chain(usual.iter().cloned()), name, extensions(), dead)
 }
 
 /// The first file `name` could be in `folders`, in order, that is not `dead`.
@@ -126,11 +155,44 @@ fn first_found(folders: impl Iterator<Item = PathBuf>, name: &str, extensions: &
     folders.flat_map(|dir| candidates(&dir, name, extensions)).find(|candidate| candidate.is_file() && !dead(candidate))
 }
 
-/// Whether `candidate` is one of the developer stubs in `usr_bin` with no program behind it in any of the folders
-/// `developer_dirs` gives, which it asks only for a stub.
+/// The program a process given `path` as its `PATH` runs for the bare `name`, as a shell's search finds it: the first
+/// file of that name on `path` that it may run, with no other folder tried and nothing past it. `None` when there is
+/// none, or when that one is `dead`, which would open a dialog rather than run.
+fn first_on_path(path: &str, name: &str, dead: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    env::split_paths(path).flat_map(|dir| candidates(&dir, name, extensions())).find(|candidate| runnable(candidate)).filter(|candidate| !dead(candidate))
+}
+
+/// Whether a search for a program may run `candidate`: a file, or a link to one, and outside Windows one with a run
+/// bit set. A shell's search goes on past a file it may not run.
+fn runnable(candidate: &Path) -> bool {
+    fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && has_run_bit(&meta))
+}
+
+#[cfg(unix)]
+fn has_run_bit(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no run bits: the file's extension makes it a program.
+#[cfg(not(unix))]
+fn has_run_bit(_: &fs::Metadata) -> bool {
+    true
+}
+
+/// Whether `candidate` is, on macOS, a `/usr/bin` developer stub with no developer tools behind it, or a link to one.
+fn dead_stub(candidate: &Path) -> bool {
+    cfg!(target_os = "macos") && is_dead_stub(candidate, Path::new("/usr/bin"), &developer_dirs)
+}
+
+/// Whether `candidate`, or the file it links to, is one of the developer stubs in `usr_bin` with no program behind it
+/// in any of the folders `developer_dirs` gives, which it asks only for a stub.
 fn is_dead_stub(candidate: &Path, usr_bin: &Path, developer_dirs: &dyn Fn() -> Vec<PathBuf>) -> bool {
+    // A link to a stub runs the stub, so the file it ends at decides.
+    let real = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let (candidate, usr_bin) = (real(candidate), real(usr_bin));
     let Some(name) = candidate.file_name().and_then(OsStr::to_str) else { return false };
-    if candidate.parent() != Some(usr_bin) || !DEVELOPER_STUBS.contains(&name) {
+    if candidate.parent() != Some(usr_bin.as_path()) || !DEVELOPER_STUBS.contains(&name) {
         return false;
     }
     // A folder may be named down to `Contents/Developer`, or as the Xcode app itself.
@@ -286,6 +348,53 @@ mod tests {
         fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
         fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
         assert_eq!(first_found(folders(), "python3", &[], &dead), Some(usr_bin.join("python3")), "a backed stub is found first");
+    }
+
+    /// Writes an empty file `name` into `folder` with the permission bits `mode`.
+    #[cfg(unix)]
+    fn file_with_mode(folder: &Path, name: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::create_dir_all(folder).unwrap();
+        fs::write(folder.join(name), "").unwrap();
+        fs::set_permissions(folder.join(name), fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_macos_the_tool_check_finds_python3_as_a_task_runs_it() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = |name: &str| root.path().join(name);
+        let (usr_bin, later, tools, links, unrunnable, only) =
+            (folder("usr_bin"), folder("later"), folder("tools"), folder("links"), folder("unrunnable"), folder("only"));
+        for name in ["python3", "git"] {
+            file_with_mode(&usr_bin, name, 0o755);
+            file_with_mode(&later, name, 0o755);
+        }
+        file_with_mode(&unrunnable, "python3", 0o644);
+        file_with_mode(&only, "python", 0o755);
+        fs::create_dir_all(&links).unwrap();
+        for name in ["python3", "git"] {
+            std::os::unix::fs::symlink(usr_bin.join(name), links.join(name)).unwrap();
+        }
+        let dead = |candidate: &Path| is_dead_stub(candidate, &usr_bin, &|| vec![tools.clone()]);
+        let find = |folders: &[&PathBuf], name: &str, macos: bool| {
+            tool_program_with(&env::join_paths(folders).unwrap().into_string().unwrap(), name, macos, &[], &dead)
+        };
+
+        assert_eq!(find(&[&usr_bin, &later], "python3", true), None, "a task would open the stub's dialog, not reach the later one");
+        assert_eq!(find(&[&usr_bin, &later], "python3", false), Some(later.join("python3")), "elsewhere the search goes on past it");
+        assert_eq!(find(&[&later, &usr_bin], "python3", true), Some(later.join("python3")));
+        assert_eq!(find(&[&usr_bin, &later], "git", true), Some(later.join("git")), "other tools go on past a stub");
+        assert_eq!(find(&[&links, &later], "python3", true), None, "a link to the stub runs the stub");
+        assert_eq!(find(&[&links, &later], "git", true), Some(later.join("git")), "a search goes on past a link to a stub too");
+        assert_eq!(find(&[&unrunnable, &later], "python3", true), Some(later.join("python3")), "a shell goes on past a file it may not run");
+        assert_eq!(find(&[&only], "python3", true), None, "ai-job-search's tools call python3, never python");
+        assert_eq!(find(&[&only], "python3", false), Some(only.join("python")), "off macOS a python stands in");
+
+        fs::create_dir_all(tools.join("usr").join("bin")).unwrap();
+        fs::write(tools.join("usr").join("bin").join("python3"), "").unwrap();
+        assert_eq!(find(&[&usr_bin, &later], "python3", true), Some(usr_bin.join("python3")), "a backed stub runs");
+        assert_eq!(find(&[&links, &later], "python3", true), Some(links.join("python3")), "and so does a link to it");
     }
 
     #[test]

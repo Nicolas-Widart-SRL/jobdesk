@@ -25,7 +25,7 @@ Your folder keeps a hidden `.jobdesk` folder with a copy of the download and its
 
 ### This computer
 
-ai-job-search needs three free helpers: Python keeps your tracker, Bun searches job sites, and LaTeX makes your CV and cover letter PDFs. Jobdesk first checks which ones this computer already has. A copy you have counts only when it works with ai-job-search: Python 3.10 or newer, or a LaTeX with every package the CV and cover letter templates use.
+ai-job-search needs three free helpers: Python keeps your tracker, Bun searches job sites, and LaTeX makes your CV and cover letter PDFs. Jobdesk first checks which ones this computer already has. A copy you have counts only when it works with ai-job-search: Python 3.10 or newer, or a LaTeX with every package the CV and cover letter templates use. For Python, that means the `python3` your tasks would run first: a newer one behind macOS's own `python3` in `/usr/bin` does not count.
 
 Install what is missing installs the rest. Each line shows its download size and about how long it takes. LaTeX is the slow one, about 100 MB and 1 to 4 minutes, so you can step away. Each file is compared with Jobdesk's own record of it before it is installed. Cancel stops the install and leaves that helper missing.
 
@@ -159,6 +159,8 @@ Add a portal has Claude build a portal for a job board you name. Type the board'
 ## Setup and the status bar
 
 Setup shows whether your profile, tools, portals, templates and sync are ready. Its Profile panel is one line: how many of the eleven topics are filled, how many are hidden if a file cannot be read, and Open Profile, which opens the Profile screen. With no profile file found, the panel, like the Profile screen, offers Set up your profile…, which opens `/setup` in the launcher. Writing style and cover letter templates no longer show there. Its Portals panel is one line too: how many portals are on and the jobs every installed one found, on or off, with Open Portals, which opens the Portals screen. With no portal installed it reads "No portals installed.", and Open Portals stays. While your saved jobs cannot be read, the jobs found hide, and while `.agents/skills` or a portal's `SKILL.md` cannot be read, the portals hide. Check portal health and Add portal moved to the Portals screen. Setup's tab stays in the menu only while a required item is not ready, so through your first setup too, and comes back if one goes missing later. A required item is your job search folder or a required tool. Your profile never keeps the tab. Optional tools never keep it either, and never count against the ready total. Settings › Runtime status always shows the same. The status bar says "Claude is ready", or "Claude Code is not installed". Before you choose a folder it says "Claude is installed. Tasks use its sign-in, or an API key you save in Settings.", and during [first run](#first-run) on a Mac "Claude Code is installed. Jobdesk uses it for every task." The theme is set in Settings › Appearance.
+
+On a Mac, Python counts as ready only when the first `python3` your tasks would run works. When macOS's own `python3` in `/usr/bin` comes first and needs the Command Line Tools, which it would ask you to install, Setup and Runtime status show Python as missing, even with a newer copy later on your `PATH`. A `python` with no `python3` does not count either. On Windows, a `python` counts when there is no `python3`.
 
 When a new version of Jobdesk is out, the status bar shows it to the left of Settings, one state at a time:
 

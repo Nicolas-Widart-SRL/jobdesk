@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::shared_kernel::host_path::{find_executable, resolved_path};
+use crate::shared_kernel::host_path::{find_executable, resolved_path, tool_program};
 use crate::shared_kernel::process_tree::no_window;
 use crate::workspace::domain::{ToolProber, ToolSpec};
 
@@ -15,12 +15,7 @@ pub struct ProcessProber;
 
 impl ToolProber for ProcessProber {
     fn probe(&self, tool: &ToolSpec) -> Option<String> {
-        let path = resolved_path();
-        // A python.org install on Windows ships no `python3`.
-        let program = find_executable(path, tool.name).or_else(|| (tool.name == "python3").then(|| find_executable(path, "python")).flatten())?;
-        let output = run(program, tool.args, None, path)?;
-        let text = if output.stdout.is_empty() { output.stderr } else { output.stdout };
-        Some(String::from_utf8_lossy(&text).lines().next().unwrap_or_default().trim().to_owned())
+        version(resolved_path(), tool)
     }
 }
 
@@ -30,6 +25,14 @@ impl ProcessProber {
     pub fn beside(&self, beside: &str, program: &str, args: &[&str]) -> Option<String> {
         output_beside(resolved_path(), beside, program, args)
     }
+}
+
+/// The first line `tool` prints when run with its arguments and `path` as its `PATH`, from the file
+/// `host_path::tool_program` finds for it there: on its output, else on its errors.
+fn version(path: &str, tool: &ToolSpec) -> Option<String> {
+    let output = run(tool_program(path, tool.name)?, tool.args, None, path)?;
+    let text = if output.stdout.is_empty() { output.stderr } else { output.stdout };
+    Some(String::from_utf8_lossy(&text).lines().next().unwrap_or_default().trim().to_owned())
 }
 
 /// All `program` prints when run with `args`, looked for beside the file `beside` is on `path` and run with that
@@ -94,6 +97,24 @@ mod tests {
         assert_eq!(output_beside(&path, "lualatex", "kpsewhich", &["moderncv.cls"]).as_deref(), Some("/tex/moderncv.cls\n"));
         assert_eq!(output_beside(&path, "xelatex", "kpsewhich", &[]), None, "no engine");
         assert_eq!(output_beside(&path_of(&[&tex]), "lualatex", "mktexlsr", &[]), None, "nothing to run beside it");
+    }
+
+    /// The stub cases are in `host_path`'s tests, which can name their own `/usr/bin`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn on_macos_the_tool_check_runs_the_python3_a_task_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let (old, new, plain, unrunnable) = (root.path().join("old"), root.path().join("new"), root.path().join("plain"), root.path().join("unrunnable"));
+        script(&old, "python3", "echo 'Python 3.9.6'");
+        script(&new, "python3", "echo 'Python 3.12.4'");
+        script(&plain, "python", "echo 'Python 3.12.7'");
+        script(&unrunnable, "python3", "echo 'Python 3.13.0'");
+        fs::set_permissions(unrunnable.join("python3"), fs::Permissions::from_mode(0o644)).unwrap();
+        let python = ToolSpec { name: "python3", args: &["--version"], purpose: "", required: true };
+        assert_eq!(version(&path_of(&[&old, &new]), &python).as_deref(), Some("Python 3.9.6"), "the later one is not reached");
+        assert_eq!(version(&path_of(&[&new, &old]), &python).as_deref(), Some("Python 3.12.4"));
+        assert_eq!(version(&path_of(&[&unrunnable, &new]), &python).as_deref(), Some("Python 3.12.4"), "a file it may not run is passed, as a shell does");
+        assert_eq!(version(&path_of(&[&plain]), &python), None, "ai-job-search's tools call python3, never python");
     }
 
     #[test]

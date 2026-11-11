@@ -24,8 +24,8 @@ pub fn environment_checks(repaint: Arc<dyn Fn() + Send + Sync>) -> EnvironmentCh
     EnvironmentChecks::new(Arc::new(ProcessProber), repaint)
 }
 
-/// The first line the tool `name` of `TOOLS` prints about itself, found and run as the tool check does. `None` when it
-/// cannot run, or the check knows no tool of that name.
+/// The first line the tool `name` of `TOOLS` prints about itself, found and run as the tool check does: on macOS,
+/// `python3` as a task's own command runs it. `None` when it cannot run, or the check knows no tool of that name.
 pub fn tool_version(name: &str) -> Option<String> {
     TOOLS.iter().find(|tool| tool.name == name).and_then(|tool| ProcessProber.probe(tool))
 }

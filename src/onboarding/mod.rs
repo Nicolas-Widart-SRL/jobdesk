@@ -34,9 +34,10 @@ pub fn first_run(data: &Path, current: &str, documents: PathBuf, helpers: Helper
     Onboarding::new(store, crate::updates::source_pins(current), Arc::new(fetcher), Arc::new(unpacker), helpers, documents, repaint)
 }
 
-/// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, and a missing one installed in
-/// `~/.jobdesk` under `home` from the files pinned for this copy's processor, downloaded into `data` first. It removes
-/// the half installs a setup that stopped midway left. macOS only, and `None` on a processor setup has no files for.
+/// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, so Python as a task runs
+/// `python3`, and a missing one installed in `~/.jobdesk` under `home` from the files pinned for this copy's processor,
+/// downloaded into `data` first. It removes the half installs a setup that stopped midway left. macOS only, and `None`
+/// on a processor setup has no files for.
 #[cfg(target_os = "macos")]
 pub fn helper_setup(data: &Path, current: &str, home: PathBuf) -> Option<HelperSetup> {
     let arch = Arch::of_this_build()?;

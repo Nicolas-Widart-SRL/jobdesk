@@ -7723,6 +7723,11 @@ mod profile_chapter {
     }
 
     fn scene(name: &str, theme: Theme, without_pdfs: bool) -> Scene {
+        scene_sized(name, theme, without_pdfs, [1280.0, 820.0])
+    }
+
+    /// The scene in a window of `size`.
+    fn scene_sized(name: &str, theme: Theme, without_pdfs: bool, size: [f32; 2]) -> Scene {
         let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         let _ = fs::remove_dir_all(&base);
         let root = base.join("ai-job-search");
@@ -7750,19 +7755,19 @@ mod profile_chapter {
         let shell = Rc::new(RefCell::new(shell));
         let (inner, opened) = (Rc::clone(&shell), Rc::new(RefCell::new(Vec::new())));
         let seen = Rc::clone(&opened);
-        let harness =
-            with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
-                .build_ui(move |ui| {
-                    inner.borrow_mut().show(ui);
-                    let urls: Vec<String> = ui.ctx().output(|output| {
-                        output
-                            .commands
-                            .iter()
-                            .filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None })
-                            .collect()
-                    });
-                    seen.borrow_mut().extend(urls);
+        let harness = with_renderer(Harness::builder().with_size(size).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look)).build_ui(
+            move |ui| {
+                inner.borrow_mut().show(ui);
+                let urls: Vec<String> = ui.ctx().output(|output| {
+                    output
+                        .commands
+                        .iter()
+                        .filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None })
+                        .collect()
                 });
+                seen.borrow_mut().extend(urls);
+            },
+        );
         Scene { shell, harness, sink, calls, root, desktop, data, opened }
     }
 
@@ -8330,6 +8335,48 @@ mod profile_chapter {
         };
         let long = format!("Your CV is built.\n\n{}", "Here is one more thing to look at before we go on.\n\n".repeat(30));
         assert_eq!(caption("Your CV is built.", "cv_short_message"), caption(&long, "cv_long_message"));
+    }
+
+    /// The CV check in a window of `size`, Claude's turn ending on `message`.
+    fn cv_check_sized(name: &str, size: [f32; 2], message: &str) -> Scene {
+        let mut scene = scene_sized(name, Theme::Light, false, size);
+        scene.past_five();
+        scene.emit([tool("b1", "Bash", "cd cv && lualatex main_example.tex", false), done("b1")]);
+        scene.says(message);
+        scene.until_shown("Page 1 of");
+        scene
+    }
+
+    /// With a long message, the reply Looks good sends and Show all Claude wrote still show above the foot.
+    #[test]
+    fn a_long_cv_message_leaves_the_reply_and_show_all_in_view() {
+        let long = format!("Your CV is built.\n\n{}", "Here is one more thing to look at before we go on.\n\n".repeat(30));
+        let scene = cv_check_sized("cv_long_side", [1280.0, 820.0], &long);
+        let foot = scene.harness.get_by_label("Looks good").rect().top();
+        for label in ["Looks good sends Claude this reply:", "Show all Claude wrote"] {
+            assert!(scene.harness.get_by_label(label).rect().bottom() < foot, "{label} shows above the foot");
+        }
+    }
+
+    /// In the smallest window the side column scrolls rather than cut its last slips off.
+    #[test]
+    fn the_side_column_scrolls_in_the_smallest_window() {
+        let mut scene = cv_check_sized("cv_side_scrolls", [1040.0, 640.0], "Your CV is built.");
+        let before = scene.harness.get_by_label("Show all Claude wrote").rect().top();
+        scene.harness.hover_at(scene.harness.get_by_label("Master CV").rect().center());
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        scene.harness.event(wheel);
+        scene.step();
+        let after = scene.harness.get_by_label("Show all Claude wrote").rect().top();
+        assert!(after < before, "the side column scrolled: {before} to {after}");
+        let foot = scene.harness.get_by_label("Looks good").rect().top();
+        assert!(scene.harness.get_by_label("Show all Claude wrote").rect().bottom() <= foot, "and its last slip comes into view");
     }
 
     /// A link in Claude's message shows its words, and a click on them opens nothing.

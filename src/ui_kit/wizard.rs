@@ -254,7 +254,8 @@ pub fn wide_card<R>(ui: &mut Ui, step: &WizardStep, body: impl FnOnce(&mut Ui) -
 
 /// A step of the Profile chapter split in two: `wide_card` with `main` at the left and a side column of slips,
 /// `SPLIT_SIDE_BASIS` wide and `SPLIT_GAP` from it, at the right. `main` scrolls on its own with its bar at its right,
-/// clear of its words. `side` holds still. Each column starts at the top.
+/// clear of its words. `side` holds still while it fits, and scrolls on its own when it is taller than the room. Each
+/// column starts at the top.
 pub fn split_card<R>(
     ui: &mut Ui,
     step: &WizardStep,
@@ -277,9 +278,12 @@ pub fn split_card<R>(
             let inner = well(&mut main_ui, "split_card_main", main);
             let mut side_ui = ui.new_child(column(side_rect, "split_card_side"));
             side_ui.shrink_clip_rect(side_rect);
-            side_ui.set_width(side_rect.width());
-            side_ui.spacing_mut().item_spacing.y = f32::from(GUTTER);
-            side(&mut side_ui);
+            // Slips taller than the room scroll on their own, never sideways, so none is cut off under the foot.
+            egui::ScrollArea::vertical().id_salt("split_card_side").auto_shrink([false, false]).show(&mut side_ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = f32::from(GUTTER);
+                side(ui);
+            });
             ui.advance_cursor_after_rect(area);
             inner
         },

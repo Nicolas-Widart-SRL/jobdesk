@@ -50,7 +50,7 @@ const SWEEP_FRAME: Duration = Duration::from_millis(33);
 /// The soonest a draft's next write asks for a frame, so a write due now does not spin the window.
 const DRAFT_FRAME: Duration = Duration::from_millis(50);
 /// The most height Claude's message takes in the CV check's side column before it scrolls.
-const CV_MESSAGE_HEIGHT: f32 = 160.0;
+const CV_MESSAGE_HEIGHT: f32 = 96.0;
 
 /// What the chapter asks of the shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,18 +530,19 @@ impl ProfileChapter {
             },
             |ui| {
                 open.set(cv_slip(ui, &label, &sentence).clicked());
-                // What Claude said with the CV, beside the pages so they keep their reading size. A long message scrolls.
+                // What Claude said with the CV, beside the pages so they keep their reading size. A long message scrolls,
+                // and Show all Claude wrote under it opens the whole.
                 side_slip(ui, "Claude wrote", "", |ui| {
                     ScrollArea::vertical().id_salt("setup_cv_message").max_height(CV_MESSAGE_HEIGHT).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         claude_markdown(ui, cache, message);
                     });
+                    show_all.set(link(ui, SHOW_ALL).clicked());
                 });
                 side_slip(ui, "", "", |ui| {
                     slip_text(ui, "", "Spotted something? Ask for a change opens a field. Say it in your own words, such as \"Put the design system first\".")
                 });
                 reply_slip(ui, "Looks good sends Claude this reply:", CV_LOOKS_GOOD);
-                show_all.set(show_all_slip(ui));
             },
             |ui| {
                 if changing {

@@ -2,7 +2,7 @@
 //! looked at one folder at a time from the job search folder down, so nothing is read, written, renamed or deleted
 //! through a link inside it.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -130,12 +130,15 @@ pub fn write_new(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Waits until the names in the folder `dir` are on the disk. Windows has no such call for a folder, and needs none.
+/// Waits until the names in the folder `dir` are on the disk.
+#[cfg(unix)]
 pub fn sync_dir(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    File::open(dir)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = (dir, File::open);
+    fs::File::open(dir)?.sync_all()
+}
+
+/// Windows has no call that waits for the names in a folder, and needs none.
+#[cfg(not(unix))]
+pub fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 

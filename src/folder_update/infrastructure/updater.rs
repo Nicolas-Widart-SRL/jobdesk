@@ -498,9 +498,14 @@ impl Staging {
         let mut name = OsString::from(prefix);
         name.push(process::id().to_string());
         let path = parent.join(name);
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = {
+            let mut builder = fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         builder.create(&path).map_err(|_| UpdateError::Disk)?;
         Ok(Self { path })
     }
@@ -1618,10 +1623,13 @@ mod tests {
         assert!(fixture.run().is_ok(), "the folder updates again");
     }
 
+    #[cfg(unix)]
     const SECRET: &str = "A fictional private key.\n";
+    #[cfg(unix)]
     const PLANTED: &str = "Planted by a run.\n";
 
     /// A folder updated once, with `x.md` planted in it, and a directory outside it that holds `SECRET` as `name`.
+    #[cfg(unix)]
     fn planted(name: &str) -> (Fixture, tempfile::TempDir) {
         let fixture = Fixture::new(BASE, NEW_FILES);
         fixture.run().unwrap();
@@ -1633,6 +1641,7 @@ mod tests {
 
     /// Writes a record of the last update whose one operation puts `SECRET`, found at `backup`, back as `x.md`, as a
     /// run's tools could.
+    #[cfg(unix)]
     fn forge(fixture: &Fixture, backup: &str) {
         let op = Op {
             path: "x.md".to_owned(),

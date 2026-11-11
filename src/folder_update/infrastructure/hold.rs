@@ -35,8 +35,13 @@ pub enum Open {
 /// Holds `folder` open, shared with every other Jobdesk that has it open. Nothing is written through a link.
 pub fn hold_open(folder: &Path) -> Open {
     let jobdesk = folder.join(installed_source::DIR);
-    if !is_real_dir(&jobdesk) {
-        return Open::Nothing;
+    // Only a `.jobdesk` known to be missing, a link or not a folder has nothing to hold. One that cannot be looked at
+    // may hold a base, so the folder is kept out until it can.
+    match fs::symlink_metadata(&jobdesk) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Open::Nothing,
+        Err(_) => return Open::KeptOut(FolderWait::Unlockable),
+        Ok(meta) if !meta.is_dir() => return Open::Nothing,
+        Ok(_) => {}
     }
     let Ok(file) = open(&jobdesk) else { return Open::KeptOut(FolderWait::Unlockable) };
     match file.try_lock_shared() {
@@ -111,6 +116,20 @@ mod tests {
         assert!(!folder.path().join(installed_source::DIR).exists(), "no .jobdesk is made for the lock");
         fs::write(folder.path().join(installed_source::DIR), b"").unwrap();
         assert!(matches!(hold_open(folder.path()), Open::Nothing), "a .jobdesk that is a file holds no base either");
+    }
+
+    /// A `.jobdesk` that cannot be looked at, here for the permissions of the folder above it, may well hold a base:
+    /// the folder is kept out and tried again, never taken for one with nothing to hold.
+    #[cfg(unix)]
+    #[test]
+    fn a_jobdesk_that_cannot_be_looked_at_keeps_the_folder_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = folder();
+        fs::set_permissions(folder.path(), fs::Permissions::from_mode(0o600)).unwrap();
+        let open = hold_open(folder.path());
+        fs::set_permissions(folder.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(open, Open::KeptOut(FolderWait::Unlockable)), "{open:?}");
+        assert!(matches!(hold_open(folder.path()), Open::Held(_)), "held once it can be looked at");
     }
 
     #[cfg(unix)]

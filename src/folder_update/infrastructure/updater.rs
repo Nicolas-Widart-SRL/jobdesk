@@ -126,6 +126,7 @@ pub fn can_undo(folder: &Path) -> bool {
 
 /// Undoes the last update of `folder`: puts back each file that still holds what the update wrote, removes the side
 /// copies it made that are unchanged, and puts back the old base. A file changed since is left as it is and listed,
+/// and so is the copy of the user's file beside a safety file it leaves, which `journal::revert_from` pairs with it,
 /// and the record then names only those files and their originals, marked undone. Jobdesk does not offer Undo for it
 /// again: the originals stay in the backup until the next update's backup replaces them, as "Last update
 /// only" allows.
@@ -1097,6 +1098,51 @@ mod tests {
         assert_eq!(fixture.read(".claude/commands/apply.md").as_deref(), Some("Apply to the role.\n"));
     }
 
+    /// A safety file the user changed after the update stays, and so does the copy of theirs saved beside it, which then
+    /// holds their settings from before the update.
+    #[test]
+    fn undo_keeps_the_copy_beside_a_safety_file_it_keeps() {
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        fixture.write(".claude/settings.json", "{\n  \"allow\": [\"Grep\", \"Edit\"]\n}\n");
+        let reverted = undo(&fixture.folder).unwrap();
+        assert_eq!(reverted.kept, strings(&[".claude/settings.json", ".claude/settings.json.yours-1.8.0"]));
+        assert_eq!(fixture.read(".claude/settings.json").as_deref(), Some("{\n  \"allow\": [\"Grep\", \"Edit\"]\n}\n"));
+        assert_eq!(fixture.read(".claude/settings.json.yours-1.8.0").as_deref(), Some(SETTINGS_OURS), "the user's settings stay beside it");
+        assert_eq!(fixture.read("CLAUDE.md").as_deref(), Some(CLAUDE_OURS), "the rest is undone");
+    }
+
+    /// The copy of the user's safety file stays beside it while Undo keeps the file for any reason, and goes with it
+    /// when it is put back: a copy the user changed keeps the file too.
+    #[test]
+    fn undo_keeps_or_reverts_a_safety_file_and_its_copy_together() {
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        fixture.write(".claude/settings.json.yours-1.8.0", "Merged by hand.\n");
+        let reverted = undo(&fixture.folder).unwrap();
+        assert_eq!(reverted.kept, strings(&[".claude/settings.json", ".claude/settings.json.yours-1.8.0"]));
+        assert_eq!(fixture.read(".claude/settings.json").as_deref(), Some(SETTINGS_NEW));
+        assert_eq!(fixture.read(".claude/settings.json.yours-1.8.0").as_deref(), Some("Merged by hand.\n"));
+
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        fs::remove_file(fixture.folder.join(".claude/settings.json.yours-1.8.0")).unwrap();
+        let reverted = undo(&fixture.folder).unwrap();
+        assert!(reverted.kept.is_empty(), "{reverted:?}");
+        assert_eq!(fixture.read(".claude/settings.json").as_deref(), Some(SETTINGS_OURS), "a copy the user deleted holds nothing back");
+    }
+
+    /// The rollback of a stopped update keeps the copy beside a safety file it keeps, as Undo does.
+    #[test]
+    fn a_rollback_keeps_the_copy_beside_a_safety_file_it_keeps() {
+        let fixture = stopped();
+        fixture.write(".claude/settings.json", "Edited after the stop.\n");
+        let reverted = recover(&fixture.folder).unwrap().unwrap();
+        assert_eq!(reverted.kept, strings(&[".claude/settings.json", ".claude/settings.json.yours-1.8.0"]));
+        assert_eq!(fixture.read(".claude/settings.json.yours-1.8.0").as_deref(), Some(SETTINGS_OURS));
+        assert_eq!(fixture.read(".claude/commands/review.md"), None, "the rest is rolled back");
+    }
+
     #[test]
     fn an_existing_side_copy_that_differs_is_backed_up_not_lost() {
         let fixture = Fixture::edited();
@@ -1316,8 +1362,9 @@ mod tests {
             if linked {
                 symlink(outside.path(), fixture.jobdesk().join(BACKUP)).unwrap();
             }
-            // The files whose originals were in the backup and that the update had replaced or deleted.
-            let lost = strings(&[".claude/commands/apply.md", ".claude/commands/old.md", ".claude/settings.json"]);
+            // The files whose originals were in the backup and that the update had replaced or deleted, and the copy of
+            // the user's safety file beside one, which then holds the only copy of their settings.
+            let lost = strings(&[".claude/commands/apply.md", ".claude/commands/old.md", ".claude/settings.json", ".claude/settings.json.yours-1.8.0"]);
             assert_eq!(recover(&fixture.folder), Err(UpdateError::Kept(lost)), "linked: {linked}");
             assert!(!fixture.jobdesk().join(JOURNAL).exists(), "linked: {linked}");
             assert!(fixture.jobdesk().join("update-stopped.json").is_file(), "linked: {linked}: the journal is kept aside");
@@ -1345,7 +1392,7 @@ mod tests {
                 fs::write(&files, "not a folder").unwrap();
             }
             assert!(is_real_dir(&fixture.jobdesk().join(BACKUP)), "the backup itself is a real folder");
-            let lost = strings(&[".claude/commands/apply.md", ".claude/commands/old.md", ".claude/settings.json"]);
+            let lost = strings(&[".claude/commands/apply.md", ".claude/commands/old.md", ".claude/settings.json", ".claude/settings.json.yours-1.8.0"]);
             assert_eq!(recover(&fixture.folder), Err(UpdateError::Kept(lost)), "linked: {linked}");
             assert!(!fixture.jobdesk().join(JOURNAL).exists(), "linked: {linked}: the journal is set aside");
             assert_eq!(fs::read_to_string(outside.path().join("0")).unwrap(), SECRET, "linked: {linked}");

@@ -3,14 +3,14 @@
 //! record left there means the update stopped midway. Once the last file is in place it moves into the backup as
 //! `update.json`, the record an undo reads. Both put back a file only while it still holds what the update wrote.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::folder_update::domain::{Reverted, UpdateError};
+use crate::folder_update::domain::{Reverted, UpdateError, side_name};
 use crate::folder_update::infrastructure::disk::{
     Found, holds, in_jobdesk, is_plain_relative, is_real_dir, joined, look, read_plain, remove, sync_dir, write_new,
 };
@@ -127,11 +127,23 @@ pub fn revert_all(folder: &Path, jobdesk: &Path, journal: &Journal) -> io::Resul
 
 /// `revert_all`, with the originals in `files`, the backup's checked `files` folder. `None` puts back only what needs
 /// no original, and keeps every file that does.
+///
+/// A safety file the update replaced and the copy of the user's file it saved beside it, `<path>.yours-<version>`, are
+/// kept or put back together. While the file stays, for any reason, the copy holds the user's own settings from before
+/// the update, so it stays too and is listed. A copy changed since keeps the file as well.
 pub fn revert_from(folder: &Path, files: Option<PathBuf>, journal: &Journal) -> io::Result<Reverted> {
     let mut reverted = Reverted::default();
     let mut touched = BTreeSet::new();
+    let pairs = Pairs::of(journal);
+    // The safety files kept so far. The update wrote each copy before its file, so the file comes first here.
+    let mut kept_files = BTreeSet::new();
     for op in journal.ops.iter().rev() {
-        match revert(folder, files.as_deref(), op)? {
+        let outcome = match (pairs.file_of(&op.path), pairs.copy_of(&op.path)) {
+            (Some(file), _) if kept_files.contains(file) => left(folder, op)?,
+            (_, Some(copy)) if changed(folder, copy)? => left(folder, op)?,
+            _ => revert(folder, files.as_deref(), op)?,
+        };
+        match outcome {
             Outcome::Reverted => {
                 touched.extend(joined(folder, &op.path).parent().map(Path::to_path_buf));
                 if !in_jobdesk(&op.path) {
@@ -139,7 +151,12 @@ pub fn revert_from(folder: &Path, files: Option<PathBuf>, journal: &Journal) -> 
                 }
             }
             Outcome::Already => {}
-            Outcome::Kept => reverted.kept.push(op.path.clone()),
+            Outcome::Kept => {
+                if pairs.copy_of(&op.path).is_some() {
+                    kept_files.insert(op.path.as_str());
+                }
+                reverted.kept.push(op.path.clone());
+            }
         }
     }
     for made in journal.folders.iter().rev() {
@@ -159,6 +176,57 @@ pub fn revert_from(folder: &Path, files: Option<PathBuf>, journal: &Journal) -> 
     reverted.reverted.sort();
     reverted.kept.sort();
     Ok(reverted)
+}
+
+/// Each safety file the update replaced and the copy of the user's file it saved beside it, by name: the copy's
+/// operation is named `<path>.yours-<version>` for the file's `<path>` and the record's version. A release never holds
+/// such a name, so only an upstream-wins step writes one.
+struct Pairs<'a> {
+    /// The copy's operation of each such file, by the file's path.
+    copies: BTreeMap<&'a str, &'a Op>,
+    /// The file's path of each copy, by the copy's path.
+    files: BTreeMap<&'a str, &'a str>,
+}
+
+impl<'a> Pairs<'a> {
+    fn of(journal: &'a Journal) -> Self {
+        let by_path: BTreeMap<&str, &Op> = journal.ops.iter().map(|op| (op.path.as_str(), op)).collect();
+        let (mut copies, mut files) = (BTreeMap::new(), BTreeMap::new());
+        for op in &journal.ops {
+            let Some(name) = side_name(&op.path, &journal.version, true) else { continue };
+            if let Some(copy) = by_path.get(name.as_str()) {
+                copies.insert(op.path.as_str(), *copy);
+                files.insert(copy.path.as_str(), op.path.as_str());
+            }
+        }
+        Self { copies, files }
+    }
+
+    /// The operation of the copy saved beside the safety file at `path`, when the update saved one.
+    fn copy_of(&self, path: &str) -> Option<&'a Op> {
+        self.copies.get(path).copied()
+    }
+
+    /// The safety file whose copy is at `path`, when it is one.
+    fn file_of(&self, path: &str) -> Option<&'a str> {
+        self.files.get(path).copied()
+    }
+}
+
+/// Whether the file of `op` holds neither what it held before the update nor what the update wrote: it changed since.
+/// A link on the way, or anything but a plain file, counts as changed.
+fn changed(folder: &Path, op: &Op) -> io::Result<bool> {
+    let current = match look(folder, &op.path)?.found {
+        Found::File(bytes, _) => Some(sha256_hex(&bytes)),
+        Found::Missing => None,
+        Found::Link | Found::Other => return Ok(true),
+    };
+    Ok(current != op.before && current != op.wrote)
+}
+
+/// Leaves the file of `op` as it is: `Already` when it holds what it held before the update, else `Kept`.
+fn left(folder: &Path, op: &Op) -> io::Result<Outcome> {
+    Ok(if holds(folder, &op.path, op.before.as_deref())? { Outcome::Already } else { Outcome::Kept })
 }
 
 /// The backup's `files` of `jobdesk`, `None` when the backup holds none. `.jobdesk`, the backup or `files` as a link

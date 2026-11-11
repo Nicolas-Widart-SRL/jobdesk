@@ -8,7 +8,6 @@ mod progress_file;
 mod unpacker;
 
 pub use document_copy::FileCopier;
-pub use fetcher::HttpsFetcher;
 #[cfg(target_os = "macos")]
 pub use helper_install::HomeInstaller;
 #[cfg(target_os = "macos")]

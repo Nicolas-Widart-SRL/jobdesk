@@ -11,6 +11,8 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use egui::{CursorIcon, Key, Theme};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::{Harness, HarnessBuilder, SnapshotOptions};
+use jobdesk::folder_update::application::{Failure as FolderFailure, Outcome as FolderOutcome, Phase, Report, Reverted, SideCopy, Stage, UndoOutcome};
+use jobdesk::folder_update::idle_folder_update;
 use jobdesk::runs::application::{
     AgentEvent, AgentGateway, AgentSession, CATALOG, CommandSpec, Decision, EventSink, ModelCost, Prompt, PromptKind, Question, QuestionOption, RunDesk,
     RunRequest, StartOptions, TaskCost, TaskOutcome, Tokens, Usage, UsageReport,
@@ -1854,7 +1856,7 @@ fn the_welcome_points_at_a_place_that_stays() {
     assert!(is_shown(&harness, "Profile shows each topic, what is filled in and what is missing."));
     assert!(is_shown(
         &harness,
-        "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer."
+        "Jobdesk reads this folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one, and when a Jobdesk update brings newer versions of its files, which you can undo right after. Tasks you start change it through Claude Code on this computer."
     ));
 
     let mut harness = tray_harness(probed(shell(Screen::InTray, "welcome_step_reachable"), AllTools));
@@ -4166,6 +4168,7 @@ fn release_020() -> Release {
         notes: RELEASE_NOTES.to_owned(),
         size: 14_200_000,
         signature: "fictional".to_owned(),
+        pin: None,
     }
 }
 
@@ -4442,6 +4445,200 @@ fn the_update_group_fits_the_smallest_window() {
     assert!(window.contains_rect(retry) && window.contains_rect(settings), "{retry:?} {settings:?}");
     assert!(retry.right() < settings.left() && words.right() < retry.left());
     assert!(words.left() >= waits.right(), "the group never lies over the left: {words:?} {waits:?}");
+}
+
+/// Today with every tool ready, as the update canvases draw it, its folder update showing `stage`, as Jobdesk 0.4.0.
+fn folder_harness(name: &str, stage: Stage, theme: Theme) -> Harness<'static> {
+    let shell = with_update(shell(Screen::InTray, name), Vec::new()).with_folder_update(idle_folder_update("0.4.0").showing(stage, true));
+    probed_wgpu(probed(shell, AllTools), theme)
+}
+
+fn side(path: &str, side: &str) -> SideCopy {
+    SideCopy { path: path.into(), side: side.into() }
+}
+
+/// A fictional update to 1.8.0 that met the user's changes, the update's fix of two safety files, and one the user
+/// had removed.
+fn report_with_details() -> Report {
+    Report {
+        version: "1.8.0".into(),
+        updated: vec![".claude/commands/apply.md".into()],
+        conflicts: vec![side("CLAUDE.md", "CLAUDE.md.update-1.8.0"), side(".claude/commands/scrape.md", ".claude/commands/scrape.md.update-1.8.0")],
+        upstream_wins: vec![side(".claude/settings.json", ".claude/settings.json.yours-1.8.0")],
+        restored: vec![".claude/hooks/check-paths.py".into()],
+        ..Report::default()
+    }
+}
+
+/// The folder update downloads the release that goes with this Jobdesk: no Undo, nothing to put away.
+fn folder_working(name: &str, theme: Theme) {
+    let mut harness = folder_harness(name, Stage::Working(Phase::Downloading { received: 0 }), theme);
+    assert!(is_shown(&harness, "Updating your job search folder to go with Jobdesk 0.4.0…"));
+    assert!(harness.query_by_label("Undo").is_none() && harness.query_by_label("Dismiss").is_none());
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_working_light() {
+    folder_working("folder_update_working_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_working_dark() {
+    folder_working("folder_update_working_dark", Theme::Dark);
+}
+
+/// An update that met no change of the user's: one line, Undo and Dismiss, and nothing to open.
+fn folder_updated(name: &str, theme: Theme) {
+    let report = Report { version: "1.8.0".into(), updated: vec!["CLAUDE.md".into()], ..Report::default() };
+    let mut harness = folder_harness(name, Stage::Ended(FolderOutcome::Updated(report)), theme);
+    let words = "Your job search folder was updated with Jobdesk 0.4.0.";
+    assert_eq!(harness.get_by_label(words).accesskit_node().role(), egui::accesskit::Role::Label, "plain words with nothing to open");
+    assert!(is_shown(&harness, "Undo") && is_shown(&harness, "Dismiss"));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_updated_light() {
+    folder_updated("folder_update_updated_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_updated_dark() {
+    folder_updated("folder_update_updated_dark", Theme::Dark);
+}
+
+/// The same line with its details open above it: the files the user changed kept beside the update's copy, the safety
+/// files replaced beside the user's, and the one put back, each path as plain text.
+fn folder_details(name: &str, theme: Theme) {
+    let mut harness = folder_harness(name, Stage::Ended(FolderOutcome::Updated(report_with_details())), theme);
+    click_away(&mut harness, "Your job search folder was updated with Jobdesk 0.4.0.");
+    for line in [
+        "You had changed 2 files that this update also changed. Jobdesk kept yours and saved the new version beside each:",
+        "CLAUDE.md, new version in CLAUDE.md.update-1.8.0",
+        "Jobdesk replaced 1 safety file with the new version and saved yours beside it:",
+        ".claude/settings.json, yours in .claude/settings.json.yours-1.8.0",
+        "Jobdesk put back 1 safety file you had removed:",
+        ".claude/hooks/check-paths.py",
+        "Undo the update",
+    ] {
+        assert!(is_shown(&harness, line), "{line}");
+    }
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_details_light() {
+    folder_details("folder_update_details_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_details_dark() {
+    folder_details("folder_update_details_dark", Theme::Dark);
+}
+
+/// An update that stopped at an earlier open is undone, with nothing to keep: one line, and Dismiss.
+fn folder_recovered(name: &str, theme: Theme) {
+    let reverted = Reverted { reverted: vec!["CLAUDE.md".into(), ".claude/commands/apply.md".into()], kept: Vec::new() };
+    let mut harness = folder_harness(name, Stage::Ended(FolderOutcome::Recovered(reverted)), theme);
+    assert!(is_shown(&harness, "Jobdesk finished undoing an interrupted update of your job search folder."));
+    assert!(harness.query_by_label("Undo").is_none() && is_shown(&harness, "Dismiss"));
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_recovered_light() {
+    folder_recovered("folder_update_recovered_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_recovered_dark() {
+    folder_recovered("folder_update_recovered_dark", Theme::Dark);
+}
+
+/// The download had no connection: the failed look, and nothing changed.
+fn folder_failed(name: &str, theme: Theme) {
+    let mut harness = folder_harness(name, Stage::Ended(FolderOutcome::Failed(FolderFailure::Offline)), theme);
+    assert!(is_shown(
+        &harness,
+        "Your job search folder was not updated: the connection failed or dropped during the download. Nothing changed, and Jobdesk tries again next time."
+    ));
+    assert!(harness.query_by_label("Undo").is_none());
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_failed_light() {
+    folder_failed("folder_update_failed_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_failed_dark() {
+    folder_failed("folder_update_failed_dark", Theme::Dark);
+}
+
+/// Undo put the folder back but for one file the user changed since, which its details list.
+fn folder_undone(name: &str, theme: Theme) {
+    let reverted = Reverted { reverted: vec![".claude/commands/apply.md".into()], kept: vec!["CLAUDE.md".into()] };
+    let mut harness = folder_harness(name, Stage::Undid(UndoOutcome::Undone(reverted)), theme);
+    click_away(
+        &mut harness,
+        "Jobdesk undid the update, except for 1 file that changed since. It updates your job search folder again when a later Jobdesk brings a newer version of its files.",
+    );
+    assert!(is_shown(&harness, "Jobdesk left 1 file as it is, because it changed after the update wrote it:") && is_shown(&harness, "CLAUDE.md"));
+    assert!(harness.query_by_label("Undo the update").is_none(), "nothing left to undo");
+    compare(&mut harness, name);
+}
+
+#[test]
+fn folder_update_undone_light() {
+    folder_undone("folder_update_undone_light", Theme::Light);
+}
+
+#[test]
+fn folder_update_undone_dark() {
+    folder_undone("folder_update_undone_dark", Theme::Dark);
+}
+
+/// About says, in one quiet line, why Jobdesk leaves a folder under git as it is, and the bar says nothing.
+fn about_git_folder(name: &str, theme: Theme) {
+    let git = idle_folder_update("0.4.0").showing(Stage::Ended(FolderOutcome::GitFolder), false);
+    let current = Release { version: Version { major: 0, minor: 1, patch: 0 }, ..release_020() };
+    let mut shell = with_update(shell_with_usage(name, usage_tasks()), vec![ServiceEvent::Checked(Ok(current))]).with_folder_update(git);
+    shell.open_settings(Page::About);
+    let mut harness = probed_wgpu(probed(shell, VersionedTools), theme);
+    assert!(is_shown(&harness, "This folder uses git, so updating it is up to you.") && is_shown(&harness, "Up to date"));
+    assert!(harness.query_by_label("Dismiss").is_none(), "no notice");
+    compare(&mut harness, name);
+}
+
+#[test]
+fn settings_about_folder_git_light() {
+    about_git_folder("settings_about_folder_git_light", Theme::Light);
+}
+
+#[test]
+fn settings_about_folder_git_dark() {
+    about_git_folder("settings_about_folder_git_dark", Theme::Dark);
+}
+
+/// The details' Esc closes them before anything behind them takes it, and Dismiss puts the notice away.
+#[test]
+fn the_folder_details_close_on_esc_and_dismiss_puts_the_notice_away() {
+    let shell = with_update(shell(Screen::InTray, "folder_update_esc"), Vec::new())
+        .with_folder_update(idle_folder_update("0.4.0").showing(Stage::Ended(FolderOutcome::Updated(report_with_details())), true));
+    let mut harness = tray_harness(shell);
+    let words = "Your job search folder was updated with Jobdesk 0.4.0.";
+    let details = |harness: &Harness| harness.query_by_label("Jobdesk put back 1 safety file you had removed:").is_some();
+    harness.get_by_label(words).click();
+    harness.run_steps(3);
+    assert!(details(&harness));
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    assert!(!details(&harness), "Esc closes the details");
+    harness.get_by_label("Dismiss").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label(words).is_none(), "Dismiss puts the notice away");
 }
 
 /// Every required tool answers, so the menu has no Setup tab.
@@ -5938,6 +6135,32 @@ fn save_waits_while_a_run_works_and_the_draft_survives_it() {
     assert!(!is_shown(&harness, SAVE_WAITS_LINE));
     press_button(&mut harness, "Save");
     assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED));
+}
+
+/// A folder update that works, as an idle one showing a download keeps working with no worker to end it.
+fn working_folder_update() -> jobdesk::folder_update::application::FolderUpdate {
+    idle_folder_update("0.4.0").showing(Stage::Working(Phase::Downloading { received: 0 }), false)
+}
+
+const FOLDER_SAVE_WAITS_LINE: &str = "Jobdesk is updating your job search folder, so Save waits until it ends. Your text stays here.";
+
+/// While Jobdesk updates the job search folder, Save waits and says why, so neither write is lost. It writes once the
+/// update has ended.
+#[test]
+fn save_waits_while_the_folder_updates() {
+    let (shell, root) = profile_at("profile_edit_folder_update");
+    let before = candidate(&root);
+    let (mut harness, shared) = shared_harness(shell.with_folder_update(working_folder_update()));
+    fill_the_budget(&mut harness);
+    cmd_enter(&mut harness);
+    assert_eq!(candidate(&root), before, "nothing was written");
+    assert!(is_shown(&harness, FOLDER_SAVE_WAITS_LINE));
+    assert!(button(&harness, "Save").accesskit_node().is_disabled());
+
+    *shared.borrow_mut().folder_update_slot() = idle_folder_update("0.4.0");
+    harness.run_steps(3);
+    press_button(&mut harness, "Save");
+    assert_eq!(candidate(&root), before.replace(BUDGET, BUDGET_FILLED), "the draft is saved once the update has ended");
 }
 
 /// A reply that starts a turn while the editor is open turns Save off again, and the draft waits for the turn.
@@ -8866,6 +9089,23 @@ fn a_change_asked_for_while_a_run_works_writes_nothing() {
     harness.run_steps(3);
     assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
     assert!(harness.query_all_by_label(PORTALS_BUSY).count() > 0, "the detail says why");
+}
+
+/// While Jobdesk updates the job search folder, a portal is neither switched nor moved to the Trash, and the detail says
+/// why in the update's words.
+#[test]
+fn a_change_asked_for_while_the_folder_updates_writes_nothing() {
+    use jobdesk::portals::application::Origin;
+    use jobdesk::portals::ui::{FOLDER_UPDATING, PortalsRequest};
+
+    let (shell, calls) = faked_portals("portals_folder_update");
+    let (mut harness, shell) = shared_harness(shell.with_folder_update(working_folder_update()));
+    pick_portal(&mut harness, "Northfield Jobs");
+    shell.borrow_mut().change_portals(PortalsRequest::Switch { folder: "northfield-search".into(), on: false });
+    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into(), origin: Origin::MadeByYou });
+    harness.run_steps(3);
+    assert!(calls.lock().unwrap().is_empty(), "nothing is written while the folder updates");
+    assert!(harness.query_all_by_label(FOLDER_UPDATING).count() > 0, "the detail says why");
 }
 
 // Browse community and Add a portal.

@@ -112,6 +112,52 @@ pub struct Release {
     pub size: u64,
     /// The signature of the build. The feed holds it and the size, and no address.
     pub signature: String,
+    /// The `ai-job-search` release the same read of the feed pins, once the update key's signature of it checks.
+    /// `None` for a build with no update key, and for a pin that is missing, does not read or fails its signature.
+    /// Jobdesk's own update never reads it.
+    pub pin: Option<SignedPin>,
+}
+
+/// A pin whose signature the update key checked. Only the read of the feed in the updates feature makes one, so outside
+/// it a `Release` can carry no pin but the one that read gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedPin(SourcePin);
+
+impl SignedPin {
+    /// `pin`, which the update key's signature has just checked.
+    pub(in crate::updates) fn checked(pin: SourcePin) -> Self {
+        SignedPin(pin)
+    }
+
+    pub fn pin(&self) -> &SourcePin {
+        &self.0
+    }
+}
+
+/// What the last check that read the feed found, for a folder update: the latest Jobdesk version, and the
+/// `ai-job-search` release that feed pins, when its signature checks. Only the updates feature makes one, from a
+/// check's release, so the only pin it can hold outside tests is one the update key checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestFeed {
+    latest: Version,
+    pin: Option<SignedPin>,
+}
+
+impl LatestFeed {
+    /// What the check that gave `release` found.
+    pub(in crate::updates) fn of(release: &Release) -> Self {
+        LatestFeed { latest: release.version, pin: release.pin.clone() }
+    }
+
+    /// The latest Jobdesk version the feed names.
+    pub fn latest(&self) -> Version {
+        self.latest
+    }
+
+    /// The `ai-job-search` release the feed pins, its signature checked. `None` when it pins nothing this copy trusts.
+    pub fn pin(&self) -> Option<&SourcePin> {
+        self.pin.as_ref().map(SignedPin::pin)
+    }
 }
 
 /// Why a check or a download did not finish. Jobdesk says each in its own words, and no server text reaches the screen.
@@ -234,6 +280,14 @@ pub trait UpdateService: Send {
     fn cancel(&mut self);
     /// The next thing that happened, if anything did.
     fn poll(&mut self) -> Option<ServiceEvent>;
+}
+
+/// A feed answer for tests anywhere in the crate, with a pin no key checked. No build that ships has it.
+#[cfg(test)]
+impl LatestFeed {
+    pub fn for_tests(latest: Version, pin: Option<SourcePin>) -> Self {
+        LatestFeed { latest, pin: pin.map(SignedPin) }
+    }
 }
 
 #[cfg(test)]

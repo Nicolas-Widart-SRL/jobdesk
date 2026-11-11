@@ -112,6 +112,8 @@ pub struct SettingsView<'a> {
     pub update: &'a UpdateView,
     /// Why Restart to update waits, if it does, as the shell words it.
     pub restart_wait: Option<&'a str>,
+    /// Why Jobdesk leaves the open job search folder as it is when it updates itself, if it does, as the shell words it.
+    pub folder_note: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,7 +224,13 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
             request = asked.or(request);
         }
         Page::About => {
-            let about = AboutView { version: view.version, claude: view.claude, update: &view.update.about, restart_wait: view.restart_wait };
+            let about = AboutView {
+                version: view.version,
+                claude: view.claude,
+                update: &view.update.about,
+                restart_wait: view.restart_wait,
+                folder_note: view.folder_note,
+            };
             let mut auto = view.settings.preferences().check_updates.is_on();
             let (_, (asked, providers)) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &mut auto, &query));
             if auto != view.settings.preferences().check_updates.is_on() {
@@ -457,7 +465,11 @@ fn rail_foot(ui: &mut Ui, settings: &Settings, hits: Option<&SearchHits>) {
         Some(found) if found.total == 1 => ("1 setting matches. Esc clears the search.".to_owned(), Ink::Muted),
         Some(found) if found.total > 1 => (format!("{} settings match. Esc clears the search.", found.total), Ink::Muted),
         Some(_) => ("Esc clears the search.".to_owned(), Ink::Muted),
-        None => ("Changes apply at once and stay on this computer. Your job search folder is never changed here.".to_owned(), Ink::Muted),
+        // Check now on About can start a folder update, so the folder is not out of Settings' reach.
+        None => (
+            "Changes apply at once and stay on this computer. Settings changes nothing in your job search folder. A Jobdesk update can.".to_owned(),
+            Ink::Muted,
+        ),
     };
     Frame::new().inner_margin(Margin::symmetric(INSET, BODY_PADDING)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -648,6 +660,7 @@ mod tests {
                 jobs: state.jobs,
                 update: &update,
                 restart_wait: None,
+                folder_note: None,
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -884,6 +897,7 @@ mod tests {
                 jobs: None,
                 update: &update,
                 restart_wait: None,
+                folder_note: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1451,6 +1465,7 @@ mod tests {
                 jobs: None,
                 update: &update,
                 restart_wait: None,
+                folder_note: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1675,6 +1690,7 @@ mod tests {
                 jobs: None,
                 update: &update,
                 restart_wait: None,
+                folder_note: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

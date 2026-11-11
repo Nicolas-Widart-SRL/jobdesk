@@ -45,7 +45,7 @@ impl UpdateService for GithubUpdates {
         let shared = Arc::clone(&self.shared);
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let _ = sender.send(ServiceEvent::Checked(read_feed(shared.transport.as_ref(), shared.platform)));
+            let _ = sender.send(ServiceEvent::Checked(read_feed(shared.transport.as_ref(), shared.platform, shared.key.as_ref())));
             (shared.repaint)();
         });
     }
@@ -120,7 +120,7 @@ mod tests {
 
     use super::*;
     use crate::shared_kernel::https::{Body, Fetch, HttpsFailure};
-    use crate::updates::domain::{FEED_URL, Version};
+    use crate::updates::domain::{FEED_URL, SignedPin, Version};
     use crate::updates::infrastructure::download::tests::{Serves, WINDOWS, release, windows_build};
     use crate::updates::infrastructure::feed::tests::fixture_pin;
     use crate::updates::infrastructure::signature::tests::{fixture, fixture_key};
@@ -203,6 +203,7 @@ mod tests {
         let answers: [ServiceEvent; 1] = wait(&mut service).try_into().unwrap();
         let [ServiceEvent::Checked(Ok(found))] = answers else { panic!("{answers:?}") };
         assert_eq!(found.version, Version { major: 0, minor: 2, patch: 0 });
+        assert_eq!(found.pin.as_ref().map(SignedPin::pin), Some(&fixture_pin()), "the check carries the pin it read, checked with the update key");
         // The worker repaints after it sends, so wait for that call.
         let deadline = Instant::now() + Duration::from_secs(10);
         while repaints.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
@@ -285,6 +286,16 @@ mod tests {
     #[test]
     fn the_pin_reads_from_the_feed_with_the_update_key() {
         assert_eq!(GithubSourcePins::new(Arc::new(Feed), Some(fixture_key())).read(), Ok(Some(fixture_pin())));
+    }
+
+    #[test]
+    fn a_check_with_no_update_key_carries_no_pin() {
+        let data = tempfile::tempdir().unwrap();
+        let mut service = GithubUpdates::new(Arc::new(Feed), data.path().join("updates"), Some(Platform::WindowsX64), None, Arc::new(|| {}));
+        service.check();
+        let answers: [ServiceEvent; 1] = wait(&mut service).try_into().unwrap();
+        let [ServiceEvent::Checked(Ok(found))] = answers else { panic!("{answers:?}") };
+        assert_eq!((found.version, found.pin), (Version { major: 0, minor: 2, patch: 0 }, None));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use egui::{Align, Frame, Label, Layout, Margin, Ui, vec2};
 
 use crate::portals::application::{Origin, Phrase, PortalView, Priority, Quotes, SEARCH_TERMS_LINE, SearchPlan, site_lines_for, term_as_sent};
 use crate::portals::ui::rail::{badge_word, day, origin_word, portal_switch};
-use crate::portals::ui::screen::{BUILT_IN, BUSY, TRASH};
+use crate::portals::ui::screen::{BUILT_IN, TRASH};
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_ITEM_GAP, SKELETON_LINE, Type};
 use crate::ui_kit::{
     Confirm, Ink, Tone, alert, code_box, confirm_popover, desk_label, divider, enabled_when, headed_paper, hidden_note, lead_line, muted, path_label, rich,
@@ -27,13 +27,13 @@ pub(super) enum DetailAsk {
     Remove,
 }
 
-/// What the detail shows: the portal, the search terms every portal shares and whether they could be read, whether a
-/// run works, and why its last change failed, if it did.
+/// What the detail shows: the portal, the search terms every portal shares and whether they could be read, why every
+/// change waits, if it does, such as a run that works, and why its last change failed, if it did.
 pub(super) struct Detail<'a> {
     pub portal: &'a PortalView,
     pub plan: &'a SearchPlan,
     pub plan_read: bool,
-    pub busy: bool,
+    pub wait: Option<&'static str>,
     pub failure: Option<&'a str>,
 }
 
@@ -74,7 +74,7 @@ fn head(ui: &mut Ui, shown: &Detail, confirm: &mut Option<bool>) -> Option<Detai
     ui.spacing_mut().item_spacing.y = HEAD_GAP;
     let width = ui.available_width();
     ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::right_to_left(Align::Min), |ui| {
-        if portal_switch(ui, portal, shown.busy).clicked() {
+        if portal_switch(ui, portal, shown.wait).clicked() {
             ask = Some(DetailAsk::Switch(!portal.on));
         }
         ui.add_space(ROW_ITEM_GAP);
@@ -134,19 +134,19 @@ fn facts(ui: &mut Ui, portal: &PortalView) {
 /// A built-in portal has no Remove…, only its switch. Returns true on the frame the user answers Remove.
 fn actions(ui: &mut Ui, shown: &Detail, confirm: &mut Option<bool>) -> bool {
     let portal = shown.portal;
-    let busy = shown.busy;
+    let (busy, why) = (shown.wait.is_some(), shown.wait.unwrap_or_default());
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = ITEM_GAP;
         if let Some(line) = portal.check_line() {
-            enabled_when(ui, !busy, BUSY, |ui| small_command_action(ui, "Check this portal…", &line));
+            enabled_when(ui, !busy, why, |ui| small_command_action(ui, "Check this portal…", &line));
         }
-        enabled_when(ui, !busy, BUSY, |ui| small_command_action(ui, "Change search terms…", SEARCH_TERMS_LINE));
+        enabled_when(ui, !busy, why, |ui| small_command_action(ui, "Change search terms…", SEARCH_TERMS_LINE));
         if portal.origin == Origin::BuiltIn {
             ui.add_space(ITEM_GAP);
             desk_label(ui, BUILT_IN, Type::NOTE, Ink::Muted);
             return false;
         }
-        let remove = enabled_when(ui, !busy, BUSY, |ui| small_danger_button(ui, "Remove…"));
+        let remove = enabled_when(ui, !busy, why, |ui| small_danger_button(ui, "Remove…"));
         if remove.clicked() {
             *confirm = Some(true);
         }

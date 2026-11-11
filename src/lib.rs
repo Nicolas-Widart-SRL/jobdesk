@@ -1,5 +1,6 @@
 pub mod discovery;
 pub mod dossier;
+pub mod folder_update;
 pub mod insights;
 pub mod intray;
 pub mod onboarding;

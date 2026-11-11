@@ -1,6 +1,6 @@
 # Runs
 
-This page covers a task's `claude` processes: how one starts, stops and signs in, how Test connection differs, when Claude waits on the user, and how first run builds the profile. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
+This page covers a task's `claude` processes: how one starts, stops and signs in, how Test connection differs, how runs and the folder update wait for each other, when Claude waits on the user, and how first run builds the profile. The features it names are mapped in [ARCHITECTURE.md](../../ARCHITECTURE.md#features).
 
 ## The child process
 
@@ -22,7 +22,7 @@ Most tasks run a slash command from the catalog. A screen can also open the laun
 - `Launcher::prefill` opens a trimmed line that does not start with `/` as a task in plain words. A `/` line the catalog does not hold, and a task with a hidden character (see [trust](trust.md#rendering-untrusted-text)), change nothing and open no launcher.
 - The form shows the text read only under "Claude will run", with no fields, and Run sends it as the prompt, unchanged. The task is dropped once it starts, when the user picks a command, when the launcher opens with no line (New task, Cmd K, or New task on the Tasks screen or in Settings) and when the folder changes, so Cmd Enter never repeats it unseen.
 - Model and Spend come from the run defaults for every task, else `WORDS_BUDGET_USD`. No command's row applies.
-- Run waits on the same rules as a command: one run at a time, Test connection, the monthly cap and a budget above zero. Nothing runs until the user presses Run.
+- Run waits on the same rules as a command: one run at a time, Test connection, [the folder update](#while-the-folder-updates), the monthly cap and a budget above zero. Nothing runs until the user presses Run.
 
 Usage counts such a task with no command, and the band's place reads "Task" in place of a command word.
 
@@ -119,9 +119,19 @@ Test connection is not a run, so the monthly cap does not apply to it. It runs o
 
 It takes no data folder, so it writes no run log: Tasks never lists it and Usage never counts it.
 
-It waits while a task or another test runs, so one Claude process runs at a time.
+It waits while a task or another test runs, so one Claude process runs at a time. It also waits while the folder updates.
 
 A test of the key uses the key held in memory, or reads it from the keychain when nothing read it yet this launch. A test of the Claude sign-in passes no key and changes no method.
+
+## While the folder updates
+
+The folder update, its Undo and its rollback write the job search folder, so they and the runs wait for each other. What the folder update does is in [ARCHITECTURE](../../ARCHITECTURE.md#the-folder-update).
+
+- The folder update starts only when no Claude session is open, even one only waiting on a reply, first-run setup has handed over and its worker has ended, the Profile chapter is not copying documents into the folder, and the window is not closing for Restart to update. The shell's `folder_writable` holds that rule.
+- While it works, `RunDesk::set_folder_updating` keeps `start` and `reply` refused with `StartError::FolderUpdating`, on a live session or a new process. The launcher's Run and the reply field say why. So does the [Profile chapter](#the-first-run-profile-run): Read my documents copies nothing and starts nothing, a copy that ends meanwhile starts no run, Pick up where it stopped closes nothing, every reply waits with its draft kept, and Jobdesk's own documents path reply goes once the update has ended.
+- Every other writer of the folder waits too: Profile's Save, and a portal's switch and Remove. They write on the window's thread within one frame, so none is under way when the folder update starts.
+- Test connection, Restart to update and Change folder wait as well, each with its reason. While Jobdesk only cannot lock the folder, `FolderWait::Unlockable`, this Jobdesk holds nothing, though another Jobdesk might still hold the folder. Restart to update and Change folder do not wait then: they are the ways out.
+- These rules hold in one window. Another Jobdesk with the folder open knows nothing of them, so the folder update, its Undo and its rollback also wait until no other Jobdesk has the folder open, as [trust](trust.md#folder-update) says. The other way round, while another Jobdesk updates the folder, `FolderUpdate::is_busy` holds in this one, and every rule above applies as for its own update, until it holds the folder again.
 
 ## When Claude waits on the user
 

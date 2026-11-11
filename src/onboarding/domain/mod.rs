@@ -8,7 +8,7 @@ mod replies;
 pub use documents::{
     CopyFailure, DOCUMENTS, DocumentCopier, DocumentKind, MAX_DOCUMENT, MAX_NUMBER, Refusal, by_name, copy_name, looks_like_pdf, numbered, shown_name,
 };
-pub use download::{Failure, MAX_ENTRIES, MAX_UNPACKED, MAX_ZIP, Phase, SourceFetcher, Unpacker};
+pub use download::{Failure, MAX_ZIP, Phase, SourceFetcher, Unpacker};
 pub use folder::{Contents, FOLDER_NAME, Place, suggested_folder};
 #[cfg(target_os = "macos")]
 pub use helpers::OWN_FOLDER;

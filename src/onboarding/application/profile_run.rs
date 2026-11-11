@@ -18,6 +18,8 @@ use crate::runs::application::{
     ActivityKind, CapCheck, Decision, Run, RunDefaults, RunDesk, RunStatus, StartError, StartOptions, closing_question, notice_text, spec_for_line,
     start_values,
 };
+use crate::shared_kernel::FolderWait;
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::visible_chars;
 
 /// The command the chapter runs, unchanged and with no arguments.
@@ -110,6 +112,8 @@ pub enum StartRefusal {
     /// Another task works, and one run works at a time.
     Busy,
     Testing,
+    /// Jobdesk updates the job search folder, or cannot lock it: no run starts and no reply goes, as for every task.
+    FolderWait(FolderWait),
     CapReached {
         reopens_on: NaiveDate,
     },
@@ -130,6 +134,8 @@ impl StartRefusal {
             Self::AlreadyStarted => "Setup has already started reading your documents.".to_owned(),
             Self::Busy => "Another task is running. Setup can start once it ends.".to_owned(),
             Self::Testing => "Settings is testing the connection. Setup can start once the test ends.".to_owned(),
+            Self::FolderWait(FolderWait::Updating) => "Jobdesk is updating your job search folder. Setup can start once it ends.".to_owned(),
+            Self::FolderWait(FolderWait::Unlockable) => UNLOCKABLE.to_owned(),
             // A no-break space holds the day to its month.
             Self::CapReached { reopens_on } => {
                 format!("This month's tasks reached the monthly cap you set in Settings. Setup can start on {}.", reopens_on.format("%-d\u{a0}%B"))
@@ -152,6 +158,8 @@ pub enum SendRefusal {
     NoReply,
     Busy,
     Testing,
+    /// Jobdesk updates the job search folder, or cannot lock it.
+    FolderWait(FolderWait),
 }
 
 impl SendRefusal {
@@ -162,6 +170,8 @@ impl SendRefusal {
             Self::NoReply => "Tick a change, or use Change something.",
             Self::Busy => "Another task is running. Send once it ends.",
             Self::Testing => "Settings is testing the connection. Send once the test ends.",
+            Self::FolderWait(FolderWait::Updating) => "Jobdesk is updating your job search folder. Send once it ends.",
+            Self::FolderWait(FolderWait::Unlockable) => UNLOCKABLE,
         }
     }
 }
@@ -171,6 +181,7 @@ impl From<SendRefusal> for StartRefusal {
         match refusal {
             SendRefusal::Busy => Self::Busy,
             SendRefusal::Testing => Self::Testing,
+            SendRefusal::FolderWait(wait) => Self::FolderWait(wait),
             SendRefusal::NotNow | SendRefusal::Empty | SendRefusal::NoReply => Self::NotNow,
         }
     }
@@ -387,9 +398,11 @@ impl ProfileRun {
         let spec = spec_for_line(SETUP).ok_or(StartRefusal::NoCommand)?;
         let values = start_values(rules.defaults, spec);
         let options = StartOptions { model: values.model.alias().map(str::to_owned), budget_usd: values.budget.usd() };
+        let wait = desk.folder_wait().unwrap_or(FolderWait::Updating);
         let id = desk.start(SETUP, &options, wall).map_err(|error| match error {
             StartError::AnotherRunIsActive => StartRefusal::Busy,
             StartError::TestRunning => StartRefusal::Testing,
+            StartError::FolderUpdating => StartRefusal::FolderWait(wait),
         })?;
         self.progress.run = Some(id);
         self.progress.path_a_sent = false;
@@ -502,6 +515,10 @@ impl ProfileRun {
         else {
             return Err(StartRefusal::NotNow);
         };
+        // Before anything is closed, so a refused pick up leaves the run as it was.
+        if let Some(wait) = desk.folder_wait() {
+            return Err(StartRefusal::FolderWait(wait));
+        }
         if !resumable {
             if let Some(refusal) = gate(desk, rules) {
                 return Err(refusal);
@@ -544,9 +561,11 @@ impl ProfileRun {
         let Some(id) = self.run(desk).filter(|run| !run.is_busy() && !run.needs_user()).map(|run| run.id.clone()) else {
             return Err(SendRefusal::NotNow);
         };
+        let wait = desk.folder_wait().unwrap_or(FolderWait::Updating);
         desk.reply(&id, text).map_err(|error| match error {
             StartError::AnotherRunIsActive => SendRefusal::Busy,
             StartError::TestRunning => SendRefusal::Testing,
+            StartError::FolderUpdating => SendRefusal::FolderWait(wait),
         })?;
         self.progress.draft = None;
         let _ = self.save();
@@ -646,10 +665,14 @@ impl ProfileRun {
     }
 }
 
-/// What holds back a run that starts: another run, a connection test or the monthly cap.
+/// What holds back a run that starts: another run, the folder update, a connection test or the monthly cap. The folder
+/// update holds back the copy into `documents/` too, since the copy writes the job search folder.
 fn gate(desk: &RunDesk, rules: &StartRules) -> Option<StartRefusal> {
     if desk.is_busy() {
         return Some(StartRefusal::Busy);
+    }
+    if let Some(wait) = desk.folder_wait() {
+        return Some(StartRefusal::FolderWait(wait));
     }
     if rules.testing {
         return Some(StartRefusal::Testing);
@@ -1861,5 +1884,75 @@ mod tests {
         f.desk.set_testing(true);
         assert_eq!(f.profile.send_answers(&mut f.desk, &[(1, "Design Lead")]), Err(SendRefusal::Testing));
         assert!(f.record().draft.is_some());
+    }
+
+    /// While Jobdesk updates the folder, or cannot lock it, Read my documents copies nothing and starts nothing, and a
+    /// copy that ends meanwhile starts no run. The same press goes once the wait has ended.
+    #[test]
+    fn read_my_documents_waits_while_the_folder_updates() {
+        let mut f = fixture();
+        f.add("cv.pdf");
+        f.desk.set_folder_wait(Some(FolderWait::Updating));
+        let refused = f.read(&RunDefaults::default(), &open());
+        assert_eq!(refused, Err(StartRefusal::FolderWait(FolderWait::Updating)));
+        assert_eq!(refused.unwrap_err().line(), "Jobdesk is updating your job search folder. Setup can start once it ends.");
+        assert!(f.shelf.0.lock().unwrap().is_empty() && f.script.borrow().requests.is_empty(), "nothing is copied, nothing starts");
+        f.desk.set_folder_wait(Some(FolderWait::Unlockable));
+        assert_eq!(f.profile.start_refusal(&f.desk, &rules(&RunDefaults::default(), &open())).map(|refusal| refusal.line()), Some(UNLOCKABLE.to_owned()));
+
+        f.desk.set_folder_wait(None);
+        f.profile.read_documents(&mut f.desk, &rules(&RunDefaults::default(), &open()), now()).unwrap();
+        // Another Jobdesk takes the folder while the copy works.
+        f.desk.set_folder_wait(Some(FolderWait::Updating));
+        f.settle();
+        assert_eq!(f.profile.start_failure(), Some(&StartRefusal::FolderWait(FolderWait::Updating)));
+        assert!(f.script.borrow().requests.is_empty(), "no run starts after the copy");
+
+        f.desk.set_folder_wait(None);
+        assert_eq!(f.read(&RunDefaults::default(), &open()), Ok(()));
+        assert_eq!(f.script.borrow().requests.len(), 1);
+        assert_eq!(*f.shelf.0.lock().unwrap(), ["cv.pdf"], "copied once");
+    }
+
+    /// While the folder updates, no reply reaches Claude: not Jobdesk's own Path A reply, not the user's, and not Pick
+    /// up where it stopped, which leaves the run as it was. Each goes once the wait has ended.
+    #[test]
+    fn no_reply_and_no_pick_up_while_the_folder_updates() {
+        let mut f = fixture();
+        f.start();
+        f.desk.set_folder_wait(Some(FolderWait::Updating));
+        f.says(PATH_QUESTION);
+        f.ends_turn();
+        f.poll();
+        assert!(f.sent().is_empty() && !f.record().path_a_sent, "the path waits");
+        f.desk.set_folder_wait(None);
+        f.poll();
+        assert_eq!(f.sent(), [PATH_A_REPLY], "and goes once the update has ended");
+
+        f.says(FIVE);
+        f.ends_turn();
+        f.poll();
+        f.profile.record_draft(&f.desk, vec![(1, "Design Lead".into())], String::new(), Instant::now());
+        f.desk.set_folder_wait(Some(FolderWait::Updating));
+        let refused = f.profile.send_answers(&mut f.desk, &[(1, "Design Lead")]);
+        assert_eq!(refused, Err(SendRefusal::FolderWait(FolderWait::Updating)));
+        assert_eq!(refused.unwrap_err().line(), "Jobdesk is updating your job search folder. Send once it ends.");
+        assert_eq!(SendRefusal::FolderWait(FolderWait::Unlockable).line(), UNLOCKABLE);
+        assert!(f.record().draft.is_some(), "the draft stays");
+        assert_eq!(f.sent(), [PATH_A_REPLY]);
+
+        f.desk.set_folder_wait(None);
+        f.profile.send_answers(&mut f.desk, &[(1, "Design Lead")]).unwrap();
+        f.emit(AgentEvent::TurnEnded { failed: true, message: Some("Budget cap reached.".into()), cost_usd: 25.0, duration_ms: 1 });
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::Stopped { .. }));
+        let id = f.profile.progress().run.clone().unwrap();
+        f.desk.set_folder_wait(Some(FolderWait::Updating));
+        assert_eq!(f.pick_up(), Err(StartRefusal::FolderWait(FolderWait::Updating)));
+        assert!(f.desk.has_session(&id), "the run is left as it was");
+        assert_eq!(f.script.borrow().requests.len(), 1);
+        f.desk.set_folder_wait(None);
+        f.pick_up().unwrap();
+        assert_eq!(f.script.borrow().requests.len(), 2, "picked up once the update has ended");
     }
 }

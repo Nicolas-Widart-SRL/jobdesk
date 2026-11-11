@@ -25,6 +25,8 @@ pub struct AboutView<'a> {
     pub update: &'a AboutUpdate,
     /// Why Restart to update waits, if it does.
     pub restart_wait: Option<&'a str>,
+    /// Why Jobdesk leaves the open job search folder as it is when it updates itself, if it does. One quiet line.
+    pub folder_note: Option<&'a str>,
 }
 
 /// The two versions with Copy details, the updates, the links to read more, then who makes Jobdesk. No logo shows
@@ -81,6 +83,10 @@ pub fn body(ui: &mut Ui, view: AboutView, auto: &mut bool, query: &str) -> (Opti
     let restart = update.buttons.iter().any(|button| button.action == AboutAction::Bar(BarAction::Restart));
     if let Some(wait) = view.restart_wait.filter(|_| restart) {
         help.push((wait, Ink::Muted));
+    }
+    // The open folder goes with each Jobdesk update, unless it stays as it is, which one quiet line says.
+    if let Some(note) = view.folder_note {
+        help.push((note, Ink::Muted));
     }
     let mut request = None;
     setting_row_lines(ui, latest, &help, query, |ui| request = latest_controls(ui, update, view.restart_wait));

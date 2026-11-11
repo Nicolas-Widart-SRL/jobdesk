@@ -303,7 +303,7 @@ const AUTO_CHECK_OFF: &str = "Off. Jobdesk looks for a new version only when you
 
 /// The lines Runtime status always draws come first. The folder's sections follow, drawn only once it is open and read.
 const RUNTIME: [&str; 12] = [
-    "Jobdesk reads your folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one. Tasks you start change it through Claude Code on this computer.",
+    "Jobdesk reads your folder and changes it only when you save a Profile edit, switch a portal on or off, or remove one, and when a Jobdesk update brings newer versions of its files, which you can undo right after. Tasks you start change it through Claude Code on this computer.",
     "Claude Code",
     "On this computer",
     "Jobdesk runs this program for every task.",

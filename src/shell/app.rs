@@ -245,9 +245,17 @@ pub struct Shell {
     folder_update: FolderUpdate,
     /// Whether the folder update's details are open over the desk.
     notice_screen: NoticeScreen,
-    /// The run the launcher started from Today's first-search note, until it ends. Jobs opens at its end only while
-    /// it is open in Tasks.
-    first_search: Option<String>,
+    /// The run the launcher started from Today's first-search note, in memory only, until it finds its jobs or leaves
+    /// the desk. Jobs opens at that end only while it is open in Tasks.
+    first_search: Option<FirstSearchRun>,
+}
+
+/// The first search from Today, followed until a turn ends with its jobs found. A stop, a failure or a session ended
+/// while Claude asked keeps it: the user can resume the same run in Tasks, and that run's end still counts.
+struct FirstSearchRun {
+    id: String,
+    /// Whether Claude last ended its turn waiting on the user, so a session ended since found nothing.
+    asked: bool,
 }
 
 /// The Profile chapter of first-run setup, and its recap once the run is done.
@@ -749,8 +757,9 @@ impl Shell {
                 (self.portals_screen, self.portal_changes, self.portals_changed) = (PortalsScreen::default(), Some(portals::open_changes(root.path())), None);
                 // The launcher no longer leads back into the last folder's screens.
                 self.launcher_from = self.screen.tab();
-                // A task in plain words was written for the last folder.
+                // A task in plain words was written for the last folder, and the first-search note offered there.
                 self.launcher.clear_words();
+                self.launcher.drop_note();
                 // The last folder's data stays off screen while this one is read.
                 self.snapshot = Snapshot { today: Local::now().date_naive(), ..Snapshot::default() };
                 self.loaded = false;
@@ -1418,21 +1427,31 @@ impl Shell {
         self.was_busy = busy;
     }
 
-    /// Once the first search from Today ends, Jobs opens on New, but only while that run is open in Tasks, so the
+    /// Once the first search from Today finds its jobs, Jobs opens, but only while that run is open in Tasks, so the
     /// screen never moves under a user who went elsewhere. Otherwise Today offers the scoring once the jobs are read.
-    /// A search that failed or was stopped opens nothing. A run that waits on the user has not ended.
+    /// A run that waits on the user has not ended. A search that failed, was stopped, or whose session the user ended
+    /// while Claude asked opens nothing and stays followed: resumed in Tasks, the same run's end opens Jobs.
     fn follow_first_search(&mut self) {
-        let Some(id) = &self.first_search else { return };
-        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(id)) else {
+        let Some(search) = &mut self.first_search else { return };
+        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(&search.id)) else {
             self.first_search = None;
             return;
         };
-        if run.is_busy() || wants_reply(run) {
+        if run.is_busy() {
+            search.asked = false;
             return;
         }
-        let found = matches!(run.status, RunStatus::AwaitingReply | RunStatus::Closed);
-        let open = self.screen == Screen::Runs && !self.settings_open && self.run_screen.selected() == Some(id.as_str());
-        if found && open {
+        if wants_reply(run) {
+            search.asked = true;
+            return;
+        }
+        // Only a turn that got its result and ended well found the jobs, and a session ended while Claude asked did not.
+        let found = !search.asked && run.has_turn_result() && matches!(run.status, RunStatus::AwaitingReply | RunStatus::Closed);
+        if !found {
+            return;
+        }
+        let open = self.screen == Screen::Runs && !self.settings_open && self.run_screen.selected() == Some(search.id.as_str());
+        if open {
             self.jobs.open_new();
             self.screen = Screen::Jobs;
         }
@@ -1805,7 +1824,9 @@ impl Shell {
                 let topics = profile::application::topic_counts(&snapshot.profile);
                 let partial = topics.any_found && topics.hidden == 0 && topics.filled < topics.total;
                 let profile = partial.then_some((topics.filled, topics.total));
-                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts, profile };
+                // A folder with no profile file, or only its blanks, holds no profile the first-search offer may call ready.
+                let profile_written = topics.any_found && topics.filled > 0;
+                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts, profile, profile_written };
                 if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, &context, keys)) {
                     self.follow(ui.ctx(), request);
                 }
@@ -1950,7 +1971,7 @@ impl Shell {
                     match self.launcher.show(ui, desk, &rules) {
                         Some(LauncherRequest::Started(id)) => {
                             if noted == Some(LaunchNote::FirstSearch) {
-                                self.first_search = Some(id.clone());
+                                self.first_search = Some(FirstSearchRun { id: id.clone(), asked: false });
                             }
                             self.run_screen.select(id);
                             self.screen = Screen::Runs;

@@ -2342,7 +2342,152 @@ fn jobs_opens_at_the_first_search_end_only_while_its_run_is_open_in_tasks() {
         assert!(is_shown(&harness, LAUNCHER));
         assert!(harness.query_all_by_label("/rank").count() > 0);
         assert!(!is_shown(&harness, FIRST_SEARCH_NOTE), "the note names only the first search");
+
+        // While the scoring works, Today offers it no more.
+        harness.get_by_label("Run").click();
+        harness.run_steps(3);
+        harness.get_by_label("Today").click();
+        harness.run_steps(3);
+        assert!(!is_shown(&harness, "Score your first jobs"), "the scoring is under way");
+        press(&mut harness, Key::Y);
+        assert!(!is_shown(&harness, LAUNCHER), "Y opens nothing while the scoring works");
     }
+}
+
+/// While the first search works, Today offers it no more, and Y opens nothing.
+#[test]
+fn today_offers_no_first_search_while_it_works() {
+    let (mut harness, _shell, _sink, _root) = start_first_search("first_search_under_way");
+    harness.get_by_label("Today").click();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, "Nothing to decide yet"), "the search is under way");
+    assert!(!is_shown(&harness, "Find your first jobs"));
+    press(&mut harness, Key::Y);
+    assert!(!is_shown(&harness, LAUNCHER), "Y opens nothing while the search works");
+}
+
+/// Starts the first search from Today, and leaves its run open in Tasks.
+fn start_first_search(name: &str) -> (Harness<'static>, Rc<RefCell<Shell>>, SharedSink, std::path::PathBuf) {
+    let root = first_search_root(name, NO_JOBS);
+    let sink = SharedSink::default();
+    let mut shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), first_search_snapshot(&root));
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(Arc::clone(&sink))));
+    let (mut harness, shell) = shared_harness(shell);
+    press(&mut harness, Key::Y);
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    harness.get_by_label("Recent runs");
+    (harness, shell, sink, root)
+}
+
+fn first_run_id(shell: &Rc<RefCell<Shell>>) -> String {
+    shell.borrow_mut().desk_slot().as_ref().unwrap().runs()[0].id.clone()
+}
+
+/// The user answers in Tasks, the search goes on in the same run and finds the jobs: Jobs opens then.
+fn resume_and_find(harness: &mut Harness<'static>, shell: &Rc<RefCell<Shell>>, sink: &SharedSink, root: &Path) {
+    let id = first_run_id(shell);
+    shell.borrow_mut().desk_slot().as_mut().unwrap().reply(&id, "Search Brussels, then go on.").unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(harness, JOBS_SUBTITLE));
+    first_search_ends(sink);
+    fs::write(root.join("job_scraper/seen_jobs.json"), FIRST_FOUND).unwrap();
+    let feed = shell.borrow_mut().snapshot_feed();
+    feed.send(first_search_snapshot(root)).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(harness, JOBS_SUBTITLE), "the resumed search's end opens Jobs");
+    assert!(is_shown(harness, "New  7"));
+}
+
+/// Claude asks before it searches, and the user ends the session there: the search was left, not done, so Jobs stays
+/// closed. Answered later in the same run, its end opens Jobs.
+#[test]
+fn a_first_search_ended_while_claude_asks_opens_nothing() {
+    let (mut harness, shell, sink, root) = start_first_search("first_search_left");
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "7c41e0d2-9a3b".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: "Which city should I search in?".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.02, duration_ms: 9_000 },
+        ],
+    );
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a run that waits on the user has not ended");
+
+    let id = first_run_id(&shell);
+    shell.borrow_mut().desk_slot().as_mut().unwrap().close(&id);
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a session ended while Claude asks opens nothing");
+
+    resume_and_find(&mut harness, &shell, &sink, &root);
+}
+
+/// A first search that failed or was stopped opens nothing. Resumed in the same run, its end opens Jobs.
+#[test]
+fn a_failed_or_stopped_first_search_opens_nothing_until_its_resume_ends() {
+    for stopped in [false, true] {
+        let name = if stopped { "first_search_stopped" } else { "first_search_failed" };
+        let (mut harness, shell, sink, root) = start_first_search(name);
+        let started = AgentEvent::SessionStarted { session_id: "7c41e0d2-9a3b".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() };
+        if stopped {
+            emit_all(&sink, [started]);
+            let id = first_run_id(&shell);
+            shell.borrow_mut().desk_slot().as_mut().unwrap().stop(&id);
+            let ended = AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.05, duration_ms: 20_000 };
+            emit_all(&sink, [ended, AgentEvent::ProcessExited { failure: None }]);
+        } else {
+            let failed = AgentEvent::TurnEnded { failed: true, message: Some("A job site did not answer.".into()), cost_usd: 0.05, duration_ms: 20_000 };
+            emit_all(&sink, [started, failed, AgentEvent::ProcessExited { failure: None }]);
+        }
+        harness.run_steps(3);
+        assert!(!is_shown(&harness, JOBS_SUBTITLE), "{name}: opens nothing");
+
+        resume_and_find(&mut harness, &shell, &sink, &root);
+    }
+}
+
+/// The first-search note belongs to the folder it was offered in. Opening another folder drops it, so a search run
+/// there is no first search.
+#[test]
+fn opening_another_folder_drops_the_first_search_note() {
+    let mut shell = first_search_shell(Screen::InTray, "first_search_note_folder", NO_JOBS);
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
+    let (mut harness, shell) = shared_harness(shell);
+    press(&mut harness, Key::Y);
+    assert!(is_shown(&harness, FIRST_SEARCH_NOTE));
+
+    let theirs = Path::new(env!("CARGO_TARGET_TMPDIR")).join("first_search_note_folder").join("their search");
+    let _ = fs::remove_dir_all(&theirs);
+    sample_workspace(&theirs);
+    shell.borrow_mut().choose_folder_from(&harness.ctx.clone(), theirs);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, LAUNCHER), "the launcher stays open");
+    assert!(!is_shown(&harness, FIRST_SEARCH_NOTE), "the note named the last folder's offer");
+}
+
+/// The first-search offer says the profile is ready only when the folder holds a profile with a topic written.
+#[test]
+fn the_first_search_offer_claims_no_profile_that_is_not_there() {
+    let root = first_search_root("first_search_no_profile", NO_JOBS);
+    for file in [
+        ".claude/skills/job-application-assistant/01-candidate-profile.md",
+        ".claude/skills/job-application-assistant/02-behavioral-profile.md",
+        ".claude/skills/job-application-assistant/04-job-evaluation.md",
+        ".claude/skills/job-application-assistant/05-cv-templates.md",
+        ".claude/skills/job-application-assistant/07-interview-prep.md",
+        "CLAUDE.md",
+        ".claude/skills/job-scraper/search-queries.md",
+    ] {
+        let _ = fs::remove_file(root.join(file));
+    }
+    let harness = tray_harness(Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), first_search_snapshot(&root)));
+    assert!(is_shown(&harness, "Nothing to decide yet"));
+    assert!(harness.query_by_label_contains("Your profile is ready.").is_none(), "no profile was found");
+    assert!(is_shown(&harness, "Find your first jobs, and Today deals them to you."));
+
+    let ready = tray_harness(first_search_shell(Screen::InTray, "first_search_profile_ready", NO_JOBS));
+    assert!(is_shown(&ready, "Your profile is ready. Find your first jobs, and Today deals them to you."));
 }
 
 /// Score N new jobs… on Jobs only opens the launcher on `/rank`.

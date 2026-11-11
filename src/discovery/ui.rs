@@ -109,9 +109,10 @@ impl JobsScreen {
         self.filters = filters;
     }
 
-    /// Opens the New list, as the first search's end does, whatever list was open.
+    /// Opens Jobs as the first search's end does: whatever list was picked goes, so New shows while the jobs found
+    /// are all new, and Shortlist once they are scored.
     pub fn open_new(&mut self) {
-        self.lane = Some(Lane::New);
+        self.lane = None;
         self.selected = None;
     }
 
@@ -552,6 +553,18 @@ mod tests {
 
     fn low_and_top() -> JobBoard {
         board(vec![(Lane::Shortlist, vec![view("top"), JobView { score: Some(40), ..view("low") }])])
+    }
+
+    /// The first search's end opens New while its jobs are all new. Once they are scored, Jobs falls back to Shortlist,
+    /// as it does with no list picked.
+    #[test]
+    fn the_first_search_end_opens_new_only_while_its_jobs_are_new() {
+        let mut jobs = JobsScreen { lane: Some(Lane::Shortlist), ..JobsScreen::default() };
+        jobs.open_new();
+        let found = board(vec![(Lane::New, vec![view("a"), view("b")])]);
+        assert_eq!(jobs.lane(&found), Lane::New);
+        let scored = board(vec![(Lane::New, vec![]), (Lane::Shortlist, vec![view("a")]), (Lane::BelowThreshold, vec![view("b")])]);
+        assert_eq!(jobs.lane(&scored), Lane::Shortlist, "New, empty after the scoring, is no pick to keep");
     }
 
     #[test]

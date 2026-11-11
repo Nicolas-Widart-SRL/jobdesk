@@ -94,6 +94,8 @@ pub struct TodayContext<'a> {
     pub alerts: &'a dyn Fn(&mut Ui),
     /// How many profile topics are filled, of how many, while the profile is not full. Today shows a slip for it.
     pub profile: Option<(usize, usize)>,
+    /// Whether the folder holds a profile with a topic written, so the first-search offer may call it ready.
+    pub profile_written: bool,
 }
 
 /// Keys never fire while a text field has focus. Y does nothing on a card with no default.
@@ -143,7 +145,7 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
         screen.departing = None;
     }
 
-    head(ui, queue, context.missing);
+    head(ui, queue, context);
     page_body(ui, |ui| {
         (context.alerts)(ui);
         side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context, &mut pressed));
@@ -175,10 +177,11 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 }
 
 /// The day stamp ticks off today's decisions. Cards set aside with Later count on neither side.
-fn head(ui: &mut Ui, queue: &Queue, missing: &[&str]) {
+fn head(ui: &mut Ui, queue: &Queue, context: &TodayContext) {
     let tally = queue.tally();
     let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
-    stamped_head(ui, stamp, &queue.today_headline(missing), &queue.today_subtitle(missing));
+    let subtitle = queue.today_subtitle(context.missing, context.profile_written);
+    stamped_head(ui, stamp, &queue.today_headline(context.missing), &subtitle);
 }
 
 /// With nothing dealt, the stamp's ring is empty and it reads as the date alone.

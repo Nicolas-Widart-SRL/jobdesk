@@ -117,7 +117,7 @@ pub enum FirstSteps {
     NoJobs,
     /// The first search found jobs and none is scored yet, so Today suggests scoring them.
     Unscored(FirstSearch),
-    /// The search is under way, or Today has something to show.
+    /// A run works, so the search or the scoring may be under way, or Today has something to show.
     #[default]
     Past,
 }
@@ -212,10 +212,12 @@ impl Queue {
         }
     }
 
-    /// `missing` names the sources that could not be read, as they should read at the start of a sentence.
-    pub fn today_subtitle(&self, missing: &[&str]) -> String {
+    /// `missing` names the sources that could not be read, as they should read at the start of a sentence. `profile`
+    /// says whether the folder holds a profile with a topic written, so the first-search offer may call it ready.
+    pub fn today_subtitle(&self, missing: &[&str], profile: bool) -> String {
         match self.first_steps(missing) {
-            FirstSteps::NoJobs => return "Your profile is ready. Find your first jobs, and Today deals them to you.".to_owned(),
+            FirstSteps::NoJobs if profile => return "Your profile is ready. Find your first jobs, and Today deals them to you.".to_owned(),
+            FirstSteps::NoJobs => return "Find your first jobs, and Today deals them to you.".to_owned(),
             FirstSteps::Unscored(found) => return format!("{} Score them, and Today deals the best fits to you.", found.found()),
             FirstSteps::Past => {}
         }
@@ -505,7 +507,9 @@ impl InTray {
             .filter(|decision| decision.is_logged_on(today))
             .map(|decision| Cleared { name: decision.name.clone(), label: decision.label() })
             .collect();
+        // While a run works, the search or the scoring Today would suggest may be under way, so it suggests neither.
         let board = match sources.board.first_search() {
+            _ if sources.runs.iter().any(|run| run.is_busy()) => FirstSteps::Past,
             _ if sources.board.is_empty() => FirstSteps::NoJobs,
             Some(found) => FirstSteps::Unscored(found),
             None => FirstSteps::Past,
@@ -1510,7 +1514,8 @@ mod tests {
         let empty = queue(&tray, &JobBoard::default(), today());
         assert_eq!(empty.first_steps(&[]), FirstSteps::NoJobs);
         assert_eq!(empty.today_headline(&[]), "Nothing to decide yet");
-        assert_eq!(empty.today_subtitle(&[]), "Your profile is ready. Find your first jobs, and Today deals them to you.");
+        assert_eq!(empty.today_subtitle(&[], true), "Your profile is ready. Find your first jobs, and Today deals them to you.");
+        assert_eq!(empty.today_subtitle(&[], false), "Find your first jobs, and Today deals them to you.", "no profile, no claim");
         assert_eq!(empty.first_steps(&["Jobs"]), FirstSteps::Past, "a board that could not be read may hold jobs");
         assert_eq!(empty.today_headline(&["Jobs"]), "Nothing to show yet");
 
@@ -1519,7 +1524,7 @@ mod tests {
         let unscored = queue(&tray, &found, today());
         assert_eq!(unscored.first_steps(&[]), FirstSteps::Unscored(FirstSearch { jobs: 2, sites: 2 }));
         assert_eq!(unscored.today_headline(&[]), "Nothing to decide yet");
-        assert_eq!(unscored.today_subtitle(&[]), "Your first search found 2 new jobs on 2 sites. Score them, and Today deals the best fits to you.");
+        assert_eq!(unscored.today_subtitle(&[], true), "Your first search found 2 new jobs on 2 sites. Score them, and Today deals the best fits to you.");
 
         let decided = Queue { cleared: logged(1), ..unscored };
         assert_eq!(decided.first_steps(&[]), FirstSteps::Past, "a decision today means Today has been in use");
@@ -1532,25 +1537,28 @@ mod tests {
         let due = |offset| Some((offset, "closes"));
         let cards = vec![named("a", "A", CardKind::Send, due(-1)), named("b", "B", CardKind::Close, due(4))];
         let one_late = Queue { cleared: logged(3), ..today_queue(cards) };
-        assert_eq!(one_late.today_subtitle(&[]), "About 4 minutes. 3 done so far today. 1 is past its deadline.");
+        assert_eq!(one_late.today_subtitle(&[], true), "About 4 minutes. 3 done so far today. 1 is past its deadline.");
 
         let cards = vec![named("a", "A", CardKind::Close, due(-3)), named("b", "B", CardKind::Triage, due(-1))];
-        assert_eq!(today_queue(cards).today_subtitle(&[]), "About 2 minutes. 2 are past their deadline.");
+        assert_eq!(today_queue(cards).today_subtitle(&[], true), "About 2 minutes. 2 are past their deadline.");
 
         let undated = today_queue(vec![pending(CardKind::Close, None)]);
-        assert_eq!(undated.today_subtitle(&[]), "About 1 minute. Nothing has a deadline yet.");
+        assert_eq!(undated.today_subtitle(&[], true), "About 1 minute. Nothing has a deadline yet.");
 
         let undated_but_started = Queue { cleared: logged(1), ..undated };
-        assert_eq!(undated_but_started.today_subtitle(&[]), "About 1 minute. 1 done so far today.");
+        assert_eq!(undated_but_started.today_subtitle(&[], true), "About 1 minute. 1 done so far today.");
     }
 
     #[test]
     fn today_subtitle_names_missing_sources() {
         let queue = Queue { cleared: logged(1), ..today_queue(vec![pending(CardKind::Close, None)]) };
-        assert_eq!(queue.today_subtitle(&["Applications"]), "About 1 minute. 1 done so far today. Applications are missing from this list.");
-        assert_eq!(queue.today_subtitle(&["Applications", "Jobs"]), "About 1 minute. 1 done so far today. Applications and Jobs are missing from this list.");
+        assert_eq!(queue.today_subtitle(&["Applications"], true), "About 1 minute. 1 done so far today. Applications are missing from this list.");
         assert_eq!(
-            queue.today_subtitle(&["Applications", "Jobs", "Tasks"]),
+            queue.today_subtitle(&["Applications", "Jobs"], true),
+            "About 1 minute. 1 done so far today. Applications and Jobs are missing from this list."
+        );
+        assert_eq!(
+            queue.today_subtitle(&["Applications", "Jobs", "Tasks"], true),
             "About 1 minute. 1 done so far today. Applications, Jobs and Tasks are missing from this list."
         );
     }
@@ -1559,15 +1567,15 @@ mod tests {
     fn clear_subtitle_names_the_next_deadline() {
         let marks = vec![marked("late", "Harbor Bank", 1, false), marked("b", "Ardent Software", 6, true), marked("a", "Meridian Rail Systems", 5, true)];
         let clear = Queue { cleared: logged(11), marks, ..today_queue(vec![]) };
-        assert_eq!(clear.today_subtitle(&[]), "11 decisions. Your next deadline is Thu 5 Nov, Meridian Rail Systems.");
+        assert_eq!(clear.today_subtitle(&[], true), "11 decisions. Your next deadline is Thu 5 Nov, Meridian Rail Systems.");
 
         let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
-        assert_eq!(one.today_subtitle(&[]), "1 decision.");
+        assert_eq!(one.today_subtitle(&[], true), "1 decision.");
 
         let only_deadline = Queue { marks: vec![marked("a", "Acme", 0, true)], ..today_queue(vec![]) };
-        assert_eq!(only_deadline.today_subtitle(&[]), "Your next deadline is Sat 31 Oct, Acme.");
+        assert_eq!(only_deadline.today_subtitle(&[], true), "Your next deadline is Sat 31 Oct, Acme.");
 
-        assert_eq!(today_queue(vec![]).today_subtitle(&[]), "Nothing waits on you.");
+        assert_eq!(today_queue(vec![]).today_subtitle(&[], true), "Nothing waits on you.");
     }
 
     #[test]
@@ -1575,14 +1583,14 @@ mod tests {
         assert_eq!(today_queue(vec![]).today_headline(&["Applications"]), "Nothing to show yet");
         assert_eq!(today_queue(vec![pending(CardKind::Close, None)]).today_headline(&["Applications"]), "1 thing needs you");
         let undated = today_queue(vec![pending(CardKind::Close, None)]);
-        assert_eq!(undated.today_subtitle(&["Jobs"]), "About 1 minute. Jobs are missing from this list.");
+        assert_eq!(undated.today_subtitle(&["Jobs"], true), "About 1 minute. Jobs are missing from this list.");
     }
 
     #[test]
     fn a_clear_list_with_a_missing_source_never_says_nothing_waits() {
-        assert_eq!(today_queue(vec![]).today_subtitle(&["Applications"]), "Applications are missing from this list.");
+        assert_eq!(today_queue(vec![]).today_subtitle(&["Applications"], true), "Applications are missing from this list.");
         let one = Queue { cleared: logged(1), ..today_queue(vec![]) };
-        assert_eq!(one.today_subtitle(&["Jobs", "Applications"]), "1 decision. Jobs and Applications are missing from this list.");
+        assert_eq!(one.today_subtitle(&["Jobs", "Applications"], true), "1 decision. Jobs and Applications are missing from this list.");
     }
 
     #[test]

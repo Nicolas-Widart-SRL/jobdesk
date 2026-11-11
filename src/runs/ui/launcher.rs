@@ -6,8 +6,9 @@ use crate::runs::application::{
     CAP_READING, CATALOG, CapCheck, CommandGroup, CommandSpec, FieldSpec, RunDefaults, RunDesk, StartOptions, StartValues, cap_line, cap_reason, compose_line,
     spec_for_line, start_values, task_start_values,
 };
-use crate::shared_kernel::ModelChoice;
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::all_visible;
+use crate::shared_kernel::{FolderWait, ModelChoice};
 use crate::ui_kit::tokens::{FIELD_AREA_HEIGHT, FIELD_GAP, FIELD_HEIGHT, FIELD_PADDING, HEADER_PADDING, INSET, ROW_GAP};
 use crate::ui_kit::{
     Ink, Subtitle, Title, Tone, Type, alert, code_box, command_chord, command_row, divider, enabled_when, group_title, hand, link, muted, page_body, page_head,
@@ -241,15 +242,20 @@ impl Launcher {
                 CapCheck::Reached(reached) => Some(reached),
                 CapCheck::Open | CapCheck::Reading => None,
             };
-            let updating = desk.folder_updating();
+            // Jobdesk updates the folder, or cannot lock it, and says which.
+            let folder_wait = desk.folder_wait().map(|wait| match wait {
+                FolderWait::Updating => FOLDER_UPDATING,
+                FolderWait::Unlockable => UNLOCKABLE,
+            });
+            let updating = folder_wait.is_some();
             let ready = budget.is_some() && !busy && !rules.testing && !updating && *rules.cap == CapCheck::Open && (!destructive || self.reset_confirmed);
             if budget.is_none() {
                 alert(ui, NO_BUDGET);
             }
             if busy {
                 strong(ui, BUSY);
-            } else if updating {
-                strong(ui, FOLDER_UPDATING);
+            } else if let Some(wait) = folder_wait {
+                strong(ui, wait);
             } else if rules.testing {
                 strong(ui, TESTING);
             }
@@ -259,7 +265,7 @@ impl Launcher {
             let why = match rules.cap {
                 _ if budget.is_none() => NO_BUDGET.to_owned(),
                 _ if busy => BUSY.to_owned(),
-                _ if updating => FOLDER_UPDATING.to_owned(),
+                _ if updating => folder_wait.unwrap_or_default().to_owned(),
                 _ if rules.testing => TESTING.to_owned(),
                 CapCheck::Reached(reached) => cap_reason(reached),
                 CapCheck::Reading => CAP_READING.to_owned(),

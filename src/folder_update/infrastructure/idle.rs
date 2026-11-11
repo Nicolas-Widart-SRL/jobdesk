@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::download::DownloadFailure;
 use crate::shared_kernel::installed_source::InstalledSource;
 
@@ -36,12 +37,12 @@ impl ZipFetcher for IdleFolder {
 }
 
 impl FolderUpdater for IdleFolder {
-    fn open(&self, _folder: &Path) -> bool {
-        false
+    fn open(&self, _folder: &Path) -> Option<FolderWait> {
+        None
     }
 
-    fn hold_again(&self, _folder: &Path) -> bool {
-        false
+    fn hold_again(&self, _folder: &Path) -> Option<FolderWait> {
+        None
     }
 
     fn alone_possible(&self, _folder: &Path) -> bool {

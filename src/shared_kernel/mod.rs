@@ -4,6 +4,7 @@ pub mod data_folder;
 pub mod dates;
 pub mod download;
 pub mod file_text;
+pub mod folder_wait;
 pub mod host_path;
 pub mod https;
 pub mod installed_source;
@@ -25,6 +26,7 @@ pub mod workspace_path;
 
 pub use api_key::{ApiKey, ENV_THAT_OUTRANKS_THE_KEY, EnvReader, KeyReader, inherited_env, key_route_refusal};
 pub use check_state::CheckState;
+pub use folder_wait::FolderWait;
 pub use key_mask::{KeyMask, redacted};
 pub use load_error::LoadError;
 pub use model_choice::ModelChoice;

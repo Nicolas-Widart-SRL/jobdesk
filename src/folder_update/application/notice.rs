@@ -3,6 +3,7 @@
 
 use crate::folder_update::application::{Failure, Outcome, Phase, Stage, UndoOutcome};
 use crate::folder_update::domain::{Report, Reverted, SideCopy, SkipReason};
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::{variation_selector, visible_chars};
 use crate::updates::application::Version;
 
@@ -166,6 +167,12 @@ const AGAIN: &str = "It updates your job search folder again when a later Jobdes
 /// A stopped update whose rollback waits for another Jobdesk window to close the folder.
 const OPEN_ELSEWHERE: &str = "Jobdesk could not finish an interrupted update of your job search folder because another Jobdesk window has it open. Close the other window to let it finish.";
 const NOTHING_TO_UNDO: &str = "There was no update of your job search folder left to undo. Nothing changed.";
+
+/// The notice while Jobdesk cannot lock the folder for a reason other than another Jobdesk's update: the writers wait,
+/// and only the user can end it. Nothing to undo or put away while it lasts.
+pub fn unlockable() -> Notice {
+    Notice { mark: NoticeMark::Failed, words: UNLOCKABLE.to_owned(), undo: false, dismiss: false, lists: Vec::new() }
+}
 
 fn working_words(current: Option<Version>) -> String {
     match current {

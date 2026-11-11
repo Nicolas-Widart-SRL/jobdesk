@@ -7,7 +7,7 @@ use chrono::NaiveDateTime;
 
 use crate::runs::application::turn::{clock_runs, wants_reply};
 use crate::runs::domain::{AgentEvent, AgentGateway, AgentSession, Decision, EventSink, PromptKind, Run, RunHistory, RunRequest};
-use crate::shared_kernel::SignIn;
+use crate::shared_kernel::{FolderWait, SignIn};
 
 /// Where the desk reads the time, so a test can script it.
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
@@ -45,8 +45,8 @@ pub struct RunDesk {
     sign_in: SignIn,
     /// Settings' Test connection is running, so no new process starts.
     testing: bool,
-    /// Jobdesk is updating the job search folder, so no run starts and no turn is sent.
-    folder_updating: bool,
+    /// Why no run starts and no turn is sent, if none does: Jobdesk is updating the job search folder, or cannot lock it.
+    folder_wait: Option<FolderWait>,
     clock: Clock,
 }
 
@@ -64,7 +64,7 @@ impl RunDesk {
             asks_permission: false,
             sign_in: SignIn::ClaudeSignIn,
             testing: false,
-            folder_updating: false,
+            folder_wait: None,
             clock: Arc::new(Instant::now),
         }
     }
@@ -106,13 +106,20 @@ impl RunDesk {
     }
 
     /// While Jobdesk updates the job search folder, or undoes its update, no run starts and no reply is sent, on a live
-    /// session or a new process: a task would read or write the folder halfway.
-    pub fn set_folder_updating(&mut self, updating: bool) {
-        self.folder_updating = updating;
+    /// session or a new process: a task would read or write the folder halfway. The same holds while Jobdesk cannot
+    /// lock the folder, so it cannot tell whether another Jobdesk updates it. `wait` says which, for the screens' words.
+    pub fn set_folder_wait(&mut self, wait: Option<FolderWait>) {
+        self.folder_wait = wait;
     }
 
+    /// Whether runs and replies wait on the folder update: see `set_folder_wait`.
     pub fn folder_updating(&self) -> bool {
-        self.folder_updating
+        self.folder_wait.is_some()
+    }
+
+    /// Why runs and replies wait on the folder update, if they do.
+    pub fn folder_wait(&self) -> Option<FolderWait> {
+        self.folder_wait
     }
 
     pub fn restore(&mut self, history: &dyn RunHistory) {
@@ -202,7 +209,7 @@ impl RunDesk {
         if self.testing {
             return Err(StartError::TestRunning);
         }
-        if self.folder_updating {
+        if self.folder_updating() {
             return Err(StartError::FolderUpdating);
         }
         self.started += 1;
@@ -234,7 +241,7 @@ impl RunDesk {
         if self.reply_waits_for_test(id) {
             return Err(StartError::TestRunning);
         }
-        if self.folder_updating {
+        if self.folder_updating() {
             return Err(StartError::FolderUpdating);
         }
         let sign_in = self.sign_in;
@@ -558,7 +565,7 @@ mod tests {
         desk.poll();
         desk.sink_for(&live)(AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.1, duration_ms: 1 });
         desk.poll();
-        desk.set_folder_updating(true);
+        desk.set_folder_wait(Some(FolderWait::Updating));
         assert!(desk.folder_updating());
         assert_eq!(desk.reply(&live, "yes"), Err(StartError::FolderUpdating), "not even on a live session");
         assert_eq!(desk.start("/rank", &options(), now()), Err(StartError::FolderUpdating));
@@ -568,7 +575,11 @@ mod tests {
         assert_eq!((script.borrow().requests.len(), script.borrow().sent.len()), (1, 0), "nothing reached Claude");
         assert_eq!(desk.run(&live).unwrap().turn_number(), 1, "the refused replies are not in the story");
 
-        desk.set_folder_updating(false);
+        desk.set_folder_wait(Some(FolderWait::Unlockable));
+        assert_eq!(desk.reply(&live, "again"), Err(StartError::FolderUpdating), "nor while the folder does not lock");
+        assert_eq!(desk.folder_wait(), Some(FolderWait::Unlockable), "and the screens can tell which");
+
+        desk.set_folder_wait(None);
         desk.reply(&live, "again").unwrap();
         assert_eq!(script.borrow().requests.len(), 2);
     }

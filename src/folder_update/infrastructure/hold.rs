@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::folder_update::domain::UpdateError;
 use crate::folder_update::infrastructure::disk::is_real_dir;
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::installed_source;
 
 /// The lock file, in `.jobdesk`.
@@ -22,23 +23,26 @@ pub enum Open {
     /// This Jobdesk holds the folder open, shared with every other Jobdesk that has it open, for as long as the file
     /// stays open.
     Held(File),
-    /// The folder could not be held: another Jobdesk holds it alone, to update, undo or roll it back now, or the lock
-    /// file is a link, not a file, or does not open or lock. Nothing may write the folder until it is held.
-    KeptOut,
+    /// The folder could not be held, and nothing may write it until it is. `Updating` when another Jobdesk holds it
+    /// alone, to update, undo or roll it back now. `Unlockable` when the lock file is a link, not a file, or does not
+    /// open or lock for any other reason: then nothing updates the folder.
+    KeptOut(FolderWait),
     /// Nothing is to be held: the folder has no `.jobdesk` folder, or one that is a link or not a folder, so no update,
     /// Undo or rollback ever runs in it.
     Nothing,
 }
 
-/// Holds `folder` open, shared with every other Jobdesk that has it open.
+/// Holds `folder` open, shared with every other Jobdesk that has it open. Nothing is written through a link.
 pub fn hold_open(folder: &Path) -> Open {
     let jobdesk = folder.join(installed_source::DIR);
     if !is_real_dir(&jobdesk) {
         return Open::Nothing;
     }
-    match open(&jobdesk).map(|file| file.try_lock_shared().map(|()| file)) {
-        Ok(Ok(file)) => Open::Held(file),
-        Ok(Err(_)) | Err(_) => Open::KeptOut,
+    let Ok(file) = open(&jobdesk) else { return Open::KeptOut(FolderWait::Unlockable) };
+    match file.try_lock_shared() {
+        Ok(()) => Open::Held(file),
+        Err(TryLockError::WouldBlock) => Open::KeptOut(FolderWait::Updating),
+        Err(TryLockError::Error(_)) => Open::KeptOut(FolderWait::Unlockable),
     }
 }
 
@@ -94,7 +98,7 @@ mod tests {
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy), "while one still has it open");
         drop(second);
         let alone = hold_alone(&jobdesk).unwrap();
-        assert!(matches!(hold_open(folder.path()), Open::KeptOut), "no Jobdesk holds it open while one holds it alone");
+        assert!(matches!(hold_open(folder.path()), Open::KeptOut(FolderWait::Updating)), "no Jobdesk holds it open while one holds it alone");
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy));
         drop(alone);
         assert!(matches!(hold_open(folder.path()), Open::Held(_)));
@@ -115,7 +119,7 @@ mod tests {
         let folder = folder();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path().join("elsewhere"), folder.path().join(installed_source::DIR).join(OPEN)).unwrap();
-        assert!(matches!(hold_open(folder.path()), Open::KeptOut), "kept out, never unheld");
+        assert!(matches!(hold_open(folder.path()), Open::KeptOut(FolderWait::Unlockable)), "kept out, never unheld, and nothing updates");
         assert_eq!(hold_alone(&folder.path().join(installed_source::DIR)).map(|_| ()), Err(UpdateError::Disk));
         assert!(!outside.path().join("elsewhere").exists());
     }

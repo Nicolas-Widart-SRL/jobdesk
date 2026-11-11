@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use crate::folder_update::domain::{Report, Reverted, Update, UpdateError};
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::download::DownloadFailure;
 use crate::shared_kernel::installed_source::InstalledSource;
 
@@ -58,15 +59,16 @@ pub trait FolderUpdater: Send + Sync {
     /// Jobdesk's `recover`, `update` and `undo` of it are `Busy`, and its own let go of the hold while they run. A
     /// folder whose `.jobdesk` is not there is held by nothing, and nothing is made in it.
     ///
-    /// Returns whether it is kept out: another Jobdesk holds the folder alone, to update, undo or roll it back, or the
-    /// lock does not open or lock for any other reason, so this one cannot hold it open now. Only a folder with no
-    /// `.jobdesk` folder, where no update ever runs, is never kept out. Then nothing may write the folder until `hold_again` takes the hold.
-    fn open(&self, folder: &Path) -> bool;
+    /// Returns why it is kept out, if it is, so this one cannot hold the folder open now: `Updating` while another
+    /// Jobdesk holds it alone, to update, undo or roll it back, and `Unlockable` while the lock does not open or lock for
+    /// any other reason. Only a folder with no `.jobdesk` folder, where no update ever runs, is never kept out. While it
+    /// is kept out, nothing may write the folder until `hold_again` takes the hold.
+    fn open(&self, folder: &Path) -> Option<FolderWait>;
     /// Tries again to hold `folder` open, after `open` or the end of an update, Undo or rollback of this Jobdesk's own
-    /// found it kept out. Returns whether it is still kept out. False when `folder` is not the one open, or when this
-    /// Jobdesk holds it already or could never hold it, as for a folder with no `.jobdesk`. It never waits: while this
-    /// Jobdesk's own update, Undo or rollback runs, it is false.
-    fn hold_again(&self, folder: &Path) -> bool;
+    /// found it kept out. Returns why it is still kept out, if it is. `None` when `folder` is not the one open, or when
+    /// this Jobdesk holds it already or could never hold it, as for a folder with no `.jobdesk`. It never waits: while
+    /// this Jobdesk's own update, Undo or rollback runs, it is `None`.
+    fn hold_again(&self, folder: &Path) -> Option<FolderWait>;
     /// Whether this Jobdesk could hold `folder` alone now: no other Jobdesk has it open. It lets go of its own hold for a
     /// moment and takes it back, as `recover` does, and never waits: while this Jobdesk's own update, Undo or rollback
     /// runs, it is false.

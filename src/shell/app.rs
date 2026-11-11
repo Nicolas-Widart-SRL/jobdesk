@@ -38,8 +38,9 @@ use crate::settings::application::{
     UsageState, cap_check,
 };
 use crate::settings::ui::{LastTask, SettingsRequest, SettingsScreen, SettingsView};
-use crate::shared_kernel::LoadError;
 use crate::shared_kernel::data_folder::DATA_DIR_VARIABLE;
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
+use crate::shared_kernel::{FolderWait, LoadError};
 use crate::shell::live_snapshot::{self, Reload};
 use crate::shell::{Issue, Snapshot, Source};
 use crate::tracking::ui::TrackerScreen;
@@ -244,8 +245,8 @@ pub type RestartSlot = Arc<Mutex<Option<(RestartPlan, Vec<OsString>)>>>;
 enum FolderWriter {
     /// A task works, and Claude may write any file.
     Task,
-    /// Jobdesk updates the folder, or undoes its update.
-    FolderUpdate,
+    /// Jobdesk updates the folder, or undoes its update, or cannot lock it: which, for each writer's words.
+    FolderUpdate(FolderWait),
 }
 
 /// What would drop unsaved profile text from outside Profile, once the user agrees.
@@ -769,10 +770,11 @@ impl Shell {
 
     /// Why Change folder waits, if it does.
     fn folder_wait(&self) -> Option<&'static str> {
-        if self.folder_update.is_busy() {
-            return Some(FOLDER_WAITS);
+        match self.folder_update.folder_wait() {
+            Some(FolderWait::Updating) => Some(FOLDER_WAITS),
+            Some(FolderWait::Unlockable) => Some(UNLOCKABLE),
+            None => self.folder_locked().then_some(FOLDER_BUSY),
         }
-        self.folder_locked().then_some(FOLDER_BUSY)
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
@@ -981,10 +983,8 @@ impl Shell {
     fn folder_writer(&self) -> Option<FolderWriter> {
         if self.desk.as_ref().is_some_and(RunDesk::is_busy) {
             Some(FolderWriter::Task)
-        } else if self.folder_update.is_busy() {
-            Some(FolderWriter::FolderUpdate)
         } else {
-            None
+            self.folder_update.folder_wait().map(FolderWriter::FolderUpdate)
         }
     }
 
@@ -992,7 +992,8 @@ impl Shell {
     fn portals_wait(&self) -> Option<&'static str> {
         self.folder_writer().map(|writer| match writer {
             FolderWriter::Task => portals::ui::BUSY,
-            FolderWriter::FolderUpdate => portals::ui::FOLDER_UPDATING,
+            FolderWriter::FolderUpdate(FolderWait::Updating) => portals::ui::FOLDER_UPDATING,
+            FolderWriter::FolderUpdate(FolderWait::Unlockable) => UNLOCKABLE,
         })
     }
 
@@ -1010,11 +1011,17 @@ impl Shell {
         let writable = self.folder_writable();
         let feed = self.updates.latest_feed().map(|feed| (self.updates.feed_answers(), feed));
         self.folder_update.follow(feed, writable);
-        let updating = self.folder_update.is_busy();
+        self.share_folder_wait();
+    }
+
+    /// Hands the folder update's wait, if any, to the desk and to Test connection, so neither starts a Claude process
+    /// meanwhile, and each says why.
+    fn share_folder_wait(&mut self) {
+        let wait = self.folder_update.folder_wait();
         if let Some(desk) = &mut self.desk {
-            desk.set_folder_updating(updating);
+            desk.set_folder_wait(wait);
         }
-        self.providers.set_folder_updating(updating);
+        self.providers.set_folder_wait(wait);
     }
 
     /// What a Claude session open in Tasks means for Restart to update: one that waits on a permission or a question, one
@@ -1030,7 +1037,12 @@ impl Shell {
 
     /// Why Restart to update waits, if it does: a Claude session is open, or the job search folder is being updated.
     fn restart_wait(&self) -> Option<&'static str> {
-        restart_wait(self.session_state()).or_else(|| self.folder_update.is_busy().then_some(RESTART_WAITS))
+        restart_wait(self.session_state()).or_else(|| {
+            self.folder_update.folder_wait().map(|wait| match wait {
+                FolderWait::Updating => RESTART_WAITS,
+                FolderWait::Unlockable => UNLOCKABLE,
+            })
+        })
     }
 
     /// Restart to update goes through the normal quit, so an unsaved profile draft still asks first. It never starts while
@@ -1436,11 +1448,7 @@ impl Shell {
                 Some(NoticeRequest::Undo) => {
                     let writable = self.folder_writable();
                     self.folder_update.undo_update(writable);
-                    let updating = self.folder_update.is_busy();
-                    if let Some(desk) = &mut self.desk {
-                        desk.set_folder_updating(updating);
-                    }
-                    self.providers.set_folder_updating(updating);
+                    self.share_folder_wait();
                 }
                 Some(NoticeRequest::Dismiss) => self.folder_update.dismiss(),
                 None => {}
@@ -1588,8 +1596,12 @@ impl Shell {
                 // `RUN_READ_WAIT` at most.
                 let reading = self.save_waits_for_load();
                 let writer = self.folder_writer();
-                let (busy, updating) = (writer == Some(FolderWriter::Task), writer == Some(FolderWriter::FolderUpdate));
-                let moment = Moment { busy, reading, updating, now: self.now() };
+                let busy = writer == Some(FolderWriter::Task);
+                let folder_wait = match writer {
+                    Some(FolderWriter::FolderUpdate(wait)) => Some(wait),
+                    Some(FolderWriter::Task) | None => None,
+                };
+                let moment = Moment { busy, reading, folder_wait, now: self.now() };
                 let asked = match self.profile_editor.as_mut() {
                     Some(editor) => profile::ui::show(
                         ui,
@@ -3173,10 +3185,12 @@ mod tests {
         }
         let start = |shell: &mut Shell| shell.desk.as_mut().unwrap().start("/apply https://kestrel.example/jobs/2", &options, Local::now().naive_local());
         assert!(start(&mut shell).is_err(), "no task starts");
-        assert_eq!(shell.folder_writer(), Some(FolderWriter::FolderUpdate), "Profile's Save and the portal changes wait");
+        assert_eq!(shell.folder_writer(), Some(FolderWriter::FolderUpdate(FolderWait::Updating)), "Profile's Save and the portal changes wait");
         assert_eq!(shell.restart_wait(), Some(RESTART_WAITS));
         assert_eq!(shell.folder_wait(), Some(FOLDER_WAITS));
+        assert_eq!(shell.portals_wait(), Some(portals::ui::FOLDER_UPDATING), "another Jobdesk truly updates it");
         assert_eq!(shell.providers.test_gate(false), TestGate::FolderUpdating);
+        assert_eq!(shell.folder_update.notice(), None, "the other window's notice says how it goes");
 
         drop(other);
         shell.follow_folder_update();
@@ -3192,6 +3206,35 @@ mod tests {
         assert_eq!(shell.folder_writer(), None);
         assert_eq!((shell.restart_wait(), shell.folder_wait()), (None, None));
         assert!(start(&mut shell).is_ok(), "the task starts once this Jobdesk holds the folder");
+    }
+
+    /// A lock file that does not open, here a link planted where it goes, keeps every writer waiting as another
+    /// Jobdesk's update does, but nothing is updating: each says that Jobdesk cannot lock the folder, never that it
+    /// updates it. Nothing is written through the link.
+    #[cfg(unix)]
+    #[test]
+    fn every_writer_waits_and_says_so_while_the_folder_lock_does_not_open() {
+        const CANNOT_LOCK: &str = "Jobdesk cannot lock your job search folder, so tasks and saves wait. Check .jobdesk/.open in the folder.";
+        let (data, folder, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let ctx = egui::Context::default();
+        let path = checkout(&folder);
+        fs::create_dir(path.join(".jobdesk")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("planted"), path.join(".jobdesk/.open")).unwrap();
+        let mut shell = launch(&ctx, Some(path.clone()), data.path());
+        shell.folder_update = folder_update::folder_update(data.path(), "0.1.0", Arc::new(|| {}));
+        shell.open(&ctx, &path);
+        shell.desk = Some(RunDesk::new(Box::new(Idle), Arc::new(|| {})));
+        shell.follow_folder_update();
+        let options = StartOptions { model: None, budget_usd: 5.0 };
+        assert!(shell.desk.as_mut().unwrap().start("/apply https://kestrel.example/jobs/2", &options, Local::now().naive_local()).is_err());
+        assert_eq!(shell.folder_update.notice().map(|notice| notice.words), Some(CANNOT_LOCK.to_owned()));
+        assert_eq!(shell.restart_wait(), Some(CANNOT_LOCK));
+        assert_eq!(shell.folder_wait(), Some(CANNOT_LOCK));
+        assert_eq!(shell.portals_wait(), Some(CANNOT_LOCK));
+        assert_eq!(shell.providers.test_sign_in(false), Err(CANNOT_LOCK.to_owned()));
+        assert_eq!(shell.folder_writer(), Some(FolderWriter::FolderUpdate(FolderWait::Unlockable)), "Profile's Save waits and says so");
+        assert_eq!(shell.desk.as_ref().unwrap().folder_wait(), Some(FolderWait::Unlockable), "the launcher and the reply say so");
+        assert!(!outside.path().join("planted").exists(), "nothing is written through the link");
     }
 
     /// Keep working in the quit dialog, by click or by Esc, keeps the window, so a Restart to update that waited on it is off.

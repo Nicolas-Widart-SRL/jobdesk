@@ -6,8 +6,9 @@ use chrono::NaiveDateTime;
 
 use crate::settings::application::settings::Settings;
 use crate::settings::domain::{ConnectionTester, KeyMask, KeyStore, KeyStoreError, KeyTest, Outcome, Preferences, Saved, TestReport, task_sign_in};
+use crate::shared_kernel::folder_wait::UNLOCKABLE;
 use crate::shared_kernel::visible_text::visible_chars;
-use crate::shared_kernel::{ApiKey, KeyReader, KeySource, SignIn, key_source, redacted};
+use crate::shared_kernel::{ApiKey, FolderWait, KeyReader, KeySource, SignIn, key_source, redacted};
 
 /// Why Test connection is off while a task runs: one Claude process at a time.
 const TASK_RUNNING: &str = "A task is running. Test once it ends.";
@@ -34,6 +35,8 @@ pub enum TestGate {
     TaskRunning,
     /// Jobdesk updates the job search folder, or undoes its update.
     FolderUpdating,
+    /// Jobdesk cannot lock the job search folder, so tasks wait, and the test with them.
+    FolderUnlockable,
 }
 
 impl TestGate {
@@ -44,6 +47,7 @@ impl TestGate {
             TestGate::Testing => Some(TESTING),
             TestGate::TaskRunning => Some(TASK_RUNNING),
             TestGate::FolderUpdating => Some(FOLDER_UPDATING),
+            TestGate::FolderUnlockable => Some(UNLOCKABLE),
         }
     }
 }
@@ -281,20 +285,21 @@ pub struct Providers {
     running: Option<Running>,
     sign_in_check: Option<SignInCheck>,
     key_failure: Option<KeyFailure>,
-    /// Jobdesk updates the job search folder, so no test starts.
-    folder_updating: bool,
+    /// Why no test starts, if none does: Jobdesk updates the job search folder, or cannot lock it.
+    folder_wait: Option<FolderWait>,
 }
 
 impl Providers {
     pub fn new(keys: Arc<dyn KeyStore>, tester: Box<dyn ConnectionTester>) -> Self {
         let key = Arc::new(KeyCache::new(keys));
-        Self { key, tester, saved: Saved::NotRead, keychain_busy: false, running: None, sign_in_check: None, key_failure: None, folder_updating: false }
+        Self { key, tester, saved: Saved::NotRead, keychain_busy: false, running: None, sign_in_check: None, key_failure: None, folder_wait: None }
     }
 
     /// While Jobdesk updates the job search folder, or undoes its update, no test starts: one Claude process or folder
-    /// writer at a time, as for tasks. A test that already runs goes on, in its empty temporary folder.
-    pub fn set_folder_updating(&mut self, updating: bool) {
-        self.folder_updating = updating;
+    /// writer at a time, as for tasks. The same holds while Jobdesk cannot lock the folder, as tasks wait then too. A
+    /// test that already runs goes on, in its empty temporary folder.
+    pub fn set_folder_wait(&mut self, wait: Option<FolderWait>) {
+        self.folder_wait = wait;
     }
 
     pub fn saved(&self) -> &Saved {
@@ -339,8 +344,11 @@ impl Providers {
             TestGate::Testing
         } else if task_running {
             TestGate::TaskRunning
-        } else if self.folder_updating {
-            TestGate::FolderUpdating
+        } else if let Some(wait) = self.folder_wait {
+            match wait {
+                FolderWait::Updating => TestGate::FolderUpdating,
+                FolderWait::Unlockable => TestGate::FolderUnlockable,
+            }
         } else {
             TestGate::Ready
         }
@@ -879,14 +887,17 @@ mod tests {
     #[test]
     fn a_folder_update_keeps_the_tester_from_being_called() {
         let mut f = fixture(Some(FAKE));
-        f.providers.set_folder_updating(true);
+        f.providers.set_folder_wait(Some(FolderWait::Updating));
         assert_eq!(f.providers.test_gate(false), TestGate::FolderUpdating);
         assert_eq!(f.providers.test_key(false), Err(FOLDER_UPDATING.to_owned()));
         assert_eq!(f.providers.test_sign_in(false), Err(FOLDER_UPDATING.to_owned()));
         f.providers.save_key(OTHER, &mut f.settings, false).unwrap();
         assert_eq!(f.stored().as_deref(), Some(OTHER), "the key is still saved");
+        f.providers.set_folder_wait(Some(FolderWait::Unlockable));
+        assert_eq!(f.providers.test_gate(false), TestGate::FolderUnlockable);
+        assert_eq!(f.providers.test_sign_in(false), Err(UNLOCKABLE.to_owned()), "never that the folder updates");
         assert_eq!(f.tester.calls(), 0);
-        f.providers.set_folder_updating(false);
+        f.providers.set_folder_wait(None);
         assert_eq!(f.providers.test_gate(false), TestGate::Ready);
     }
 

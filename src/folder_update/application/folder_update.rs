@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::folder_update::application::notice::{self, Notice, Quiet};
 use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Release, Report, Reverted, Update, UpdateError, ZipFetcher};
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::download::DownloadFailure;
 use crate::shared_kernel::installed_source::InstalledSource;
 use crate::shared_kernel::release_zip::ZipFailure;
@@ -183,9 +184,10 @@ pub struct FolderUpdate {
     tried: HashSet<(PathBuf, u64)>,
     /// The folder the worker runs on, while one does.
     working_on: Option<PathBuf>,
-    /// Another Jobdesk held the open folder alone, to update, undo or roll it back, at this Jobdesk's last try to hold
-    /// it, made at this moment. While it is set, nothing writes the folder, as while this Jobdesk's own worker runs.
-    kept_out: Option<Instant>,
+    /// This Jobdesk's last try to hold the open folder, made at this moment, could not, and why: another Jobdesk held it
+    /// alone, to update, undo or roll it back, or its lock did not open or lock. While it is set, nothing writes the
+    /// folder, as while this Jobdesk's own worker runs.
+    kept_out: Option<(Instant, FolderWait)>,
     /// A stopped update's rollback of the open folder waits for another Jobdesk window to close it, as the last try,
     /// made at this moment, found. `follow` tries again every `HOLD_RETRY`, once the folder can be held alone.
     rollback_waits: Option<Instant>,
@@ -274,7 +276,7 @@ impl FolderUpdate {
     /// the last folder, so it goes. Call it at every open, a launch's, a switch's and first-run setup's hand-over, and
     /// open no folder while `is_working`.
     pub fn opened(&mut self, folder: PathBuf) {
-        self.kept_out = self.ports.updater.open(&folder).then(|| (self.clock)());
+        self.kept_out = self.ports.updater.open(&folder).map(|wait| ((self.clock)(), wait));
         self.folder = Some(folder);
         (self.recover_due, self.rollback_waits) = (true, None);
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
@@ -295,10 +297,10 @@ impl FolderUpdate {
     pub fn follow(&mut self, feed: Option<(u64, &LatestFeed)>, runs_idle: bool) {
         self.poll();
         let now = (self.clock)();
-        if let (Some(tried), Some(folder), false) = (self.kept_out, &self.folder, self.working)
+        if let (Some((tried, _)), Some(folder), false) = (self.kept_out, &self.folder, self.working)
             && now.saturating_duration_since(tried) >= HOLD_RETRY
         {
-            self.kept_out = self.ports.updater.hold_again(folder).then_some(now);
+            self.kept_out = self.ports.updater.hold_again(folder).map(|wait| (now, wait));
         }
         if self.working || !runs_idle || self.kept_out.is_some() {
             return;
@@ -344,8 +346,12 @@ impl FolderUpdate {
         }
     }
 
-    /// What the status bar says of the folder update, if anything.
+    /// What the status bar says of the folder update, if anything. While this Jobdesk cannot lock the folder, and no
+    /// update holds it, that comes first: the writers wait, and nothing else will end the wait.
     pub fn notice(&self) -> Option<Notice> {
+        if self.folder_wait() == Some(FolderWait::Unlockable) {
+            return Some(notice::unlockable());
+        }
         notice::notice(&self.stage, self.told.as_ref(), self.undo_offered && self.can_undo(), self.current)
     }
 
@@ -408,17 +414,25 @@ impl FolderUpdate {
         self.working
     }
 
-    /// Whether another Jobdesk held the open folder alone, to update, undo or roll it back, when this one last tried to
-    /// hold it open. `follow` tries again every `HOLD_RETRY`, so the window should repaint at least that often meanwhile.
+    /// Whether this Jobdesk could not hold the open folder when it last tried: another Jobdesk held it alone, or its lock
+    /// did not open or lock. `follow` tries again every `HOLD_RETRY`, so the window should repaint at least that often
+    /// meanwhile.
     pub fn kept_out(&self) -> bool {
         self.kept_out.is_some()
     }
 
-    /// Whether the job search folder is being updated, undone or rolled back, by this Jobdesk's worker or by another
-    /// Jobdesk that holds it alone. While it holds, the caller starts no task and sends no reply, and every other writer
-    /// of the folder, Test connection, Restart to update and Change folder wait, as for this Jobdesk's own update.
+    /// Why the folder's writers wait on the folder update, if they do: `Updating` while this Jobdesk's worker, or
+    /// another Jobdesk that holds the folder alone, updates, undoes or rolls it back, and `Unlockable` while this
+    /// Jobdesk cannot lock the folder for any other reason, when nothing updates it. Meanwhile the caller starts no
+    /// task and sends no reply, and every other writer of the folder, Test connection, Restart to update and Change
+    /// folder wait, each saying why.
+    pub fn folder_wait(&self) -> Option<FolderWait> {
+        if self.working { Some(FolderWait::Updating) } else { self.kept_out.map(|(_, wait)| wait) }
+    }
+
+    /// Whether the folder's writers wait on the folder update: see `folder_wait`.
     pub fn is_busy(&self) -> bool {
-        self.working || self.kept_out.is_some()
+        self.folder_wait().is_some()
     }
 
     /// Whether the last update of the folder can be undone, as the last update pass or undo found it on its worker.
@@ -518,7 +532,7 @@ impl FolderUpdate {
                     // The worker let go of this Jobdesk's hold while it ran, and another Jobdesk may hold the folder
                     // alone now, before this one took the hold again.
                     if let Some(folder) = &self.folder {
-                        self.kept_out = self.ports.updater.hold_again(folder).then(|| (self.clock)());
+                        self.kept_out = self.ports.updater.hold_again(folder).map(|wait| ((self.clock)(), wait));
                     }
                 }
             }
@@ -769,12 +783,12 @@ mod tests {
     }
 
     impl FolderUpdater for Fake {
-        fn open(&self, folder: &Path) -> bool {
+        fn open(&self, folder: &Path) -> Option<FolderWait> {
             self.note(format!("open {}", folder.display()));
-            self.kept_out.load(Ordering::SeqCst)
+            self.kept_out.load(Ordering::SeqCst).then_some(FolderWait::Updating)
         }
-        fn hold_again(&self, _folder: &Path) -> bool {
-            self.kept_out.load(Ordering::SeqCst)
+        fn hold_again(&self, _folder: &Path) -> Option<FolderWait> {
+            self.kept_out.load(Ordering::SeqCst).then_some(FolderWait::Updating)
         }
         fn alone_possible(&self, _folder: &Path) -> bool {
             !self.others_open.load(Ordering::SeqCst)

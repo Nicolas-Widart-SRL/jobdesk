@@ -9,6 +9,7 @@ use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater,
 use crate::folder_update::infrastructure::disk::is_real_dir;
 use crate::folder_update::infrastructure::hold::{Open, hold_alone, hold_open};
 use crate::folder_update::infrastructure::updater;
+use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::download::{DownloadFailure, HttpsFetcher};
 use crate::shared_kernel::installed_source::{self, InstalledSource, MAX_ZIP};
 
@@ -24,18 +25,19 @@ struct Opened {
     folder: Option<PathBuf>,
     /// The hold, while this Jobdesk has one.
     hold: Option<File>,
-    /// The last try could not hold the folder: another Jobdesk held it alone, or its lock file did not open or lock.
-    kept_out: bool,
+    /// Why the last try could not hold the folder, if it could not: another Jobdesk held it alone, or its lock file did
+    /// not open or lock.
+    kept_out: Option<FolderWait>,
 }
 
 impl Opened {
-    /// Tries to hold the open folder, and says whether another Jobdesk keeps this one out.
-    fn hold(&mut self) -> bool {
-        let Some(folder) = &self.folder else { return false };
+    /// Tries to hold the open folder, and says why this Jobdesk is kept out, if it is.
+    fn hold(&mut self) -> Option<FolderWait> {
+        let folder = self.folder.as_ref()?;
         (self.hold, self.kept_out) = match hold_open(folder) {
-            Open::Held(file) => (Some(file), false),
-            Open::KeptOut => (None, true),
-            Open::Nothing => (None, false),
+            Open::Held(file) => (Some(file), None),
+            Open::KeptOut(wait) => (None, Some(wait)),
+            Open::Nothing => (None, None),
         };
         self.kept_out
     }
@@ -114,17 +116,17 @@ impl BaseReader for DiskFolder {
 }
 
 impl FolderUpdater for DiskFolder {
-    fn open(&self, folder: &Path) -> bool {
+    fn open(&self, folder: &Path) -> Option<FolderWait> {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         // The folder held before is let go of first: it may be this one.
         *open = Opened { folder: Some(folder.to_owned()), ..Opened::default() };
         open.hold()
     }
 
-    fn hold_again(&self, folder: &Path) -> bool {
-        let Some(mut open) = self.try_open() else { return false };
-        if open.folder.as_deref() != Some(folder) || !open.kept_out {
-            return false;
+    fn hold_again(&self, folder: &Path) -> Option<FolderWait> {
+        let mut open = self.try_open()?;
+        if open.folder.as_deref() != Some(folder) || open.kept_out.is_none() {
+            return None;
         }
         open.hold()
     }
@@ -277,8 +279,8 @@ mod tests {
     fn opening_a_folder_with_no_jobdesk_makes_nothing() {
         let folder = tempfile::tempdir().unwrap();
         let disk = DiskFolder::default();
-        assert!(!disk.open(folder.path()), "never kept out");
-        assert!(!disk.hold_again(folder.path()));
+        assert_eq!(disk.open(folder.path()), None, "never kept out");
+        assert_eq!(disk.hold_again(folder.path()), None);
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
     }
 
@@ -291,14 +293,14 @@ mod tests {
         let other = fs::File::options().read(true).write(true).create(true).truncate(false).open(&lock).unwrap();
         other.lock().unwrap();
         let disk = DiskFolder::default();
-        assert!(disk.open(folder.path()), "kept out at the open");
-        assert!(disk.hold_again(folder.path()), "and while the other holds it");
-        assert!(!disk.hold_again(&folder.path().join("another")), "of the open folder only");
+        assert_eq!(disk.open(folder.path()), Some(FolderWait::Updating), "kept out at the open, while the other updates it");
+        assert_eq!(disk.hold_again(folder.path()), Some(FolderWait::Updating), "and while the other holds it");
+        assert_eq!(disk.hold_again(&folder.path().join("another")), None, "of the open folder only");
         drop(other);
-        assert!(!disk.hold_again(folder.path()), "the hold is taken");
+        assert_eq!(disk.hold_again(folder.path()), None, "the hold is taken");
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds it open now");
-        assert!(!disk.hold_again(folder.path()));
+        assert_eq!(disk.hold_again(folder.path()), None);
     }
 
     /// A lock file that cannot be opened now, here for its permissions, keeps this Jobdesk out and retrying, as
@@ -312,10 +314,10 @@ mod tests {
         fs::write(&lock, b"").unwrap();
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o000)).unwrap();
         let disk = DiskFolder::default();
-        assert!(disk.open(folder.path()), "kept out");
-        assert!(disk.hold_again(folder.path()), "and still while it does not open");
+        assert_eq!(disk.open(folder.path()), Some(FolderWait::Unlockable), "kept out, though nothing updates it");
+        assert_eq!(disk.hold_again(folder.path()), Some(FolderWait::Unlockable), "and still while it does not open");
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(!disk.hold_again(folder.path()), "held once it opens");
+        assert_eq!(disk.hold_again(folder.path()), None, "held once it opens");
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds the folder open");
     }
@@ -328,12 +330,12 @@ mod tests {
         let folder = set_up();
         let lock = folder.path().join(installed_source::DIR).join(".open");
         let disk = DiskFolder::default();
-        assert!(!disk.open(folder.path()));
+        assert_eq!(disk.open(folder.path()), None);
         let panicked = catch_unwind(AssertUnwindSafe(|| disk.alone(folder.path(), || panic!("a fictional panic in the job"))));
         assert!(panicked.is_err());
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds the folder open again");
-        assert!(!disk.hold_again(folder.path()), "and is not kept out");
+        assert_eq!(disk.hold_again(folder.path()), None, "and is not kept out");
 
         // Another Jobdesk takes the folder alone while the job runs, and the job panics.
         let panicked = catch_unwind(AssertUnwindSafe(|| {
@@ -343,9 +345,9 @@ mod tests {
             })
         }));
         assert!(panicked.is_err());
-        assert!(disk.hold_again(folder.path()), "kept out, and trying again");
+        assert_eq!(disk.hold_again(folder.path()), Some(FolderWait::Updating), "kept out, and trying again");
         other.unlock().unwrap();
-        assert!(!disk.hold_again(folder.path()), "the hold is taken once the other lets go");
+        assert_eq!(disk.hold_again(folder.path()), None, "the hold is taken once the other lets go");
         assert!(other.try_lock().is_err());
     }
 

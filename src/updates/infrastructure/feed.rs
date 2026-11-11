@@ -106,7 +106,7 @@ pub fn parse_pin(bytes: &[u8], key: &UpdateKey) -> Option<SourcePin> {
 /// comment must name the zip of that version, so a signature of another version, another hash or with another key
 /// never passes. An entry that does not read or whose signature fails is dropped, and only itself. A version listed
 /// twice counts once, the first seen, the list before the legacy field. The feed is not signed, so its order means
-/// nothing: the result is sorted by version.
+/// nothing: the result is sorted by version, and of more than `COMPATIBLE_LIMIT` signed releases only the newest are kept.
 pub fn parse_pins(bytes: &[u8], key: &UpdateKey) -> Vec<SourcePin> {
     let Ok(pinned) = serde_json::from_slice::<Pinned>(bytes) else { return Vec::new() };
     let listed = match pinned.ai_job_search_releases {
@@ -121,8 +121,15 @@ pub fn parse_pins(bytes: &[u8], key: &UpdateKey) -> Vec<SourcePin> {
             found.push(pin);
         }
     }
-    found.sort_by_key(|pin| std::cmp::Reverse(pin.version));
-    found
+    newest_first(found)
+}
+
+/// `pins`, which are already checked and hold no version twice, newest first and no more than `COMPATIBLE_LIMIT`. The
+/// list is read up to the limit and the old field comes after it, so up to one more than the limit can arrive here.
+fn newest_first(mut pins: Vec<SourcePin>) -> Vec<SourcePin> {
+    pins.sort_by_key(|pin| std::cmp::Reverse(pin.version));
+    pins.truncate(COMPATIBLE_LIMIT);
+    pins
 }
 
 /// One entry of the feed, when it reads and `key` signed it for its own zip.
@@ -520,6 +527,19 @@ pub mod tests {
     }
 
     #[test]
+    fn never_more_than_five_pins_are_kept_and_they_are_the_newest() {
+        // Only 1.4.0 and 1.3.0 have signatures, so the cut is tested on pins already checked: five listed and one more
+        // from the old field arrive as six.
+        let pin = |version: &str| SourcePin::parse(version, &fixture_pin().sha256).unwrap();
+        let six = ["1.2.0", "1.6.0", "1.3.0", "1.5.0", "1.4.0", "1.7.0"].map(pin).to_vec();
+        assert_eq!(versions(&newest_first(six)), ["1.7.0", "1.6.0", "1.5.0", "1.4.0", "1.3.0"], "the oldest is the one left out");
+        assert_eq!(versions(&newest_first(vec![pin("1.3.0"), pin("1.4.0")])), ["1.4.0", "1.3.0"], "fewer are all kept");
+        assert_eq!(newest_first(Vec::new()), Vec::new());
+        let signed_pair = with_fields(Some(serde_json::json!([good_130()])), Some(good_140()));
+        assert_eq!(parse_pins(&signed_pair, &fixture_key()), fixture_pins(), "parse_pins goes through the same cut");
+    }
+
+    #[test]
     fn a_feed_with_only_the_old_field_still_pins() {
         let bytes = with_pin(Some(good_140()));
         assert_eq!(parse_pins(&bytes, &fixture_key()), vec![fixture_pin()]);
@@ -610,6 +630,34 @@ pub mod tests {
             let said = String::from_utf8_lossy(&output.stderr);
             assert!(said.contains(&format!("holds {count} ai-job-search-v*.zip.sha256 files, not 1 to 5")), "{said}");
             assert!(output.stdout.is_empty(), "no feed is written");
+        }
+    }
+
+    /// One bad pin file among good ones refuses the whole feed: no `latest.json` is written. The bad file is 1.5.0, so it
+    /// comes after the good 1.4.0 in the order the script reads them.
+    #[cfg(unix)]
+    #[test]
+    fn the_script_refuses_the_feed_for_one_bad_pin_among_good_ones() {
+        let sha256 = fixture_pin().sha256;
+        let good = format!("{sha256}  ai-job-search-v1.5.0.zip\n");
+        for (what, content) in [
+            ("a second line", Some(format!("{good}{good}"))),
+            ("a line without its newline", Some(good.trim_end().to_owned())),
+            ("another zip's name", Some(format!("{sha256}  ai-job-search-v1.4.0.zip\n"))),
+            ("an uppercase hash", Some(good.replacen(&sha256, &sha256.to_uppercase(), 1))),
+            ("no signature file", None),
+        ] {
+            let dir = pins_dir(&["1.4.0", "1.5.0"]);
+            let bad = dir.path().join("ai-job-search-v1.5.0.zip.sha256");
+            match content {
+                Some(content) => fs::write(&bad, content).unwrap(),
+                None => fs::remove_file(dir.path().join("ai-job-search-v1.5.0.zip.sha256.sig")).unwrap(),
+            }
+            let output = run_script(dir.path());
+            assert!(!output.status.success(), "{what}");
+            assert!(output.stdout.is_empty(), "{what}: no feed is written");
+            let said = String::from_utf8_lossy(&output.stderr);
+            assert!(said.contains("ai-job-search-v1.5.0.zip.sha256"), "{what}: {said}");
         }
     }
 

@@ -93,11 +93,12 @@ pub fn source_zip_url(version: &Version) -> String {
     format!("https://codeload.github.com/{AI_JOB_SEARCH_REPOSITORY}/zip/refs/tags/{}", version.tag())
 }
 
-/// Reads the `ai-job-search` release the feed pins.
+/// Reads the newest `ai-job-search` release the feed pins.
 pub trait SourcePinReader: Send + Sync {
     /// Reads the feed, so it blocks: call it away from the window's thread. A feed that cannot be reached or read
-    /// says why. `Ok(None)` is a feed with no pin this copy can trust: none, one that does not read, or one whose
-    /// signature fails. A build with no update key always gets `Ok(None)`, and reads nothing.
+    /// says why. `Ok(Some(_))` is the newest release whose signature checks. `Ok(None)` is a feed with no pin this
+    /// copy can trust: none, none that reads, or none whose signature checks. A build with no update key always gets
+    /// `Ok(None)`, and reads nothing.
     fn read(&self) -> Result<Option<SourcePin>, Failure>;
 }
 
@@ -122,7 +123,7 @@ pub struct Release {
 pub const COMPATIBLE_LIMIT: usize = 5;
 
 /// A pin whose signature the update key checked. Only the read of the feed in the updates feature makes one, so outside
-/// it a `Release` can carry no pin but the one that read gave.
+/// it a `Release` can carry no pins but the ones that read gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedPin(SourcePin);
 

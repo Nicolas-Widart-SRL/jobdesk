@@ -311,7 +311,11 @@ impl FolderUpdate {
                 return;
             }
             // A look that lets go of the hold for a moment, not a worker: nothing reads as busy while the wait lasts.
-            if !self.ports.updater.alone_possible(&folder) {
+            // Another Jobdesk may take the folder alone in that moment, so what taking the hold back found is kept, and
+            // every writer waits while this one is kept out.
+            let look = self.ports.updater.alone_possible(&folder);
+            self.kept_out = look.kept_out.map(|wait| (now, wait));
+            if !look.alone || self.kept_out.is_some() {
                 self.rollback_waits = Some(now);
                 return;
             }
@@ -688,6 +692,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
+    use crate::folder_update::domain::AloneLook;
     use crate::shared_kernel::installed_source::InstalledSource;
     use crate::updates::application::SourcePin;
 
@@ -716,6 +721,9 @@ mod tests {
         kept_out: AtomicBool,
         /// Another Jobdesk has the folder open, so a stopped update's rollback waits.
         others_open: AtomicBool,
+        /// Another Jobdesk takes the folder alone in the moment `alone_possible` lets go of this one's hold, so this one
+        /// is kept out once it has looked.
+        grabbed_in_probe: AtomicBool,
     }
 
     impl Fake {
@@ -736,6 +744,7 @@ mod tests {
                 panics: false,
                 kept_out: AtomicBool::new(false),
                 others_open: AtomicBool::new(false),
+                grabbed_in_probe: AtomicBool::new(false),
             }
         }
 
@@ -790,8 +799,12 @@ mod tests {
         fn hold_again(&self, _folder: &Path) -> Option<FolderWait> {
             self.kept_out.load(Ordering::SeqCst).then_some(FolderWait::Updating)
         }
-        fn alone_possible(&self, _folder: &Path) -> bool {
-            !self.others_open.load(Ordering::SeqCst)
+        fn alone_possible(&self, _folder: &Path) -> AloneLook {
+            if self.grabbed_in_probe.load(Ordering::SeqCst) {
+                self.kept_out.store(true, Ordering::SeqCst);
+            }
+            let kept_out = self.kept_out.load(Ordering::SeqCst).then_some(FolderWait::Updating);
+            AloneLook { alone: !self.others_open.load(Ordering::SeqCst), kept_out }
         }
         fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {
             self.note("recover".into());
@@ -1239,6 +1252,25 @@ mod tests {
         follow(&mut opened, None, true);
         assert_eq!(rollbacks(&fake), 2, "the rollback runs once the folder can be held alone");
         assert_eq!(opened.stage(), &Stage::Ended(Outcome::Recovered(rolled_back)));
+    }
+
+    /// The look whether the folder can be held alone lets go of this Jobdesk's hold for a moment. When another Jobdesk
+    /// takes the folder alone in that moment, this one is kept out, and every writer waits, as at an open.
+    #[test]
+    fn a_look_that_cannot_take_the_hold_back_keeps_the_writers_waiting() {
+        let fake = Arc::new(Fake { others_open: AtomicBool::new(true), ..Fake::ready() });
+        let hands = Hands::new();
+        let mut opened = desk(&fake, "0.2.0").with_clock(hands.clock());
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, None, true);
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::RollbackFailed(Failure::OpenElsewhere)));
+        assert!(!opened.is_busy());
+
+        fake.grabbed_in_probe.store(true, Ordering::SeqCst);
+        hands.advance(HOLD_RETRY);
+        follow(&mut opened, None, true);
+        assert!(opened.is_busy() && opened.kept_out(), "the look found the hold taken by another Jobdesk");
+        assert_eq!(rollbacks(&fake), 1, "and starts nothing");
     }
 
     /// A rollback another Jobdesk kept out ran nothing and says nothing, so it holds no update back.

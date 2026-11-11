@@ -33,6 +33,15 @@ pub trait FolderProbe: Send + Sync {
     fn has_git(&self, folder: &Path) -> bool;
 }
 
+/// What a look whether a folder can be held alone found: see `FolderUpdater::alone_possible`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AloneLook {
+    /// No other Jobdesk had the folder open.
+    pub alone: bool,
+    /// Why this Jobdesk is kept out once it took its hold back, if it is.
+    pub kept_out: Option<FolderWait>,
+}
+
 /// Reads the base of a folder update.
 pub trait BaseReader: Send + Sync {
     fn read(&self, folder: &Path) -> Base;
@@ -70,9 +79,10 @@ pub trait FolderUpdater: Send + Sync {
     /// this Jobdesk's own update, Undo or rollback runs, it is `None`.
     fn hold_again(&self, folder: &Path) -> Option<FolderWait>;
     /// Whether this Jobdesk could hold `folder` alone now: no other Jobdesk has it open. It lets go of its own hold for a
-    /// moment and takes it back, as `recover` does, and never waits: while this Jobdesk's own update, Undo or rollback
-    /// runs, it is false.
-    fn alone_possible(&self, folder: &Path) -> bool;
+    /// moment and takes it back, as `recover` does, and says whether it is kept out once it has: another Jobdesk may
+    /// take the folder alone in that moment. It never waits: while this Jobdesk's own update, Undo or rollback runs, it
+    /// finds the folder neither free nor kept out.
+    fn alone_possible(&self, folder: &Path) -> AloneLook;
     /// Rolls back an update of `folder` that stopped midway. `None` when none did.
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError>;
     /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`. Once it holds

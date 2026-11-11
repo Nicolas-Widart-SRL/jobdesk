@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
-use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
+use crate::folder_update::domain::{AloneLook, Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
 use crate::folder_update::infrastructure::disk::is_real_dir;
 use crate::folder_update::infrastructure::hold::{Open, hold_alone, hold_open};
 use crate::folder_update::infrastructure::updater;
@@ -70,6 +70,24 @@ impl DiskFolder {
         }
     }
 
+    /// `alone_possible`, with `gap` run while this Jobdesk's hold is let go of, as another Jobdesk could act then: a
+    /// test's seam. What taking the hold back found is read back, so the caller knows when it is kept out.
+    fn alone_possible_with(&self, folder: &Path, gap: impl FnOnce()) -> AloneLook {
+        let Some(mut open) = self.try_open() else { return AloneLook { alone: false, kept_out: None } };
+        let held = open.folder.as_deref() == Some(folder);
+        if held {
+            open.hold = None;
+        }
+        // Takes the hold back even if what follows panics.
+        let mut take_back = TakeBack { open, held };
+        // The lock alone is let go of at once, before the hold is taken back.
+        let alone = hold_alone(&folder.join(installed_source::DIR)).is_ok();
+        gap();
+        let kept_out = if held { take_back.open.hold() } else { None };
+        take_back.held = false;
+        AloneLook { alone, kept_out }
+    }
+
     /// Runs `job` on `folder` with this Jobdesk's own hold on it let go, so the job can hold the folder alone, then
     /// takes the hold again. The hold is let go of only while `job` runs, and taken again even when the job failed or
     /// panicked, or when it could not be taken at the open because another Jobdesk held the folder alone then.
@@ -131,17 +149,8 @@ impl FolderUpdater for DiskFolder {
         open.hold()
     }
 
-    fn alone_possible(&self, folder: &Path) -> bool {
-        let Some(mut open) = self.try_open() else { return false };
-        let held = open.folder.as_deref() == Some(folder);
-        if held {
-            open.hold = None;
-        }
-        let take_back = TakeBack { open, held };
-        // The lock alone is let go of at once, before the hold is taken back.
-        let alone = hold_alone(&folder.join(installed_source::DIR)).is_ok();
-        drop(take_back);
-        alone
+    fn alone_possible(&self, folder: &Path) -> AloneLook {
+        self.alone_possible_with(folder, || {})
     }
 
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError> {
@@ -320,6 +329,24 @@ mod tests {
         assert_eq!(disk.hold_again(folder.path()), None, "held once it opens");
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds the folder open");
+    }
+
+    /// The look whether a folder can be held alone lets go of this Jobdesk's hold for a moment. Another Jobdesk that
+    /// takes the folder alone then, as a second handle does in the gap here, keeps this one out, and the look says so.
+    #[test]
+    fn a_look_that_cannot_take_the_hold_back_says_it_is_kept_out() {
+        let folder = set_up();
+        let lock = folder.path().join(installed_source::DIR).join(".open");
+        let disk = DiskFolder::default();
+        assert_eq!(disk.open(folder.path()), None);
+        assert_eq!(disk.alone_possible(folder.path()), AloneLook { alone: true, kept_out: None }, "held again after a plain look");
+
+        let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
+        let look = disk.alone_possible_with(folder.path(), || other.lock().unwrap());
+        assert_eq!(look, AloneLook { alone: true, kept_out: Some(FolderWait::Updating) });
+        assert_eq!(disk.hold_again(folder.path()), Some(FolderWait::Updating), "and stays kept out while the other holds it");
+        other.unlock().unwrap();
+        assert_eq!(disk.hold_again(folder.path()), None, "held once the other lets go");
     }
 
     /// A job that panics, as the zip crate or the planner might on bytes a run's tools wrote, still leaves this Jobdesk

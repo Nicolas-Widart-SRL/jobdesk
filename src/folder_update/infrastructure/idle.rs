@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::folder_update::domain::{Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
+use crate::folder_update::domain::{AloneLook, Base, BaseReader, FolderProbe, FolderUpdater, Report, Reverted, Update, UpdateError, ZipFetcher};
 use crate::shared_kernel::FolderWait;
 use crate::shared_kernel::download::DownloadFailure;
 use crate::shared_kernel::installed_source::InstalledSource;
@@ -45,8 +45,8 @@ impl FolderUpdater for IdleFolder {
         None
     }
 
-    fn alone_possible(&self, _folder: &Path) -> bool {
-        false
+    fn alone_possible(&self, _folder: &Path) -> AloneLook {
+        AloneLook { alone: false, kept_out: None }
     }
 
     fn recover(&self, _folder: &Path) -> Result<Option<Reverted>, UpdateError> {

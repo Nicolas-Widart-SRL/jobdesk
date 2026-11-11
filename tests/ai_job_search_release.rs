@@ -124,10 +124,11 @@ struct Doubt {
     /// What is wrong with the block, worded to follow "the front matter of <file>": "has no closing ---", "does not
     /// parse as YAML: <reason> at line <n> of the file", or "is not one YAML mapping".
     why: String,
-    /// The raw value of each `name` line that gives one in printable ASCII.
+    /// The raw value of each `name` line that gives one in printable ASCII, as plain text or in quotes.
     names: Vec<String>,
-    /// Whether a `name` line gives no value on its line, so its value could be on the next, or one with a character
-    /// outside printable ASCII: the name is then not known.
+    /// Whether a `name` line gives no value on its line, so its value could be on the next, one with a character
+    /// outside printable ASCII, or one out of quotes that starts with a YAML indicator, so it is no plain text and could
+    /// be a list, a mapping, an alias or a block scalar: the name is then not known.
     unknown_name: bool,
 }
 
@@ -167,7 +168,8 @@ fn front_matter(bytes: &[u8]) -> FrontMatter {
 /// line is one whose key, before its first `:`, reads `name` once spaces and tabs around it and one pair of matching
 /// quotes around the key are gone. Its value loses a trailing comment, a space or tab then `#` and all after it, then
 /// spaces and tabs around it, one pair of matching quotes, and spaces and tabs around what they held. A value that is
-/// then empty, or holds a character outside printable ASCII, is not known.
+/// then empty, or holds a character outside printable ASCII, is not known, nor is one that was in no pair of quotes and
+/// starts as no plain YAML text does.
 fn raw_names(block: &[&str]) -> (Vec<String>, bool) {
     let mut names = Vec::new();
     let mut unknown = false;
@@ -176,14 +178,28 @@ fn raw_names(block: &[&str]) -> (Vec<String>, bool) {
         if unquoted(blank_trimmed(key)) != "name" {
             continue;
         }
-        let name = blank_trimmed(unquoted(blank_trimmed(uncommented(value))));
-        if name.is_empty() || !printable_ascii(name) {
+        let value = blank_trimmed(uncommented(value));
+        let quoted = unquoted(value).len() != value.len();
+        let name = blank_trimmed(unquoted(value));
+        if name.is_empty() || !printable_ascii(name) || (!quoted && starts_as_no_plain_text(name)) {
             unknown = true;
         } else {
             names.push(name.to_owned());
         }
     }
     (names, unknown)
+}
+
+/// Whether a raw value out of quotes starts the way no plain YAML text does: with a YAML indicator, such as `[` or `{`
+/// for a list or a mapping, `&`, `*` or `!` for an anchor, an alias or a tag, `|` or `>` for a block scalar, or a quote
+/// with no matching one at the end, or with `-`, `?` or `:` then a space, a tab or nothing.
+fn starts_as_no_plain_text(value: &str) -> bool {
+    let mut characters = value.chars();
+    match characters.next() {
+        Some('[' | ']' | '{' | '}' | ',' | '#' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`') => true,
+        Some('-' | '?' | ':') => matches!(characters.next(), None | Some(' ' | '\t')),
+        _ => false,
+    }
 }
 
 /// `text` without the spaces and tabs around it, and nothing else: a wider trim would hide a character the name holds.
@@ -285,13 +301,14 @@ fn doubtful_command_files(files: &Files) -> impl Iterator<Item = (&str, &str, Do
     })
 }
 
+/// What a `name` line in front matter in doubt gives when its name is not known, worded to follow "gives a name:".
+const NOT_KNOWN_IN_DOUBT: &str = "with no value on its line, one outside printable ASCII, or one out of quotes that starts with a YAML indicator, such as [, { or >, and so is no plain text";
+
 /// One line for each skill whose `name:` is not plain, non-empty text in printable ASCII, and for each skill or command
 /// file in doubt with a `name` line whose name is not known: it could be any command, so the check fails.
 fn unknown_names(files: &Files) -> Vec<String> {
     let then = "so the slash command Claude Code makes of it is not known, and it could be any command the launcher starts";
-    let in_doubt = |path: &str, doubt: &Doubt| {
-        format!("{path} gives a name: with no value on its line, or one outside printable ASCII, in front matter that {}, {then}", doubt.why)
-    };
+    let in_doubt = |path: &str, doubt: &Doubt| format!("{path} gives a name: {NOT_KNOWN_IN_DOUBT}, in front matter that {}, {then}", doubt.why);
     let mut lines: Vec<String> =
         doubtful_command_files(files).filter(|(_, _, doubt)| doubt.unknown_name).map(|(path, _, doubt)| in_doubt(path, &doubt)).collect();
     for (path, _, named) in skills(files) {
@@ -306,12 +323,14 @@ fn unknown_names(files: &Files) -> Vec<String> {
 
 /// The file Claude Code runs for the slash command `name`, given without its `/`, or why there is none it would run.
 /// A skill of that name wins over the command file, as it does at run time: a skill named by its front matter's
-/// `name:`, or by its folder when it gives none, so a skill whose `name:` names another command is not this one,
-/// whatever its folder. The file that wins must be one the user can invoke, and when it is not, the command is missing:
-/// the other file does not count. Failing closed, the command is missing too, since which file runs, or whether the
-/// user can invoke it, is then not known: when a skill's or a command file's front matter is in doubt and its folder,
-/// its command or a raw `name` line is `name`, and the line says why each is in doubt; when a skill's `name:` is `name` with spaces around it; or when more
-/// than one skill is named `name`.
+/// `name:`, or by its folder when it gives none, so a skill whose `name:` names another command is never counted as this
+/// one. The file that wins must be one the user can invoke, and when it is not, the command is missing: the other file
+/// does not count. Failing closed, the command is missing too, since which file runs, or whether the user can invoke
+/// it, is then not known: when a skill's or a command file's front matter is in doubt and its folder, its command or a
+/// raw `name` line is `name`, and the line says why each is in doubt; when a skill's `name:` is `name` with spaces
+/// around it; when more than one skill is named `name`; or when a skill in the folder `name` gives another `name:`,
+/// since some Claude Code versions run a skill for its folder's name too, and the line names the skill, its folder and
+/// its name, and says it is a second candidate when another skill is named `name`.
 fn command_file<'a>(files: &'a Files, name: &str) -> Result<(&'a str, &'a [u8]), String> {
     let command = command_path(name);
     let could_be = |own: &str, doubt: &Doubt| own == name || doubt.names.iter().any(|given| given == name);
@@ -344,6 +363,22 @@ fn command_file<'a>(files: &'a Files, name: &str) -> Result<(&'a str, &'a [u8]),
         })
         .map(|(path, _, _)| path)
         .collect();
+    // A folder holds one `SKILL.md`, so at most one skill is in the folder of this name.
+    let aliased = skills(files).find_map(|(path, folder, named)| match named {
+        SkillName::Given(given) if folder == name && given != name => Some((path, format!("name: {given}"))),
+        SkillName::Padded(given) if folder == name && given != name => Some((path, format!("name: {given} with spaces around it"))),
+        _ => None,
+    });
+    if let Some((alias, gives)) = aliased {
+        if named.is_empty() {
+            return Err(format!(
+                "/{name} is missing: the skill {alias} is in the folder {name} but gives {gives}, and some Claude Code versions run a skill for its folder's name too, so whether Claude Code runs it for /{name} is not known"
+            ));
+        }
+        let candidates: Vec<String> =
+            named.iter().map(|path| format!("{path}, a skill named {name}")).chain([format!("{alias}, in the folder {name} but with {gives}")]).collect();
+        return Err(format!("/{name} is missing: {}, could each run for /{name}, so the one Claude Code would run is not known", candidates.join(", and ")));
+    }
     let (path, skill) = match named.as_slice() {
         [] if files.contains_key(&command) => (command.as_str(), false),
         [] => {
@@ -778,9 +813,9 @@ fn a_name_that_is_not_text_fails_the_check() {
     }
 }
 
-/// In front matter in doubt, a `name` line with no value on it, whose value could be on the next line, or with a value
-/// outside printable ASCII, leaves the name unknown, so the check fails and names the file, a skill's or a command
-/// file's, wherever it is.
+/// In front matter in doubt, a `name` line with no value on it, whose value could be on the next line, with a value
+/// outside printable ASCII, or with a value out of quotes that starts with a YAML indicator, so that it is no plain text,
+/// leaves the name unknown, so the check fails and names the file, a skill's or a command file's, wherever it is.
 #[test]
 fn a_name_line_in_doubt_with_no_known_value_fails_the_check() {
     for bytes in [
@@ -792,6 +827,23 @@ fn a_name_line_in_doubt_with_no_known_value_fails_the_check() {
         &b"---\nname: \"\xef\xbb\xbfscrape\"\ndescription: [unclosed\n---\n"[..],
         &b"---\nname: scr\x01ape\n"[..],
         &b"---\nname: other\nname: \xc2\xa0\n---\n"[..],
+        &b"---\nname: [add-template]\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: >\n  add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: |\n  add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: >- # folded\n  add-template\n"[..],
+        &b"---\nname: {add-template}\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: &anchor add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: *anchor\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: !!str add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: %add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: @add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: `add-template`\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: - add-template\n---\n"[..],
+        &b"---\nname: -\t\n  - add-template\n"[..],
+        &b"---\nname: ]add-template\n"[..],
+        &b"---\nname: 'add-template\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: \"add-template\" x\ndescription: [unclosed\n---\n"[..],
+        &b"---\nname: ? add-template\ndescription: [unclosed\n---\n"[..],
     ] {
         assert!(
             matches!(front_matter(bytes), FrontMatter::Doubtful(Doubt { unknown_name: true, .. })),
@@ -804,12 +856,31 @@ fn a_name_line_in_doubt_with_no_known_value_fails_the_check() {
             files.insert(file.clone(), bytes.to_vec());
             let lines = unmet(&files);
             assert_eq!(lines.len(), 1, "{lines:#?}");
-            assert!(
-                lines[0].starts_with(&format!("{file} gives a name: with no value on its line, or one outside printable ASCII, in front matter that ")),
-                "{}",
-                lines[0]
-            );
+            assert!(lines[0].starts_with(&format!("{file} gives a name: {NOT_KNOWN_IN_DOUBT}, in front matter that ")), "{}", lines[0]);
         }
+    }
+}
+
+/// In front matter in doubt, a value in quotes is text whatever it starts with, and a value out of quotes that starts
+/// with `-`, `?` or `:` and no space after it is plain text, so each is a name the check knows.
+#[test]
+fn a_name_line_in_doubt_with_plain_text_is_a_known_name() {
+    for (bytes, name) in [
+        (&b"---\nname: '[add-template]'\ndescription: [unclosed\n---\n"[..], "[add-template]"),
+        (&b"---\nname: \"> add-template\"\ndescription: [unclosed\n---\n"[..], "> add-template"),
+        (&b"---\nname: -add-template\ndescription: [unclosed\n---\n"[..], "-add-template"),
+        (&b"---\nname: ?add-template\ndescription: [unclosed\n---\n"[..], "?add-template"),
+        (&b"---\nname: add-[template]\ndescription: [unclosed\n---\n"[..], "add-[template]"),
+    ] {
+        assert!(
+            matches!(front_matter(bytes), FrontMatter::Doubtful(Doubt { ref names, unknown_name: false, .. }) if names == &[name.to_owned()]),
+            "{:?}: {:?}",
+            String::from_utf8_lossy(bytes),
+            front_matter(bytes)
+        );
+        let mut files = complete();
+        files.insert(".claude/skills/other/SKILL.md".to_owned(), bytes.to_vec());
+        assert_eq!(unmet(&files), Vec::<String>::new(), "{:?}: a name that is no command blocks none", String::from_utf8_lossy(bytes));
     }
 }
 
@@ -926,6 +997,69 @@ fn two_skills_of_one_name_fail_closed() {
         "{}",
         lines[0]
     );
+}
+
+/// Some Claude Code versions also run a skill for its folder's name when its `name:` gives another, so a skill in a
+/// folder of a command's name with another sound `name:`, or one with spaces around it, leaves that command in doubt,
+/// whatever command file there is, and beside another skill named for the command it is a second candidate.
+#[test]
+fn a_skill_in_a_folder_of_a_command_with_another_name_fails_closed() {
+    let skill = ".claude/skills/add-template/SKILL.md";
+    for (bytes, gives) in [
+        ("---\nname: helper\n---\nWrites no block.\n".to_owned(), "name: helper"),
+        (format!("---\nname: helper\n---\n{ACTIVE_TEMPLATE}\n"), "name: helper"),
+        ("---\nname: ' helper'\n---\nWrites no block.\n".to_owned(), "name: helper with spaces around it"),
+    ] {
+        let mut files = complete();
+        assert!(String::from_utf8_lossy(&files[&command_path("add-template")]).contains(ACTIVE_TEMPLATE), "the command file is sound");
+        files.insert(skill.to_owned(), bytes.into_bytes());
+        let alias = format!(
+            "/add-template is missing: the skill {skill} is in the folder add-template but gives {gives}, and some Claude Code versions run a skill for its folder's name too, so whether Claude Code runs it for /add-template is not known"
+        );
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{gives}: {lines:#?}");
+        assert!(lines[0].starts_with(&alias), "{gives}: the line names the skill, its folder and its name: {}", lines[0]);
+        files.remove(&command_path("add-template"));
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{gives}, with no command file: {lines:#?}");
+        assert!(lines[0].starts_with(&alias), "{gives}, with no command file: {}", lines[0]);
+        files.insert(".claude/skills/templates/SKILL.md".to_owned(), format!("---\nname: add-template\n---\n{ACTIVE_TEMPLATE}\n").into_bytes());
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{gives}, beside a skill named add-template: {lines:#?}");
+        assert!(
+            lines[0].starts_with(&format!(
+                "/add-template is missing: .claude/skills/templates/SKILL.md, a skill named add-template, and {skill}, in the folder add-template but with {gives}, could each run for /add-template, so the one Claude Code would run is not known"
+            )),
+            "{gives}: a folder and a name that point at one command are two candidates: {}",
+            lines[0]
+        );
+    }
+    for (bytes, why) in [
+        (format!("---\nname: add-template\n---\n{ACTIVE_TEMPLATE}\n"), "a name: of its folder"),
+        (format!("---\ndescription: Adds a template.\n---\n{ACTIVE_TEMPLATE}\n"), "no name:"),
+        (format!("{ACTIVE_TEMPLATE}\n"), "no front matter"),
+    ] {
+        let mut files = complete();
+        files.insert(command_path("add-template"), b"Writes no block.".to_vec());
+        files.insert(skill.to_owned(), bytes.into_bytes());
+        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}: the skill is the command of its folder, and wins over the command file");
+    }
+}
+
+/// A release that ships commands as skills in folders of their own names, each named, and helpers in folders that are no
+/// command, passes: the shape of v1.7.5, whose `/scrape` is `job-scraper` named `scrape` and `/upskill` is `upskill`.
+#[test]
+fn a_sound_skill_layout_passes() {
+    let mut files = complete();
+    files.remove(&command_path("scrape"));
+    files.remove(&command_path("upskill"));
+    files.remove(&command_path("add-template"));
+    files.insert(".claude/skills/job-scraper/SKILL.md".to_owned(), b"---\nname: scrape\ndescription: Finds jobs.\n---\n".to_vec());
+    files.insert(".claude/skills/upskill/SKILL.md".to_owned(), b"---\nname: upskill\ndescription: Plans learning.\n---\n".to_vec());
+    files.insert(".claude/skills/templates/SKILL.md".to_owned(), format!("---\nname: add-template\n---\n{ACTIVE_TEMPLATE}\n").into_bytes());
+    files.insert(".claude/skills/helper-tools/SKILL.md".to_owned(), b"---\nname: helper-tools\n---\n".to_vec());
+    files.insert(".claude/skills/notes/SKILL.md".to_owned(), b"---\nname: other-notes\n---\n".to_vec());
+    assert_eq!(unmet(&files), Vec::<String>::new());
 }
 
 /// `/apply`'s command file is the marker, needed as a file whatever runs for `/apply`, and `/apply` is held to the same

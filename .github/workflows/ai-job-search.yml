@@ -1,0 +1,142 @@
+# Checks that the ai-job-search releases in assets/update/ai-job-search.json have what Jobdesk relies on: the commands
+# the launcher starts, the files the readers read, within the limits first-run setup holds every release to, and each
+# zip's hash against the list. It starts no `claude` and costs nothing.
+# A pull request or a push to main that changes the list, or the code that says what Jobdesk relies on, checks every
+# release the list holds at the commit it checks out, so a change that makes Jobdesk need something new is checked
+# against the releases already listed, not only the ones it adds. Run it by hand on a version to check a release before
+# `scripts/ai-job-search.sh add`. The maintainer still tests a new release with Jobdesk and signs it off on the pull
+# request.
+name: ai-job-search release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The ai-job-search release to check, such as 1.7.5'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - 'assets/update/ai-job-search.json'
+      - 'src/**'
+      - 'tests/ai_job_search_release.rs'
+      - '.github/workflows/ai-job-search.yml'
+      - 'scripts/ai-job-search.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - 'assets/update/ai-job-search.json'
+      - 'src/**'
+      - 'tests/ai_job_search_release.rs'
+      - '.github/workflows/ai-job-search.yml'
+      - 'scripts/ai-job-search.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-job-search-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One job and one build: each release downloads into a folder of its own, then the ignored test runs once per zip.
+  check:
+    name: Check the ai-job-search releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        # bash -eo pipefail: a failing command in a pipe fails the step.
+        shell: bash
+    steps:
+      # The test comes from the pull request, so it gets no token in the Git config.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      # The versions to check, one a line: the input on a run by hand, or every release the list holds.
+      - name: Find the releases to check
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          versions="$RUNNER_TEMP/versions"
+          if [[ $EVENT == workflow_dispatch ]]; then
+            printf '%s\n' "${INPUT#v}" > "$versions"
+          else
+            list=assets/update/ai-job-search.json
+            if ! jq -n -e '[inputs] | length == 1 and (.[0] | type == "array" and length >= 1)' "$list" > /dev/null 2>&1; then
+              echo "::error::$list is not one list of releases."
+              exit 1
+            fi
+            jq -r '.[].version' "$list" > "$versions"
+          fi
+          mapfile -t found < "$versions"
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "::error::There is no release to check."
+            exit 1
+          fi
+          # Three numbers from 0 to 4294967295 with no leading zero, the form the app writes back and names the zip by.
+          shape='^(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})$'
+          for version in "${found[@]}"; do
+            if ! [[ $version =~ $shape ]] \
+              || ((BASH_REMATCH[1] > 4294967295 || BASH_REMATCH[2] > 4294967295 || BASH_REMATCH[3] > 4294967295)); then
+              echo "::error::'$version' is not a version like 1.7.5: three numbers from 0 to 4294967295, with no leading zero."
+              exit 1
+            fi
+          done
+          echo "Releases to check: ${found[*]}"
+
+      # Each zip goes into a fresh folder of its own, so no release reads another's files.
+      - name: Download the releases
+        run: |
+          mapfile -t versions < "$RUNNER_TEMP/versions"
+          : > "$RUNNER_TEMP/zips"
+          for version in "${versions[@]}"; do
+            dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
+            if ! scripts/ai-job-search.sh download "v$version" "$dir/source.zip"; then
+              echo "::error::ai-job-search $version did not download."
+              exit 1
+            fi
+            printf '%s %s\n' "$version" "$dir/source.zip" >> "$RUNNER_TEMP/zips"
+          done
+
+      - name: Build the check
+        run: cargo test --locked --test ai_job_search_release --no-run
+
+      # The ignored test is the only one this runs. A filter that matched nothing would pass with 0 tests, so each run
+      # must report the one pass. Every release is checked, and the step fails naming each that did not pass.
+      - name: Check what each release holds
+        run: |
+          mapfile -t zips < "$RUNNER_TEMP/zips"
+          failed=()
+          for line in "${zips[@]}"; do
+            version=${line%% *}
+            zip=${line#* }
+            log="$RUNNER_TEMP/check-$version.log"
+            echo "::group::ai-job-search $version"
+            status=0
+            JOBDESK_CANDIDATE_ZIP="$zip" JOBDESK_CANDIDATE_VERSION="$version" \
+              cargo test --locked --test ai_job_search_release -- --ignored < /dev/null 2>&1 | tee "$log" || status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ] || ! grep -Eq '^test result: ok\. 1 passed;' "$log"; then
+              echo "::error::ai-job-search $version lacks what Jobdesk relies on, or its check did not report 1 passed."
+              failed+=("$version")
+            fi
+          done
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::These ai-job-search releases did not pass: ${failed[*]}"
+            exit 1
+          fi
+          echo "Every release passed: ${#zips[@]} checked."

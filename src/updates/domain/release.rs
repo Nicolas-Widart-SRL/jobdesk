@@ -93,11 +93,12 @@ pub fn source_zip_url(version: &Version) -> String {
     format!("https://codeload.github.com/{AI_JOB_SEARCH_REPOSITORY}/zip/refs/tags/{}", version.tag())
 }
 
-/// Reads the `ai-job-search` release the feed pins.
+/// Reads the newest `ai-job-search` release the feed pins.
 pub trait SourcePinReader: Send + Sync {
     /// Reads the feed, so it blocks: call it away from the window's thread. A feed that cannot be reached or read
-    /// says why. `Ok(None)` is a feed with no pin this copy can trust: none, one that does not read, or one whose
-    /// signature fails. A build with no update key always gets `Ok(None)`, and reads nothing.
+    /// says why. `Ok(Some(_))` is the newest release whose signature checks. `Ok(None)` is a feed with no pin this
+    /// copy can trust: none, none that reads, or none whose signature checks. A build with no update key always gets
+    /// `Ok(None)`, and reads nothing.
     fn read(&self) -> Result<Option<SourcePin>, Failure>;
 }
 
@@ -112,14 +113,17 @@ pub struct Release {
     pub size: u64,
     /// The signature of the build. The feed holds it and the size, and no address.
     pub signature: String,
-    /// The `ai-job-search` release the same read of the feed pins, once the update key's signature of it checks.
-    /// `None` for a build with no update key, and for a pin that is missing, does not read or fails its signature.
-    /// Jobdesk's own update never reads it.
-    pub pin: Option<SignedPin>,
+    /// The `ai-job-search` releases the same read of the feed pins, each once the update key's signature of it checks,
+    /// newest first. At most `COMPATIBLE_LIMIT`, and none twice. Empty for a build with no update key, and when no
+    /// entry is there, reads or passes its signature. Jobdesk's own update never reads it.
+    pub pins: Vec<SignedPin>,
 }
 
+/// The most `ai-job-search` releases Jobdesk reads from the feed, and so the most it supports at once.
+pub const COMPATIBLE_LIMIT: usize = 5;
+
 /// A pin whose signature the update key checked. Only the read of the feed in the updates feature makes one, so outside
-/// it a `Release` can carry no pin but the one that read gave.
+/// it a `Release` can carry no pins but the ones that read gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedPin(SourcePin);
 
@@ -135,18 +139,18 @@ impl SignedPin {
 }
 
 /// What the last check that read the feed found, for a folder update: the latest Jobdesk version, and the
-/// `ai-job-search` release that feed pins, when its signature checks. Only the updates feature makes one, from a
-/// check's release, so the only pin it can hold outside tests is one the update key checked.
+/// `ai-job-search` releases that feed pins, newest first, each one whose signature checks. Only the updates feature
+/// makes one, from a check's release, so the only pins it can hold outside tests are ones the update key checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatestFeed {
     latest: Version,
-    pin: Option<SignedPin>,
+    pins: Vec<SignedPin>,
 }
 
 impl LatestFeed {
     /// What the check that gave `release` found.
     pub(in crate::updates) fn of(release: &Release) -> Self {
-        LatestFeed { latest: release.version, pin: release.pin.clone() }
+        LatestFeed { latest: release.version, pins: release.pins.clone() }
     }
 
     /// The latest Jobdesk version the feed names.
@@ -154,9 +158,18 @@ impl LatestFeed {
         self.latest
     }
 
-    /// The `ai-job-search` release the feed pins, its signature checked. `None` when it pins nothing this copy trusts.
+    /// The newest `ai-job-search` release the feed pins, its signature checked. `None` when it pins nothing this copy
+    /// trusts. First-run setup and the folder update use this one.
     pub fn pin(&self) -> Option<&SourcePin> {
-        self.pin.as_ref().map(SignedPin::pin)
+        self.pins.first().map(SignedPin::pin)
+    }
+
+    /// Whether the feed's signed list holds `version`. `None` when the list is empty, so nothing can be said.
+    pub fn supports(&self, version: Version) -> Option<bool> {
+        if self.pins.is_empty() {
+            return None;
+        }
+        Some(self.pins.iter().any(|signed| signed.pin().version == version))
     }
 }
 
@@ -286,7 +299,12 @@ pub trait UpdateService: Send {
 #[cfg(test)]
 impl LatestFeed {
     pub fn for_tests(latest: Version, pin: Option<SourcePin>) -> Self {
-        LatestFeed { latest, pin: pin.map(SignedPin) }
+        Self::for_tests_with(latest, pin.into_iter().collect())
+    }
+
+    /// As `for_tests`, with `pins` as given, newest first.
+    pub fn for_tests_with(latest: Version, pins: Vec<SourcePin>) -> Self {
+        LatestFeed { latest, pins: pins.into_iter().map(SignedPin).collect() }
     }
 }
 

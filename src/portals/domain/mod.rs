@@ -7,7 +7,7 @@ mod search_plan;
 mod switch;
 
 pub use add_line::{AddError, AddField, add_portal_line};
-pub use built_in::{BUILT_IN, Origin, origin};
+pub use built_in::{BUILT_IN, MANIFEST, Origin, SKILLS, origin};
 pub use community::{
     COMMUNITY_REPOSITORY, Codeowners, CommunityFailure, CommunityList, CommunitySource, CountryCode, FolderName, GitSha, ListedPortal, REFUSAL_WAIT, code_url,
     install_prompt, list_url, parse_codeowners, parse_tree_path,

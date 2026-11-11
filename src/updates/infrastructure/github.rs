@@ -122,7 +122,7 @@ mod tests {
     use crate::shared_kernel::https::{Body, Fetch, HttpsFailure};
     use crate::updates::domain::{FEED_URL, SignedPin, Version};
     use crate::updates::infrastructure::download::tests::{Serves, WINDOWS, release, windows_build};
-    use crate::updates::infrastructure::feed::tests::fixture_pin;
+    use crate::updates::infrastructure::feed::tests::{fixture_pin, fixture_pins};
     use crate::updates::infrastructure::signature::tests::{fixture, fixture_key};
 
     /// Holds every request until the test lets it through.
@@ -203,7 +203,8 @@ mod tests {
         let answers: [ServiceEvent; 1] = wait(&mut service).try_into().unwrap();
         let [ServiceEvent::Checked(Ok(found))] = answers else { panic!("{answers:?}") };
         assert_eq!(found.version, Version { major: 0, minor: 2, patch: 0 });
-        assert_eq!(found.pin.as_ref().map(SignedPin::pin), Some(&fixture_pin()), "the check carries the pin it read, checked with the update key");
+        let pins: Vec<&SourcePin> = found.pins.iter().map(SignedPin::pin).collect();
+        assert_eq!(pins, fixture_pins().iter().collect::<Vec<_>>(), "the check carries the pins it read, checked with the update key, newest first");
         // The worker repaints after it sends, so wait for that call.
         let deadline = Instant::now() + Duration::from_secs(10);
         while repaints.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
@@ -289,13 +290,13 @@ mod tests {
     }
 
     #[test]
-    fn a_check_with_no_update_key_carries_no_pin() {
+    fn a_check_with_no_update_key_carries_no_pins() {
         let data = tempfile::tempdir().unwrap();
         let mut service = GithubUpdates::new(Arc::new(Feed), data.path().join("updates"), Some(Platform::WindowsX64), None, Arc::new(|| {}));
         service.check();
         let answers: [ServiceEvent; 1] = wait(&mut service).try_into().unwrap();
         let [ServiceEvent::Checked(Ok(found))] = answers else { panic!("{answers:?}") };
-        assert_eq!((found.version, found.pin), (Version { major: 0, minor: 2, patch: 0 }, None));
+        assert_eq!((found.version, found.pins), (Version { major: 0, minor: 2, patch: 0 }, Vec::new()));
     }
 
     #[test]

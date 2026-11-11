@@ -45,6 +45,10 @@ pub struct AloneLook {
 /// Reads the base of a folder update.
 pub trait BaseReader: Send + Sync {
     fn read(&self, folder: &Path) -> Base;
+    /// The record of the base alone, `.jobdesk/source.json`, with neither the kept zip read nor its hash checked: what
+    /// the folder says it was set up from or last updated to, for a line in About, never for an update. `None` when
+    /// `.jobdesk` or the record is missing, a link or anything but what it should be, or the record does not read.
+    fn record(&self, folder: &Path) -> Option<InstalledSource>;
     /// The release the user undid the last update to, as Undo noted it in the folder's `.jobdesk`: its version and the
     /// SHA-256 of its zip. `None` when nothing is noted, or the note does not read. The next update of the folder
     /// replaces the note with its own backup.

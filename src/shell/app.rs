@@ -1840,6 +1840,9 @@ impl Shell {
         // for Check now while a check would update the folder: Jobdesk reads nothing from the network on its own.
         let auto_check = self.settings.preferences().check_updates.is_on();
         let folder_note = self.folder_update.about_line(auto_check).filter(|_| folder_open);
+        // Whether the last check's signed list still holds the version the open folder's files come from. About only:
+        // the status bar says nothing of it.
+        let folder_support = self.folder_update.support_line(self.updates.latest_feed()).filter(|_| folder_open);
         let (environment, view) = (&mut self.environment, &snapshot.workspace);
         let (x, top, _) = SHELL_PADDING;
         let margin = Margin { left: x as i8, right: SCREEN_PADDING.0 as i8, top: top as i8, bottom: top as i8 };
@@ -1871,6 +1874,7 @@ impl Shell {
                     update: &update,
                     restart_wait,
                     folder_note,
+                    folder_support,
                 };
                 settings::ui::show(ui, &mut self.settings_screen, page_view, &mut |ui, page, query| match (page, environment.as_mut()) {
                     (Page::Runtime, Some(environment)) => {
@@ -2816,7 +2820,7 @@ mod tests {
             notes: "### Features\n\n- A fictional change".into(),
             size: 10,
             signature: "sig".into(),
-            pin: None,
+            pins: Vec::new(),
         }
     }
 

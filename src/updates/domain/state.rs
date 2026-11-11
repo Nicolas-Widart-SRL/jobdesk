@@ -201,7 +201,7 @@ mod tests {
     }
 
     fn release(minor: u32) -> Release {
-        Release { version: version(minor), released: None, notes: "Notes".into(), size: 1000, signature: "sig".into(), pin: None }
+        Release { version: version(minor), released: None, notes: "Notes".into(), size: 1000, signature: "sig".into(), pins: Vec::new() }
     }
 
     /// Reports the end of the download that runs now, as its service would.

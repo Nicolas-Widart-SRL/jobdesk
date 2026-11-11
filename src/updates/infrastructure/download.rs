@@ -200,7 +200,7 @@ pub mod tests {
             notes: String::new(),
             size,
             signature: fixture_signature(WINDOWS),
-            pin: None,
+            pins: Vec::new(),
         }
     }
 

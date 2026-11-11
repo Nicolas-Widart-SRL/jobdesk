@@ -128,6 +128,14 @@ impl BaseReader for DiskFolder {
         if missing(&dir) || empty { Base::Missing } else { Base::Bad }
     }
 
+    fn record(&self, folder: &Path) -> Option<InstalledSource> {
+        let dir = folder.join(installed_source::DIR);
+        if !is_real_dir(&dir) {
+            return None;
+        }
+        installed_source::read_record(&dir.join(installed_source::RECORD))
+    }
+
     fn skipped(&self, folder: &Path) -> Option<InstalledSource> {
         updater::skipped(folder)
     }
@@ -233,6 +241,28 @@ mod tests {
         let file = tempfile::tempdir().unwrap();
         fs::write(file.path().join(installed_source::DIR), b"").unwrap();
         assert_eq!(DiskFolder::default().read(file.path()), Base::Bad, ".jobdesk is a file");
+    }
+
+    /// The record alone reads without the zip, so About learns the version without the zip's bytes or hash.
+    #[test]
+    fn the_record_reads_alone() {
+        let record = |folder: &Path| DiskFolder::default().record(folder).map(|source| source.version);
+        let folder = set_up();
+        assert_eq!(record(folder.path()).as_deref(), Some("1.7.5"));
+        fs::remove_file(folder.path().join(installed_source::DIR).join(installed_source::ZIP)).unwrap();
+        assert_eq!(record(folder.path()).as_deref(), Some("1.7.5"), "with no zip beside it");
+        fs::write(folder.path().join(installed_source::DIR).join(installed_source::RECORD), b"not json").unwrap();
+        assert_eq!(record(folder.path()), None, "a record that does not read");
+        assert_eq!(record(tempfile::tempdir().unwrap().path()), None, "no .jobdesk");
+        let file = tempfile::tempdir().unwrap();
+        fs::write(file.path().join(installed_source::DIR), b"").unwrap();
+        assert_eq!(record(file.path()), None, ".jobdesk is a file");
+        #[cfg(unix)]
+        {
+            let (real, linked) = (set_up(), tempfile::tempdir().unwrap());
+            std::os::unix::fs::symlink(real.path().join(installed_source::DIR), linked.path().join(installed_source::DIR)).unwrap();
+            assert_eq!(record(linked.path()), None, ".jobdesk is a link");
+        }
     }
 
     #[test]

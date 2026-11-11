@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-const MARKER: &str = ".claude/commands/apply.md";
+/// The file whose presence makes a folder an `ai-job-search` checkout.
+pub const MARKER: &str = ".claude/commands/apply.md";
 
 /// A folder confirmed to be an `ai-job-search` checkout.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime, Timelike};
 
 use crate::onboarding::application::{Batch, CopyStop, Documents, Message, read_message};
 use crate::onboarding::domain::{
@@ -14,7 +14,8 @@ use crate::onboarding::domain::{
 };
 use crate::profile::application::{CvShelf, PdfDocument};
 use crate::runs::application::{
-    ActivityKind, CapCheck, Decision, Run, RunDefaults, RunDesk, RunStatus, StartError, StartOptions, notice_text, spec_for_line, start_values,
+    ActivityKind, CapCheck, Decision, Run, RunDefaults, RunDesk, RunStatus, StartError, StartOptions, closing_question, notice_text, spec_for_line,
+    start_values,
 };
 use crate::shared_kernel::visible_text::visible_chars;
 
@@ -200,6 +201,16 @@ pub struct ProfileRun {
     last_draft_try: Option<Instant>,
     /// When the draft last reached the record.
     last_draft_save: Option<Instant>,
+    /// The turn `poll` last saw, and when it began, known only when `poll` saw it working.
+    turn: Option<TurnSeen>,
+}
+
+/// A turn of the run as `poll` first saw it. Kept in memory only.
+struct TurnSeen {
+    run: String,
+    /// `Run::current_turn_start` of the turn.
+    start: usize,
+    began: Option<NaiveDateTime>,
 }
 
 impl ProfileRun {
@@ -226,6 +237,7 @@ impl ProfileRun {
             trouble: None,
             last_draft_try: None,
             last_draft_save: None,
+            turn: None,
         }
     }
 
@@ -350,9 +362,25 @@ impl ProfileRun {
             self.start_failure = started.err();
         }
         self.send_path_a(desk);
-        self.phase =
-            if self.starting { ProfilePhase::Copying } else { phase_of(self.run(desk), self.progress.path_a_sent, &self.folder, input.cv, input.without_pdfs) };
+        let began = self.see_turn(desk, input.wall);
+        self.phase = if self.starting {
+            ProfilePhase::Copying
+        } else {
+            phase_of(self.run(desk), self.progress.path_a_sent, &self.folder, input.cv, input.without_pdfs, began)
+        };
         self.save_draft_if_due(input.now);
+    }
+
+    /// When the run's current turn began, as far as this window saw. A turn first seen while it works began now, to the
+    /// second. One first seen after it ended, as after a restore, has no known start.
+    fn see_turn(&mut self, desk: &RunDesk, wall: NaiveDateTime) -> Option<NaiveDateTime> {
+        let run = self.run(desk)?;
+        let start = run.current_turn_start();
+        if !self.turn.as_ref().is_some_and(|seen| seen.run == run.id && seen.start == start) {
+            let began = run.is_busy().then(|| wall.with_nanosecond(0).unwrap_or(wall));
+            self.turn = Some(TurnSeen { run: run.id.clone(), start, began });
+        }
+        self.turn.as_ref().and_then(|seen| seen.began)
     }
 
     /// Jobdesk's one reply of its own. It goes when a turn that names Path A ended cleanly on its live session, with
@@ -553,8 +581,9 @@ fn gate(desk: &RunDesk, rules: &StartRules) -> Option<StartRefusal> {
 }
 
 /// The phase `run` is in. `path_a_sent` says whether the documents path went, `root` is the job search folder, `cv`
-/// the snapshot's CV documents, and `without_pdfs` holds when no CV can be built.
-pub fn phase_of(run: Option<&Run>, path_a_sent: bool, root: &Path, cv: &CvShelf, without_pdfs: bool) -> ProfilePhase {
+/// the snapshot's CV documents, `without_pdfs` holds when no CV can be built, and `turn_began` is when the current turn
+/// began, when it was seen beginning.
+pub fn phase_of(run: Option<&Run>, path_a_sent: bool, root: &Path, cv: &CvShelf, without_pdfs: bool, turn_began: Option<NaiveDateTime>) -> ProfilePhase {
     let Some(run) = run else { return ProfilePhase::Documents };
     if run.needs_user() {
         return ProfilePhase::Choice;
@@ -576,30 +605,39 @@ pub fn phase_of(run: Option<&Run>, path_a_sent: bool, root: &Path, cv: &CvShelf,
         // A live run is answered on this poll. One whose process ended waits for the user to pick it up.
         return if closed { ProfilePhase::Stopped { reason: STOPPED_BEFORE_READING.to_owned() } } else { ProfilePhase::Reading };
     }
-    at_turn_end(run, root, cv, without_pdfs)
+    at_turn_end(run, root, cv, without_pdfs, turn_began)
 }
 
 /// The phase of a turn that ended cleanly with nothing open. A turn that asks numbered questions or proposes changes is
-/// never the end, whatever else it says.
-fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool) -> ProfilePhase {
+/// never the end, whatever else it says. The CV check shows only for a turn whose message has no numbered items, so "The CV looks good." never answers
+/// questions or a proposal.
+fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool, turn_began: Option<NaiveDateTime>) -> ProfilePhase {
     let message = last_message(run).unwrap_or_default();
-    let read = read_message(&message);
-    if let Message::Proposal(batch) = read {
-        return ProfilePhase::Review { message, batch };
+    match read_message(&message) {
+        Message::Proposal(batch) => return ProfilePhase::Review { message, batch },
+        Message::Questions(batch) => return ProfilePhase::Sheet { message, batch },
+        Message::Free => {}
     }
     if !without_pdfs
         && built_cv(run, root)
-        && let Some(pdf) = fresh_pdf(run, cv)
+        && let Some(pdf) = fresh_pdf(run, cv, turn_began)
     {
         return ProfilePhase::CvCheck { message, pdf };
-    }
-    if let Message::Questions(batch) = read {
-        return ProfilePhase::Sheet { message, batch };
     }
     if setup_complete(run, &message) {
         return ProfilePhase::Done;
     }
     ProfilePhase::FallbackSheet { message }
+}
+
+/// Whether the turn closes on a question, as Tasks reads one. A run read back from its log reads as its turn ended.
+fn asks_back(run: &Run) -> bool {
+    if run.awaits_reply() {
+        return closing_question(run).is_some();
+    }
+    let mut ended = run.clone();
+    ended.status = RunStatus::AwaitingReply;
+    closing_question(&ended).is_some()
 }
 
 /// `text` as plain lower-case text, without hidden characters.
@@ -625,8 +663,8 @@ fn names_path_a(text: &str) -> bool {
 }
 
 /// Whether the turn ends setup: it says setup is complete, or it answers the user's "The CV looks good." after an
-/// earlier turn of the run said so. That earlier turn may have shown the CV check, and a change asked for there keeps
-/// it said. Read from the run's own rows, so it holds after a restore.
+/// earlier turn of the run said so and it closes on no question. That earlier turn may have shown the CV check, and a
+/// change asked for there keeps it said. Read from the run's own rows, so it holds after a restore.
 fn setup_complete(run: &Run, message: &str) -> bool {
     if says_complete(message) {
         return true;
@@ -634,7 +672,7 @@ fn setup_complete(run: &Run, message: &str) -> bool {
     let start = run.current_turn_start();
     let answers_check =
         start.checked_sub(1).and_then(|at| run.activity.get(at)).is_some_and(|row| matches!(&row.kind, ActivityKind::You(text) if text == CV_LOOKS_GOOD));
-    answers_check && earlier_turns_said_complete(run, start)
+    answers_check && earlier_turns_said_complete(run, start) && !asks_back(run)
 }
 
 /// Whether a turn before the row at `start` said setup is complete in its last top-level message.
@@ -690,8 +728,15 @@ fn built_cv(run: &Run, root: &Path) -> bool {
 
 /// The newest CV PDF of the snapshot written since the run started. The run keeps its start to the minute, so a PDF
 /// from that minute counts.
-fn fresh_pdf(run: &Run, cv: &CvShelf) -> Option<PdfDocument> {
-    let started = NaiveDateTime::parse_from_str(&run.started_at, STARTED_AT).ok()?;
+///
+/// When `turn_began` knows when the current turn began, only a PDF written since then counts, so a build that failed or
+/// built another file never shows a PDF the user already answered. A turn first seen after it ended, as after a
+/// restore, has no known start and falls back to the run's.
+fn fresh_pdf(run: &Run, cv: &CvShelf, turn_began: Option<NaiveDateTime>) -> Option<PdfDocument> {
+    let started = match turn_began {
+        Some(began) => began,
+        None => NaiveDateTime::parse_from_str(&run.started_at, STARTED_AT).ok()?,
+    };
     let CvShelf::Read { documents, .. } = cv else { return None };
     documents
         .iter()
@@ -832,6 +877,8 @@ mod tests {
         cv: CvShelf,
         without_pdfs: bool,
         rules_testing: bool,
+        /// The local time each poll reads.
+        wall: NaiveDateTime,
     }
 
     fn today() -> NaiveDate {
@@ -852,7 +899,7 @@ mod tests {
         let shelf = Arc::new(Shelf::default());
         let copier = Arc::clone(&shelf) as Arc<dyn DocumentCopier>;
         let profile = ProfileRun::new(Arc::clone(&store) as Arc<dyn ProgressStore>, progress, PathBuf::from(ROOT), copier, Arc::new(|| {}), today());
-        Fixture { desk, script, store, shelf, profile, cv: CvShelf::default(), without_pdfs: false, rules_testing: false }
+        Fixture { desk, script, store, shelf, profile, cv: CvShelf::default(), without_pdfs: false, rules_testing: false, wall: now() }
     }
 
     fn fixture() -> Fixture {
@@ -888,7 +935,7 @@ mod tests {
         fn poll_at(&mut self, at: Instant) {
             let (defaults, cap) = (RunDefaults::default(), CapCheck::Open);
             let rules = StartRules { defaults: &defaults, cap: &cap, testing: self.rules_testing };
-            let input = PollInput { cv: &self.cv, without_pdfs: self.without_pdfs, rules, now: at, wall: now() };
+            let input = PollInput { cv: &self.cv, without_pdfs: self.without_pdfs, rules, now: at, wall: self.wall };
             self.desk.poll();
             self.profile.poll(&mut self.desk, &input);
         }
@@ -1404,6 +1451,72 @@ mod tests {
         after.cv = f.cv.clone();
         after.poll();
         assert!(matches!(after.profile.phase(), ProfilePhase::FallbackSheet { .. }), "nor after a restore");
+    }
+
+    #[test]
+    fn a_question_after_the_cv_looks_good_is_not_the_end() {
+        let mut f = fixture();
+        at_complete_with_a_cv(&mut f);
+        f.profile.cv_looks_good(&mut f.desk).unwrap();
+        let question = "Glad you like it. Would you also like me to tailor the cover letter template to it?";
+        f.says(question);
+        f.ends_turn();
+        f.poll();
+        assert_eq!(f.profile.phase(), &ProfilePhase::FallbackSheet { message: question.into() });
+        let restored = Restored(read_back(f.desk.run(f.profile.progress().run.as_deref().unwrap()).unwrap()));
+        let mut again = fixture_with(f.record(), Some(&restored));
+        again.poll();
+        assert!(matches!(again.profile.phase(), ProfilePhase::FallbackSheet { .. }), "nor after a restore");
+        f.profile.send_text(&mut f.desk, "No, thank you.").unwrap();
+        f.says("Then setup is done. Run Find new jobs next.");
+        f.ends_turn();
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::FallbackSheet { .. }), "only the turn that answers the CV check can end it");
+    }
+
+    #[test]
+    fn numbered_questions_in_a_turn_that_built_the_cv_open_the_sheet() {
+        let mut f = fixture();
+        f.at(FIVE);
+        f.profile.send_answers(&mut f.desk, &[]).unwrap();
+        f.tool("b", "Bash", "cd cv && lualatex main_example.tex");
+        f.says(FIVE);
+        f.ends_turn();
+        f.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(30));
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::Sheet { .. }), "{:?}", f.profile.phase());
+        let mut proposal = fixture();
+        proposal.at(FIVE);
+        proposal.profile.send_answers(&mut proposal.desk, &[]).unwrap();
+        proposal.tool("b", "Bash", "cd cv && lualatex main_example.tex");
+        proposal.says(SIXTEEN);
+        proposal.ends_turn();
+        proposal.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(30));
+        proposal.poll();
+        assert!(matches!(proposal.profile.phase(), ProfilePhase::Review { .. }));
+    }
+
+    #[test]
+    fn a_failed_rebuild_shows_no_second_check_on_the_pdf_already_answered() {
+        let mut f = fixture();
+        at_complete_with_a_cv(&mut f);
+        f.wall = now() + chrono::TimeDelta::minutes(35);
+        f.profile.send_text(&mut f.desk, "Put my phone number on the first line.").unwrap();
+        f.poll();
+        f.emit(AgentEvent::ToolStarted { id: "b2".into(), name: "Bash".into(), summary: "cd cv && lualatex main_example.tex".into(), nested: false });
+        f.emit(AgentEvent::ToolFinished { id: "b2".into(), outcome: Err(Some("! LaTeX Error".into())) });
+        f.says("The build failed. Shall I try another way?");
+        f.ends_turn();
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::FallbackSheet { .. }), "the PDF is the one answered: {:?}", f.profile.phase());
+        f.profile.send_text(&mut f.desk, "Yes.").unwrap();
+        f.poll();
+        f.tool("b3", "Bash", "cd cv && xelatex main_example.tex");
+        f.says("Built with XeLaTeX. Have a look.");
+        f.ends_turn();
+        f.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(40));
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::CvCheck { .. }), "a PDF built in this turn");
     }
 
     #[test]

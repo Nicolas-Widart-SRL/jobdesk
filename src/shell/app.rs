@@ -2816,7 +2816,7 @@ mod tests {
             notes: "### Features\n\n- A fictional change".into(),
             size: 10,
             signature: "sig".into(),
-            pin: None,
+            pins: Vec::new(),
         }
     }
 

@@ -4168,7 +4168,7 @@ fn release_020() -> Release {
         notes: RELEASE_NOTES.to_owned(),
         size: 14_200_000,
         signature: "fictional".to_owned(),
-        pin: None,
+        pins: Vec::new(),
     }
 }
 

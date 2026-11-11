@@ -148,7 +148,7 @@ ai-job-search keeps its name, as the user may already know it.
 | Choosing job sites and search terms | writes under `.agents/skills/` or to `.claude/skills/job-scraper/search-queries.md` |
 
 - The working line carries `live_sweep` and "Last update 4s ago", with the quiet rules from Tasks ("No update for 48s. Long writes can be quiet."). The lead says "This can take a few minutes", because Claude's turns took 1 to 3 minutes each.
-- The side column, while Claude works, says the user can step away and keeps a So far slip: rounds answered and changes applied.
+- The side column, while Claude works, says the user can step away and keeps a So far slip: rounds answered and changes approved ("14 changes approved.", "1 change approved."). The review's reply approves them; Claude may not have written them yet.
 
 ### Question sheet
 

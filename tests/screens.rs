@@ -8487,6 +8487,20 @@ mod profile_chapter {
         assert_eq!(scene.sent().last().unwrap(), "Apply all except 3 and 7.");
     }
 
+    /// So far counts the changes the review approved, which Claude has yet to write, so it says approved, never applied.
+    #[test]
+    fn so_far_counts_the_changes_approved() {
+        let mut scene = scene("so_far_approved", Theme::Light, false);
+        scene.at(SIXTEEN);
+        scene.until_shown("16 of 16 changes");
+        scene.untick(2);
+        scene.untick(6);
+        scene.click("Apply these changes");
+        scene.until_shown("Claude is working on your profile");
+        assert!(scene.shown("14 changes approved."), "the slip counts what the review approved");
+        assert!(!scene.shown("applied to your profile"));
+    }
+
     #[test]
     fn every_change_unticked_disables_apply() {
         let mut scene = scene("review_none", Theme::Light, false);

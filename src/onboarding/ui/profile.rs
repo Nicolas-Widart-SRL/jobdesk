@@ -750,9 +750,10 @@ fn working(ui: &mut Ui, run: &mut ProfileRun, desk: &mut RunDesk, phase: &Profil
                             let answered = if rounds.len() == 1 { "1 round answered:".to_owned() } else { format!("{} rounds answered:", rounds.len()) };
                             slip_text(ui, &answered, &questions);
                         }
+                        // The review approved them. Claude may not have written them yet.
                         if so_far.changes > 0 {
                             let changes = if so_far.changes == 1 { "1 change".to_owned() } else { format!("{} changes", so_far.changes) };
-                            slip_text(ui, &changes, "applied to your profile.");
+                            slip_text(ui, &changes, "approved.");
                         }
                     });
                 }

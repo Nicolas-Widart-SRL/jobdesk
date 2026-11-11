@@ -2,13 +2,7 @@
 //! The script tests use a temporary list and zips made here, and never touch the network.
 
 use std::fs;
-use std::io::{Cursor, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output};
-
-use sha2::{Digest, Sha256};
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,6 +47,13 @@ fn the_committed_list_is_well_formed() {
 
 #[cfg(unix)]
 mod script {
+    use std::io::{Cursor, Write};
+    use std::process::{Command, Output};
+
+    use sha2::{Digest, Sha256};
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
     use super::*;
 
     fn tools_present() -> bool {

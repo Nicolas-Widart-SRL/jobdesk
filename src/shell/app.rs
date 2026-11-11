@@ -18,12 +18,13 @@ use crate::insights;
 use crate::intray;
 use crate::intray::application::{InTray, Queue, Request, Sources};
 use crate::intray::ui::{TodayContext, TodayScreen};
-use crate::onboarding::application::{Onboarding, Stage as SetupStage};
-use crate::onboarding::ui::{FirstRunRequest, FirstRunScreen};
+use crate::onboarding::application::{Onboarding, PollInput, ProfilePhase, ProfileRun, Stage as SetupStage, StartRules};
+use crate::onboarding::ui::{Chapter, ChapterRequest, FirstRunRequest, FirstRunScreen, ProfileChapter, Recap, RecapRequest};
 use crate::portals;
 use crate::portals::application::{Community, PortalChanges};
 use crate::portals::ui::{BrowseContext, PortalsRequest, PortalsScreen};
 use crate::profile;
+use crate::profile::application::{CvShelf, Shelf, home_country, topic_counts};
 use crate::profile::application::{ProfileEditor, UpdatedMarks};
 use crate::profile::ui::{Away, Moment, ProfileRequest, ProfileScreen};
 use crate::runs;
@@ -225,6 +226,23 @@ pub struct Shell {
     setup_stopping: Option<JoinHandle<()>>,
     /// The size the window was last asked to take. None until first-run setup's first frame asks for the small one.
     window: Option<WindowSize>,
+    /// First-run setup's Profile chapter, then its recap, over the folder it opened, in the window grown to the app's.
+    profile_setup: Option<ProfileSetup>,
+    /// The folder opened for first-run setup, whose profile is not built yet. It is not remembered, so the next open
+    /// shows the welcome back and its Finish my profile.
+    setup_pending: bool,
+}
+
+/// The Profile chapter of first-run setup, and its recap once the run is done.
+struct ProfileSetup {
+    run: ProfileRun,
+    screen: ProfileChapter,
+    /// The user went on without LaTeX this time.
+    without_pdfs: bool,
+    /// The job search folder as the screens show it, such as `Documents/Job search`.
+    shown: String,
+    /// The recap shows, with the minutes setup's run took, read when it opened.
+    recap: Option<u64>,
 }
 
 /// What Restart to update applies once the window has closed, and the arguments the new copy opens with. `run` reads it.
@@ -325,6 +343,8 @@ impl Shell {
             setup_stopping: None,
             // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
             window: Some(WindowSize::App),
+            profile_setup: None,
+            setup_pending: false,
         }
     }
 
@@ -379,6 +399,23 @@ impl Shell {
     /// `home` show from it.
     pub fn with_first_run(self, onboarding: Onboarding, home: PathBuf) -> Self {
         Self { first_run: Some(FirstRun { onboarding, screen: FirstRunScreen::new(home) }), window: None, ..self }
+    }
+
+    /// Shows first-run setup's Profile chapter through `run` over the folder open, which shows as `shown`, as setup does
+    /// once the Computer step is done, for tests and snapshots. `without_pdfs` says the user went on without LaTeX.
+    pub fn with_profile_setup(self, run: ProfileRun, without_pdfs: bool, shown: &str) -> Self {
+        let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown: shown.to_owned(), recap: None };
+        Self { profile_setup: Some(setup), setup_pending: true, screen: Screen::InTray, ..self }
+    }
+
+    /// The Profile chapter's run while it shows, for tests that act on it as its screens would.
+    pub fn profile_setup_mut(&mut self) -> Option<&mut ProfileRun> {
+        self.profile_setup.as_mut().map(|setup| &mut setup.run)
+    }
+
+    /// Whether first-run setup's Profile chapter or its recap shows.
+    pub fn in_profile_setup(&self) -> bool {
+        self.profile_setup.is_some()
     }
 
     /// First-run setup while it shows, for tests that act as its folder picker would.
@@ -646,8 +683,10 @@ impl Shell {
                 self.loaded = false;
                 self.workspace = Some(root);
                 self.folder_error = None;
-                // However the folder opened, first-run setup has nothing left to do.
+                // However the folder opened, first-run setup has nothing left to do. Its Profile chapter, when this is
+                // its folder, starts again once it has opened.
                 self.leave_first_run();
+                self.leave_profile_setup();
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }
@@ -738,6 +777,7 @@ impl Shell {
             desk.set_testing(testing);
             desk.poll();
         }
+        self.follow_profile_setup();
         self.follow_runs();
         self.settle_run_end(ui.ctx());
         if let Some(pages) = &mut self.pages {
@@ -771,6 +811,8 @@ impl Shell {
             egui::CentralPanel::default().frame(sheet_frame()).show(ui, |ui| {
                 if self.settings_open {
                     self.settings(ui);
+                } else if self.profile_setup.is_some() {
+                    self.profile_setup_screen(ui);
                 } else if self.workspace.is_some() {
                     self.content(ui, &queue);
                 } else if self.first_run.is_some() {
@@ -806,16 +848,143 @@ impl Shell {
     }
 
     /// Takes what first-run setup's worker said. Once the Folder and Computer steps are done, the folder opens as the
-    /// job search.
+    /// job search, and the Profile chapter shows over it in the window grown to the app's size.
     fn follow_first_run(&mut self, ctx: &egui::Context) {
         self.join_stopped_setup(ctx);
         let Some(first) = &mut self.first_run else { return };
         first.onboarding.poll(self.snapshot.today);
-        if let SetupStage::Finished { folder } = first.onboarding.stage() {
-            let folder = folder.clone();
+        if let SetupStage::Finished { folder, without_pdfs } = first.onboarding.stage() {
+            let (folder, without_pdfs) = (folder.clone(), *without_pdfs);
+            let (progress, shown) = (first.onboarding.progress().clone(), first.screen.shown(&folder));
             self.open(ctx, &folder);
             // A folder that failed to open leaves setup too, and shows on the welcome.
             self.leave_first_run();
+            if let (Some(_), Some(data)) = (&self.workspace, &self.data) {
+                let repaint = ctx.clone();
+                let run = crate::onboarding::profile_run(data, folder, progress, Arc::new(move || repaint.request_repaint()), self.snapshot.today);
+                let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown, recap: None };
+                (self.profile_setup, self.setup_pending) = (Some(setup), true);
+            }
+        }
+    }
+
+    /// Leaves the Profile chapter or its recap, with the draft written first. Its record stays, unless the recap
+    /// cleared it.
+    fn leave_profile_setup(&mut self) {
+        if let Some(mut setup) = self.profile_setup.take() {
+            setup.run.flush();
+        }
+    }
+
+    /// Polls the Profile chapter's run after the desk, with the rules Read my documents is checked against, and opens
+    /// the recap once the run is done. Without PDFs holds once the user went on without LaTeX, or the tool check finds
+    /// none.
+    fn follow_profile_setup(&mut self) {
+        let cap = self.cap();
+        let testing = self.providers.test_gate(false) == TestGate::Testing;
+        let wall = self.now();
+        let no_latex = self.environment.as_ref().is_some_and(|checks| checks.results().is_some() && checks.version_of("lualatex").is_none());
+        let (Some(setup), Some(desk)) = (&mut self.profile_setup, &mut self.desk) else { return };
+        let rules = StartRules { defaults: &self.settings.preferences().run_defaults, cap: &cap, testing };
+        let input = PollInput { cv: &self.snapshot.cv_documents, without_pdfs: setup.without_pdfs || no_latex, rules, now: Instant::now(), wall };
+        setup.run.poll(desk, &input);
+        if setup.recap.is_none() && *setup.run.phase() == ProfilePhase::Done {
+            let took = setup.run.run(desk).map_or(Duration::ZERO, |run| run.elapsed.total(desk.now()));
+            setup.recap = Some((took.as_secs() + 30) / 60);
+            // The recap opens: the record goes, and the folder is remembered from now on.
+            setup.run.clear_record();
+            setup.without_pdfs |= no_latex;
+            self.setup_pending = false;
+            (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+        }
+    }
+
+    /// The recap's facts, from the snapshot.
+    fn recap_facts(&self, setup: &ProfileSetup, minutes: u64) -> Recap {
+        let snapshot = &self.snapshot;
+        let counts = topic_counts(&snapshot.profile);
+        let cv = match &snapshot.cv_documents {
+            CvShelf::Read { documents, .. } => {
+                documents.iter().filter(|doc| doc.shelf == Shelf::Master).find_map(|doc| doc.pdf.as_ref().map(|pdf| pdf.name.clone()))
+            }
+            CvShelf::Unread => None,
+        };
+        let sites = snapshot.portals.portals.iter().filter(|portal| portal.on).map(|portal| portal.name.clone()).collect();
+        Recap {
+            folder: setup.shown.clone(),
+            without_pdfs: setup.without_pdfs,
+            topics: (counts.filled, counts.total),
+            cv,
+            sites,
+            country: home_country(&snapshot.profile),
+            minutes,
+            today: snapshot.today,
+        }
+    }
+
+    /// The Profile chapter's screen for where its run stands, or the recap, then what the user asked for there.
+    fn profile_setup_screen(&mut self, ui: &mut Ui) {
+        if let Some(minutes) = self.profile_setup.as_ref().and_then(|setup| setup.recap) {
+            let facts = self.profile_setup.as_ref().map(|setup| self.recap_facts(setup, minutes));
+            if let Some(asked) = facts.and_then(|facts| crate::onboarding::ui::recap(ui, &facts).map(|asked| (asked, facts))) {
+                self.follow_recap(asked.0, asked.1.cv.as_deref());
+            }
+            return;
+        }
+        let cap = self.cap();
+        let testing = self.providers.test_gate(false) == TestGate::Testing;
+        let wall = self.now();
+        let (Some(setup), Some(desk)) = (&mut self.profile_setup, &mut self.desk) else { return };
+        let rules = StartRules { defaults: &self.settings.preferences().run_defaults, cap: &cap, testing };
+        let ProfileSetup { run, screen, shown, .. } = setup;
+        let mut chapter = Chapter { desk, rules, pages: self.pages.as_mut(), wall, now: Instant::now(), folder: shown };
+        let asked = screen.show(ui, run, &mut chapter);
+        match asked {
+            Some(ChapterRequest::ChooseFiles) => {
+                if let Some(files) = rfd::FileDialog::new().set_title("Choose your documents").add_filter("PDF", &["pdf"]).pick_files() {
+                    run.add_documents(files);
+                }
+            }
+            // Checked again against `cv/` before the system's viewer gets the file.
+            Some(ChapterRequest::OpenPdf(name)) => {
+                if let Some(workspace) = &self.workspace {
+                    profile::open_cv_pdf(workspace.path(), &name);
+                }
+            }
+            Some(ChapterRequest::FinishLater) => {
+                // The record stays, and the folder is not remembered, so the next open offers to pick up.
+                self.leave_profile_setup();
+                (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+            }
+            None => {}
+        }
+    }
+
+    /// Does what the recap asked. Each leaves it but Show in Finder and Open PDF.
+    fn follow_recap(&mut self, asked: RecapRequest, cv: Option<&str>) {
+        let root = self.workspace.as_ref().map(|workspace| workspace.path().to_owned());
+        match asked {
+            RecapRequest::ShowFolder => {
+                if let Some(root) = root {
+                    settings::reveal_folder(&root);
+                }
+            }
+            RecapRequest::OpenPdf => {
+                if let (Some(root), Some(name)) = (root, cv) {
+                    profile::open_cv_pdf(&root, name);
+                }
+            }
+            // It only opens the launcher: the user starts the run there.
+            RecapRequest::AddPortal => {
+                self.leave_profile_setup();
+                if self.launcher.prefill("/add-portal") {
+                    self.open_launcher();
+                }
+            }
+            RecapRequest::OpenJobdesk => {
+                self.leave_profile_setup();
+                (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
+            }
         }
     }
 
@@ -874,8 +1043,8 @@ impl Shell {
             FirstRunRequest::Cancel => onboarding.cancel(),
             FirstRunRequest::GoOn => onboarding.go_on(),
             FirstRunRequest::Install => onboarding.install(),
-            FirstRunRequest::Finish => onboarding.finish(false),
-            FirstRunRequest::WithoutPdfs => onboarding.finish(true),
+            FirstRunRequest::Finish => onboarding.finish(false, today),
+            FirstRunRequest::WithoutPdfs => onboarding.finish(true, today),
         }
         // The worker may already have news, and a finished setup opens its folder at once.
         ui.ctx().request_repaint();
@@ -1117,6 +1286,7 @@ impl Shell {
 
     /// Opens the launcher and keeps where it came from, for Esc. It closes Settings, which keeps its page for next time.
     fn open_launcher(&mut self) {
+        self.leave_recap();
         self.settings_open = false;
         if self.screen != Screen::Launcher {
             self.launcher_from = self.screen;
@@ -1174,7 +1344,9 @@ impl Shell {
         if open_settings {
             self.settings_open = true;
         }
-        if ask && self.workspace.is_some() {
+        // The Profile chapter offers no task of its own until its recap.
+        let chapter = self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_none());
+        if ask && self.workspace.is_some() && !chapter {
             self.new_task();
         }
     }
@@ -1205,8 +1377,9 @@ impl Shell {
     /// Before a folder is open, only the lit Today tab answers: the rest have nothing to show yet.
     fn desk_top(&mut self, ui: &mut Ui, pending: usize) {
         ui.spacing_mut().item_spacing.y = 0.0;
-        // First-run setup has no menu: nothing else is usable yet.
-        if self.first_run.is_some() && self.workspace.is_none() {
+        // First-run setup has no menu until its recap: nothing else is usable yet.
+        let chapter = self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_none());
+        if (self.first_run.is_some() && self.workspace.is_none()) || chapter {
             ui.allocate_ui_with_layout(vec2(ui.available_width(), NAV_TAB_HEIGHT), Layout::left_to_right(Align::Center), brand);
             return;
         }
@@ -1248,8 +1421,16 @@ impl Shell {
         }
     }
 
+    /// Leaves first-run setup's recap, if it shows, for the screen the user picked.
+    fn leave_recap(&mut self) {
+        if self.profile_setup.as_ref().is_some_and(|setup| setup.recap.is_some()) {
+            self.leave_profile_setup();
+        }
+    }
+
     /// Shows `screen`. Leaving Profile with unsaved text asks first, and the screen changes only once the user drops it.
     fn leave_for(&mut self, screen: Screen) {
+        self.leave_recap();
         let asks = self.screen == Screen::Profile
             && screen != Screen::Profile
             && self.profile_editor.as_mut().is_some_and(|editor| self.profile_screen.ask_to_leave(editor));
@@ -1991,13 +2172,18 @@ impl eframe::App for Shell {
         self.show(ui);
     }
 
+    /// A folder whose first-run profile is not built yet is not remembered, so the next open offers to finish it.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(workspace) = &self.workspace {
+        if let Some(workspace) = self.workspace.as_ref().filter(|_| !self.setup_pending) {
             storage.set_string(WORKSPACE_KEY, workspace.path().display().to_string());
         }
     }
 
+    /// The Profile chapter's draft is written as the window closes.
     fn on_exit(&mut self) {
+        if let Some(setup) = &mut self.profile_setup {
+            setup.run.flush();
+        }
         self.leave_restart();
     }
 }

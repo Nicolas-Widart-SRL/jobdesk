@@ -320,18 +320,25 @@ pub struct AnswersSlip<'a> {
     pub saved_at: Option<&'a str>,
     /// The short form for a round of follow-ups: the count and one line, with no tally, draft slip or Show all.
     pub short: bool,
+    /// The draft could not be saved: the slip says the answers are not saved yet, in place of when they saved.
+    pub unsaved: bool,
 }
+
+/// What the draft slip says when the answers could not be saved.
+pub const NOT_SAVED: &str = "Your answers are not saved yet. They stay here while Jobdesk is open, so send them before you quit.";
 
 /// The question sheet's side slips: "Your answers" with how many of the questions have one and a `TALLY_FAT` mark
 /// for each, lit where it is answered, then that short answers are fine and an empty one is sent as Skipped. Then when
-/// the draft saved, and what Send does, with Show all Claude wrote. Returns whether Show all Claude wrote was clicked.
+/// the draft saved, or that it could not be, and what Send does, with Show all Claude wrote. Returns whether Show all
+/// Claude wrote was clicked.
 pub fn answers_slip(ui: &mut Ui, slip: &AnswersSlip) -> bool {
     let p = Palette::of(ui);
     let total = slip.answered.len();
     let done = slip.answered.iter().filter(|answered| **answered).count();
     side_slip(ui, "Your answers", &format!("{done} of {total}"), |ui| {
         if slip.short {
-            slip_text(ui, "Short answers are fine.", "Saved as you type. An empty one is sent as Skipped.");
+            let saved = if slip.unsaved { NOT_SAVED } else { "Saved as you type." };
+            slip_text(ui, "Short answers are fine.", &format!("{saved} An empty one is sent as Skipped."));
             return;
         }
         let colors: Vec<Color32> = slip.answered.iter().map(|&answered| if answered { p.text } else { p.off }).collect();
@@ -341,14 +348,44 @@ pub fn answers_slip(ui: &mut Ui, slip: &AnswersSlip) -> bool {
     if slip.short {
         return false;
     }
-    let when = slip.saved_at.map_or_else(|| "Saved as you type.".to_owned(), |at| format!("Saved as you type, last at {at}."));
-    side_slip(ui, "Draft saved", "", |ui| {
-        slip_text(ui, "", &format!("{when} Take your time: close Jobdesk and come back, and your answers wait here."));
-    });
+    if slip.unsaved {
+        side_slip(ui, "Not saved yet", "", |ui| slip_text(ui, "", NOT_SAVED));
+    } else {
+        let when = slip.saved_at.map_or_else(|| "Saved as you type.".to_owned(), |at| format!("Saved as you type, last at {at}."));
+        side_slip(ui, "Draft saved", "", |ui| {
+            slip_text(ui, "", &format!("{when} Take your time: close Jobdesk and come back, and your answers wait here."));
+        });
+    }
     side_slip(ui, "", "", |ui| {
         slip_text(ui, "", "Send joins your answers into one numbered reply, in Claude's order.");
         link(ui, "Show all Claude wrote").clicked()
     })
+}
+
+/// The height Claude's whole message may take in its popover before it scrolls.
+const WROTE_HEIGHT: f32 = 520.0;
+
+/// Show all Claude wrote: Claude's whole message, by `claude_markdown`'s rules, in a popover over the window, at
+/// `DOC_MEASURE` and scrolling past `WROTE_HEIGHT`, so nothing the sheet leaves out is hidden. Close, Esc or a click
+/// outside closes it, by setting `open` to false.
+pub fn claude_wrote_popover(ctx: &egui::Context, open: &mut bool, cache: &mut CommonMarkCache, text: &str) {
+    if !*open {
+        return;
+    }
+    let modal = egui::Modal::new(Id::NULL.with("claude_wrote_popover")).show(ctx, |ui| {
+        ui.set_width(DOC_MEASURE);
+        ui.spacing_mut().item_spacing.y = ITEM_GAP;
+        add_text(ui, "All Claude wrote", Type::SECTION, Ink::Text);
+        ScrollArea::vertical().id_salt("claude_wrote_text").max_height(WROTE_HEIGHT).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            claude_markdown(ui, cache, text);
+        });
+        ui.add_space(ITEM_GAP);
+        button(ui, "Close").clicked()
+    });
+    if modal.inner || modal.should_close() {
+        *open = false;
+    }
 }
 
 /// A proposed change in the review card: a checkbox, painted as `setting_check` paints its own, Claude's number in

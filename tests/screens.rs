@@ -7628,6 +7628,598 @@ mod first_run {
     }
 }
 
+/// First-run setup's Profile chapter and its recap, in the window grown to the app's size, over a copy of the sample
+/// folder. A scripted gateway plays Claude's side with the fictional `/setup` messages of `tests/fixtures/setup`, and
+/// the documents are copies of the sample folder's PDFs under fictional names.
+mod profile_chapter {
+    use std::path::PathBuf;
+
+    use jobdesk::onboarding::application::{PATH_A_REPLY, Progress, Step};
+
+    use super::*;
+
+    const FIVE: &str = include_str!("fixtures/setup/five_questions.md");
+    const THIRTEEN: &str = include_str!("fixtures/setup/thirteen_questions.md");
+    const SIXTEEN: &str = include_str!("fixtures/setup/sixteen_changes.md");
+    const UNNUMBERED: &str = include_str!("fixtures/setup/unnumbered.md");
+    const FOLLOW_UPS: &str = include_str!("fixtures/setup/follow_ups.md");
+    const PATH_QUESTION: &str = "Welcome to the AI Job Search setup!\n\nThree ways to start:\n\n**Path A: Documents folder**\n\nWhich would you like?";
+    const COMPLETE: &str = "**Setup complete!** Here's what was generated:\n\n- `CLAUDE.md` - Your full candidate profile\n\n**Try it out:**\n- Run `/scrape` to search for matching jobs right now";
+    const PATIENCE: Duration = Duration::from_secs(10);
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, 10).unwrap()
+    }
+
+    /// The local time the shell reads, so the draft's time and the run's start hold still.
+    fn wall() -> NaiveDateTime {
+        today().and_hms_opt(14, 32, 30).unwrap()
+    }
+
+    /// A file dropped on the window, by its path.
+    #[derive(Debug)]
+    struct Dropped(PathBuf);
+
+    impl egui::DroppedFile for Dropped {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            fs::read(&self.0).map_err(|error| error.to_string())
+        }
+    }
+
+    /// A shell on the chapter, the gateway's sink and calls, the job search folder, and the folder documents come from.
+    struct Scene {
+        shell: Rc<RefCell<Shell>>,
+        harness: Harness<'static>,
+        sink: SharedSink,
+        calls: SharedCalls,
+        root: PathBuf,
+        desktop: PathBuf,
+        opened: Rc<RefCell<Vec<String>>>,
+    }
+
+    fn scene(name: &str, theme: Theme, without_pdfs: bool) -> Scene {
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("ai-job-search");
+        sample_workspace(&root);
+        // One master CV, the one setup builds, and no other.
+        fs::copy(root.join("cv/main_harbor.pdf"), root.join("cv/main_example.pdf")).unwrap();
+        fs::remove_file(root.join("cv/main_harbor.pdf")).unwrap();
+        fs::remove_file(root.join("cv/main_tessel_group_solution_architect.pdf")).unwrap();
+        let desktop = base.join("Desktop");
+        fs::create_dir_all(&desktop).unwrap();
+        for file in ["Mira_Hale_CV.pdf", "Profile.pdf"] {
+            fs::copy(root.join("cv/main_example.pdf"), desktop.join(file)).unwrap();
+        }
+        let data = base.join("data");
+        fs::create_dir_all(&data).unwrap();
+        let snapshot = Snapshot { usage_read: true, ..Snapshot::load(&root, today()) };
+        let progress = Progress { folder: Some(root.clone()), done: [Step::Folder, Step::Computer].into(), ..Progress::default() };
+        let run = jobdesk::onboarding::profile_run(&data, root.clone(), progress, Arc::new(|| {}), today());
+        let (sink, calls) = (SharedSink::default(), SharedCalls::default());
+        let mut shell = Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), snapshot)
+            .with_now(wall())
+            .with_page_store(jobdesk::dossier::page_store(Arc::new(|| {})))
+            .with_profile_setup(run, without_pdfs, "Documents/Job search");
+        *shell.desk_slot() = Some(desk_on(RecordingGateway(Arc::clone(&sink), Arc::clone(&calls))));
+        let shell = Rc::new(RefCell::new(shell));
+        let (inner, opened) = (Rc::clone(&shell), Rc::new(RefCell::new(Vec::new())));
+        let seen = Rc::clone(&opened);
+        let harness =
+            with_renderer(Harness::builder().with_size([1280.0, 820.0]).with_pixels_per_point(1.5).with_theme(theme).with_context_setup(install_look))
+                .build_ui(move |ui| {
+                    inner.borrow_mut().show(ui);
+                    let urls: Vec<String> = ui.ctx().output(|output| {
+                        output
+                            .commands
+                            .iter()
+                            .filter_map(|command| if let egui::OutputCommand::OpenUrl(open) = command { Some(open.url.clone()) } else { None })
+                            .collect()
+                    });
+                    seen.borrow_mut().extend(urls);
+                });
+        Scene { shell, harness, sink, calls, root, desktop, opened }
+    }
+
+    impl Scene {
+        fn step(&mut self) {
+            self.harness.run_steps(4);
+        }
+
+        fn until(&mut self, what: &str, seen: impl Fn(&Self) -> bool) {
+            let deadline = Instant::now() + PATIENCE;
+            while !seen(self) {
+                assert!(Instant::now() < deadline, "{what} never happened");
+                self.harness.run_steps(1);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.step();
+        }
+
+        fn shown(&self, label: &str) -> bool {
+            self.harness.query_all_by_label_contains(label).next().is_some()
+        }
+
+        fn until_shown(&mut self, label: &str) {
+            let label = label.to_owned();
+            self.until(&label.clone(), move |scene| scene.shown(&label));
+        }
+
+        fn click(&mut self, label: &str) {
+            self.until(label, |scene| scene.harness.query_by_label(label).is_some_and(|node| !node.accesskit_node().is_disabled()));
+            self.harness.get_by_label(label).click();
+            self.step();
+        }
+
+        fn emit(&self, events: impl IntoIterator<Item = AgentEvent>) {
+            emit_all(&self.sink, events);
+        }
+
+        fn clock(&mut self, seconds: f64) {
+            clock_at(self.shell.borrow_mut().desk_slot().as_mut().unwrap(), seconds);
+        }
+
+        fn sent(&self) -> Vec<String> {
+            self.calls.lock().unwrap().sent.clone()
+        }
+
+        /// Drops `files` from the fictional desktop on the window, as Finder does, and waits until each is looked at.
+        fn drop_files(&mut self, files: &[&str]) {
+            let dropped = files.iter().map(|file| Arc::new(Dropped(self.desktop.join(file))) as egui::DroppedFileHandle).collect();
+            self.harness.input_mut().dropped_files = dropped;
+            self.harness.run_steps(1);
+            self.until("the documents looked at", |scene| {
+                let mut shell = scene.shell.borrow_mut();
+                let run = shell.profile_setup_mut().unwrap();
+                !run.documents().is_empty() && !run.documents().is_looking()
+            });
+        }
+
+        /// The two documents dropped, Read my documents, and the run started with its session.
+        fn start(&mut self) {
+            self.drop_files(&["Mira_Hale_CV.pdf", "Profile.pdf"]);
+            self.click("Read my documents");
+            self.until("the run starting", |scene| scene.calls.lock().unwrap().starts == 1);
+            self.emit([AgentEvent::SessionStarted { session_id: "5e7a0c11-setup".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() }]);
+            self.step();
+        }
+
+        /// Claude asks for the path, and Jobdesk answers it alone.
+        fn path(&mut self) {
+            self.emit([AgentEvent::AssistantText { text: PATH_QUESTION.into(), nested: false }, stop_point()]);
+            self.until("the path sent", |scene| scene.sent() == [PATH_A_REPLY]);
+        }
+
+        /// Claude reads the documents.
+        fn reads(&mut self) {
+            let cv = self.root.join("documents/cv/Mira_Hale_CV.pdf").display().to_string();
+            self.emit([tool("r1", "Read", &cv, false), done("r1")]);
+            self.step();
+        }
+
+        /// Claude's turn ends on `message`.
+        fn says(&mut self, message: &str) {
+            self.emit([AgentEvent::AssistantText { text: message.into(), nested: false }, stop_point()]);
+            self.step();
+        }
+
+        /// Started, the path sent, the documents read, and Claude's turn ended on `message`.
+        fn at(&mut self, message: &str) {
+            self.start();
+            self.path();
+            self.reads();
+            // Claude's turn ends 18 minutes in.
+            self.clock(1_090.0);
+            self.says(message);
+        }
+
+        /// At the five questions, answered with the first field only.
+        fn past_five(&mut self) {
+            self.at(FIVE);
+            self.until_shown("Claude has 5 questions");
+            self.type_into(0, "Design Lead");
+            self.click("Send answers");
+            self.until("the answers sent", |scene| scene.sent().len() == 2);
+        }
+
+        /// Types `text` into the `at`th answer field.
+        fn type_into(&mut self, at: usize, text: &str) {
+            let field = self.harness.query_all_by_role(egui::accesskit::Role::MultilineTextInput).nth(at).expect("a field");
+            field.focus();
+            self.harness.run_steps(1);
+            let field = self.harness.query_all_by_role(egui::accesskit::Role::MultilineTextInput).nth(at).expect("a field");
+            field.type_text(text);
+            self.step();
+        }
+
+        /// The `at`th change's checkbox, counting from 0.
+        fn untick(&mut self, at: usize) {
+            // By the keyboard, so a change scrolled out of view flips too.
+            self.harness.query_all_by_role(egui::accesskit::Role::CheckBox).nth(at).expect("a change").focus();
+            self.harness.run_steps(1);
+            self.harness.key_press(Key::Space);
+            self.step();
+        }
+
+        fn snapshot(&mut self, name: &str) {
+            self.harness.input_mut().events.push(egui::Event::PointerGone);
+            self.step();
+            compare(&mut self.harness, name);
+        }
+    }
+
+    fn render(name: &str, theme: Theme, play: impl FnOnce(&mut Scene), label: &str) {
+        let mut scene = scene(name, theme, false);
+        play(&mut scene);
+        scene.until_shown(label);
+        scene.snapshot(name);
+    }
+
+    #[test]
+    fn onboarding_docs_light() {
+        render("onboarding_docs_light", Theme::Light, |_| {}, "Drop your documents here");
+    }
+
+    #[test]
+    fn onboarding_dropped_light() {
+        render("onboarding_dropped_light", Theme::Light, |scene| scene.drop_files(&["Mira_Hale_CV.pdf", "Profile.pdf"]), "2 documents added");
+    }
+
+    #[test]
+    fn onboarding_reading_light() {
+        render(
+            "onboarding_reading_light",
+            Theme::Light,
+            |scene| {
+                scene.start();
+                scene.path();
+                scene.clock(126.0);
+                scene.reads();
+                scene.clock(130.0);
+            },
+            "Last update 4s ago",
+        );
+    }
+
+    #[test]
+    fn onboarding_working_light() {
+        render(
+            "onboarding_working_light",
+            Theme::Light,
+            |scene| {
+                scene.past_five();
+                scene.clock(1_260.0);
+                let profile = scene.root.join("CLAUDE.md").display().to_string();
+                scene.emit([tool("w1", "Write", &profile, false), done("w1")]);
+                scene.step();
+                scene.clock(1_308.0);
+            },
+            "No update for 48s",
+        );
+    }
+
+    #[test]
+    fn onboarding_sheet_light() {
+        render("onboarding_sheet_light", Theme::Light, sheet, "Claude has 13 questions");
+    }
+
+    #[test]
+    fn onboarding_sheet_dark() {
+        render("onboarding_sheet_dark", Theme::Dark, sheet, "Claude has 13 questions");
+    }
+
+    /// The thirteen questions, with two answered and the draft saved.
+    fn sheet(scene: &mut Scene) {
+        scene.at(THIRTEEN);
+        scene.until_shown("Claude has 13 questions");
+        scene.type_into(0, "Design lead, principal designer");
+        scene.type_into(1, "b, with a hand in the craft");
+        saved(scene);
+    }
+
+    /// Waits until the draft's next write is due, so the slip says when it saved.
+    fn saved(scene: &mut Scene) {
+        std::thread::sleep(Duration::from_millis(1_100));
+        scene.step();
+    }
+
+    #[test]
+    fn onboarding_sheet_fallback_light() {
+        render(
+            "onboarding_sheet_fallback_light",
+            Theme::Light,
+            |scene| {
+                scene.at(UNNUMBERED);
+                scene.until_shown("Claude has a few questions");
+                scene.type_into(0, "Design systems work in Lowmere, or remote. Leave out the 2021 studio closure.");
+                saved(scene);
+            },
+            "Your answer",
+        );
+    }
+
+    #[test]
+    fn onboarding_review_light() {
+        render("onboarding_review_light", Theme::Light, |scene| scene.at(SIXTEEN), "16 of 16 changes");
+    }
+
+    #[test]
+    fn onboarding_review_skip_light() {
+        render(
+            "onboarding_review_skip_light",
+            Theme::Light,
+            |scene| {
+                scene.at(SIXTEEN);
+                scene.until_shown("16 of 16 changes");
+                scene.untick(2);
+                scene.untick(6);
+            },
+            "14 of 16 changes",
+        );
+    }
+
+    #[test]
+    fn onboarding_followup_light() {
+        render(
+            "onboarding_followup_light",
+            Theme::Light,
+            |scene| {
+                scene.past_five();
+                scene.clock(1_590.0);
+                scene.says(FOLLOW_UPS);
+                scene.until_shown("Two quick checks");
+                scene.type_into(0, "Only the country, please.");
+            },
+            "Two quick checks",
+        );
+    }
+
+    /// Claude built the CV this turn: its pages, once rendered.
+    fn cv_check(scene: &mut Scene) {
+        scene.past_five();
+        scene.emit([tool("b1", "Bash", "cd cv && lualatex -interaction=nonstopmode main_example.tex", false), done("b1")]);
+        scene.clock(1_870.0);
+        scene.says("Your CV is built. Have a look at cv/main_example.pdf before we go on.");
+        scene.until_shown("Check your CV");
+        scene.until_shown("Page 1 of");
+    }
+
+    #[test]
+    fn onboarding_cvcheck_light() {
+        render("onboarding_cvcheck_light", Theme::Light, cv_check, "The CV looks good.");
+    }
+
+    #[test]
+    fn onboarding_choice_light() {
+        render(
+            "onboarding_choice_light",
+            Theme::Light,
+            |scene| {
+                scene.past_five();
+                scene.clock(1_620.0);
+                let option = |label: &str, description: &str| QuestionOption { label: label.into(), description: description.into() };
+                scene.emit([AgentEvent::PromptRaised(Prompt {
+                    request_id: "q1".into(),
+                    kind: PromptKind::Questions(vec![Question {
+                        text: "Which language should your CVs be in?".into(),
+                        header: "Language".into(),
+                        options: vec![
+                            option("English", "Accepted in most countries. Cover letters still follow each job ad's language."),
+                            option("German", "Matches most job ads where you live."),
+                        ],
+                        multi_select: false,
+                    }]),
+                    input_json: "{}".into(),
+                    suggestions_json: None,
+                })]);
+                scene.step();
+                scene.until_shown("Claude has a question");
+                scene.click("English");
+            },
+            "Which language should your CVs be in?",
+        );
+    }
+
+    #[test]
+    fn onboarding_stopped_light() {
+        render(
+            "onboarding_stopped_light",
+            Theme::Light,
+            |scene| {
+                scene.past_five();
+                let profile = scene.root.join("CLAUDE.md").display().to_string();
+                scene.emit([
+                    tool("w1", "Write", &profile, false),
+                    done("w1"),
+                    AgentEvent::TurnEnded { failed: true, message: Some("The connection to Claude dropped.\u{202e}".into()), cost_usd: 1.0, duration_ms: 1 },
+                ]);
+                scene.step();
+            },
+            "Setup stopped partway",
+        );
+    }
+
+    /// Setup complete after the five answers, 41 minutes in.
+    fn complete(scene: &mut Scene) {
+        scene.past_five();
+        scene.clock(2_400.0);
+        let profile = scene.root.join("CLAUDE.md").display().to_string();
+        scene.emit([tool("w1", "Write", &profile, false), done("w1")]);
+        scene.clock(2_460.0);
+        scene.says(COMPLETE);
+    }
+
+    #[test]
+    fn onboarding_recap_light() {
+        render("onboarding_recap_light", Theme::Light, complete, "Your job search is ready");
+    }
+
+    #[test]
+    fn onboarding_recap_dark() {
+        render("onboarding_recap_dark", Theme::Dark, complete, "Your job search is ready");
+    }
+
+    #[test]
+    fn onboarding_recap_nopdf_light() {
+        let mut scene = scene("onboarding_recap_nopdf_light", Theme::Light, true);
+        complete(&mut scene);
+        scene.until_shown("Your job search is ready");
+        assert!(scene.shown("This computer is almost ready"));
+        scene.snapshot("onboarding_recap_nopdf_light");
+    }
+
+    /// Send joins the fields into one numbered reply, in Claude's order, with Skipped for each empty one.
+    #[test]
+    fn send_answers_sends_exactly_the_joined_reply() {
+        let mut scene = scene("send_answers_joined", Theme::Light, false);
+        scene.at(FIVE);
+        scene.until_shown("Claude has 5 questions");
+        scene.type_into(0, "Design Lead");
+        scene.type_into(2, "Lowmere, remote preferred");
+        assert_eq!(scene.sent(), [PATH_A_REPLY], "nothing goes while the user types");
+        scene.harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::Enter);
+        scene.step();
+        assert_eq!(scene.sent().last().unwrap(), "1. Design Lead\n2. Skipped\n3. Lowmere, remote preferred\n4. Skipped\n5. Skipped", "Cmd Enter sends");
+        assert_eq!(scene.sent().len(), 2, "once");
+        scene.until_shown("Claude is working on your profile");
+    }
+
+    #[test]
+    fn unticking_3_and_7_sends_apply_all_except_3_and_7() {
+        let mut scene = scene("review_except", Theme::Light, false);
+        scene.at(SIXTEEN);
+        scene.until_shown("16 of 16 changes");
+        assert!(scene.shown("Yes, apply these changes."), "all ticked");
+        scene.untick(2);
+        scene.untick(6);
+        assert!(scene.shown("Apply all except 3 and 7."), "the slip shows the reply as it will go");
+        scene.click("Apply these changes");
+        assert_eq!(scene.sent().last().unwrap(), "Apply all except 3 and 7.");
+    }
+
+    #[test]
+    fn every_change_unticked_disables_apply() {
+        let mut scene = scene("review_none", Theme::Light, false);
+        scene.at(SIXTEEN);
+        scene.until_shown("16 of 16 changes");
+        for at in 0..16 {
+            scene.untick(at);
+        }
+        assert!(scene.harness.get_by_label("Apply these changes").accesskit_node().is_disabled());
+        assert!(scene.shown("Tick a change, or use Change something."));
+        scene.harness.get_by_label("Apply these changes").click();
+        scene.step();
+        assert_eq!(scene.sent(), [PATH_A_REPLY], "nothing is sent");
+    }
+
+    /// A link in Claude's message shows its words, and a click on them opens nothing.
+    #[test]
+    fn a_link_in_claudes_message_never_opens() {
+        let mut scene = scene("claude_link_never_opens", Theme::Light, false);
+        scene.at("Have a look at [the harbor site](https://harbor.example/jobs) and tell me which roles fit.");
+        scene.until_shown("Claude has a few questions");
+        for link in scene.harness.query_all_by_label_contains("the harbor site") {
+            link.click();
+        }
+        scene.step();
+        assert!(scene.opened.borrow().is_empty(), "{:?}", scene.opened.borrow());
+    }
+
+    /// A file name's reordering mark is gone from the list and from the names a screen reader hears.
+    #[test]
+    fn a_file_name_with_a_bidi_character_shows_without_it() {
+        let mut scene = scene("bidi_file_name", Theme::Light, false);
+        let odd = "Mira\u{202E}fdp.CV.pdf";
+        fs::copy(scene.desktop.join("Mira_Hale_CV.pdf"), scene.desktop.join(odd)).unwrap();
+        scene.drop_files(&[odd]);
+        assert!(scene.shown("Mirafdp.CV.pdf"));
+        assert!(scene.harness.query_by_label("Kind of Mirafdp.CV.pdf").is_some());
+        assert!(scene.harness.query_by_label_contains("\u{202E}").is_none(), "no label holds the mark");
+    }
+
+    /// Each file's kind is guessed from its name, and the kind picked decides the subfolder of `documents/` it goes to.
+    #[test]
+    fn the_kind_picked_decides_the_documents_subfolder() {
+        let mut scene = scene("kind_decides_subfolder", Theme::Light, false);
+        scene.drop_files(&["Mira_Hale_CV.pdf", "Profile.pdf"]);
+        let menu = scene.harness.get_by_label("Kind of Profile.pdf");
+        assert_eq!(menu.accesskit_node().role(), egui::accesskit::Role::ComboBox);
+        assert_eq!(menu.accesskit_node().value().as_deref(), Some("LinkedIn profile"));
+        scene.harness.get_by_label("Kind of Profile.pdf").click();
+        scene.step();
+        scene.harness.get_by_label("Reference letter").click();
+        scene.step();
+        assert_eq!(scene.harness.get_by_label("Kind of Profile.pdf").accesskit_node().value().as_deref(), Some("Reference letter"));
+        scene.click("Read my documents");
+        scene.until("the run starting", |scene| scene.calls.lock().unwrap().starts == 1);
+        assert!(scene.root.join("documents/references/Profile.pdf").is_file());
+        assert!(scene.root.join("documents/cv/Mira_Hale_CV.pdf").is_file());
+        assert!(scene.desktop.join("Profile.pdf").is_file(), "the original stays where it was");
+    }
+
+    /// A copy that stops at a file shows where, as plain text, and the file already copied keeps its kind and its row.
+    #[test]
+    fn after_a_copy_a_files_kind_menu_is_disabled() {
+        let mut scene = scene("kind_after_copy", Theme::Light, false);
+        scene.drop_files(&["Mira_Hale_CV.pdf", "Profile.pdf"]);
+        fs::remove_file(scene.desktop.join("Profile.pdf")).unwrap();
+        scene.click("Read my documents");
+        scene.until_shown("The copy stopped at Profile.pdf");
+        assert_eq!(scene.calls.lock().unwrap().starts, 0, "no run starts");
+        assert!(scene.harness.get_by_label("Kind of Mira_Hale_CV.pdf").accesskit_node().is_disabled(), "copied");
+        assert!(scene.harness.get_by_label("Remove Mira_Hale_CV.pdf").accesskit_node().is_disabled());
+        assert!(!scene.harness.get_by_label("Kind of Profile.pdf").accesskit_node().is_disabled());
+    }
+
+    /// When setup said it is complete but a change asked for afterwards left no clean end, Finish setup opens the recap,
+    /// only once pressed, and the recap clears the record. Open Jobdesk opens Today.
+    #[test]
+    fn finish_setup_opens_the_recap_and_open_jobdesk_opens_today() {
+        let mut scene = scene("finish_setup", Theme::Light, false);
+        scene.past_five();
+        scene.says(COMPLETE);
+        scene.until_shown("Your job search is ready");
+        scene.click("Open Jobdesk");
+        assert!(!scene.shell.borrow().in_profile_setup());
+        scene.until_shown("New task");
+
+        let mut scene = self::scene("finish_setup_link", Theme::Light, false);
+        scene.past_five();
+        scene.emit([tool("b1", "Bash", "cd cv && lualatex main_example.tex", false), done("b1")]);
+        scene.says(COMPLETE);
+        scene.until_shown("Check your CV");
+        scene.click("Ask for a change");
+        scene.harness.get_by_role(egui::accesskit::Role::TextInput).focus();
+        scene.harness.run_steps(1);
+        scene.harness.get_by_role(egui::accesskit::Role::TextInput).type_text("Put my phone number first.");
+        scene.step();
+        scene.click("Send");
+        scene.until("the change sent", |scene| scene.sent().last().is_some_and(|last| last == "Put my phone number first."));
+        scene.says("I moved it in the source. Anything else?");
+        scene.until_shown("Finish setup");
+        assert!(scene.shell.borrow().in_profile_setup(), "setup never ends on its own");
+        scene.click("Finish setup");
+        scene.until_shown("Your job search is ready");
+        let sent = scene.sent();
+        assert_eq!(sent.last().unwrap(), "Put my phone number first.", "Finish setup sends nothing");
+    }
+
+    /// Add a job site you use… only opens the launcher on `/add-portal`. No run starts.
+    #[test]
+    fn add_a_job_site_only_opens_the_launcher() {
+        let mut scene = scene("recap_add_portal", Theme::Light, false);
+        complete(&mut scene);
+        scene.until_shown("Your job search is ready");
+        assert!(!scene.shown("$"), "no spend on the recap");
+        scene.click("Add a job site you use…");
+        scene.until_shown("Pick a command. Nothing runs until you press Run.");
+        assert_eq!(scene.calls.lock().unwrap().starts, 1, "only setup's run ever started");
+    }
+}
+
 // The Portals screen.
 
 const PORTALS_SUBTITLE: &str = "The job boards Claude searches when you find new jobs. 4 of 6 on.";

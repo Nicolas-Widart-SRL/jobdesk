@@ -1503,7 +1503,7 @@ fn setup(ui: &mut Ui, bench: &mut SetupBench) {
             &step,
             |ui| question_sheet(ui, &mut bench.cache, &SETUP_QUESTIONS, &mut bench.answers),
             |ui| {
-                answers_slip(ui, &AnswersSlip { answered: &answered, saved_at: Some("14:32"), short: false });
+                answers_slip(ui, &AnswersSlip { answered: &answered, saved_at: Some("14:32"), short: false, unsaved: false });
             },
             |ui| {
                 primary_shortcut_button(ui, "Send answers", &command_chord("Enter"));
@@ -1657,7 +1657,7 @@ fn setup(ui: &mut Ui, bench: &mut SetupBench) {
     ui.allocate_ui(egui::vec2(340.0, 120.0), |ui| {
         paper(ui, false, |ui| {
             egui::Frame::new().inner_margin(12).show(ui, |ui| {
-                answers_slip(ui, &AnswersSlip { answered: &[true, true], saved_at: None, short: true });
+                answers_slip(ui, &AnswersSlip { answered: &[true, true], saved_at: None, short: true, unsaved: false });
             });
         });
     });

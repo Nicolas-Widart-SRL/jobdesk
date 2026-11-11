@@ -126,7 +126,7 @@ fn tally_marks(ui: &mut Ui, colors: &[Color32], mark: TallySize) -> Response {
 }
 
 /// Marks that wrap to the width they have, spoken as `spoken`.
-fn tally_spoken(ui: &mut Ui, colors: &[Color32], mark: TallySize, spoken: String) -> Response {
+pub(in crate::ui_kit) fn tally_spoken(ui: &mut Ui, colors: &[Color32], mark: TallySize, spoken: String) -> Response {
     let total = colors.len();
     let pitch = mark.width + mark.gap;
     let per_row = ((ui.available_width() + mark.gap) / pitch).floor().max(1.0) as usize;

@@ -245,13 +245,29 @@ fn render(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, html: Option<&Re
 /// as its alt text in `muted`, raw HTML as its text, and every heading at the section size. Bold and lists stay.
 /// Any url the viewer still asks to open is dropped.
 pub fn release_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    link_free_markdown(ui, cache, text, Type::BODY);
+}
+
+/// Claude's message in first-run setup, rendered by `release_markdown`'s rules, as docs/architecture/trust.md says:
+/// hidden characters go before anything parses, a link shows as its words and never opens, an image as its alt text,
+/// raw HTML as its text, and every heading at the section size. Its body reads at `Type::TAKE`, held to `DOC_MEASURE`,
+/// and its words can be selected and copied.
+pub fn claude_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width().min(DOC_MEASURE));
+        copyable(ui, |ui| link_free_markdown(ui, cache, text, Type::TAKE));
+    });
+}
+
+/// `release_markdown` with its body in `body`.
+fn link_free_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str, body: Type) {
     // The rewrite runs once per distinct text, and is kept while the text stays on screen.
     let text = ui.ctx().memory_mut(|memory| memory.caches.cache::<LinkFreeCache>().get(text).clone());
     let before = ui.ctx().output(|output| output.commands.len());
     ui.scope(|ui| {
         let styles = &mut ui.style_mut().text_styles;
         styles.insert(TextStyle::Heading, Type::SECTION.font());
-        styles.insert(TextStyle::Body, Type::BODY.font());
+        styles.insert(TextStyle::Body, body.font());
         let first = ui.painter().add(Shape::Noop);
         // The viewer hands inline math to this, and the rewrite leaves no math but the alt text it marked.
         CommonMarkViewer::new().render_math_fn(Some(&alt_text)).show(ui, cache, &text);
@@ -262,7 +278,9 @@ pub fn release_markdown(ui: &mut Ui, cache: &mut CommonMarkCache, text: &str) {
 
 /// An image's alt text in release notes, where the image stood.
 fn alt_text(ui: &mut Ui, alt: &str, _inline: bool) {
-    ui.add(Label::new(rich(ui, alt, Type::BODY, Ink::Muted)));
+    // At the body size the scope set, so alt text reads level with the words around it.
+    let font = TextStyle::Body.resolve(ui.style());
+    ui.add(Label::new(RichText::new(alt).font(font).color(Palette::of(ui).muted)));
 }
 
 /// Drops every url opened after `from`.
@@ -860,6 +878,66 @@ pub(in crate::ui_kit) fn blank_line(ui: &Ui, pieces: &[Piece], style: Type, ink:
         }
     }
     job
+}
+
+/// A short run of Claude's Markdown, such as one numbered question or one proposed change, laid out as one wrapped text
+/// by `release_markdown`'s rules, for a widget that shows it as a label or paints it inside a control of its own.
+/// Hidden characters go before it parses and from every decoded piece. Bold takes the semibold face and code `Type::MONO`;
+/// a link is its words in `ink` and opens nothing; an image is its alt text in `muted`; raw HTML and math are their text
+/// as written. A heading reads as its words, at `style`. Blocks after the first start on a line of their own. `ink` may
+/// be `Color32::PLACEHOLDER`, so a painter can choose the ink when it paints.
+pub(in crate::ui_kit) fn inline_job(ui: &Ui, text: &str, style: Type, ink: Color32) -> LayoutJob {
+    let muted = Palette::of(ui).muted;
+    let clean = visible(&text.replace("\r\n", "\n").replace('\r', "\n"));
+    let (mut strong, mut image) = (0_usize, 0_usize);
+    let mut pieces: Vec<(String, FontId, Color32)> = Vec::new();
+    let push = |pieces: &mut Vec<(String, FontId, Color32)>, piece: &str, font: FontId, color: Color32| {
+        let piece: String = piece.split('\n').map(|line| visible_chars(line).collect::<String>()).collect::<Vec<_>>().join("\n");
+        if !piece.is_empty() {
+            pieces.push((piece, font, color));
+        }
+    };
+    for event in Parser::new_ext(&clean, markdown::options()) {
+        let font = |strong: usize| FontId::new(style.size, if strong > 0 { Type::STRONG.face.family() } else { style.face.family() });
+        let color = if image > 0 { muted } else { ink };
+        match event {
+            Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::Item | Tag::BlockQuote(_) | Tag::CodeBlock(_)) => {
+                if pieces.last().is_some_and(|(last, _, _)| !last.ends_with('\n')) {
+                    push(&mut pieces, "\n", font(strong), color);
+                }
+            }
+            Event::Start(Tag::Strong) => strong += 1,
+            Event::End(TagEnd::Strong) => strong = strong.saturating_sub(1),
+            Event::Start(Tag::Image { .. }) => image += 1,
+            Event::End(TagEnd::Image) => image = image.saturating_sub(1),
+            Event::Text(part) | Event::Html(part) | Event::InlineHtml(part) | Event::InlineMath(part) | Event::DisplayMath(part) => {
+                push(&mut pieces, &part, font(strong), color);
+            }
+            Event::Code(part) => push(&mut pieces, &part, Type::MONO.font(), color),
+            Event::SoftBreak => push(&mut pieces, " ", font(strong), color),
+            Event::HardBreak => push(&mut pieces, "\n", font(strong), color),
+            _ => {}
+        }
+    }
+    // A code block or a block of HTML ends on a line end, which would leave an empty line under the words.
+    while let Some((last, _, _)) = pieces.last_mut() {
+        let kept = last.trim_end_matches('\n').len();
+        if kept > 0 {
+            last.truncate(kept);
+            break;
+        }
+        pieces.pop();
+    }
+    let mut job = LayoutJob::default();
+    for (piece, font, color) in pieces {
+        job.append(&piece, 0.0, TextFormat::simple(font, color));
+    }
+    job
+}
+
+/// A name from outside Jobdesk, such as a file's, as plain text on one line: hidden characters and line breaks removed.
+pub(in crate::ui_kit) fn plain_name(name: &str) -> String {
+    visible_chars(&name.replace(['\n', '\r'], " ")).collect()
 }
 
 /// The height `text` takes wrapped at `width`, for rows sized before they are drawn.

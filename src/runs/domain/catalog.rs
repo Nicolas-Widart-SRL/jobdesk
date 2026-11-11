@@ -124,7 +124,8 @@ pub const CATALOG: &[CommandSpec] = &[
         "skill files",
         CommandGroup::Profile,
         &[flag("section", "Section, optional", "--section", "")],
-        5,
+        // A whole first setup reads every document and writes every profile file in one session, about 40 minutes.
+        25,
     ),
     spec("/expand", "Find new competency signals in your documents", "skill files", CommandGroup::Profile, &[], 3),
     spec("/add-portal", "Generate a search skill for a job board", ".agents/skills/", CommandGroup::Profile, &[text("url", "Portal URL")], 3),

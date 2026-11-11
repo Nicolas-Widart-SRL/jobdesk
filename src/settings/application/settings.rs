@@ -610,10 +610,10 @@ mod tests {
 
     /// Run defaults says what an empty budget falls back to, so the words must follow the catalog.
     #[test]
-    fn the_suggested_budgets_run_from_one_to_five_dollars() {
+    fn the_suggested_budgets_run_from_one_to_twenty_five_dollars() {
         let budgets = CATALOG.iter().map(|spec| spec.budget_usd);
-        assert_eq!((budgets.clone().min(), budgets.max()), (Some(1), Some(5)));
-        assert!(crate::settings::domain::index(Page::Defaults).iter().any(|line| line.contains("its suggested budget, $1 to $5.")));
+        assert_eq!((budgets.clone().min(), budgets.max()), (Some(1), Some(25)));
+        assert!(crate::settings::domain::index(Page::Defaults).iter().any(|line| line.contains("its suggested budget, $1 to $25.")));
     }
 
     #[test]

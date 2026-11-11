@@ -1,5 +1,12 @@
 //! First-run setup's screens in the small first window: the welcome, or the welcome back, on the desk, then the Folder
 //! and Computer steps, one wizard card each. They read the setup's stage and record, and say what the user asked for.
+//! The Profile chapter and the recap follow, in the window grown to the app's size.
+
+mod profile;
+mod recap;
+
+pub use profile::{Chapter, ChapterRequest, ProfileChapter};
+pub use recap::{Recap, RecapRequest, recap};
 
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -118,7 +125,7 @@ impl FirstRunScreen {
     }
 
     /// `path` as the screens show it: from the home folder when it is in it, `/` between its parts.
-    fn shown(&self, path: &Path) -> String {
+    pub fn shown(&self, path: &Path) -> String {
         match path.strip_prefix(&self.home) {
             Ok(inside) if !inside.as_os_str().is_empty() => inside.iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join("/"),
             _ => path.display().to_string(),
@@ -160,14 +167,25 @@ impl FirstRunScreen {
         }
     }
 
-    /// The welcome back, with the Folder step done. The record is cleared once the Computer step is, so setup always
-    /// picks up there.
+    /// The welcome back, with the Folder step done, and the Computer step too once the Profile chapter is next.
     fn welcome_back(&self, ui: &mut Ui, progress: &Progress, asked: &Asked) {
-        let at = 1;
-        let lead = "Your folder is ready. Let's get this computer ready.";
+        let profile_next = progress.is_done(Step::Computer);
+        let at = if profile_next { 2 } else { 1 };
+        let lead =
+            if profile_next { "Your folder and tools are ready. Let's finish your profile." } else { "Your folder is ready. Let's get this computer ready." };
         let folder = progress.folder.as_deref().map(|folder| self.shown(folder)).unwrap_or_default();
-        let tools = "Jobdesk checks Python, Bun and LaTeX, and installs what is missing.";
-        let unders = [folder.as_str(), tools, "Claude builds it from your CV and your answers.", ""];
+        let tools = if profile_next {
+            "Python and Bun are ready, and LaTeX if it installed."
+        } else {
+            "Jobdesk checks Python, Bun and LaTeX, and installs what is missing."
+        };
+        let profile = match (&progress.draft, &progress.run) {
+            (Some(_), _) => "You stopped at Claude's questions. Your draft answers are kept.",
+            (None, Some(_)) => "Claude picks up where it stopped.",
+            (None, None) => "Claude builds it from your CV and your answers.",
+        };
+        let unders = [folder.as_str(), tools, profile, ""];
+        let primary = if profile_next { "Finish my profile" } else { "Continue setup" };
         let why = progress.stopped.map(|day| format!("You stopped on {}.", day.format("%A %-d %B"))).unwrap_or_default();
         on_desk(
             ui,
@@ -185,7 +203,7 @@ impl FirstRunScreen {
                     }
                 });
             },
-            |ui| press(primary_button(ui, "Continue setup"), FirstRunRequest::Resume, asked),
+            |ui| press(primary_button(ui, primary), FirstRunRequest::Resume, asked),
             &why,
         );
     }

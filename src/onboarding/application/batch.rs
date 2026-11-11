@@ -106,8 +106,11 @@ enum Span {
 /// The message's blocks in order: each item and title where its span lies, the proposal's ask apart, and the text
 /// between them as prose, one block for each stretch.
 fn blocks(text: &str, spans: &[(Range<usize>, Span)], ask: Option<Range<usize>>) -> Vec<MessageBlock> {
-    let mut marked: Vec<(Range<usize>, Option<&Span>)> = spans.iter().map(|(range, span)| (range.clone(), Some(span))).collect();
-    marked.extend(ask.map(|range| (range, None)));
+    // The ask wins over anything else read at its paragraph, such as a title when it is all bold.
+    let asked = |range: &Range<usize>| ask.as_ref().is_some_and(|ask| range.start < ask.end && ask.start < range.end);
+    let mut marked: Vec<(Range<usize>, Option<&Span>)> =
+        spans.iter().filter(|(range, _)| !asked(range)).map(|(range, span)| (range.clone(), Some(span))).collect();
+    marked.extend(ask.clone().map(|range| (range, None)));
     marked.sort_by_key(|(range, _)| range.start);
     let mut found = Vec::new();
     let mut at = 0;
@@ -771,6 +774,15 @@ mod tests {
     fn a_numbered_line_inside_code_stays_in_its_code_block() {
         let blocks = blocks_of("Here is the format:\n\n```\n1. Example\n```\n\n1. Which city?\n2. Which salary?");
         assert_eq!(blocks, ["prose: Here is the format:\n\n```\n1. Example\n```", "item 1", "item 2"]);
+    }
+
+    /// A closing ask in bold is still the ask, never a group's title.
+    #[test]
+    fn a_bold_closing_ask_is_the_ask() {
+        let message = "Here is what I will write.\n\n1. Add the title.\n2. Add the city.\n\n**Reply yes to apply all, or list the numbers to skip.**";
+        assert!(matches!(read_message(message), Message::Proposal(_)));
+        assert_eq!(blocks_of(message).last().map(String::as_str), Some("ask: **Reply yes to apply all, or list the numbers to skip.**"));
+        assert!(!blocks_of(message).iter().any(|block| block.starts_with("title")));
     }
 
     /// The paragraph that makes a message a proposal is its ask, so the review card can leave it out.

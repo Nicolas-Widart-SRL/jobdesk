@@ -349,6 +349,24 @@ mod tests {
             assert_eq!(read(&dir.path().join(JOURNAL)), Err(UpdateError::BadJournal), "{journal:?}");
         }
         assert!(journal(".jobdesk/source.zip", Some("12")).is_plain(), "the base's own files may be named");
+        let with_modes =
+            |backup, modes| Journal { ops: vec![Op { modes: Some(modes), ..journal("CLAUDE.md", backup).ops[0].clone() }], ..journal("CLAUDE.md", backup) };
+        assert!(with_modes(Some("0"), (0o644, 0o755)).is_plain(), "a mode change of a file that was there");
+        // Each malformed case on its own, so a guard that lets any through names every one.
+        let malformed = [
+            ("a mode before above 0o777", with_modes(Some("0"), (0o4755, 0o755))),
+            ("a mode written above 0o777", with_modes(Some("0"), (0o644, 0o1777))),
+            ("modes with no original file", with_modes(None, (0o644, 0o755))),
+        ];
+        let accepted: Vec<&str> = malformed
+            .iter()
+            .filter(|(_, journal)| {
+                write(dir.path(), JOURNAL, journal).unwrap();
+                read(&dir.path().join(JOURNAL)) != Err(UpdateError::BadJournal)
+            })
+            .map(|(case, _)| *case)
+            .collect();
+        assert!(accepted.is_empty(), "these read: {accepted:?}");
         fs::write(dir.path().join(JOURNAL), b"not json").unwrap();
         assert_eq!(read(&dir.path().join(JOURNAL)), Err(UpdateError::BadJournal));
     }

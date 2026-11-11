@@ -766,17 +766,21 @@ fn names_path_a(text: &str) -> bool {
     text.match_indices(PATH_A).any(|(at, _)| !text[at + PATH_A.len()..].starts_with(char::is_alphanumeric))
 }
 
-/// Whether the turn ends setup: it says setup is complete, or it answers the user's "The CV looks good." after an
-/// earlier turn of the run said so and it closes on no question. That earlier turn may have shown the CV check, and a
-/// change asked for there keeps it said. Read from the run's own rows, so it holds after a restore.
+/// Whether the turn ends setup: it closes on no question, and it says setup is complete, or it answers the user's "The
+/// CV looks good." after an earlier turn of the run said so. That earlier turn may have shown the CV check, and a change
+/// asked for there keeps it said. A turn that closes on a question waits on the user, whatever else it says. Read from
+/// the run's own rows, so it holds after a restore.
 fn setup_complete(run: &Run, message: &str) -> bool {
+    if asks_back(run) {
+        return false;
+    }
     if says_complete(message) {
         return true;
     }
     let start = run.current_turn_start();
     let answers_check =
         start.checked_sub(1).and_then(|at| run.activity.get(at)).is_some_and(|row| matches!(&row.kind, ActivityKind::You(text) if text == CV_LOOKS_GOOD));
-    answers_check && earlier_turns_said_complete(run, start) && !asks_back(run)
+    answers_check && earlier_turns_said_complete(run, start)
 }
 
 /// Whether a turn before the row at `start` said setup is complete in its last top-level message.
@@ -1473,6 +1477,25 @@ mod tests {
         f.ends_turn();
         f.poll();
         assert_eq!(f.profile.phase(), &ProfilePhase::Done);
+    }
+
+    /// "Setup complete" that closes on a question leaves the session waiting on the user, so it is no end: the fallback
+    /// sheet shows, with Finish setup.
+    #[test]
+    fn setup_complete_that_closes_on_a_question_is_the_fallback_sheet() {
+        for message in [
+            "**Setup complete!** Here's what was generated:\n\n- `CLAUDE.md` - Your full candidate profile\n\nWant me to compile your CV to PDF now?",
+            "Setup complete! Would you like to change your target roles?",
+        ] {
+            let mut f = fixture();
+            f.at(message);
+            assert_eq!(f.profile.phase(), &ProfilePhase::FallbackSheet { message: message.into() }, "{message}");
+            assert!(f.profile.complete_seen(&f.desk), "Finish setup shows");
+            let restored = Restored(read_back(f.desk.run(f.profile.progress().run.as_deref().unwrap()).unwrap()));
+            let mut again = fixture_with(f.record(), Some(&restored));
+            again.poll();
+            assert!(matches!(again.profile.phase(), ProfilePhase::FallbackSheet { .. }), "nor after a restore: {message}");
+        }
     }
 
     #[test]

@@ -225,7 +225,7 @@ The chapter shows the first of these that holds:
 1. the choice card, while an `AskUserQuestion` question or a permission prompt waits. Jobdesk never answers it;
 2. the review card for a proposal, or the question sheet for questions;
 3. the CV check, only when LaTeX was not left out with Continue without PDFs, the turn ran a LaTeX build or wrote a `.pdf` under `cv/`, a CV PDF was written since the turn began, and the message is free text. After a restart the turn's start is unknown, and the run's start counts. `/setup` itself does not build the CV PDF, so the check often does not show;
-4. the end of setup, when the message says "Setup complete", as `/setup`'s closing summary opens, or when the turn answers "The CV looks good." after an earlier turn said so and does not close on a question;
+4. the end of setup, when the turn does not close on a question and its message says "Setup complete", as `/setup`'s closing summary opens, or the turn answers "The CV looks good." after an earlier turn said so. A "Setup complete" that closes on a question, such as an offer to compile the CV, waits on the user's answer;
 5. the fallback sheet otherwise: the message beside one field.
 
 The end of setup opens the recap, which removes the progress record. A fallback sheet shows a Finish setup link once any top-level message of the run said setup is complete, as when the user asked for a change after it. Only the user's press on it ends setup there, and it sends nothing.

@@ -236,6 +236,26 @@ mod script {
         assert_eq!(sandbox.bytes(), before);
     }
 
+    /// A file of several JSON values is no list, even when each is one: `jq -e` alone would judge only the last.
+    #[test]
+    fn a_file_holding_two_arrays_is_refused() {
+        if !tools_present() {
+            return;
+        }
+        let sandbox = Sandbox::new();
+        sandbox.fill(&["1.0.0", "1.1.0"]);
+        let one = String::from_utf8(sandbox.bytes()).unwrap();
+        let (zip, _) = sandbox.zip("new.zip", "new");
+        for (second, why) in [(one.as_str(), "the same list twice"), ("[]\n", "a list, then an empty one")] {
+            let both = format!("{one}{second}");
+            fs::write(sandbox.list(), &both).unwrap();
+            assert_refused(&sandbox.run(&["remove", "v1.1.0"]));
+            assert_refused(&sandbox.run(&["add", "v1.2.0", zip.to_str().unwrap()]));
+            assert_refused(&sandbox.run(&["check"]));
+            assert_eq!(fs::read_to_string(sandbox.list()).unwrap(), both, "{why}: the file is unchanged");
+        }
+    }
+
     #[test]
     fn remove_works_and_refuses_the_last_entry() {
         if !tools_present() {

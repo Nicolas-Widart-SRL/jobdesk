@@ -1,8 +1,11 @@
-# Checks that an ai-job-search release has what Jobdesk relies on before it joins assets/update/ai-job-search.json:
-# the commands the launcher starts, the files the readers read, within the limits first-run setup holds every release to.
-# It starts no `claude` and costs nothing. A pull request that changes the list checks each release it adds, and its
-# hash against the list. Run it by hand on a version to check a release before `scripts/ai-job-search.sh add`.
-# The maintainer still tests the release with Jobdesk and signs it off on the pull request.
+# Checks that the ai-job-search releases in assets/update/ai-job-search.json have what Jobdesk relies on: the commands
+# the launcher starts, the files the readers read, within the limits first-run setup holds every release to, and each
+# zip's hash against the list. It starts no `claude` and costs nothing.
+# A pull request or a push to main that changes the list, or the code that says what Jobdesk relies on, checks every
+# release the list holds at the commit it checks out, so a change that makes Jobdesk need something new is checked
+# against the releases already listed, not only the ones it adds. Run it by hand on a version to check a release before
+# `scripts/ai-job-search.sh add`. The maintainer still tests a new release with Jobdesk and signs it off on the pull
+# request.
 name: ai-job-search release
 
 on:
@@ -15,6 +18,23 @@ on:
   pull_request:
     paths:
       - 'assets/update/ai-job-search.json'
+      - 'src/**'
+      - 'tests/ai_job_search_release.rs'
+      - '.github/workflows/ai-job-search.yml'
+      - 'scripts/ai-job-search.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - 'assets/update/ai-job-search.json'
+      - 'src/**'
+      - 'tests/ai_job_search_release.rs'
+      - '.github/workflows/ai-job-search.yml'
+      - 'scripts/ai-job-search.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 
 permissions:
   contents: read
@@ -27,57 +47,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The versions to check, as a JSON array: the input on a run by hand, or the releases a pull request adds to the list.
-  versions:
-    name: Find the releases to check
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.find.outputs.versions }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      # A pull request checks out its merge commit, whose first parent is the base it merges into.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-      - name: Find the releases
-        id: find
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT: ${{ inputs.version }}
-        run: |
-          list=assets/update/ai-job-search.json
-          if [[ $EVENT == workflow_dispatch ]]; then
-            version=${INPUT#v}
-            if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::'$INPUT' is not a version like 1.7.5."
-              exit 1
-            fi
-            versions=$(jq -cn --arg v "$version" '[$v]')
-          else
-            base=$(git show "HEAD^1:$list" 2>/dev/null || echo '[]')
-            # A pair the base lacks: a new release, or a known one with another hash.
-            versions=$(jq -c --argjson base "$base" '[.[] | select(. as $entry | any($base[]; . == $entry) | not) | .version] | unique' "$list")
-            if ! jq -e 'all(.[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<<"$versions" >/dev/null; then
-              echo "::error::The list holds a version that is not like 1.7.5: $versions"
-              exit 1
-            fi
-          fi
-          echo "Releases to check: $versions"
-          echo "versions=$versions" >> "$GITHUB_OUTPUT"
-
+  # One job and one build: each release downloads into a folder of its own, then the ignored test runs once per zip.
   check:
-    name: Check ai-job-search ${{ matrix.version }}
-    needs: versions
-    if: needs.versions.outputs.versions != '[]'
+    name: Check the ai-job-search releases
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        version: ${{ fromJSON(needs.versions.outputs.versions) }}
     defaults:
       run:
         # bash -eo pipefail: a failing command in a pipe fails the step.
@@ -90,22 +64,76 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - name: Download the release
+
+      # The versions to check, one a line: the input on a run by hand, or every release the list holds.
+      - name: Find the releases to check
         env:
-          VERSION: ${{ matrix.version }}
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.version }}
         run: |
-          dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
-          scripts/ai-job-search.sh download "v$VERSION" "$dir/source.zip"
-          echo "JOBDESK_CANDIDATE_ZIP=$dir/source.zip" >> "$GITHUB_ENV"
-      # The ignored test is the only one this runs. A filter that matched nothing would pass with 0 tests, so the
-      # step asks for the one pass.
-      - name: Check what the release holds
-        env:
-          JOBDESK_CANDIDATE_VERSION: ${{ matrix.version }}
-        run: |
-          log="$RUNNER_TEMP/check.log"
-          cargo test --locked --test ai_job_search_release -- --ignored 2>&1 | tee "$log"
-          if ! grep -Eq '^test result: ok\. 1 passed;' "$log"; then
-            echo "::error::The release check did not report 1 passed."
+          versions="$RUNNER_TEMP/versions"
+          if [[ $EVENT == workflow_dispatch ]]; then
+            printf '%s\n' "${INPUT#v}" > "$versions"
+          else
+            list=assets/update/ai-job-search.json
+            if ! jq -n -e '[inputs] | length == 1 and (.[0] | type == "array" and length >= 1)' "$list" > /dev/null 2>&1; then
+              echo "::error::$list is not one list of releases."
+              exit 1
+            fi
+            jq -r '.[].version' "$list" > "$versions"
+          fi
+          mapfile -t found < "$versions"
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "::error::There is no release to check."
             exit 1
           fi
+          for version in "${found[@]}"; do
+            if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$version' is not a version like 1.7.5."
+              exit 1
+            fi
+          done
+          echo "Releases to check: ${found[*]}"
+
+      # Each zip goes into a fresh folder of its own, so no release reads another's files.
+      - name: Download the releases
+        run: |
+          mapfile -t versions < "$RUNNER_TEMP/versions"
+          : > "$RUNNER_TEMP/zips"
+          for version in "${versions[@]}"; do
+            dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
+            if ! scripts/ai-job-search.sh download "v$version" "$dir/source.zip"; then
+              echo "::error::ai-job-search $version did not download."
+              exit 1
+            fi
+            printf '%s %s\n' "$version" "$dir/source.zip" >> "$RUNNER_TEMP/zips"
+          done
+
+      - name: Build the check
+        run: cargo test --locked --test ai_job_search_release --no-run
+
+      # The ignored test is the only one this runs. A filter that matched nothing would pass with 0 tests, so each run
+      # must report the one pass. Every release is checked, and the step fails naming each that did not pass.
+      - name: Check what each release holds
+        run: |
+          mapfile -t zips < "$RUNNER_TEMP/zips"
+          failed=()
+          for line in "${zips[@]}"; do
+            version=${line%% *}
+            zip=${line#* }
+            log="$RUNNER_TEMP/check-$version.log"
+            echo "::group::ai-job-search $version"
+            status=0
+            JOBDESK_CANDIDATE_ZIP="$zip" JOBDESK_CANDIDATE_VERSION="$version" \
+              cargo test --locked --test ai_job_search_release -- --ignored < /dev/null 2>&1 | tee "$log" || status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ] || ! grep -Eq '^test result: ok\. 1 passed;' "$log"; then
+              echo "::error::ai-job-search $version lacks what Jobdesk relies on, or its check did not report 1 passed."
+              failed+=("$version")
+            fi
+          done
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "::error::These ai-job-search releases did not pass: ${failed[*]}"
+            exit 1
+          fi
+          echo "Every release passed: ${#zips[@]} checked."

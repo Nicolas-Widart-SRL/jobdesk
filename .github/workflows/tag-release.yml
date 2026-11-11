@@ -176,8 +176,8 @@ jobs:
   # Checks the ai-job-search releases this one is compatible with: assets/update/ai-job-search.json at the built commit,
   # 1 to 5 releases, each with the SHA-256 of its source zip. scripts/ai-job-search.sh check, then the step itself,
   # downloads and hashes each zip, from an address built from the repository and the tag only, as the app builds it.
-  # A list that is not valid, a zip that does not download or a hash that does not match fails the run. The job runs code from the repository, so it holds only a token that reads it,
-  # which the checkout does not keep, and no secret.
+  # A list that is not valid, a zip that does not download or a hash that does not match fails the run. The job runs
+  # code from the repository, so it holds only a token that reads it, which the checkout does not keep, and no secret.
   source:
     name: Check the compatible ai-job-search releases
     needs: version
@@ -195,8 +195,9 @@ jobs:
 
       # The script prints the list as compact JSON, one line, on stdout, and every other message on stderr.
       # The key signs what this step outputs, so the step does not trust the script alone: the printed list must be the
-      # file at the built commit, exactly one JSON array of 1 to 5 releases, and this step downloads and hashes every
-      # zip again itself. Nothing reaches the sign job unless this workflow's own code saw GitHub serve each hash.
+      # list file as the built commit holds it, read from git and not from the working tree the script could change,
+      # exactly one JSON array of 1 to 5 releases, and this step downloads and hashes every zip again itself. Nothing
+      # reaches the sign job unless this workflow's own code saw GitHub serve each hash.
       - name: Download and hash every compatible ai-job-search release
         id: check
         shell: bash
@@ -212,7 +213,11 @@ jobs:
             echo "::error::scripts/ai-job-search.sh check did not print the list on one line. Nothing is published."
             exit 1
           fi
-          list=$(jq -c . assets/update/ai-job-search.json)
+          # The checkout is of $SHA itself, so git holds the commit.
+          if ! list=$(git show "$SHA:assets/update/ai-job-search.json" | jq -c .); then
+            echo "::error::assets/update/ai-job-search.json at $SHA does not read. Nothing is published."
+            exit 1
+          fi
           if [ "$releases" != "$list" ]; then
             echo "::error::scripts/ai-job-search.sh check did not print assets/update/ai-job-search.json at $SHA. Nothing is published."
             exit 1

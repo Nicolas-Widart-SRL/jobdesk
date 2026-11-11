@@ -98,16 +98,18 @@ download() {
   fi
 }
 
-# Succeeds when the JSON in file $1 is a well-formed list.
+# Succeeds when file $1 holds exactly one JSON value, and that value is a well-formed list. `jq -e` alone would judge
+# only the last of several values, so every value is read into one array first.
 list_is_valid() {
-  jq -e --argjson max "$max" "$vkey"'
-    type == "array" and length >= 1 and length <= $max
-    and all(.[];
-      type == "object" and (keys == ["sha256", "version"])
-      and (.version | type == "string") and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
-      and (.sha256 | type == "string") and (.sha256 | test("^[0-9a-f]{64}$")))
-    and ([.[].version | vkey] as $keys
-      | all(range(1; $keys | length); $keys[. - 1] > $keys[.]))
+  jq -n -e --argjson max "$max" "$vkey"'
+    [inputs] | length == 1 and (.[0]
+      | type == "array" and length >= 1 and length <= $max
+      and all(.[];
+        type == "object" and (keys == ["sha256", "version"])
+        and (.version | type == "string") and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+        and (.sha256 | type == "string") and (.sha256 | test("^[0-9a-f]{64}$")))
+      and ([.[].version | vkey] as $keys
+        | all(range(1; $keys | length); $keys[. - 1] > $keys[.])))
   ' "$1" >/dev/null 2>&1
 }
 
@@ -144,8 +146,8 @@ cmd_add() {
   local tag=$1 zip=${2:-} version current
   version=$(version_of "$tag")
 
-  # A missing file or an empty list is where the first release goes.
-  if [ ! -f "$list" ] || jq -e 'type == "array" and length == 0' "$list" >/dev/null 2>&1; then
+  # A missing file or an empty list, alone in its file, is where the first release goes.
+  if [ ! -f "$list" ] || jq -n -e '[inputs] | length == 1 and (.[0] | type == "array" and length == 0)' "$list" >/dev/null 2>&1; then
     current='[]'
   else
     require_valid_list

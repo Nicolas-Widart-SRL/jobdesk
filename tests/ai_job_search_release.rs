@@ -2,7 +2,8 @@
 //!
 //! The ignored test reads the release zip at `JOBDESK_CANDIDATE_ZIP`, the version `JOBDESK_CANDIDATE_VERSION`, the way
 //! first-run setup does, and names every file it lacks. It starts no `claude` and costs nothing, and the workflow
-//! `.github/workflows/ai-job-search.yml` runs it on each release a pull request adds to the list:
+//! `.github/workflows/ai-job-search.yml` runs it on every release the list holds, whenever a pull request or a push to
+//! `main` changes the list or the code that says what Jobdesk relies on:
 //!
 //! ```text
 //! scripts/ai-job-search.sh download v1.7.5 /tmp/release/source.zip
@@ -32,7 +33,8 @@ const OPTIONAL: &[(&str, &str)] = &[("/build-cv", "Profile › CV offers a build
 /// The command that writes the `ACTIVE_TEMPLATE` block the template guides are read for.
 const TEMPLATE_WRITER: &str = "/add-template";
 
-/// Where Claude Code finds a skill, which is also a slash command of the name its front matter gives.
+/// Where Claude Code finds a skill, which is also a slash command of the name its front matter gives, or of its
+/// folder's name when the front matter gives none.
 const CLAUDE_SKILLS: &str = ".claude/skills";
 
 /// Every file of a release, by its path under the top folder with `/` between parts.
@@ -43,7 +45,8 @@ type Files = BTreeMap<String, Vec<u8>>;
 enum Place {
     /// The file at this path.
     File(String),
-    /// The slash command of this name, without its `/`: a command file, or a skill of that name.
+    /// The slash command of this name, without its `/`: a command file, or a skill of that name, from its front matter
+    /// or else its folder.
     Command(&'static str),
 }
 
@@ -112,19 +115,26 @@ fn skill_name(bytes: &[u8]) -> Option<String> {
     lines.take_while(|line| line.trim_end() != "---").find_map(|line| line.strip_prefix("name:")).map(|name| name.trim().trim_matches(['"', '\'']).to_owned())
 }
 
-/// The file that makes `name` a slash command: its command file, or else a skill whose front matter has that name.
+/// The file that makes `name` a slash command: its command file, or else a skill of that name. A skill is named by the
+/// `name:` of its front matter, or by its folder when it has none, as Claude Code names it: a skill whose `name:` names
+/// another command is not this one, whatever its folder.
 fn command_file<'a>(files: &'a Files, name: &str) -> Option<(&'a str, &'a [u8])> {
     if let Some((path, bytes)) = files.get_key_value(&command_path(name)) {
         return Some((path, bytes));
     }
-    let skill = |path: &str| {
-        path.strip_prefix(CLAUDE_SKILLS)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .and_then(|rest| rest.strip_suffix(MANIFEST))
-            .and_then(|rest| rest.strip_suffix('/'))
-            .is_some_and(|folder| !folder.is_empty() && !folder.contains('/'))
-    };
-    files.iter().find(|(path, bytes)| skill(path) && skill_name(bytes).as_deref() == Some(name)).map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+    files
+        .iter()
+        .find(|(path, bytes)| skill_folder(path).is_some_and(|folder| skill_name(bytes).as_deref().unwrap_or(folder) == name))
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+}
+
+/// The folder of a skill's `SKILL.md` right under `CLAUDE_SKILLS`, or `None` for any other path.
+fn skill_folder(path: &str) -> Option<&str> {
+    path.strip_prefix(CLAUDE_SKILLS)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .and_then(|rest| rest.strip_suffix(MANIFEST))
+        .and_then(|rest| rest.strip_suffix('/'))
+        .filter(|folder| !folder.is_empty() && !folder.contains('/'))
 }
 
 /// Every need `files` does not meet, one line each.
@@ -138,7 +148,10 @@ fn unmet(files: &Files) -> Vec<String> {
         let Some((path, bytes)) = found else {
             let missing = match &need.place {
                 Place::File(path) => format!("{path} is missing"),
-                Place::Command(name) => format!("/{name} is missing: no {}, and no {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name}", command_path(name)),
+                Place::Command(name) => format!(
+                    "/{name} is missing: no {}, no {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name}, and no {CLAUDE_SKILLS}/{name}/{MANIFEST} with no name",
+                    command_path(name)
+                ),
             };
             lines.push(format!("{missing} ({})", need.why));
             continue;
@@ -267,6 +280,29 @@ fn a_command_may_ship_as_a_skill_of_its_name() {
     assert_eq!(unmet(&files), Vec::<String>::new());
     files.insert(".claude/skills/job-scraper/SKILL.md".to_owned(), b"# Scrape\n\nname: scrape\n".to_vec());
     assert_eq!(unmet(&files).len(), 1, "a name outside the front matter is no name");
+}
+
+/// Claude Code names a skill after its folder when its front matter gives no name, so such a skill in a folder of the
+/// command's name is that command, and one whose `name:` names another command is not.
+#[test]
+fn a_skill_with_no_name_is_the_command_of_its_folder() {
+    let mut files = complete();
+    files.remove(&command_path("scrape"));
+    for (bytes, why) in [
+        (&b"---\ndescription: Finds jobs.\n---\n"[..], "front matter with no name"),
+        (&b"# Scrape\n\nFinds jobs.\n"[..], "no front matter"),
+        (&b"# Scrape\n\nname: other\n"[..], "a name outside the front matter is no name"),
+    ] {
+        files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
+        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}");
+    }
+    files.insert(".claude/skills/scrape/SKILL.md".to_owned(), b"---\nname: other\n---\n".to_vec());
+    let lines = unmet(&files);
+    assert_eq!(lines.len(), 1, "a skill named for another command is not /scrape: {lines:#?}");
+    assert!(lines[0].starts_with("/scrape is missing"), "{}", lines[0]);
+    files.remove(".claude/skills/scrape/SKILL.md");
+    files.insert(".claude/skills/scrape/nested/SKILL.md".to_owned(), b"# Scrape\n".to_vec());
+    assert_eq!(unmet(&files).len(), 1, "only a SKILL.md right in the skill's folder counts");
 }
 
 #[test]

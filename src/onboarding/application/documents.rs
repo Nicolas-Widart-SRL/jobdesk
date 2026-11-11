@@ -52,7 +52,7 @@ impl CopyStop {
     pub fn line(&self) -> String {
         let name = &self.name;
         match (self.failure, self.earlier_copied) {
-            (CopyFailure::Failed, false) => CopyFailure::Failed.line().to_owned(),
+            (CopyFailure::Failed, false) => format!("The copy stopped at {name}. Nothing was saved."),
             (CopyFailure::Failed, true) => format!("The copy stopped at {name}. The files before it are in your folder."),
             (failure, false) => format!("{name}: {}", failure.line()),
             (failure, true) => format!("The copy stopped at {name}. {} The files before it are in your folder.", failure.line()),
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_that_stops_at_its_first_file_says_nothing_was_saved() {
+    fn a_copy_that_stops_at_its_first_file_names_it_and_says_nothing_was_saved() {
         let (mut documents, shelf) = documents();
         documents.add([desktop("cv\u{202e}fdp.pdf"), desktop("Profile.pdf")]);
         settle(&mut documents);
@@ -400,7 +400,7 @@ mod tests {
         settle(&mut documents);
         let stop = documents.copy_failure().unwrap();
         assert_eq!((stop.name.as_str(), stop.earlier_copied), ("cvfdp.pdf", false), "the name as shown");
-        assert_eq!(stop.line(), "The copy did not finish. Nothing was saved.");
+        assert_eq!(stop.line(), "The copy stopped at cvfdp.pdf. Nothing was saved.");
         let refused = CopyStop { name: "Letter.pdf".into(), failure: CopyFailure::NoFreeName, earlier_copied: false };
         assert_eq!(refused.line(), "Letter.pdf: Your documents folder already holds too many files of this name.");
         let after = CopyStop { earlier_copied: true, ..refused };

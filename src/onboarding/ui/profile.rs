@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chrono::{NaiveDateTime, TimeDelta};
-use egui::{ColorImage, Key, Modifiers, OpenUrl, TextureFilter, TextureHandle, TextureOptions, Ui};
+use egui::{ColorImage, Key, Modifiers, OpenUrl, ScrollArea, TextureFilter, TextureHandle, TextureOptions, Ui};
 use egui_commonmark::CommonMarkCache;
 
 use crate::onboarding::application::{
@@ -49,6 +49,8 @@ const LOADING_PAGES: usize = 2;
 const SWEEP_FRAME: Duration = Duration::from_millis(33);
 /// The soonest a draft's next write asks for a frame, so a write due now does not spin the window.
 const DRAFT_FRAME: Duration = Duration::from_millis(50);
+/// The most height Claude's message takes in the CV check's side column before it scrolls.
+const CV_MESSAGE_HEIGHT: f32 = 160.0;
 
 /// What the chapter asks of the shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -512,12 +514,6 @@ impl ProfileChapter {
             ui,
             &WizardStep { steps: &STEPS, at: AT, title: "Check your CV", lead: "Claude made it from your profile. Have a look before setup finishes." },
             |ui| {
-                // What Claude said with the CV, as it renders everywhere in the chapter.
-                ui.scope(|ui| {
-                    ui.set_max_width(DOC_MEASURE);
-                    claude_markdown(ui, cache, message);
-                });
-                ui.add_space(ITEM_GAP);
                 if changing {
                     desk_label(ui, "What should Claude change on your CV? Say it in your own words.", Type::NOTE, Ink::Muted);
                     let width = ui.available_width().min(DOC_MEASURE);
@@ -534,6 +530,13 @@ impl ProfileChapter {
             },
             |ui| {
                 open.set(cv_slip(ui, &label, &sentence).clicked());
+                // What Claude said with the CV, beside the pages so they keep their reading size. A long message scrolls.
+                side_slip(ui, "Claude wrote", "", |ui| {
+                    ScrollArea::vertical().id_salt("setup_cv_message").max_height(CV_MESSAGE_HEIGHT).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        claude_markdown(ui, cache, message);
+                    });
+                });
                 side_slip(ui, "", "", |ui| {
                     slip_text(ui, "", "Spotted something? Ask for a change opens a field. Say it in your own words, such as \"Put the design system first\".")
                 });

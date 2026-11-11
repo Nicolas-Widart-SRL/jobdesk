@@ -8295,6 +8295,22 @@ mod profile_chapter {
         assert!(check.shown("Show all Claude wrote"));
     }
 
+    /// A long message with the CV leaves the pages their reading size: the caption under them sits where it does for a
+    /// short one.
+    #[test]
+    fn a_long_message_with_the_cv_keeps_the_pages_their_size() {
+        let caption = |message: &str, name: &str| {
+            let mut scene = scene(name, Theme::Light, false);
+            scene.past_five();
+            scene.emit([tool("b1", "Bash", "cd cv && lualatex main_example.tex", false), done("b1")]);
+            scene.says(message);
+            scene.until_shown("Page 1 of");
+            scene.harness.get_by_label("Page 1 of 1").rect().top()
+        };
+        let long = format!("Your CV is built.\n\n{}", "Here is one more thing to look at before we go on.\n\n".repeat(30));
+        assert_eq!(caption("Your CV is built.", "cv_short_message"), caption(&long, "cv_long_message"));
+    }
+
     /// A link in Claude's message shows its words, and a click on them opens nothing.
     #[test]
     fn a_link_in_claudes_message_never_opens() {

@@ -4583,7 +4583,7 @@ fn folder_undone(name: &str, theme: Theme) {
     let mut harness = folder_harness(name, Stage::Undid(UndoOutcome::Undone(reverted)), theme);
     click_away(
         &mut harness,
-        "Jobdesk undid the update, except for 1 file that changed since. It will update your job search folder again with the next Jobdesk release.",
+        "Jobdesk undid the update, except for 1 file that changed since. It updates your job search folder again when a later Jobdesk brings a newer version of its files.",
     );
     assert!(is_shown(&harness, "Jobdesk left 1 file as it is, because it changed after the update wrote it:") && is_shown(&harness, "CLAUDE.md"));
     assert!(harness.query_by_label("Undo the update").is_none(), "nothing left to undo");

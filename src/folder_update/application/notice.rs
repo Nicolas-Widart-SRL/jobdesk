@@ -160,8 +160,9 @@ pub fn notice(stage: &Stage, told: Option<&Stage>, undo: bool, current: Option<V
 const UNDOING: &str = "Undoing the last update of your job search folder…";
 const UNDO_UNFINISHED: &str = "Jobdesk did not finish undoing the last update of your job search folder.";
 const RECOVERED: &str = "Jobdesk finished undoing an interrupted update of your job search folder.";
-/// What follows an Undo, which keeps the same release from coming back.
-const AGAIN: &str = "It will update your job search folder again with the next Jobdesk release.";
+/// What follows an Undo, which keeps the same release from coming back. Only a later Jobdesk that pins a newer release
+/// updates the folder again, not every Jobdesk release.
+const AGAIN: &str = "It updates your job search folder again when a later Jobdesk brings a newer version of its files.";
 const NOTHING_TO_UNDO: &str = "There was no update of your job search folder left to undo. Nothing changed.";
 
 fn working_words(current: Option<Version>) -> String {
@@ -186,7 +187,7 @@ fn said(mark: NoticeMark, words: String, lists: Vec<NoticeList>) -> Notice {
 }
 
 fn undone(reverted: &Reverted) -> Notice {
-    // Undo noted the release, so no later pass applies it again: the next Jobdesk release brings a newer one.
+    // Undo noted the release, so no later pass applies it again: only a later Jobdesk that pins a newer one updates.
     let words = match reverted.kept.len() {
         0 => format!("Jobdesk undid the update. {AGAIN}"),
         1 => format!("Jobdesk undid the update, except for 1 file that changed since. {AGAIN}"),
@@ -463,13 +464,13 @@ mod tests {
         let undone = shown(&Stage::Idle, Some(&Stage::Undid(UndoOutcome::Undone(kept)))).unwrap();
         assert_eq!(
             undone.words,
-            "Jobdesk undid the update, except for 1 file that changed since. It will update your job search folder again with the next Jobdesk release."
+            "Jobdesk undid the update, except for 1 file that changed since. It updates your job search folder again when a later Jobdesk brings a newer version of its files."
         );
         assert_eq!(undone.lists[0].items, ["CLAUDE.md"]);
         let clean = shown(&Stage::Idle, Some(&Stage::Undid(UndoOutcome::Undone(Reverted::default())))).unwrap();
         assert_eq!(
             (clean.words.as_str(), clean.lists.len()),
-            ("Jobdesk undid the update. It will update your job search folder again with the next Jobdesk release.", 0)
+            ("Jobdesk undid the update. It updates your job search folder again when a later Jobdesk brings a newer version of its files.", 0)
         );
         let nothing = shown(&Stage::Idle, Some(&Stage::Undid(UndoOutcome::NothingToUndo))).unwrap();
         assert_eq!(nothing.words, "There was no update of your job search folder left to undo. Nothing changed.");

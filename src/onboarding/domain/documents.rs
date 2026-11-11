@@ -147,8 +147,8 @@ impl DocumentKind {
     /// The kind a file's name says, if any. The name without its extension is split into words at every character
     /// that is no letter or digit, and each word is matched whole, in any case, in the user's language or English.
     /// "linkedin" anywhere names a LinkedIn profile, and so does a name whose only word besides numbers is "profile", as
-    /// LinkedIn's Save to PDF writes it. When several kinds match, LinkedIn wins, then a reference, a diploma, a
-    /// project and a CV.
+    /// LinkedIn's Save to PDF writes it. When several kinds match, LinkedIn wins, then a reference, a diploma, a CV and
+    /// a project, so a CV named after a project role stays a CV.
     pub fn guess(name: &str) -> Option<DocumentKind> {
         let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_lowercase();
         if stem.contains("linkedin") {
@@ -160,7 +160,7 @@ impl DocumentKind {
             return Some(Self::LinkedIn);
         }
         let has = |list: &[&str]| words.iter().any(|word| list.contains(word));
-        [(REFERENCE_WORDS, Self::Reference), (DIPLOMA_WORDS, Self::Diploma), (PROJECT_WORDS, Self::Project), (CV_WORDS, Self::Cv)]
+        [(REFERENCE_WORDS, Self::Reference), (DIPLOMA_WORDS, Self::Diploma), (CV_WORDS, Self::Cv), (PROJECT_WORDS, Self::Project)]
             .into_iter()
             .find_map(|(list, kind)| has(list).then_some(kind))
     }
@@ -298,6 +298,8 @@ mod tests {
             ("Portfolio 2023.pdf", Some(Project)),
             ("Projet final.pdf", Some(Project)),
             ("CV reference Tessel.pdf", Some(Reference)),
+            ("Sam Rivera CV - Project Manager.pdf", Some(Cv)),
+            ("Resume Senior Project Lead.pdf", Some(Cv)),
             ("cvs.pdf", None),
             ("Scan_0001.pdf", None),
         ];

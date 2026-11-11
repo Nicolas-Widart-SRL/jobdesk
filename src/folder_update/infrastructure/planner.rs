@@ -74,10 +74,21 @@ pub fn plan(folder: &Path, update: &Update) -> Result<Plan, UpdateError> {
             }
             Action::Write(_) | Action::Delete | Action::Restore(_) => None,
         };
-        let mode = theirs.map_or(0o644, |(_, mode)| *mode);
+        let mode = kept_mode(ours.is_some().then_some(ours_mode), theirs.map(|(_, mode)| *mode));
         plan.steps.push(Step { path: path.clone(), action, ours, mode, side, folders: seen.missing });
     }
     Ok(plan)
+}
+
+/// The mode a file the update writes gets: on Unix, the folder's file's own, `ours`, when it is there, so a merge never
+/// widens who may read a private file, and else the new release's, `theirs`. Windows keeps no such bits, so there it is
+/// always the release's, as before.
+fn kept_mode(ours: Option<u32>, theirs: Option<u32>) -> u32 {
+    match (ours, theirs) {
+        (Some(ours), _) if cfg!(unix) => ours,
+        (_, Some(theirs)) => theirs,
+        _ => 0o644,
+    }
 }
 
 /// The files of a release by their path with `/` separators, each with its bytes and mode.

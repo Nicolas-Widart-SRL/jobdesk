@@ -739,13 +739,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn each_file_takes_the_mode_of_its_entry() {
+    fn an_added_file_takes_the_mode_of_its_entry() {
         use std::os::unix::fs::PermissionsExt;
         let fixture = Fixture::new(BASE, NEW_FILES);
         fixture.run().unwrap();
         let mode = |path: &str| fs::metadata(joined(&fixture.folder, path)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode("scripts/run.sh"), 0o755);
         assert_eq!(mode("CLAUDE.md"), 0o644);
+    }
+
+    /// A file the update writes over keeps its own permissions, so a private one stays private. A file it adds takes the
+    /// release's, and each side copy the permissions of the file it copies.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_written_over_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::edited();
+        let mode = |path: &str| fs::metadata(joined(&fixture.folder, path)).unwrap().permissions().mode() & 0o777;
+        for path in ["CLAUDE.md", ".claude/settings.json", "templates/letter.md"] {
+            fs::set_permissions(joined(&fixture.folder, path), fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        fixture.run().unwrap();
+        assert_eq!(fixture.read("CLAUDE.md").as_deref(), Some(CLAUDE_MERGED));
+        assert_eq!(mode("CLAUDE.md"), 0o600, "a merge");
+        assert_eq!(mode("templates/letter.md"), 0o600, "a file the user never changed");
+        assert_eq!(mode(".claude/settings.json"), 0o600, "a safety file upstream wins");
+        assert_eq!(mode(".claude/settings.json.yours-1.8.0"), 0o600, "the copy of the user's file");
+        assert_eq!(mode("docs/guide.md.update-1.8.0"), 0o644, "the copy of upstream's");
+        assert_eq!(mode("scripts/run.sh"), 0o755, "a file the update adds");
     }
 
     #[test]

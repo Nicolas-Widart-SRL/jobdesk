@@ -66,7 +66,7 @@ pub struct Step {
     pub action: Action,
     /// The folder's file when the plan was made. `None` when it is absent.
     pub ours: Option<Vec<u8>>,
-    /// The mode the new release gives the file.
+    /// The mode the file gets: on Unix the folder's file's own when it is there, else the one the new release gives it.
     pub mode: u32,
     /// The copy saved beside the file, for a `Conflict` or an `UpstreamWins`.
     pub side: Option<Side>,

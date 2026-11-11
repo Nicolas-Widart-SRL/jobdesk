@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use crate::onboarding::domain::{CopyFailure, DocumentCopier, Refusal, shown_name};
+use crate::onboarding::domain::{CopyFailure, DocumentCopier, DocumentKind, Refusal, shown_name};
 
 /// A document the user added.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +16,9 @@ pub struct Added {
     pub looked: bool,
     /// Its page count, when the PDF reads.
     pub pages: Option<usize>,
-    /// The name its copy took in `documents/`, once copied.
+    /// What it is, guessed from its name when added and changeable until it is copied. It decides the subfolder.
+    pub kind: DocumentKind,
+    /// The name its copy took in `documents/<kind folder>/`, once copied.
     pub copied_as: Option<String>,
 }
 
@@ -66,19 +68,29 @@ impl Documents {
     /// with its page count, anything else leaves the list for the refused lines. A file already added is not added twice.
     /// The refusals of an earlier add are dropped, so the lines speak of the files just added. Nothing is added while
     /// a copy runs.
+    ///
+    /// Each new file's kind is guessed once, from its name. A file whose name says nothing is taken for the CV when it is
+    /// the first such file of this add and neither the list nor this add holds a CV yet, and for a project otherwise.
     pub fn add(&mut self, sources: impl IntoIterator<Item = PathBuf>) {
         if self.copying {
             return;
         }
         self.refused.clear();
-        let mut new = Vec::new();
+        let mut new: Vec<(PathBuf, String, Option<DocumentKind>)> = Vec::new();
         for source in sources {
-            if self.added.iter().any(|added| added.source == source) || new.contains(&source) {
+            if self.added.iter().any(|added| added.source == source) || new.iter().any(|(known, _, _)| *known == source) {
                 continue;
             }
-            self.added.push(Added { name: shown_name(&source), source: source.clone(), looked: false, pages: None, copied_as: None });
-            new.push(source);
+            let name = shown_name(&source);
+            let guessed = DocumentKind::guess(&name);
+            new.push((source, name, guessed));
         }
+        let mut has_cv = self.added.iter().any(|added| added.kind == DocumentKind::Cv) || new.iter().any(|(_, _, kind)| *kind == Some(DocumentKind::Cv));
+        for (source, name, guessed) in &new {
+            let kind = guessed.unwrap_or_else(|| if std::mem::replace(&mut has_cv, true) { DocumentKind::Project } else { DocumentKind::Cv });
+            self.added.push(Added { source: source.clone(), name: name.clone(), looked: false, pages: None, kind, copied_as: None });
+        }
+        let new: Vec<PathBuf> = new.into_iter().map(|(source, _, _)| source).collect();
         if new.is_empty() {
             return;
         }
@@ -94,6 +106,16 @@ impl Documents {
     pub fn remove(&mut self, at: usize) {
         if !self.copying && self.added.get(at).is_some_and(|added| added.copied_as.is_none()) {
             self.added.remove(at);
+        }
+    }
+
+    /// Changes what a document not copied yet is. A copied one, or one being copied, keeps its kind.
+    pub fn set_kind(&mut self, at: usize, kind: DocumentKind) {
+        if self.copying {
+            return;
+        }
+        if let Some(added) = self.added.get_mut(at).filter(|added| added.copied_as.is_none()) {
+            added.kind = kind;
         }
     }
 
@@ -155,19 +177,21 @@ impl Documents {
         }
     }
 
-    /// Copies into `documents/` of `folder`, on a worker, each document not copied yet, in order, and stops at the first
-    /// that fails. The ones copied before it stay copied, so trying again copies only the rest.
+    /// Copies into the subfolder of `documents/` of `folder` that each one's kind names, on a worker, each document not
+    /// copied yet, in order, and stops at the first that fails. The ones copied before it stay copied, so trying again
+    /// copies only the rest.
     pub(crate) fn start_copy(&mut self, folder: &Path) {
         if self.copying {
             return;
         }
-        let waiting: Vec<PathBuf> = self.added.iter().filter(|added| added.copied_as.is_none()).map(|added| added.source.clone()).collect();
+        let waiting: Vec<(PathBuf, DocumentKind)> =
+            self.added.iter().filter(|added| added.copied_as.is_none()).map(|added| (added.source.clone(), added.kind)).collect();
         self.copy_failure = None;
         self.copying = true;
         let folder = folder.to_owned();
         self.spawn(move |copier, tell| {
-            for source in waiting {
-                let copied = copier.copy(&source, &folder);
+            for (source, kind) in waiting {
+                let copied = copier.copy(&source, &folder, kind);
                 let failed = copied.is_err();
                 tell(News::Copied(source, copied));
                 if failed {
@@ -202,6 +226,7 @@ mod tests {
     #[derive(Default)]
     struct Shelf {
         copies: Mutex<Vec<String>>,
+        kinds: Mutex<Vec<(String, DocumentKind)>>,
         broken: Mutex<Option<String>>,
     }
 
@@ -210,14 +235,51 @@ mod tests {
             by_name(&shown_name(source)).map(|()| Some(2))
         }
 
-        fn copy(&self, source: &Path, _: &Path) -> Result<String, CopyFailure> {
+        fn copy(&self, source: &Path, _: &Path, kind: DocumentKind) -> Result<String, CopyFailure> {
             let name = shown_name(source);
             if self.broken.lock().unwrap().as_deref() == Some(name.as_str()) {
                 return Err(CopyFailure::Failed);
             }
             self.copies.lock().unwrap().push(name.clone());
+            self.kinds.lock().unwrap().push((name.clone(), kind));
             Ok(name)
         }
+    }
+
+    fn kinds(documents: &Documents) -> Vec<DocumentKind> {
+        documents.added().iter().map(|added| added.kind).collect()
+    }
+
+    #[test]
+    fn a_name_that_says_nothing_is_the_cv_only_when_no_cv_is_there() {
+        use DocumentKind::*;
+        let (mut with_cv, _) = documents();
+        with_cv.add([desktop("Scan_0001.pdf"), desktop("Sam Rivera CV.pdf"), desktop("Notes.pdf")]);
+        assert_eq!(kinds(&with_cv), [Project, Cv, Project], "this add holds a CV");
+        let (mut unnamed, _) = documents();
+        unnamed.add([desktop("Scan_0001.pdf"), desktop("Notes.pdf")]);
+        assert_eq!(kinds(&unnamed), [Cv, Project], "the first is taken for the CV");
+        unnamed.add([desktop("Scan_0002.pdf")]);
+        assert_eq!(kinds(&unnamed), [Cv, Project, Project], "the list holds a CV");
+        settle(&mut unnamed);
+        assert_eq!(kinds(&unnamed), [Cv, Project, Project], "guessed once, never again");
+    }
+
+    #[test]
+    fn a_kind_changes_until_the_document_is_copied() {
+        use DocumentKind::*;
+        let (mut documents, shelf) = documents();
+        documents.add([desktop("Sam Rivera CV.pdf"), desktop("Profile.pdf"), desktop("Letter.pdf")]);
+        settle(&mut documents);
+        documents.set_kind(2, Reference);
+        documents.set_kind(9, Diploma);
+        assert_eq!(kinds(&documents), [Cv, LinkedIn, Reference]);
+        documents.start_copy(Path::new("/Users/sam/Documents/Job search"));
+        settle(&mut documents);
+        let handed = shelf.kinds.lock().unwrap().clone();
+        assert_eq!(handed, [("Sam Rivera CV.pdf".to_owned(), Cv), ("Profile.pdf".to_owned(), LinkedIn), ("Letter.pdf".to_owned(), Reference)]);
+        documents.set_kind(0, Project);
+        assert_eq!(kinds(&documents), [Cv, LinkedIn, Reference], "a copied one keeps its kind");
     }
 
     /// Polls until no worker has anything left to say, or fails after a few seconds.

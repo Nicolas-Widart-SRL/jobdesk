@@ -10,7 +10,8 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::onboarding::application::{Batch, Documents, Message, read_message};
 use crate::onboarding::domain::{
-    CV_LOOKS_GOOD, CopyFailure, DocumentCopier, Draft, PATH_A_REPLY, PICK_UP_REPLY, Progress, ProgressStore, Saved, joined_reply, review_reply, tool_line,
+    CV_LOOKS_GOOD, CopyFailure, DocumentCopier, DocumentKind, Draft, PATH_A_REPLY, PICK_UP_REPLY, Progress, ProgressStore, Saved, joined_reply, review_reply,
+    tool_line,
 };
 use crate::profile::application::{CvShelf, PdfDocument};
 use crate::runs::application::{
@@ -248,6 +249,11 @@ impl ProfileRun {
 
     pub fn remove_document(&mut self, at: usize) {
         self.documents.remove(at);
+    }
+
+    /// What a document not copied yet is, which decides the subfolder of `documents/` it goes to.
+    pub fn set_document_kind(&mut self, at: usize, kind: DocumentKind) {
+        self.documents.set_kind(at, kind);
     }
 
     /// The phase as the last `poll` found it.
@@ -784,7 +790,7 @@ mod tests {
         fn look(&self, source: &Path) -> Result<Option<usize>, Refusal> {
             by_name(&shown_name(source)).map(|()| Some(1))
         }
-        fn copy(&self, source: &Path, _: &Path) -> Result<String, CopyFailure> {
+        fn copy(&self, source: &Path, _: &Path, _: DocumentKind) -> Result<String, CopyFailure> {
             self.0.lock().unwrap().push(shown_name(source));
             Ok(shown_name(source))
         }

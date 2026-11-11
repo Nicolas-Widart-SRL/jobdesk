@@ -48,7 +48,8 @@ impl Refusal {
 pub enum CopyFailure {
     /// The file changed since it was added, and is now refused.
     Refused(Refusal),
-    /// The job search folder or its `documents/` is not a real folder, or cannot be made.
+    /// The job search folder, its `documents/` or the kind's subfolder in it is not a real folder, is a link, or cannot
+    /// be made.
     NoDocumentsFolder,
     /// Every numbered name is taken.
     NoFreeName,
@@ -64,6 +65,104 @@ impl CopyFailure {
             Self::NoFreeName => "Your documents folder already holds too many files of this name.",
             Self::Failed => "The copy did not finish. Nothing was saved.",
         }
+    }
+}
+
+/// What a document is, which decides the subfolder of `documents/` it is copied into. `/setup` reads `documents/` by
+/// subfolder, and stops when every one is empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    Cv,
+    LinkedIn,
+    Diploma,
+    Reference,
+    Project,
+}
+
+const CV_WORDS: &[&str] = &["cv", "resume", "résumé", "curriculum", "vitae", "lebenslauf"];
+const REFERENCE_WORDS: &[&str] = &[
+    "reference",
+    "references",
+    "référence",
+    "références",
+    "referenz",
+    "referenzen",
+    "referentie",
+    "referenties",
+    "referencia",
+    "referencias",
+    "recommendation",
+    "recommandation",
+    "recomendación",
+    "recomendacion",
+    "empfehlung",
+    "empfehlungsschreiben",
+    "arbeitszeugnis",
+    "aanbeveling",
+    "testimonial",
+];
+const DIPLOMA_WORDS: &[&str] = &[
+    "diploma",
+    "diplomas",
+    "diplôme",
+    "diplome",
+    "diplom",
+    "degree",
+    "certificate",
+    "certificat",
+    "certificado",
+    "zertifikat",
+    "zeugnis",
+    "getuigschrift",
+    "transcript",
+];
+const PROJECT_WORDS: &[&str] = &["project", "projects", "projet", "projets", "projekt", "projekte", "proyecto", "proyectos", "portfolio"];
+
+impl DocumentKind {
+    /// In the order the menu lists them.
+    pub const ALL: [DocumentKind; 5] = [Self::Cv, Self::LinkedIn, Self::Diploma, Self::Reference, Self::Project];
+
+    /// The subfolder of `documents/` that holds this kind: the subfolders ai-job-search v1.7.5's
+    /// `.claude/commands/setup.md` Step A1 inventories, `cv/`, `linkedin/`, `diplomas/`, `references/` and `projects/`.
+    pub fn folder(self) -> &'static str {
+        match self {
+            Self::Cv => "cv",
+            Self::LinkedIn => "linkedin",
+            Self::Diploma => "diplomas",
+            Self::Reference => "references",
+            Self::Project => "projects",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cv => "CV",
+            Self::LinkedIn => "LinkedIn profile",
+            Self::Diploma => "Diploma",
+            Self::Reference => "Reference letter",
+            Self::Project => "Project",
+        }
+    }
+
+    /// The kind a file's name says, if any. The name without its extension is split into words at every character
+    /// that is no letter or digit, and each word is matched whole, in any case, in the user's language or English.
+    /// "linkedin" anywhere names a LinkedIn profile, and so does a name whose only word besides numbers is "profile", as
+    /// LinkedIn's Save to PDF writes it. When several kinds match, LinkedIn wins, then a reference, a diploma, a
+    /// project and a CV.
+    pub fn guess(name: &str) -> Option<DocumentKind> {
+        let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_lowercase();
+        if stem.contains("linkedin") {
+            return Some(Self::LinkedIn);
+        }
+        let words: Vec<&str> = stem.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).collect();
+        let named: Vec<&&str> = words.iter().filter(|word| !word.chars().all(|c| c.is_numeric())).collect();
+        if named.len() == 1 && *named[0] == "profile" {
+            return Some(Self::LinkedIn);
+        }
+        let has = |list: &[&str]| words.iter().any(|word| list.contains(word));
+        [(REFERENCE_WORDS, Self::Reference), (DIPLOMA_WORDS, Self::Diploma), (PROJECT_WORDS, Self::Project), (CV_WORDS, Self::Cv)]
+            .into_iter()
+            .find_map(|(list, kind)| has(list).then_some(kind))
     }
 }
 
@@ -124,9 +223,10 @@ pub trait DocumentCopier: Send + Sync {
     /// Looks at a file the user added, never following a link: a regular PDF it can open, with its page count when the
     /// PDF reads.
     fn look(&self, source: &Path) -> Result<Option<usize>, Refusal>;
-    /// Copies `source` into `documents/` of `folder` under its `copy_name`, numbered when that is taken, and returns the
-    /// name it took. It never writes over a file, never follows a link and never moves or changes `source`.
-    fn copy(&self, source: &Path, folder: &Path) -> Result<String, CopyFailure>;
+    /// Copies `source` into `documents/<kind folder>/` of `folder` under its `copy_name`, numbered when that is taken in
+    /// that subfolder, and returns the name it took. It never writes in the `documents/` root or over a file, never
+    /// follows a link and never moves or changes `source`.
+    fn copy(&self, source: &Path, folder: &Path, kind: DocumentKind) -> Result<String, CopyFailure>;
 }
 
 #[cfg(test)]
@@ -173,6 +273,45 @@ mod tests {
         assert_eq!(copy_name(" \u{200b} .pdf"), "Document.pdf");
         let long = copy_name(&format!("{}.pdf", "é".repeat(300)));
         assert!(long.len() <= MAX_STEM + 4 && long.ends_with("é.pdf"), "{long}");
+    }
+
+    #[test]
+    fn a_kind_is_guessed_from_whole_words_of_the_name() {
+        use DocumentKind::*;
+        let table = [
+            ("Sam Rivera CV.pdf", Some(Cv)),
+            ("Resume_2024.pdf", Some(Cv)),
+            ("résumé.pdf", Some(Cv)),
+            ("CURRICULUM VITAE.pdf", Some(Cv)),
+            ("Lebenslauf Sam.pdf", Some(Cv)),
+            ("Profile.pdf", Some(LinkedIn)),
+            ("Profile (1).pdf", Some(LinkedIn)),
+            ("linkedin-export.pdf", Some(LinkedIn)),
+            ("SamLinkedInProfile.pdf", Some(LinkedIn)),
+            ("My profile summary.pdf", None),
+            ("Diplôme.pdf", Some(Diploma)),
+            ("Degree certificate.pdf", Some(Diploma)),
+            ("Zeugnis.pdf", Some(Diploma)),
+            ("Reference letter Tessel.pdf", Some(Reference)),
+            ("Arbeitszeugnis Harbor.pdf", Some(Reference)),
+            ("Aanbeveling.pdf", Some(Reference)),
+            ("Portfolio 2023.pdf", Some(Project)),
+            ("Projet final.pdf", Some(Project)),
+            ("CV reference Tessel.pdf", Some(Reference)),
+            ("cvs.pdf", None),
+            ("Scan_0001.pdf", None),
+        ];
+        for (name, kind) in table {
+            assert_eq!(DocumentKind::guess(name), kind, "{name}");
+        }
+    }
+
+    #[test]
+    fn each_kind_has_its_folder_and_its_label_in_menu_order() {
+        let folders: Vec<&str> = DocumentKind::ALL.iter().map(|kind| kind.folder()).collect();
+        assert_eq!(folders, ["cv", "linkedin", "diplomas", "references", "projects"]);
+        let labels: Vec<&str> = DocumentKind::ALL.iter().map(|kind| kind.label()).collect();
+        assert_eq!(labels, ["CV", "LinkedIn profile", "Diploma", "Reference letter", "Project"]);
     }
 
     #[test]

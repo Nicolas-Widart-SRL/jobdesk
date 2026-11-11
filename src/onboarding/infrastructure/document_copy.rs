@@ -10,11 +10,12 @@ use std::time::{Duration, SystemTime};
 use hayro::hayro_syntax::Pdf;
 
 use crate::onboarding::domain::{
-    CopyFailure, DOCUMENTS, DocumentCopier, MAX_DOCUMENT, MAX_NUMBER, Refusal, by_name, copy_name, looks_like_pdf, numbered, shown_name,
+    CopyFailure, DOCUMENTS, DocumentCopier, DocumentKind, MAX_DOCUMENT, MAX_NUMBER, Refusal, by_name, copy_name, looks_like_pdf, numbered, shown_name,
 };
 
 /// Copies the user's documents into the job search folder. It reads each file once through a handle it checked is the
-/// regular file it looked at, and writes only new files directly in `documents/`.
+/// regular file it looked at, and writes only new files directly in the subfolder of `documents/` that the document's
+/// kind names.
 pub struct FileCopier;
 
 impl DocumentCopier for FileCopier {
@@ -32,20 +33,22 @@ impl DocumentCopier for FileCopier {
         Ok(page_count(bytes))
     }
 
-    /// The bytes go to a hidden part file in `documents/` first, on disk before the copy takes its name, so a crash
-    /// never leaves a cut PDF under a real name. The name is then linked to the part file, which fails on any name
-    /// already there, a link included, so nothing is written over. Part files a copy left more than
-    /// `STRAY_PART_AGE` ago are removed first.
-    fn copy(&self, source: &Path, folder: &Path) -> Result<String, CopyFailure> {
+    /// The bytes go to a hidden part file in the kind's subfolder first, on disk before the copy takes its name, so a
+    /// crash never leaves a cut PDF under a real name. The name is then linked to the part file, which fails on any name
+    /// already there, a link included, so nothing is written over. Part files a copy left more than `STRAY_PART_AGE`
+    /// ago are removed first. Nothing is written in the `documents/` root.
+    fn copy(&self, source: &Path, folder: &Path, kind: DocumentKind) -> Result<String, CopyFailure> {
         let name = shown_name(source);
         by_name(&name).map_err(CopyFailure::Refused)?;
         let mut file = open_regular(source).map_err(CopyFailure::Refused)?;
-        let documents = documents_folder(folder)?;
+        let documents = kind_folder(folder, kind)?;
         let canonical = fs::canonicalize(&documents).map_err(|_| CopyFailure::NoDocumentsFolder)?;
         if let Some(kept) = already_inside(source, &canonical) {
             return Ok(kept);
         }
-        clear_stray_parts(&documents);
+        for each in DocumentKind::ALL {
+            clear_stray_parts(&folder.join(DOCUMENTS).join(each.folder()));
+        }
         let part = documents.join(part_name());
         let out = OpenOptions::new().write(true).create_new(true).open(&part).map_err(|_| CopyFailure::Failed)?;
         if !stays_in(&part, &canonical) {
@@ -157,24 +160,28 @@ fn same_file(looked: &Metadata, opened: &Metadata) -> bool {
     looked.len() == opened.len()
 }
 
-/// `documents/` of the job search folder, made when it is missing. The folder and `documents/` must both be real
-/// folders, never links, so nothing is written outside them.
-fn documents_folder(folder: &Path) -> Result<PathBuf, CopyFailure> {
-    let real_folder = |path: &Path| fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
-    if !real_folder(folder) {
+/// `documents/<kind folder>/` of the job search folder, each folder made when it is missing. The job search folder,
+/// `documents/` and the subfolder must all be real folders, never links, so nothing is written outside them.
+fn kind_folder(folder: &Path, kind: DocumentKind) -> Result<PathBuf, CopyFailure> {
+    if !fs::symlink_metadata(folder).is_ok_and(|meta| meta.is_dir()) {
         return Err(CopyFailure::NoDocumentsFolder);
     }
-    let documents = folder.join(DOCUMENTS);
-    match fs::symlink_metadata(&documents) {
-        Ok(meta) if meta.is_dir() => Ok(documents),
+    let documents = real_folder(folder.join(DOCUMENTS))?;
+    real_folder(documents.join(kind.folder()))
+}
+
+/// `path` when it is a real folder, never a link, made when it is missing.
+fn real_folder(path: PathBuf) -> Result<PathBuf, CopyFailure> {
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_dir() => Ok(path),
         Ok(_) => Err(CopyFailure::NoDocumentsFolder),
-        Err(error) if error.kind() == ErrorKind::NotFound => fs::create_dir(&documents).map(|()| documents).map_err(|_| CopyFailure::NoDocumentsFolder),
+        Err(error) if error.kind() == ErrorKind::NotFound => fs::create_dir(&path).map(|()| path).map_err(|_| CopyFailure::NoDocumentsFolder),
         Err(_) => Err(CopyFailure::NoDocumentsFolder),
     }
 }
 
-/// The name of a file the user added from `documents/` itself, whose links-resolved path is `canonical`, which needs no
-/// copy.
+/// The name of a file the user added from the kind's subfolder itself, whose links-resolved path is `canonical`, which
+/// needs no copy.
 fn already_inside(source: &Path, canonical: &Path) -> Option<String> {
     let source = fs::canonicalize(source).ok()?;
     (source.parent() == Some(canonical)).then(|| source.file_name().map(|name| name.to_string_lossy().into_owned())).flatten()
@@ -243,6 +250,20 @@ mod tests {
         names
     }
 
+    /// Fails when the `documents/` root of `folder` holds anything but real subfolders.
+    fn root_holds_only_subfolders(folder: &Path) {
+        for entry in fs::read_dir(folder.join(DOCUMENTS)).unwrap() {
+            let entry = entry.unwrap();
+            assert!(fs::symlink_metadata(entry.path()).unwrap().is_dir(), "{:?} in the documents root", entry.file_name());
+        }
+    }
+
+    fn cv_folder(folder: &Path) -> PathBuf {
+        folder.join(DOCUMENTS).join("cv")
+    }
+
+    use DocumentKind::{Cv, Reference};
+
     #[test]
     fn a_pdf_shows_its_page_count() {
         let (_root, _, desktop) = places();
@@ -257,7 +278,7 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::write(desktop.join("letter.docx"), b"PK\x03\x04").unwrap();
         assert_eq!(FileCopier.look(&desktop.join("letter.docx")), Err(Refusal::Word));
-        assert_eq!(FileCopier.copy(&desktop.join("letter.docx"), &folder), Err(CopyFailure::Refused(Refusal::Word)));
+        assert_eq!(FileCopier.copy(&desktop.join("letter.docx"), &folder, Reference), Err(CopyFailure::Refused(Refusal::Word)));
         fs::write(desktop.join("renamed.pdf"), b"PK\x03\x04word/document.xml").unwrap();
         assert_eq!(FileCopier.look(&desktop.join("renamed.pdf")), Err(Refusal::NotPdf));
         fs::create_dir(desktop.join("folder.pdf")).unwrap();
@@ -273,39 +294,49 @@ mod tests {
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
         std::os::unix::fs::symlink(desktop.join("cv.pdf"), desktop.join("link.pdf")).unwrap();
         assert_eq!(FileCopier.look(&desktop.join("link.pdf")), Err(Refusal::Link));
-        assert_eq!(FileCopier.copy(&desktop.join("link.pdf"), &folder), Err(CopyFailure::Refused(Refusal::Link)));
+        assert_eq!(FileCopier.copy(&desktop.join("link.pdf"), &folder, Cv), Err(CopyFailure::Refused(Refusal::Link)));
     }
 
     #[test]
-    fn a_copy_lands_in_documents_and_leaves_the_source_as_it_was() {
+    fn a_cv_lands_in_documents_cv_and_a_missing_subfolder_is_made() {
         let (_root, folder, desktop) = places();
+        fs::create_dir(cv_folder(&folder)).unwrap();
         fs::write(desktop.join("Sam Rivera CV.pdf"), pdf(2)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("Sam Rivera CV.pdf"), &folder).as_deref(), Ok("Sam Rivera CV.pdf"));
-        assert_eq!(fs::read(folder.join(DOCUMENTS).join("Sam Rivera CV.pdf")).unwrap(), pdf(2));
+        fs::write(desktop.join("Tessel.pdf"), pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&desktop.join("Sam Rivera CV.pdf"), &folder, Cv).as_deref(), Ok("Sam Rivera CV.pdf"));
+        assert_eq!(fs::read(cv_folder(&folder).join("Sam Rivera CV.pdf")).unwrap(), pdf(2));
         assert_eq!(fs::read(desktop.join("Sam Rivera CV.pdf")).unwrap(), pdf(2), "copied, never moved");
+        assert_eq!(FileCopier.copy(&desktop.join("Tessel.pdf"), &folder, Reference).as_deref(), Ok("Tessel.pdf"));
+        assert_eq!(names(&folder.join(DOCUMENTS).join("references")), ["Tessel.pdf"]);
+        assert_eq!(names(&folder.join(DOCUMENTS)), ["cv", "references"]);
+        root_holds_only_subfolders(&folder);
     }
 
     #[test]
-    fn a_name_clash_gets_a_number_and_never_writes_over_a_file() {
+    fn a_name_clash_gets_a_number_within_its_subfolder_only() {
         let (_root, folder, desktop) = places();
-        let documents = folder.join(DOCUMENTS);
-        fs::write(documents.join("cv.pdf"), b"the one already there").unwrap();
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        fs::write(cv_folder(&folder).join("cv.pdf"), b"the one already there").unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv (2).pdf"));
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv (3).pdf"));
-        assert_eq!(fs::read(documents.join("cv.pdf")).unwrap(), b"the one already there");
-        assert_eq!(names(&documents), ["cv (2).pdf", "cv (3).pdf", "cv.pdf"]);
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (3).pdf"));
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Reference).as_deref(), Ok("cv.pdf"), "another subfolder has no clash");
+        assert_eq!(fs::read(cv_folder(&folder).join("cv.pdf")).unwrap(), b"the one already there");
+        assert_eq!(names(&cv_folder(&folder)), ["cv (2).pdf", "cv (3).pdf", "cv.pdf"]);
+        root_holds_only_subfolders(&folder);
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_link_in_documents_counts_as_taken_and_is_never_written_through() {
+    fn a_link_in_the_subfolder_counts_as_taken_and_is_never_written_through() {
         let (root, folder, desktop) = places();
         let outside = root.path().join("outside.pdf");
-        std::os::unix::fs::symlink(&outside, folder.join(DOCUMENTS).join("cv.pdf")).unwrap();
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        std::os::unix::fs::symlink(&outside, cv_folder(&folder).join("cv.pdf")).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv (2).pdf"));
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
         assert!(!outside.exists(), "the dangling link led nowhere");
+        root_holds_only_subfolders(&folder);
     }
 
     #[test]
@@ -313,9 +344,10 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::write(desktop.join("cv\u{202e}fdp.pdf"), pdf(1)).unwrap();
         fs::write(desktop.join(".profile.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv\u{202e}fdp.pdf"), &folder).as_deref(), Ok("cvfdp.pdf"));
-        assert_eq!(FileCopier.copy(&desktop.join(".profile.pdf"), &folder).as_deref(), Ok("profile.pdf"));
-        assert_eq!(names(&folder.join(DOCUMENTS)), ["cvfdp.pdf", "profile.pdf"]);
+        assert_eq!(FileCopier.copy(&desktop.join("cv\u{202e}fdp.pdf"), &folder, Cv).as_deref(), Ok("cvfdp.pdf"));
+        assert_eq!(FileCopier.copy(&desktop.join(".profile.pdf"), &folder, Cv).as_deref(), Ok("profile.pdf"));
+        assert_eq!(names(&cv_folder(&folder)), ["cvfdp.pdf", "profile.pdf"]);
+        root_holds_only_subfolders(&folder);
     }
 
     #[test]
@@ -323,8 +355,9 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::remove_dir(folder.join(DOCUMENTS)).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv.pdf"));
-        assert_eq!(names(&folder.join(DOCUMENTS)), ["cv.pdf"]);
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
+        root_holds_only_subfolders(&folder);
     }
 
     #[cfg(unix)]
@@ -336,36 +369,61 @@ mod tests {
         fs::remove_dir(folder.join(DOCUMENTS)).unwrap();
         std::os::unix::fs::symlink(&elsewhere, folder.join(DOCUMENTS)).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
         assert_eq!(names(&elsewhere), Vec::<String>::new());
         let linked = root.path().join("Linked search");
         std::os::unix::fs::symlink(&folder, &linked).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &linked), Err(CopyFailure::NoDocumentsFolder), "nor a job search folder that is one");
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &linked, Cv), Err(CopyFailure::NoDocumentsFolder), "nor a job search folder that is one");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_subfolder_that_is_a_link_is_never_written_into() {
+        let (root, folder, desktop) = places();
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, cv_folder(&folder)).unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(names(&elsewhere), Vec::<String>::new(), "the link's target stays empty");
+    }
+
+    #[test]
+    fn a_subfolder_that_is_a_file_is_refused() {
+        let (_root, folder, desktop) = places();
+        fs::write(cv_folder(&folder), b"not a folder").unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(fs::read(cv_folder(&folder)).unwrap(), b"not a folder");
     }
 
     #[test]
     fn a_copy_leaves_no_part_file_and_clears_a_stray_one() {
         let (_root, folder, desktop) = places();
-        let documents = folder.join(DOCUMENTS);
-        let stray = documents.join(format!("{PART_PREFIX}1-0{PART_SUFFIX}"));
-        let under_way = documents.join(format!("{PART_PREFIX}2-0{PART_SUFFIX}"));
+        let (cv, references) = (cv_folder(&folder), folder.join(DOCUMENTS).join("references"));
+        fs::create_dir(&cv).unwrap();
+        fs::create_dir(&references).unwrap();
+        let stray = references.join(format!("{PART_PREFIX}1-0{PART_SUFFIX}"));
+        let under_way = cv.join(format!("{PART_PREFIX}2-0{PART_SUFFIX}"));
         fs::write(&stray, b"half a PDF").unwrap();
         fs::write(&under_way, b"a copy under way").unwrap();
         File::options().write(true).open(&stray).unwrap().set_modified(SystemTime::now() - STRAY_PART_AGE * 2).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv.pdf"));
-        assert_eq!(names(&documents), [format!("{PART_PREFIX}2-0{PART_SUFFIX}"), "cv.pdf".to_owned()], "the stray part went, the fresh one stayed");
-        assert_eq!(fs::read(documents.join("cv.pdf")).unwrap(), pdf(1));
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&cv), [format!("{PART_PREFIX}2-0{PART_SUFFIX}"), "cv.pdf".to_owned()], "the fresh part stayed");
+        assert_eq!(names(&references), Vec::<String>::new(), "the stray part in another subfolder went");
+        assert_eq!(fs::read(cv.join("cv.pdf")).unwrap(), pdf(1));
+        root_holds_only_subfolders(&folder);
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_file_reached_through_a_link_does_not_stay_in_documents() {
+    fn a_file_reached_through_a_link_does_not_stay_in_its_subfolder() {
         let (root, folder, _) = places();
-        let documents = folder.join(DOCUMENTS);
-        let canonical = fs::canonicalize(&documents).unwrap();
-        fs::write(documents.join("cv.pdf"), b"x").unwrap();
-        assert!(stays_in(&documents.join("cv.pdf"), &canonical));
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        let canonical = fs::canonicalize(cv_folder(&folder)).unwrap();
+        fs::write(cv_folder(&folder).join("cv.pdf"), b"x").unwrap();
+        assert!(stays_in(&cv_folder(&folder).join("cv.pdf"), &canonical));
         let elsewhere = root.path().join("elsewhere");
         fs::create_dir(&elsewhere).unwrap();
         fs::write(elsewhere.join("cv.pdf"), b"x").unwrap();
@@ -374,11 +432,23 @@ mod tests {
     }
 
     #[test]
-    fn a_file_already_in_documents_is_not_copied_again() {
+    fn a_file_already_in_its_subfolder_is_not_copied_again() {
         let (_root, folder, _) = places();
-        let documents = folder.join(DOCUMENTS);
-        fs::write(documents.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&documents.join("cv.pdf"), &folder).as_deref(), Ok("cv.pdf"));
-        assert_eq!(names(&documents), ["cv.pdf"]);
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        fs::write(cv_folder(&folder).join("cv.pdf"), pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&cv_folder(&folder).join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
+        root_holds_only_subfolders(&folder);
+    }
+
+    #[test]
+    fn a_file_in_the_documents_root_is_copied_into_its_subfolder_and_left_as_it_was() {
+        let (_root, folder, _) = places();
+        let loose = folder.join(DOCUMENTS).join("cv.pdf");
+        fs::write(&loose, pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&loose, &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
+        assert_eq!(fs::read(&loose).unwrap(), pdf(1), "nothing moved");
+        assert_eq!(names(&folder.join(DOCUMENTS)), ["cv", "cv.pdf"]);
     }
 }

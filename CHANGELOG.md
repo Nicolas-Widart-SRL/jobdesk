@@ -2,6 +2,28 @@
 
 All notable changes to this project are listed here.
 <!-- git-cliff: end of header -->
+## [0.5.0] - 2026-11-11
+
+### Features
+
+- Let agents drive the app with agent-desktop (#58)
+- Give Jobdesk a product page on GitHub Pages (#60)
+- See, switch and add job portals on a new Portals screen (#62)
+- *(onboarding)* Set up a new Mac from scratch on first run (#65)
+- *(folder-update)* Keep the job search folder current with each Jobdesk release, no git needed (#67)
+- *(updates)* Support up to five tested ai-job-search releases, signed with each Jobdesk release (#68)
+- *(onboarding)* Build the profile in the first run (#70)
+- *(onboarding)* Suggest the first job search and its scoring after setup (#72)
+
+### Bug fixes
+
+- *(onboarding)* Check Python the way tasks run python3 (#66)
+- *(release-check)* Count a release command only in shapes the check is sure of, and sign only after it passes (#71)
+
+### Documentation
+
+- *(trust)* Name the install task's risk under automatic tool approvals (#64)
+
 ## [0.4.0] - 2026-11-05
 
 ### Features

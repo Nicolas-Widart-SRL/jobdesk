@@ -553,7 +553,7 @@ mod tests {
             notes: "## New\n- A thing".into(),
             size: 14_200_000,
             signature: "sig".into(),
-            pin: None,
+            pins: Vec::new(),
         }
     }
 
@@ -1053,7 +1053,7 @@ mod tests {
         let (mut updates, log) = desk(None);
         assert_eq!((updates.latest_feed(), updates.feed_answers()), (None, 0), "nothing before a check");
         updates.poll(at(9, 0));
-        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, pin: Some(signed("1.8.0")), ..release() })));
+        answer(&log, ServiceEvent::Checked(Ok(Release { version: Version { major: 0, minor: 1, patch: 0 }, pins: vec![signed("1.8.0")], ..release() })));
         updates.poll(at(9, 0));
         let up_to_date = LatestFeed::for_tests(Version { major: 0, minor: 1, patch: 0 }, Some(pin("1.8.0")));
         let feed = updates.latest_feed().unwrap();
@@ -1078,10 +1078,37 @@ mod tests {
     }
 
     #[test]
+    fn the_feed_handed_over_carries_every_pin_and_the_newest_drives() {
+        let (mut updates, log) = desk(None);
+        updates.poll(at(9, 0));
+        let pins = vec![signed("1.8.0"), signed("1.7.0"), signed("1.5.2")];
+        answer(&log, ServiceEvent::Checked(Ok(Release { pins, ..release() })));
+        updates.poll(at(9, 0));
+        let all = vec![pin("1.8.0"), pin("1.7.0"), pin("1.5.2")];
+        let feed = updates.latest_feed().unwrap();
+        assert_eq!(feed, &LatestFeed::for_tests_with(Version { major: 0, minor: 2, patch: 0 }, all));
+        assert_eq!(feed.pin(), Some(&pin("1.8.0")), "the first is the one the folder update and setup use");
+    }
+
+    #[test]
+    fn a_feed_says_whether_it_supports_a_version_only_when_it_lists_one() {
+        let v = |major, minor, patch| Version { major, minor, patch };
+        let none = LatestFeed::for_tests(v(0, 2, 0), None);
+        assert_eq!((none.supports(v(1, 8, 0)), none.pin()), (None, None), "an empty list says nothing");
+        let some = LatestFeed::for_tests_with(v(0, 2, 0), vec![pin("1.8.0"), pin("1.7.0")]);
+        assert_eq!(some.supports(v(1, 8, 0)), Some(true));
+        assert_eq!(some.supports(v(1, 7, 0)), Some(true), "an older one in the list counts");
+        assert_eq!(some.supports(v(1, 6, 0)), Some(false));
+        assert_eq!(some.supports(v(1, 9, 0)), Some(false), "a newer one that is not listed does not");
+        let one = LatestFeed::for_tests(v(0, 2, 0), Some(pin("1.8.0")));
+        assert_eq!((one.supports(v(1, 8, 0)), one.supports(v(1, 7, 0))), (Some(true), Some(false)));
+    }
+
+    #[test]
     fn a_pin_changes_nothing_in_jobdesks_own_update() {
         let (mut updates, log) = desk(None);
         updates.poll(at(9, 0));
-        answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+        answer(&log, ServiceEvent::Checked(Ok(Release { pins: vec![signed("1.8.0")], ..release() })));
         updates.poll(at(9, 0));
         let (plain, _log) = found();
         assert_eq!(updates.view(), plain.view());
@@ -1096,7 +1123,7 @@ mod tests {
         assert!(calls(&log).is_empty(), "the feed is never read");
         assert_eq!(updates.latest_feed(), None);
         updates.check_now(at(15, 1));
-        answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+        answer(&log, ServiceEvent::Checked(Ok(Release { pins: vec![signed("1.8.0")], ..release() })));
         updates.poll(at(15, 1));
         assert_eq!(calls(&log), ["check"]);
         assert_eq!(updates.latest_feed().map(|feed| feed.pin().cloned()), Some(Some(pin("1.8.0"))));
@@ -1106,7 +1133,7 @@ mod tests {
     fn a_copy_that_never_checks_hands_over_nothing() {
         for (current, platform) in [("banana", Some(Platform::MacArm)), ("0.1.0", None)] {
             let (mut updates, log) = desk_of(current, None, platform);
-            answer(&log, ServiceEvent::Checked(Ok(Release { pin: Some(signed("1.8.0")), ..release() })));
+            answer(&log, ServiceEvent::Checked(Ok(Release { pins: vec![signed("1.8.0")], ..release() })));
             updates.poll(at(9, 0));
             assert_eq!(updates.latest_feed(), None, "{current} {platform:?}");
         }

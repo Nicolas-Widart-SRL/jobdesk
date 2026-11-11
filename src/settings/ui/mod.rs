@@ -114,6 +114,9 @@ pub struct SettingsView<'a> {
     pub restart_wait: Option<&'a str>,
     /// Why Jobdesk leaves the open job search folder as it is when it updates itself, if it does, as the shell words it.
     pub folder_note: Option<&'a str>,
+    /// That the open job search folder's files come from a version Jobdesk no longer supports, if they do, as the
+    /// shell words it.
+    pub folder_support: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +233,7 @@ pub fn show(ui: &mut Ui, screen: &mut SettingsScreen, view: SettingsView, other_
                 update: &view.update.about,
                 restart_wait: view.restart_wait,
                 folder_note: view.folder_note,
+                folder_support: view.folder_support,
             };
             let mut auto = view.settings.preferences().check_updates.is_on();
             let (_, (asked, providers)) = settings_page(&mut page_ui, page.heading(), page.lead(), |_| {}, |ui| about::body(ui, about, &mut auto, &query));
@@ -587,6 +591,7 @@ mod tests {
         task_running: bool,
         terms: YourTerms,
         jobs: Option<(usize, usize)>,
+        folder_support: Option<&'static str>,
     }
 
     /// A key kept in memory, and a Test connection that never answers.
@@ -661,6 +666,7 @@ mod tests {
                 update: &update,
                 restart_wait: None,
                 folder_note: None,
+                folder_support: state.folder_support,
             };
             let asked = show(ui, &mut state.screen, view, &mut |ui, page, _| {
                 ui.label(format!("{} body", page.title()));
@@ -718,6 +724,7 @@ mod tests {
             task_running: false,
             terms: terms(Some(700)),
             jobs: Some((0, 14)),
+            folder_support: None,
         }))
     }
 
@@ -898,6 +905,7 @@ mod tests {
                 update: &update,
                 restart_wait: None,
                 folder_note: None,
+                folder_support: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1296,6 +1304,19 @@ mod tests {
     }
 
     #[test]
+    fn about_says_when_the_folders_files_are_no_longer_supported() {
+        const LINE: &str = "The files in your job search folder are from a version Jobdesk no longer supports, so some tasks may not work as expected.";
+        let state = state();
+        on(&state, Page::About);
+        let mut harness = harness(state.clone());
+        harness.run();
+        assert!(harness.query_by_label(LINE).is_none(), "nothing to say");
+        state.borrow_mut().folder_support = Some(LINE);
+        harness.run();
+        harness.get_by_label(LINE);
+    }
+
+    #[test]
     fn how_tasks_sign_in_opens_providers() {
         let state = state();
         on(&state, Page::About);
@@ -1466,6 +1487,7 @@ mod tests {
                 update: &update,
                 restart_wait: None,
                 folder_note: None,
+                folder_support: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });
@@ -1691,6 +1713,7 @@ mod tests {
                 update: &update,
                 restart_wait: None,
                 folder_note: None,
+                folder_support: None,
             };
             show(ui, &mut screen, view, &mut |_, _, _| {});
         });

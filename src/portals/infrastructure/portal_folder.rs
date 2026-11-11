@@ -2,11 +2,10 @@ use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
-use crate::portals::domain::{Manifest, SearchPlan, parse_manifest, parse_search_plan};
+use crate::portals::domain::{MANIFEST, Manifest, SKILLS, SearchPlan, parse_manifest, parse_search_plan};
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::visible_text::all_visible;
 
-pub(super) const SKILLS: &str = ".agents/skills";
 const SEARCH_FILE: &str = ".claude/skills/job-scraper/search-queries.md";
 /// A `SKILL.md` is read up to this size, so a huge file cannot stall the snapshot. The search file is read whole, as
 /// the profile reads it in the same load, so both show the same priorities.
@@ -38,10 +37,10 @@ impl PortalFolder {
             if name.starts_with('.') || !all_visible(&name) || !entry.path().is_dir() {
                 continue;
             }
-            match read_manifest(&entry.path().join("SKILL.md")) {
+            match read_manifest(&entry.path().join(MANIFEST)) {
                 Ok(text) => installed.push((name.clone(), parse_manifest(&text, &name))),
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(LoadError::new(format!("{SKILLS}/{name}/SKILL.md"), error)),
+                Err(error) => return Err(LoadError::new(format!("{SKILLS}/{name}/{MANIFEST}"), error)),
             }
         }
         Ok(installed)

@@ -1623,7 +1623,7 @@ fn footer_id(ui: &Ui) -> egui::Id {
 }
 
 /// Takes a block `height` tall at `ui`'s cursor, lays `footer` out at its foot, and returns the rect left above it.
-fn pinned_footer(ui: &mut Ui, height: f32, footer: impl FnOnce(&mut Ui)) -> Rect {
+pub(in crate::ui_kit) fn pinned_footer(ui: &mut Ui, height: f32, footer: impl FnOnce(&mut Ui)) -> Rect {
     let room = ui.available_size();
     let kept = KeptHeight::read(ui, footer_id(ui), 0.0);
     let inner = Rect::from_min_size(ui.cursor().min, vec2(room.x, height));

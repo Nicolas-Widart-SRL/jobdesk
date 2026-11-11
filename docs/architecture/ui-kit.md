@@ -79,9 +79,32 @@ The first run shows one step at a time on a card. Its parts live in `wizard.rs`.
 - `alert_slip` is a failure on a slip, with a `closed` edge, and its words can be copied.
 - In dark, `panel` and the card are one colour. So on a wizard card, a slip, an alert and a knot still ahead take `sheet` (`folder_fill`).
 
+## The Profile chapter
+
+From the Profile chapter on, the window is the app's size and the wizard card widens. These parts live in `setup.rs`, apart from the two cards. Each widget takes plain lists and returns what the user did. None parses Claude's messages or starts a run.
+
+- `wide_card` is `wizard_card` at `WIZARD_WIDE` (1120). Its body holds still and takes the height left over the foot, so a part in it can share that height out.
+- `split_card` is `wide_card` split in two: a main column that scrolls on its own, with its bar clear of the words, and a side column of slips, `SPLIT_SIDE_BASIS` wide and `SPLIT_GAP` from it, that holds still.
+- `side_slip` is a slip in that side column, with an optional section-face title and a muted count at its right. `slip_text` is its paragraph: a strong lead in `text`, then the rest in `muted`.
+- `drop_zone` is paper with a dashed `line` edge in `SWEEP_DASH` dashes, which turns `active` while files are dragged over the window. Its full form holds two stacked mini pages, a title, a sentence and Choose files…. Its slim form, under a file list, holds a sentence and a small Choose files…. It returns a click on Choose files… and the paths dropped on the window.
+- `file_list` is one row per added file on paper: a mini page, the name in `mono`, its page count and a small Remove. The name shows as plain text with hidden characters removed, cut with the whole name on hover. A screen reader hears Remove with the name.
+- `question_sheet` is Claude's message with a field under each numbered question. Prose renders through `claude_markdown`, and a group's bold line in `Type::TAKE_STRONG`. A question's number is in `muted`, and its lettered sub-items sit inside it, over its one field. A field starts one line high and grows. An empty one says it can be skipped, as "Optional. Leave it empty to skip." under a question marked optional. A screen reader hears each field named by its question.
+- `question_fallback` is the sheet when there are no numbered questions to find. Claude's message sits at the left and scrolls on its own. One large field at the right takes the height left over its help. It goes in `wide_card`.
+- `answers_slip` is the sheet's side slips. It shows how many questions have an answer, with a `TALLY_FAT` mark for each, lit where answered, then when the draft saved and Show all Claude wrote. Its short form, for follow-ups, keeps the count and one line.
+- `change_check` is one proposed change: a checkbox, painted as `setting_check` paints its own, then Claude's number in `muted`, then the change's words. The box, the number and the words are one control. A click on any of them flips it, and Tab stops on it once. A screen reader hears one checkbox named by the number and the words, ticked or not. Unticked, the words go `muted`. It has no hairline or setting row padding, so a list of 16 stays compact.
+- `review_changes` is Claude's proposal laid out as `question_sheet` lays out questions, with each change a `change_check`, all ticked to start.
+- `review_slip` is "N of M changes" with a mark for each change, lit where ticked, and which are left out. `reply_slip` follows it, showing the reply an action sends in `mono` on `field`, as it will go.
+- `cv_check` is the CV's pages as Profile's CV documents draw them. `cv_slip` is its side slip: the CV's name as plain text, a sentence and Open PDF.
+
+Claude's words follow `release_markdown`'s rules, as [Trust](trust.md#rendering-untrusted-text) says: hidden characters go first, a link is its words and never opens, an image is its alt text, and headings are capped at the section size.
+
+- `claude_markdown` renders a block at `Type::TAKE`, held to `DOC_MEASURE`, and its words can be copied.
+- A question's or a change's own words are laid out as one plain text with bold kept. They can be copied too, except a change's, whose words are part of its checkbox.
+
 ## Gallery snapshots
 
 `tests/ui_kit_gallery.rs` snapshots every component in both themes.
 The live sheet, `ui_kit_gallery_live_{light,dark}`, shows each form of the live sweep at a fixed time, its reduced-motion forms, and the estimate note under Cost.
 The wizard sheet, `ui_kit_gallery_wizard_{light,dark}`, shows three wizard cards with their lines, alert, slip and foot, then the step dots and setup stamps at each step, and the choice cards.
+The setup sheet, `ui_kit_gallery_setup_{light,dark}`, shows the Profile chapter's cards at 1280x820: the question sheet with its answers slip, the review card with two changes unticked and one focused, the fallback sheet, the documents step before and after files are added, and the CV check, then the short answers slip.
 The switch sheet, `ui_kit_gallery_switch_{light,dark}`, shows a switch on, off, disabled both ways, and focused, then `name_line` with its note, alone, and cut at the right, then `fitted_row_tag` whole and with its words cut.

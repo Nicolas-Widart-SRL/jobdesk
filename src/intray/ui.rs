@@ -1,15 +1,17 @@
 use chrono::NaiveDate;
 use egui::{Align, Frame, Key, Layout, Margin, Modifiers, Rect, ScrollArea, Ui};
 
-use crate::intray::application::{Action, AgendaRow, Body, Card, CardKind, ComingUp, GateRow, InTray, Queue, Request, Returning, RowState, UndoOffer};
+use crate::intray::application::{
+    Action, AgendaRow, Body, Card, CardKind, ComingUp, FirstSteps, GateRow, InTray, Queue, Request, Returning, RowState, UndoOffer,
+};
 use crate::ui_kit::tokens::{
-    BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL,
+    BUTTON_HEIGHT, DEAL_ASIDE_MIN, OFFER_GAP, OFFER_PADDING, OFFER_STEPS_GAP, OFFER_WIDTH, PICK_ROW_INLINE, RAIL_GAP, SKELETON_GAP, SKELETON_LINE, TRAY_RAIL,
 };
 use crate::ui_kit::{
     AgendaEnd, CheckMark, DealLook, Ink, Tone, Type, agenda_return, agenda_row, blank_card_tab, button, card_skeleton, card_tab, check_tag, code_box,
-    command_action, day_stamp, deal, departing, desk_label, divider, fat_tally, key_button, lead_line, link, motion_time, muted, page_body, panel_body,
-    panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton, skeleton_lines, slip, stamp, stamped_head,
-    strong, undo_row, wrapped_height,
+    command_action, day_stamp, deal, departing, desk_label, divider, fat_tally, key_button, lead_line, link, motion_time, muted, offer_paper, offer_step,
+    page_body, panel_body, panel_header, paper, primary_command_action, primary_key_button, reveal_command, rich, side_column, skeleton, skeleton_lines, slip,
+    small_button, stamp, stamped_head, strong, undo_row, wrapped_height,
 };
 
 const GATE_COLUMNS: usize = 3;
@@ -29,7 +31,15 @@ enum Pressed {
     Reason(String),
     Bring(String),
     BringAll,
+    /// Find new jobs… on the first-search offer: it opens the launcher on `/scrape` with a note.
+    FirstSearch,
+    /// Score N new jobs… on the offer after the first search: it opens the launcher on `/rank`.
+    Score,
+    OpenProfile,
 }
+
+/// The offer's middle step, the same for the first search and the first scoring. It gives the time only, never a spend.
+const TAKES: &str = "Press Run there. It takes about 5 minutes.";
 
 /// A kind's name and its tab's tone.
 /// Only what Claude asks of the user takes the stamp, `Turn`: those cards hold a paused or waiting run.
@@ -63,6 +73,8 @@ pub struct TodayScreen {
     command_open: Option<String>,
     /// A copy of the card just decided, while it slides off. The queue has already moved past it.
     departing: Option<Departing>,
+    /// Whether the command line under the first-steps offer is open. It closes when the offer goes.
+    offer_command_open: bool,
 }
 
 /// The decided card as it was dealt, with its place count and when it was decided.
@@ -80,10 +92,16 @@ pub struct TodayContext<'a> {
     pub missing_dates: Option<&'a str>,
     /// Draws the alerts for sources that could not be read, under the head.
     pub alerts: &'a dyn Fn(&mut Ui),
+    /// How many profile topics are filled, of how many, while the profile is not full. Today shows a slip for it.
+    pub profile: Option<(usize, usize)>,
+    /// Whether every profile topic is filled, so the first-search offer may call the profile ready. The slip is gone
+    /// then, and only then for that reason.
+    pub profile_full: bool,
 }
 
 /// Keys never fire while a text field has focus. Y does nothing on a card with no default.
-fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
+/// With no card, Y takes the first-steps offer's action, which only opens the launcher.
+fn pressed_key(ui: &Ui, top: Option<&Card>, steps: FirstSteps) -> Option<Pressed> {
     if ui.ctx().egui_wants_keyboard_input() {
         return None;
     }
@@ -91,7 +109,13 @@ fn pressed_key(ui: &Ui, top: Option<&Card>) -> Option<Pressed> {
     if press(Key::U) {
         return Some(Pressed::Undo);
     }
-    let top = top?;
+    let Some(top) = top else {
+        return match steps {
+            FirstSteps::NoJobs => press(Key::Y).then_some(Pressed::FirstSearch),
+            FirstSteps::Unscored(_) => press(Key::Y).then_some(Pressed::Score),
+            FirstSteps::Past => None,
+        };
+    };
     if press(Key::Y) {
         return top.primary.clone().map(Pressed::Act);
     }
@@ -111,24 +135,29 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
     if screen.command_open.as_ref().is_some_and(|key| top.is_none_or(|card| &card.key != key)) {
         screen.command_open = None;
     }
-    let mut pressed = if keys { pressed_key(ui, top) } else { None };
+    let steps = if top.is_none() { queue.first_steps(context.missing) } else { FirstSteps::Past };
+    if steps == FirstSteps::Past {
+        screen.offer_command_open = false;
+    }
+    let mut pressed = if keys { pressed_key(ui, top, steps) } else { None };
     let now = ui.input(|input| input.time);
     // Undo, or an action that leaves the card on top, drops the copy at once.
     if screen.departing.as_ref().is_some_and(|gone| now - gone.since >= f64::from(motion_time(ui.ctx())) || top.is_some_and(|card| card.key == gone.card.key)) {
         screen.departing = None;
     }
 
-    head(ui, queue, context.missing);
+    head(ui, queue, context);
     page_body(ui, |ui| {
         (context.alerts)(ui);
-        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context.missing_dates, &mut pressed));
+        side_column("tray_side", TRAY_RAIL).show(ui, |ui| rail(ui, queue, keys, context, &mut pressed));
         egui::CentralPanel::default().frame(Frame::new().inner_margin(Margin { right: 7, bottom: 7, ..Default::default() })).show(ui, |ui| {
             let room = ui.available_rect_before_wrap();
-            match top {
-                Some(card) => stack(ui, card, queue.cards.len(), queue.horizon, &mut screen.command_open, &mut pressed),
-                None => {
+            match (top, steps) {
+                (Some(card), _) => stack(ui, card, queue.cards.len(), queue.horizon, &mut screen.command_open, &mut pressed),
+                (None, FirstSteps::Past) => {
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| clear(ui, queue, &mut pressed));
                 }
+                (None, steps) => first_steps(ui, steps, &mut screen.offer_command_open, &mut pressed),
             }
             if let Some(gone) = &screen.departing {
                 departed(ui, gone, room, now, queue.horizon);
@@ -149,10 +178,11 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 }
 
 /// The day stamp ticks off today's decisions. Cards set aside with Later count on neither side.
-fn head(ui: &mut Ui, queue: &Queue, missing: &[&str]) {
+fn head(ui: &mut Ui, queue: &Queue, context: &TodayContext) {
     let tally = queue.tally();
     let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
-    stamped_head(ui, stamp, &queue.today_headline(missing), &queue.today_subtitle(missing));
+    let subtitle = queue.today_subtitle(context.missing, context.profile_full);
+    stamped_head(ui, stamp, &queue.today_headline(context.missing), &subtitle);
 }
 
 /// With nothing dealt, the stamp's ring is empty and it reads as the date alone.
@@ -238,8 +268,76 @@ fn apply(tray: &mut InTray, pressed: Pressed, top: Option<&Card>, queue: &Queue)
         Pressed::Later => tray.later(top?, today),
         Pressed::Skip => tray.skip(top?, today),
         Pressed::Act(action) => return tray.follow(top?, &action, today),
+        Pressed::FirstSearch => return Some(Request::FirstSearch),
+        Pressed::Score => return Some(Request::Command(RANK.to_owned())),
+        Pressed::OpenProfile => return Some(Request::OpenProfile),
     }
     None
+}
+
+const SCRAPE: &str = "/scrape";
+const RANK: &str = "/rank";
+
+/// Today with nothing at all to show, for a new job search: the first search to run, or the jobs it found to score.
+/// The one action only opens the launcher, and the user starts the run there. The offer gives the time, never a spend.
+fn first_steps(ui: &mut Ui, steps: FirstSteps, command_open: &mut bool, pressed: &mut Option<Pressed>) {
+    let (title, take, open, end, label, note, line, press) = match steps {
+        FirstSteps::NoJobs => (
+            "Find your first jobs",
+            "Jobdesk searches your job sites for the job titles you gave Claude, and lists every new job in Jobs.".to_owned(),
+            "Find new jobs opens the search task.".to_owned(),
+            "When it is done, Jobs shows what it found, ready to score.",
+            "Find new jobs…".to_owned(),
+            "Opens the search task. Nothing starts until you press Run.",
+            SCRAPE,
+            Pressed::FirstSearch,
+        ),
+        FirstSteps::Unscored(found) => {
+            let label = found.score_label();
+            (
+                "Score your first jobs",
+                format!("{} Scoring reads each ad against your profile and puts the best fits first.", found.found()),
+                format!("{} opens the scoring task.", label.trim_end_matches('…')),
+                "When it is done, Today deals the best fits to you.",
+                label,
+                "Opens the scoring task. Nothing starts until you press Run.",
+                RANK,
+                Pressed::Score,
+            )
+        }
+        FirstSteps::Past => return,
+    };
+    let mut asked = None;
+    offer_paper(
+        ui,
+        |ui| {
+            ui.label(rich(ui, title, Type::DEAL, Ink::Text));
+            ui.add(egui::Label::new(rich(ui, take.as_str(), Type::TAKE, Ink::Text)).wrap());
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = OFFER_STEPS_GAP;
+                for (number, step) in [open.as_str(), TAKES, end].into_iter().enumerate() {
+                    offer_step(ui, number + 1, step);
+                }
+            });
+        },
+        |ui| {
+            if primary_key_button(ui, &label, "Y").on_hover_text(line).clicked() {
+                asked = Some(press);
+            }
+            let beside = ui.available_size_before_wrap().x >= DEAL_ASIDE_MIN;
+            if !beside {
+                ui.end_row();
+            }
+            ui.with_layout(Layout::top_down(Align::Max), |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(egui::Label::new(rich(ui, note, Type::NOTE, Ink::Muted)).halign(Align::Max).wrap());
+                reveal_command(ui, line, command_open);
+            });
+        },
+    );
+    if asked.is_some() {
+        *pressed = asked;
+    }
 }
 
 /// The top card of `pending`, on the visible edges of what is left. The edge count caps, the place counts.
@@ -444,6 +542,7 @@ fn actions(ui: &mut Ui, card: &Card, command_open: &mut Option<String>, pressed:
 }
 
 /// Nothing is left to decide, so the panel offers new work. Both buttons only open the launcher: the user starts the run there.
+/// While a task runs, that task may be the search or the scoring, so the panel offers neither.
 fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     let height = ui.available_height();
     paper(ui, false, |ui| {
@@ -454,13 +553,15 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             ui.label(rich(ui, "Want more to look at?", Type::SLIP_TITLE, Ink::Text));
             let intro = "Jobdesk can search your job sites for new ads and score them against your profile. Each opens as a task, and you start it there.";
             ui.label(rich(ui, intro, Type::BODY, Ink::Muted));
-            ui.horizontal(|ui| {
-                primary_command_action(ui, "Find new jobs", "/scrape");
-                if queue.unranked > 0 {
-                    let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
-                    command_action(ui, &format!("Score {jobs}"), "/rank");
-                }
-            });
+            if !queue.busy {
+                ui.horizontal(|ui| {
+                    primary_command_action(ui, "Find new jobs", "/scrape");
+                    if queue.unranked > 0 {
+                        let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
+                        command_action(ui, &format!("Score {jobs}"), "/rank");
+                    }
+                });
+            }
             if let Some(returning) = queue.returning() {
                 let n = returning.count;
                 let (cards, verb, bring) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };
@@ -478,12 +579,40 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
 
 /// Done today over Coming up. The rail sits outside the card's scroll, so the undo row at its top stays in view.
 /// It scrolls on its own when a long log pushes Coming up past the window. `active` is off while a dialog covers the tray.
-fn rail(ui: &mut Ui, queue: &Queue, active: bool, missing_dates: Option<&str>, pressed: &mut Option<Pressed>) {
+/// Your profile follows them while the profile is not full.
+fn rail(ui: &mut Ui, queue: &Queue, active: bool, context: &TodayContext, pressed: &mut Option<Pressed>) {
     ScrollArea::vertical().id_salt("tray_rail").auto_shrink([false, false]).show(ui, |ui| {
         done_today(ui, queue, pressed);
         ui.add_space(RAIL_GAP);
-        coming_up(ui, queue, active, missing_dates, pressed);
+        coming_up(ui, queue, active, context.missing_dates, pressed);
+        if let Some((filled, total)) = context.profile {
+            ui.add_space(RAIL_GAP);
+            your_profile(ui, filled, total, pressed);
+        }
     });
+}
+
+/// How full the profile is, and the way to it. Open Profile only opens the screen.
+fn your_profile(ui: &mut Ui, filled: usize, total: usize, pressed: &mut Option<Pressed>) {
+    slip(ui, |ui| {
+        panel_header(ui, "Your profile", Some(&format!("{filled} of {total}")));
+        panel_body(ui, |ui| {
+            ui.set_width(ui.available_width());
+            fat_tally(ui, filled, total, Ink::Text);
+            ui.add(egui::Label::new(rich(ui, topics_left(total.saturating_sub(filled)), Type::NOTE, Ink::Muted)).wrap());
+            if small_button(ui, "Open Profile").clicked() {
+                *pressed = Some(Pressed::OpenProfile);
+            }
+        });
+    });
+}
+
+/// "Two topics are not filled yet. Jobs scores better once they are."
+fn topics_left(left: usize) -> String {
+    const WORDS: [&str; 11] = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+    let count = WORDS.get(left).map_or_else(|| left.to_string(), |word| (*word).to_owned());
+    let topics = if left == 1 { "topic is" } else { "topics are" };
+    format!("{count} {topics} not filled yet. Jobs scores better once they are.")
 }
 
 /// The last decision heads the log while it can be undone, so its row is not drawn twice.
@@ -604,5 +733,17 @@ fn undo(ui: &mut Ui, offer: &UndoOffer, last: bool, pressed: &mut Option<Pressed
         *pressed = Some(Pressed::Undo);
     } else if let Some((reason, _)) = press.toggle.and_then(|index| offer.reasons.get(index)) {
         *pressed = Some(Pressed::Reason(reason.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_profile_slip_counts_the_topics_left_in_words() {
+        assert_eq!(topics_left(1), "One topic is not filled yet. Jobs scores better once they are.");
+        assert_eq!(topics_left(4), "Four topics are not filled yet. Jobs scores better once they are.");
+        assert_eq!(topics_left(11), "11 topics are not filled yet. Jobs scores better once they are.");
     }
 }

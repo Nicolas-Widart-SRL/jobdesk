@@ -23,7 +23,15 @@ Settings › Today queue sets the range to 7, 14 or 30 days, 14 by default.
 
 ### When nothing is left
 
-When nothing is left to decide, the end panel offers new work: "Find new jobs…" and, while postings wait for scoring, "Score {n} new jobs…". Both only open the launcher, so the user starts the run there.
+When nothing is left to decide, the end panel offers new work: "Find new jobs…" and, while postings wait for scoring, "Score {n} new jobs…". Both only open the launcher, so the user starts the run there. While any run works, `Queue::busy` holds, and the panel offers neither.
+
+In a new job search, `Queue::first_steps` replaces the end panel. It counts only while Today has nothing at all to show: no card, none set aside, no decision today, and every source read. While any run works it suggests nothing, since that run may be the search or the scoring.
+
+- With no job on the board, the head reads "Nothing to decide yet" and Find new jobs… opens the launcher on `/scrape` with the note "Your first search, from Today." The subtitle calls the profile ready only when every topic is filled, the same `TopicCounts` test that hides the Your profile slip, so the two never disagree.
+- With every job still new, it offers Score {n} new jobs… instead. With no card on top, Y takes the offer's action, which only opens the launcher.
+- The Your profile slip sits on the rail under Coming up while the profile is found, readable and not full.
+
+The shell follows the run the launcher started from that note, in memory only. The search starts only from an empty board, so it is judged by what it saved, never by which frames saw it: once a turn got its result, nothing works and Claude waits on no answer, jobs on the board are the ones it found. Then Jobs opens with no list picked, so New shows while the jobs found are all new, but only while that run is open in Tasks. A session ended after Claude asked counts the same way, so a search that saved its jobs and then asked whether to score them still opens Jobs, and one that asked before searching does not. A failure, a stop, or an end with no job on the board opens nothing and keeps the run followed, so a resume in Tasks still counts. Opening another folder drops the note.
 
 ## Decisions
 

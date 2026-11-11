@@ -17,15 +17,15 @@ use jobdesk::ui_kit::{
     agenda_return, agenda_row, alert, amount_field, attention_count, bar, blank_card, blank_page, block_editor, brand, button, card_skeleton, card_tab,
     check_tag, code_box, command_button, command_row, confirm_popover, copy_button, danger_button, danger_shortcut_button, day_heatmap, day_heatmap_loading,
     day_stamp, deal, deal_footer, desk_label, divider, document, doughnut, empty_state, enabled_when, estimate_note, faint_mono, fat_tally, figure,
-    figure_band, figure_band_loading, fitted_pages, fitted_row_tag, flow_band, folder_tab, index_card, key_button, key_hint, knot, lane, lane_title, lead_line,
-    link, list_row, live_sweep, measure, muted, name_line, note, page_frame, page_head, panel, panel_body, panel_header, panel_header_tone, paper, path_label,
-    pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title, release_notes_popover, reveal_command, rich,
-    role_entry, row_tag, ruled_note_with_command, score, search_field, secret_field, segmented, select_row, set_reduced_motion, setting_check,
-    setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame, shortcut_button, skeleton,
-    skeleton_lines, slip, slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle, solid_tag, split_paper,
-    stamp, stamp_square, stamped_head, status_action, status_button, status_divider, status_dot, status_frame, status_line, status_mark_button,
-    status_progress, status_waits, step_line, strong, switch, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band, turn_band_live,
-    undo_row,
+    figure_band, figure_band_loading, fitted_pages, fitted_row_tag, flow_band, folder_tab, from_note, index_card, key_button, key_hint, knot, lane, lane_title,
+    lead_line, link, list_row, live_sweep, measure, muted, name_line, note, offer_paper, offer_step, page_frame, page_head, panel, panel_body, panel_header,
+    panel_header_tone, paper, path_label, pick_row, primary_button, primary_key_button, profile_markdown, prompt_box, prompt_box_tone, rail_title,
+    release_notes_popover, reveal_command, rich, role_entry, row_tag, ruled_note_with_command, score, search_field, secret_field, segmented, select_row,
+    set_reduced_motion, setting_check, setting_check_amount, setting_check_number, setting_radio, setting_row, setting_section, settings_page, shell_top_frame,
+    shortcut_button, skeleton, skeleton_lines, slip, slip_bar, small_button, small_command_action_hinted, small_danger_button, small_key_button, small_toggle,
+    solid_tag, split_paper, stamp, stamp_square, stamped_head, status_action, status_button, status_divider, status_dot, status_frame, status_line,
+    status_mark_button, status_progress, status_waits, step_line, strong, switch, table_head, tag, tally, tally_strip, text_field, toggle_group, turn_band,
+    turn_band_live, undo_row,
 };
 use jobdesk::ui_kit::{LineEnd, SetupLine, WizardStep, alert_slip, choice_card, setup_line, setup_stamp, step_dots, wizard_card};
 
@@ -55,6 +55,10 @@ fn snapshots_compare_on_macos() {
 const SLIP: f32 = TRAY_RAIL - GUTTER as f32;
 /// The room a dealt card takes in the sheet, with its tab and the edges behind it.
 const DEALT_HEIGHT: f32 = 250.0;
+/// The room the offer of a clear Today takes in the sheet.
+const OFFER_HEIGHT: f32 = 200.0;
+/// The width of the launcher's form slip.
+const LAUNCHER_SLIP: f32 = 400.0;
 
 const TONES: [(&str, Tone); 8] = [
     ("Plain", Tone::Plain),
@@ -417,6 +421,21 @@ fn tray(ui: &mut Ui) {
         small_toggle(ui, "Scope", true);
         small_toggle(ui, "Rate", false);
     });
+    ui.add_space(10.0);
+    ui.push_id("offer", |ui| {
+        ui.allocate_ui(egui::vec2(ui.available_width(), OFFER_HEIGHT), |ui| {
+            offer_paper(
+                ui,
+                |ui| {
+                    ui.label(rich(ui, "An offer", Type::DEAL, Ink::Text));
+                    offer_step(ui, 1, "A numbered step.");
+                },
+                |ui| {
+                    primary_key_button(ui, "Find new jobs…", "Y");
+                },
+            );
+        });
+    });
 }
 
 /// The height the sample Settings page takes in the sheet.
@@ -565,6 +584,17 @@ fn runs(ui: &mut Ui) {
     step_line(ui, Some(("3", KnotState::Waiting)), "Verify", "Waits for your answer on the CV template.", Some(("Show 4 actions so far", false)));
     divider(ui);
     step_line(ui, Some(("5", KnotState::Failed)), "Compile", "The cover letter did not build.", Some(("Show 2 actions", false)));
+    ui.add_space(10.0);
+    // The launcher's slip, with the note that names what opened it.
+    ui.scope(|ui| {
+        ui.set_max_width(LAUNCHER_SLIP);
+        slip(ui, |ui| {
+            panel_body(ui, |ui| {
+                from_note(ui, "Your first search, from Today.", "Leave the box below empty to search for all your job titles.");
+                muted(ui, "Find new postings on installed portals");
+            });
+        });
+    });
 }
 
 const DOCUMENT: &str = "# Job fit evaluation: Tech Lead, Java Platform\n\nVerdict: Good fit, 74 out of 100. Every hard gate passes, and the two gaps are small.\n\n## Gates\n\n| Gate | In the posting | Result |\n|---|---|---|\n| Contract | Permanent, full time | Pass |\n| Work mode | Hybrid, 2 days a week | Pass |\n| Salary | Not stated | Check |\n\n## Strengths\n\n- Eight years of Java and Spring Boot, the core stack in the posting.\n- You led a platform team of six. This role leads five.\n\nShall I go ahead and draft the CV and cover letter for this role, or stop here?";

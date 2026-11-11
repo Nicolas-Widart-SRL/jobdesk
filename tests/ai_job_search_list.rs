@@ -222,6 +222,44 @@ mod script {
         assert!(!sandbox.list().exists(), "a refused add writes no list");
     }
 
+    /// The app reads each part as a `u32` and names the zip from those numbers, so `01.8.0` would sign a zip name the
+    /// app never asks for, and a part above `u32::MAX` would never read. Only the form the app writes back is a version.
+    #[test]
+    fn a_version_the_app_would_not_write_back_is_refused() {
+        if !tools_present() {
+            return;
+        }
+        let sandbox = Sandbox::new();
+        sandbox.fill(&["1.0.0"]);
+        let before = sandbox.bytes();
+        let (zip, _) = sandbox.zip("odd.zip", "odd");
+        for version in ["v01.8.0", "v1.08.0", "v1.8.00", "v00.8.0", "v1.8.4294967296", "v4294967296.0.0", "v1.8.99999999999"] {
+            assert_refused(&sandbox.run(&["add", version, zip.to_str().unwrap()]));
+            assert_eq!(sandbox.bytes(), before, "{version}: the file is unchanged");
+        }
+        sandbox.add("0.8.0", "zero");
+        sandbox.add("1.8.4294967295", "largest");
+        assert_eq!(sandbox.versions(), ["1.8.4294967295", "1.0.0", "0.8.0"]);
+    }
+
+    #[test]
+    fn a_list_holding_a_version_the_app_would_not_write_back_is_refused() {
+        if !tools_present() {
+            return;
+        }
+        let sandbox = Sandbox::new();
+        let sha256 = "0".repeat(64);
+        for version in ["01.8.0", "1.8.4294967296", "1.8.0\n2"] {
+            let list = serde_json::json!([{ "version": version, "sha256": sha256 }]).to_string();
+            fs::write(sandbox.list(), &list).unwrap();
+            let output = sandbox.run(&["check"]);
+            assert_refused(&output);
+            // Refused as a list, before any download: a check that downloads would fail too, but for another reason.
+            assert!(text(&output).contains("is not a list of 1 to") && !text(&output).contains("checking"), "{version:?}: {}", text(&output));
+            assert_eq!(fs::read_to_string(sandbox.list()).unwrap(), list, "{version:?}: the file is unchanged");
+        }
+    }
+
     #[test]
     fn a_file_that_is_not_a_zip_is_refused() {
         if !tools_present() {

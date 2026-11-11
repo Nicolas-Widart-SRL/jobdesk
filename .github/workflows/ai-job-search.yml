@@ -87,9 +87,12 @@ jobs:
             echo "::error::There is no release to check."
             exit 1
           fi
+          # Three numbers from 0 to 4294967295 with no leading zero, the form the app writes back and names the zip by.
+          shape='^(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})\.(0|[1-9][0-9]{0,9})$'
           for version in "${found[@]}"; do
-            if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::'$version' is not a version like 1.7.5."
+            if ! [[ $version =~ $shape ]] \
+              || ((BASH_REMATCH[1] > 4294967295 || BASH_REMATCH[2] > 4294967295 || BASH_REMATCH[3] > 4294967295)); then
+              echo "::error::'$version' is not a version like 1.7.5: three numbers from 0 to 4294967295, with no leading zero."
               exit 1
             fi
           done

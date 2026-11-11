@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Keeps assets/update/ai-job-search.json: the ai-job-search releases this Jobdesk is compatible with.
 # The list is a JSON array, newest first, of 1 to 5 entries `{"version": "X.Y.Z", "sha256": "<64 lowercase hex>"}`:
-# the SHA-256 of the source zip that GitHub serves for the release's tag. Versions have no v, are unique,
-# and go strictly down by number order, so 1.10.0 sits above 1.9.0.
+# the SHA-256 of the source zip that GitHub serves for the release's tag. Versions have no v, are three numbers from 0
+# to 4294967295 with no leading zero, are unique, and go strictly down by number order, so 1.10.0 sits above 1.9.0.
 #
 #   scripts/ai-job-search.sh download vX.Y.Z OUT   download the source zip of a release to OUT, and test it
 #   scripts/ai-job-search.sh add vX.Y.Z [ZIP]      add a release, from ZIP when given or else downloaded
@@ -53,6 +53,16 @@ die() {
 # The jq function that turns a version into the list of its numbers, which is what orders versions.
 vkey='def vkey: split(".") | map(tonumber);'
 
+# A version is the form the app writes back once it reads each number as a u32, since the app names a release's zip
+# from those numbers: three numbers from 0 to 4294967295, with no leading zero. A part is 0, or 1 to 9 then at most
+# 9 more digits, so the bound is checked on numbers jq and bash hold exactly. version_of and the jq function
+# `canonical` hold the same rule.
+part='(0|[1-9][0-9]{0,9})'
+largest=4294967295
+canonical='def canonical: type == "string"
+  and test("\\A(0|[1-9][0-9]{0,9})\\.(0|[1-9][0-9]{0,9})\\.(0|[1-9][0-9]{0,9})\\z")
+  and all(split(".")[]; tonumber <= '"$largest"');'
+
 if ! command -v jq >/dev/null 2>&1; then
   die "jq is not installed"
 fi
@@ -71,8 +81,9 @@ fi
 
 # Prints the version of a tag `vX.Y.Z`, and refuses anything else.
 version_of() {
-  if ! [[ $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    die "'$1' is not a version like v1.2.3"
+  local shape="^v$part\\.$part\\.$part\$"
+  if ! [[ $1 =~ $shape ]] || ((BASH_REMATCH[1] > largest || BASH_REMATCH[2] > largest || BASH_REMATCH[3] > largest)); then
+    die "'$1' is not a version like v1.2.3: three numbers from 0 to $largest, with no leading zero"
   fi
   printf '%s\n' "${1#v}"
 }
@@ -101,13 +112,13 @@ download() {
 # Succeeds when file $1 holds exactly one JSON value, and that value is a well-formed list. `jq -e` alone would judge
 # only the last of several values, so every value is read into one array first.
 list_is_valid() {
-  jq -n -e --argjson max "$max" "$vkey"'
+  jq -n -e --argjson max "$max" "$vkey$canonical"'
     [inputs] | length == 1 and (.[0]
       | type == "array" and length >= 1 and length <= $max
       and all(.[];
         type == "object" and (keys == ["sha256", "version"])
-        and (.version | type == "string") and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
-        and (.sha256 | type == "string") and (.sha256 | test("^[0-9a-f]{64}$")))
+        and (.version | canonical)
+        and (.sha256 | type == "string") and (.sha256 | test("\\A[0-9a-f]{64}\\z")))
       and ([.[].version | vkey] as $keys
         | all(range(1; $keys | length); $keys[. - 1] > $keys[.])))
   ' "$1" >/dev/null 2>&1

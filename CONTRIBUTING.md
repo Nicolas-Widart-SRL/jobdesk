@@ -107,7 +107,7 @@ The Release workflow needs the `RELEASE_TOKEN` secret: a fine-grained personal a
 
 ### Adding an ai-job-search release
 
-`assets/update/ai-job-search.json` lists the `ai-job-search` releases this Jobdesk is compatible with, newest first: 1 to 5 entries, each a version and the SHA-256 of the source zip GitHub serves for that tag. First-run setup and the folder update use the newest. Settings › About tells the user when the open folder, if it is not under git, has files from a release that the list of the latest Jobdesk release does not hold. `scripts/ai-job-search.sh` keeps the list, and needs `jq` 1.6 or newer, `curl`, `unzip`, and `sha256sum` or `shasum`.
+`assets/update/ai-job-search.json` lists the `ai-job-search` releases this Jobdesk is compatible with, newest first: 1 to 5 entries, each a version and the SHA-256 of the source zip GitHub serves for that tag. A version is three numbers from 0 to 4294967295 with no leading zero, such as `1.7.5`, the form Jobdesk writes back and names the zip by, so the script and the release workflows refuse `01.7.5`. First-run setup and the folder update use the newest. Settings › About tells the user when the open folder, if it is not under git, has files from a release that the list of the latest Jobdesk release does not hold. `scripts/ai-job-search.sh` keeps the list, and needs `jq` 1.6 or newer, `curl`, `unzip`, and `sha256sum` or `shasum`.
 
 To add a release:
 

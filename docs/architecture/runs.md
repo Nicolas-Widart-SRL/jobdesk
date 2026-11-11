@@ -218,7 +218,7 @@ Jobdesk sends one reply of its own. It builds every other reply from what the us
 When a turn ends cleanly, `read_message` in `onboarding/application/batch.rs` reads its last top-level message. Hidden characters are removed from each line first.
 
 - Only the items of top-level numbered lists count, by the number Claude typed. They must run 1 to N across the whole message, with at least two. A gap, a repeat, a numbered line hidden in a paragraph or a quote, or a numbered list nested anywhere but as an item's own sub-steps from 1, makes the message free text.
-- The items are a proposal only when no item holds a "?" or ends in "(optional)", no item holds a numbered list of its own, and the last paragraph after the list holds the whole words "apply" and "skip". Otherwise they are questions. So when Jobdesk is unsure, the message opens in the question sheet, which still reaches the user.
+- The items are a proposal only when no item holds a "?" or ends in "(optional)", no item holds a numbered list of its own, and the last paragraph after the list holds the whole words "apply", "skip" and "yes", in any case, as in "Reply yes to apply all, or list the numbers to skip.". Otherwise they are questions, because a question batch may well end "skip the rest, and I'll apply your answers". So when Jobdesk is unsure, the message opens in the question sheet, which still reaches the user.
 
 The chapter shows the first of these that holds:
 

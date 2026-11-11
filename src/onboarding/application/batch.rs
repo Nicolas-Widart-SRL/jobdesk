@@ -137,13 +137,13 @@ fn blocks(text: &str, spans: &[(Range<usize>, Span)], ask: Option<Range<usize>>)
     found
 }
 
-/// Whether the closing paragraph holds the whole words "apply" and "skip", in any case. That is the form of a proposal,
-/// "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not make one, and neither does
-/// a mention of applying, even beside "number", as in "Reply with the number and your answer for each, and I'll apply
-/// them.", because "Yes, apply these changes." answers only a proposal.
+/// Whether the closing paragraph holds the whole words "apply", "skip" and "yes", in any case. That is the form of a
+/// proposal, "Reply yes to apply all, or list the numbers to skip.". "Confirm" and "yes" alone do not make one, and
+/// neither does a mention of applying, even beside "number" or "skip", as in "Answer what you can and skip the rest, and
+/// I'll apply your answers.", because "Yes, apply these changes." answers only a proposal.
 fn asks_to_apply(closing: &str) -> bool {
     let has = |ask: &str| closing.split(|c: char| !c.is_alphanumeric()).any(|word| word.eq_ignore_ascii_case(ask));
-    has("apply") && has("skip")
+    has("apply") && has("skip") && has("yes")
 }
 
 struct Scan {
@@ -856,16 +856,16 @@ mod tests {
     #[test]
     fn a_proposal_needs_a_closing_paragraph_that_asks() {
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all, or list the numbers to skip.\n"), Message::Proposal(_)));
-        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or give a number to SKIP.\n"), Message::Proposal(_)));
-        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or list the numbers to skip.\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nSay YES to Apply them, or give a number to SKIP.\n"), Message::Proposal(_)));
+        assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nApply them, or list the numbers to skip.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nReply yes to apply all.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nShall I APPLY these?\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n"), Message::Questions(_)));
         assert!(matches!(read_message("1. Add a skill.\n2. Rename a file.\n\nTell me when you are ready.\n"), Message::Questions(_)));
     }
 
-    /// Follow-ups written as noun phrases hold no "?", and their closing line may say "number" and "apply". Only "apply"
-    /// and "skip" together make a proposal, and an item marked "(optional)" is a question.
+    /// Follow-ups written as noun phrases hold no "?", and their closing line may say "number" and "apply". Only "apply",
+    /// "skip" and "yes" together make a proposal, and an item marked "(optional)" is a question.
     #[test]
     fn noun_phrase_follow_ups_are_questions_and_upstreams_closing_is_a_proposal() {
         let follow_ups = "A few more things:\n\n1. Career goals and target role types\n2. Deal-breakers and must-haves\n3. Salary expectations (optional)\n\nReply with the number and your answer for each, and I'll apply them to your profile.";
@@ -876,6 +876,20 @@ mod tests {
         assert!(matches!(read_message(optional), Message::Questions(_)), "an optional item asks");
         let upstream = "1. Add the Harbor certification.\n2. Add the Lowmere office.\n\nReply **yes** to apply all, or list the numbers you want to skip.";
         assert!(matches!(read_message(upstream), Message::Proposal(_)));
+        assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
+    }
+
+    /// "Skip" is natural in a batch of questions, so "apply" and "skip" without "yes" never make a proposal.
+    #[test]
+    fn questions_that_say_apply_and_skip_without_yes_are_questions() {
+        let message = "1. Career goals and target role types\n2. Deal-breakers and must-haves\n\nAnswer what you can and skip the rest, and I'll apply your answers to your profile.";
+        assert!(matches!(read_message(message), Message::Questions(_)));
+        let yesterday = "1. Add a skill.\n2. Rename a file.\n\nYesterday I said I would apply these; skip any you like.";
+        assert!(matches!(read_message(yesterday), Message::Questions(_)), "\"yes\" is a whole word");
+        let upstream = "1. Add the Harbor certification.\n2. Add the Lowmere office.\n\nReply **yes** to apply all, or list the numbers you want to skip.";
+        assert!(matches!(read_message(upstream), Message::Proposal(_)));
+        let hidden = "1. Add a skill.\n2. Rename a file.\n\nReply y\u{200B}es to apply all, or list the numbers to skip.";
+        assert!(matches!(read_message(hidden), Message::Proposal(_)), "a hidden character cannot hide \"yes\"");
         assert!(matches!(read_message(SIXTEEN), Message::Proposal(_)));
     }
 

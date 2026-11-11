@@ -46,7 +46,7 @@ enum Place {
     /// The file at this path.
     File(String),
     /// The slash command of this name, without its `/`: a command file, or a skill of that name, from its front matter
-    /// or else its folder.
+    /// or else its folder, that the user can invoke.
     Command(&'static str),
 }
 
@@ -105,26 +105,38 @@ fn needs() -> Vec<Need> {
     needs
 }
 
-/// The `name:` of a skill's front matter.
-fn skill_name(bytes: &[u8]) -> Option<String> {
+/// The value of `key` in a skill's front matter, unquoted, or `None` when the file has no front matter or the front
+/// matter does not give it.
+fn front_matter(bytes: &[u8], key: &str) -> Option<String> {
     let text = String::from_utf8_lossy(bytes);
     let mut lines = without_bom(&text).lines();
     if lines.next()?.trim_end() != "---" {
         return None;
     }
-    lines.take_while(|line| line.trim_end() != "---").find_map(|line| line.strip_prefix("name:")).map(|name| name.trim().trim_matches(['"', '\'']).to_owned())
+    lines
+        .take_while(|line| line.trim_end() != "---")
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
+        .map(|value| value.trim().trim_matches(['"', '\'']).to_owned())
 }
 
-/// The file that makes `name` a slash command: its command file, or else a skill of that name. A skill is named by the
-/// `name:` of its front matter, or by its folder when it has none, as Claude Code names it: a skill whose `name:` names
-/// another command is not this one, whatever its folder.
+/// Whether the user can start a skill as a slash command: not when its front matter says `user-invocable: false`.
+fn user_invocable(bytes: &[u8]) -> bool {
+    front_matter(bytes, "user-invocable").as_deref() != Some("false")
+}
+
+/// The file that makes `name` a slash command: its command file, or else a skill of that name the user can start. A
+/// skill is named by the `name:` of its front matter, or by its folder when it has none, as Claude Code names it: a
+/// skill whose `name:` names another command is not this one, whatever its folder. A skill with `user-invocable: false`
+/// is no slash command, so the launcher cannot start it.
 fn command_file<'a>(files: &'a Files, name: &str) -> Option<(&'a str, &'a [u8])> {
     if let Some((path, bytes)) = files.get_key_value(&command_path(name)) {
         return Some((path, bytes));
     }
     files
         .iter()
-        .find(|(path, bytes)| skill_folder(path).is_some_and(|folder| skill_name(bytes).as_deref().unwrap_or(folder) == name))
+        .find(|(path, bytes)| {
+            skill_folder(path).is_some_and(|folder| front_matter(bytes, "name").as_deref().unwrap_or(folder) == name) && user_invocable(bytes)
+        })
         .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
 }
 
@@ -149,7 +161,7 @@ fn unmet(files: &Files) -> Vec<String> {
             let missing = match &need.place {
                 Place::File(path) => format!("{path} is missing"),
                 Place::Command(name) => format!(
-                    "/{name} is missing: no {}, no {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name}, and no {CLAUDE_SKILLS}/{name}/{MANIFEST} with no name",
+                    "/{name} is missing: no {}, no {CLAUDE_SKILLS}/<folder>/{MANIFEST} named {name}, and no {CLAUDE_SKILLS}/{name}/{MANIFEST} with no name, that is not user-invocable: false",
                     command_path(name)
                 ),
             };
@@ -303,6 +315,33 @@ fn a_skill_with_no_name_is_the_command_of_its_folder() {
     files.remove(".claude/skills/scrape/SKILL.md");
     files.insert(".claude/skills/scrape/nested/SKILL.md".to_owned(), b"# Scrape\n".to_vec());
     assert_eq!(unmet(&files).len(), 1, "only a SKILL.md right in the skill's folder counts");
+}
+
+/// A skill with `user-invocable: false` is not a slash command the user can start, so the launcher cannot start it,
+/// whatever its name.
+#[test]
+fn a_skill_the_user_cannot_invoke_is_not_the_command() {
+    let mut files = complete();
+    files.remove(&command_path("scrape"));
+    for (bytes, why) in [
+        (&b"---\nname: scrape\nuser-invocable: false\n---\n"[..], "named for the command"),
+        (&b"---\nuser-invocable: false\ndescription: Finds jobs.\n---\n"[..], "named by its folder"),
+        (&b"\xef\xbb\xbf---\nuser-invocable:   false  \nname: scrape\n---\n"[..], "after a BOM, with spaces around the value"),
+    ] {
+        files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
+        let lines = unmet(&files);
+        assert_eq!(lines.len(), 1, "{why}: {lines:#?}");
+        assert!(lines[0].starts_with("/scrape is missing"), "{why}: {}", lines[0]);
+    }
+    for (bytes, why) in [
+        (&b"---\nname: scrape\nuser-invocable: true\n---\n"[..], "invocable"),
+        (&b"---\nname: scrape\n---\n"[..], "no user-invocable"),
+        (&b"---\nname: scrape\n---\nuser-invocable: false\n"[..], "user-invocable outside the front matter"),
+        (&b"# Scrape\n\nuser-invocable: false\n"[..], "no front matter"),
+    ] {
+        files.insert(".claude/skills/scrape/SKILL.md".to_owned(), bytes.to_vec());
+        assert_eq!(unmet(&files), Vec::<String>::new(), "{why}");
+    }
 }
 
 #[test]

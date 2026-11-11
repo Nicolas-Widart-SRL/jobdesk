@@ -70,3 +70,4 @@ PR 57 scripts/render-canvas.sh: every render passed `--allow-file-access-from-fi
 PR 65 src/shared_kernel/host_path.rs: joined filtered only whole empty strings, so empty PATH components inside the login or inherited PATH survived and named the current folder. Class: copy claims more than the code does.
 PR 65 src/onboarding/infrastructure/helper_probe.rs: the Python check skipped a dead /usr/bin stub that tasks would still run first on their PATH. Class: check and use disagree.
 PR 68 scripts/ai-job-search.sh: `version_of` and `list_is_valid` (and the release workflows' shape checks) accepted leading zeros and parts above u32::MAX, so `01.8.0` signed a zip name the app, which reads each part as a u32, never asks for. Class: check and use disagree.
+PR 68 tests/ai_job_search_release.rs: `command_file` counted a skill with `user-invocable: false` as the slash command, though the launcher cannot start it. Class: check and use disagree.

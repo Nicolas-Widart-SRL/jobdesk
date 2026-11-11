@@ -22,20 +22,23 @@ pub enum Open {
     /// This Jobdesk holds the folder open, shared with every other Jobdesk that has it open, for as long as the file
     /// stays open.
     Held(File),
-    /// Another Jobdesk holds the folder alone: it updates, undoes or rolls it back now.
-    Elsewhere,
-    /// Nothing can be held: the folder's `.jobdesk` is not a real folder, or the lock file is a link, not a file or does
-    /// not open.
+    /// The folder could not be held: another Jobdesk holds it alone, to update, undo or roll it back now, or the lock
+    /// file is a link, not a file, or does not open or lock. Nothing may write the folder until it is held.
+    KeptOut,
+    /// Nothing is to be held: the folder has no `.jobdesk` folder, or one that is a link or not a folder, so no update,
+    /// Undo or rollback ever runs in it.
     Nothing,
 }
 
 /// Holds `folder` open, shared with every other Jobdesk that has it open.
 pub fn hold_open(folder: &Path) -> Open {
-    let Ok(file) = open(&folder.join(installed_source::DIR)) else { return Open::Nothing };
-    match file.try_lock_shared() {
-        Ok(()) => Open::Held(file),
-        Err(TryLockError::WouldBlock) => Open::Elsewhere,
-        Err(TryLockError::Error(_)) => Open::Nothing,
+    let jobdesk = folder.join(installed_source::DIR);
+    if !is_real_dir(&jobdesk) {
+        return Open::Nothing;
+    }
+    match open(&jobdesk).map(|file| file.try_lock_shared().map(|()| file)) {
+        Ok(Ok(file)) => Open::Held(file),
+        Ok(Err(_)) | Err(_) => Open::KeptOut,
     }
 }
 
@@ -91,7 +94,7 @@ mod tests {
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy), "while one still has it open");
         drop(second);
         let alone = hold_alone(&jobdesk).unwrap();
-        assert!(matches!(hold_open(folder.path()), Open::Elsewhere), "no Jobdesk holds it open while one holds it alone");
+        assert!(matches!(hold_open(folder.path()), Open::KeptOut), "no Jobdesk holds it open while one holds it alone");
         assert_eq!(hold_alone(&jobdesk).map(|_| ()), Err(UpdateError::Busy));
         drop(alone);
         assert!(matches!(hold_open(folder.path()), Open::Held(_)));
@@ -102,6 +105,8 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         assert!(matches!(hold_open(folder.path()), Open::Nothing));
         assert!(!folder.path().join(installed_source::DIR).exists(), "no .jobdesk is made for the lock");
+        fs::write(folder.path().join(installed_source::DIR), b"").unwrap();
+        assert!(matches!(hold_open(folder.path()), Open::Nothing), "a .jobdesk that is a file holds no base either");
     }
 
     #[cfg(unix)]
@@ -110,7 +115,7 @@ mod tests {
         let folder = folder();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path().join("elsewhere"), folder.path().join(installed_source::DIR).join(OPEN)).unwrap();
-        assert!(matches!(hold_open(folder.path()), Open::Nothing));
+        assert!(matches!(hold_open(folder.path()), Open::KeptOut), "kept out, never unheld");
         assert_eq!(hold_alone(&folder.path().join(installed_source::DIR)).map(|_| ()), Err(UpdateError::Disk));
         assert!(!outside.path().join("elsewhere").exists());
     }

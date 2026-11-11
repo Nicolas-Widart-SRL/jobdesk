@@ -24,7 +24,7 @@ struct Opened {
     folder: Option<PathBuf>,
     /// The hold, while this Jobdesk has one.
     hold: Option<File>,
-    /// Another Jobdesk held the folder alone at the last try, so this one could not hold it.
+    /// The last try could not hold the folder: another Jobdesk held it alone, or its lock file did not open or lock.
     kept_out: bool,
 }
 
@@ -34,7 +34,7 @@ impl Opened {
         let Some(folder) = &self.folder else { return false };
         (self.hold, self.kept_out) = match hold_open(folder) {
             Open::Held(file) => (Some(file), false),
-            Open::Elsewhere => (None, true),
+            Open::KeptOut => (None, true),
             Open::Nothing => (None, false),
         };
         self.kept_out
@@ -279,6 +279,25 @@ mod tests {
         let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
         assert!(other.try_lock().is_err(), "this Jobdesk holds it open now");
         assert!(!disk.hold_again(folder.path()));
+    }
+
+    /// A lock file that cannot be opened now, here for its permissions, keeps this Jobdesk out and retrying, as
+    /// another Jobdesk's hold does: it never leaves the folder open with no hold.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_file_that_does_not_open_keeps_this_jobdesk_out_until_it_does() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = set_up();
+        let lock = folder.path().join(installed_source::DIR).join(".open");
+        fs::write(&lock, b"").unwrap();
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o000)).unwrap();
+        let disk = DiskFolder::default();
+        assert!(disk.open(folder.path()), "kept out");
+        assert!(disk.hold_again(folder.path()), "and still while it does not open");
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!disk.hold_again(folder.path()), "held once it opens");
+        let other = fs::File::options().read(true).write(true).open(&lock).unwrap();
+        assert!(other.try_lock().is_err(), "this Jobdesk holds the folder open");
     }
 
     /// A job that panics, as the zip crate or the planner might on bytes a run's tools wrote, still leaves this Jobdesk

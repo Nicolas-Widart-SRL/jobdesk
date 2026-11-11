@@ -207,7 +207,7 @@ All sheets share:
 
 - Five done lines: Folder saved (with Show in Finder), This computer is ready, Profile written N of 11 topics (with the `fat_tally` of filled topics), Your CV is made (with Open PDF), Job sites chosen.
 - Then one optional line with a hairline `add` knot: "Use a job site that is not listed?" with Add a job site you use…. It opens the launcher on `/add-portal`, which asks for the site's address and writes a new search tool. It never starts a run. It is for users whose country's boards are not built in.
-- Under the lines: "Setup took 41 minutes." The time comes from the run log, never from Claude's closing message.
+- Under the lines: "Claude worked on your profile for 41 minutes.", "for 1 minute." or "for under a minute.". The time is the run's Elapsed, as Tasks counts it, so the time spent writing answers is not in it. It comes from the run, never from Claude's closing message.
 - **Without PDFs.** The computer line turns `fail` with a `Plain` Not yet tag and says LaTeX is not installed, so PDFs are not ready yet. The CV line says the CV is written and its PDF comes once LaTeX is installed. The Setup tab stays in the menu, and the muted line says so.
 - Open Jobdesk opens Today, which suggests the first search.
 

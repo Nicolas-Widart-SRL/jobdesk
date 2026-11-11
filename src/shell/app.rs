@@ -241,7 +241,7 @@ struct ProfileSetup {
     without_pdfs: bool,
     /// The job search folder as the screens show it, such as `Documents/Job search`.
     shown: String,
-    /// The recap shows, with the minutes setup's run took, read when it opened.
+    /// The recap shows, with the seconds Claude worked in setup's run, read when it opened.
     recap: Option<u64>,
 }
 
@@ -890,7 +890,7 @@ impl Shell {
         setup.run.poll(desk, &input);
         if setup.recap.is_none() && *setup.run.phase() == ProfilePhase::Done {
             let took = setup.run.run(desk).map_or(Duration::ZERO, |run| run.elapsed.total(desk.now()));
-            setup.recap = Some((took.as_secs() + 30) / 60);
+            setup.recap = Some(took.as_secs());
             // The recap opens: the record goes, and the folder is remembered from now on.
             setup.run.clear_record();
             setup.without_pdfs |= no_latex;
@@ -900,7 +900,7 @@ impl Shell {
     }
 
     /// The recap's facts, from the snapshot.
-    fn recap_facts(&self, setup: &ProfileSetup, minutes: u64) -> Recap {
+    fn recap_facts(&self, setup: &ProfileSetup, worked: u64) -> Recap {
         let snapshot = &self.snapshot;
         let counts = topic_counts(&snapshot.profile);
         let cv = match &snapshot.cv_documents {
@@ -917,15 +917,15 @@ impl Shell {
             cv,
             sites,
             country: home_country(&snapshot.profile),
-            minutes,
+            worked,
             today: snapshot.today,
         }
     }
 
     /// The Profile chapter's screen for where its run stands, or the recap, then what the user asked for there.
     fn profile_setup_screen(&mut self, ui: &mut Ui) {
-        if let Some(minutes) = self.profile_setup.as_ref().and_then(|setup| setup.recap) {
-            let facts = self.profile_setup.as_ref().map(|setup| self.recap_facts(setup, minutes));
+        if let Some(worked) = self.profile_setup.as_ref().and_then(|setup| setup.recap) {
+            let facts = self.profile_setup.as_ref().map(|setup| self.recap_facts(setup, worked));
             if let Some(asked) = facts.and_then(|facts| crate::onboarding::ui::recap(ui, &facts).map(|asked| (asked, facts))) {
                 self.follow_recap(asked.0, asked.1.cv.as_deref());
             }

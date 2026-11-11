@@ -27,8 +27,9 @@ pub struct Recap {
     pub sites: Vec<String>,
     /// The user's country, as the profile says it.
     pub country: Option<String>,
-    /// How long setup's run took, in whole minutes.
-    pub minutes: u64,
+    /// How long Claude worked in setup's run, in seconds, as Tasks counts its Elapsed: the time spent waiting on the
+    /// user is not in it.
+    pub worked: u64,
     pub today: NaiveDate,
 }
 
@@ -59,8 +60,7 @@ pub fn recap(ui: &mut Ui, facts: &Recap) -> Option<RecapRequest> {
                 ui.add_space(HEAD_GAP.1);
                 paper(ui, false, |ui| lines(ui, facts, &mut asked));
                 ui.add_space(ITEM_GAP);
-                let took = if facts.minutes == 1 { "Setup took 1 minute.".to_owned() } else { format!("Setup took {} minutes.", facts.minutes) };
-                desk_label(ui, took, Type::NOTE, Ink::Text);
+                desk_label(ui, worked_line(facts.worked), Type::NOTE, Ink::Text);
             });
             divider(ui);
             let (x, y) = DEAL_FOOT_PADDING;
@@ -225,6 +225,16 @@ fn line(ui: &mut Ui, mark: &str, state: KnotState, title: &str, under: Under, en
         .inner
 }
 
+/// How long Claude worked, in whole minutes: "for 41 minutes", "for 1 minute", or "for under a minute".
+fn worked_line(seconds: u64) -> String {
+    let lead = "Claude worked on your profile for";
+    match seconds / 60 {
+        0 => format!("{lead} under a minute."),
+        1 => format!("{lead} 1 minute."),
+        minutes => format!("{lead} {minutes} minutes."),
+    }
+}
+
 /// "LinkedIn", "LinkedIn and Freehire", "A, B and C".
 fn english_list(names: &[String]) -> String {
     match names.split_last() {
@@ -242,6 +252,14 @@ fn plain(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_time_claude_worked_reads_in_whole_minutes() {
+        assert_eq!(worked_line(41 * 60 + 20), "Claude worked on your profile for 41 minutes.");
+        assert_eq!(worked_line(89), "Claude worked on your profile for 1 minute.");
+        assert_eq!(worked_line(59), "Claude worked on your profile for under a minute.");
+        assert_eq!(worked_line(0), "Claude worked on your profile for under a minute.");
+    }
 
     #[test]
     fn site_names_read_as_a_sentence() {

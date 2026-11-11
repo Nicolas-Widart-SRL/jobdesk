@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime};
 
 use hayro::hayro_syntax::Pdf;
 
+use crate::shared_kernel::own_folder;
+
 use crate::onboarding::domain::{
     CopyFailure, DOCUMENTS, DocumentCopier, DocumentKind, MAX_DOCUMENT, MAX_NUMBER, Refusal, by_name, copy_name, looks_like_pdf, numbered, shown_name,
 };
@@ -16,7 +18,20 @@ use crate::onboarding::domain::{
 /// Copies the user's documents into the job search folder. It reads each file once through a handle it checked is the
 /// regular file it looked at, and writes only new files directly in the subfolder of `documents/` that the document's
 /// kind names.
-pub struct FileCopier;
+pub struct FileCopier {
+    /// The data folder's `onboarding/`, where each running Jobdesk holds its `<pid>` folder locked, which tells a part
+    /// file of a live copy from one a stopped Jobdesk left.
+    claims: PathBuf,
+    /// How a copy takes its name: a hard link, which a test can make fail as a disk without hard links does.
+    link: fn(&Path, &Path) -> io::Result<()>,
+}
+
+impl FileCopier {
+    /// `claims` is the data folder's `onboarding/`.
+    pub fn new(claims: PathBuf) -> Self {
+        Self { claims, link: |part, target| fs::hard_link(part, target) }
+    }
+}
 
 impl DocumentCopier for FileCopier {
     fn look(&self, source: &Path) -> Result<Option<usize>, Refusal> {
@@ -35,8 +50,10 @@ impl DocumentCopier for FileCopier {
 
     /// The bytes go to a hidden part file in the kind's subfolder first, on disk before the copy takes its name, so a
     /// crash never leaves a cut PDF under a real name. The name is then linked to the part file, which fails on any name
-    /// already there, a link included, so nothing is written over. Part files a copy left more than `STRAY_PART_AGE`
-    /// ago are removed first. Nothing is written in the `documents/` root.
+    /// already there, a link included, so nothing is written over. On a disk without hard links the part file is
+    /// renamed onto the name instead, or copied into a new file of that name, neither of which writes over a file.
+    /// Part files a stopped copy left are removed first, as `clear_stray_parts` says. Nothing is written in the
+    /// `documents/` root.
     fn copy(&self, source: &Path, folder: &Path, kind: DocumentKind) -> Result<String, CopyFailure> {
         let name = shown_name(source);
         by_name(&name).map_err(CopyFailure::Refused)?;
@@ -46,8 +63,11 @@ impl DocumentCopier for FileCopier {
         if let Some(kept) = already_inside(source, &canonical) {
             return Ok(kept);
         }
+        // Held from now until the process exits, so another Jobdesk leaves this one's part files alone. Best effort: a
+        // copy goes on without it.
+        let _ = own_folder::claim(&self.claims);
         for each in DocumentKind::ALL {
-            clear_stray_parts(&folder.join(DOCUMENTS).join(each.folder()));
+            clear_stray_parts(&folder.join(DOCUMENTS).join(each.folder()), &self.claims);
         }
         let part = documents.join(part_name());
         let out = OpenOptions::new().write(true).create_new(true).open(&part).map_err(|_| CopyFailure::Failed)?;
@@ -56,7 +76,7 @@ impl DocumentCopier for FileCopier {
             return Err(CopyFailure::NoDocumentsFolder);
         }
         write_copy(&mut file, out, &part)?;
-        let placed = place(&part, &documents, &canonical, &copy_name(&name));
+        let placed = place(&part, &documents, &canonical, &copy_name(&name), self.link);
         let _ = fs::remove_file(&part);
         placed
     }
@@ -66,7 +86,8 @@ impl DocumentCopier for FileCopier {
 const PART_PREFIX: &str = ".jobdesk-copy-";
 const PART_SUFFIX: &str = ".part";
 
-/// A part file older than this belongs to a copy that never finished: a copy takes seconds.
+/// A part file of a Jobdesk that still runs, other than this one, older than this belongs to a copy that never
+/// finished: a copy takes seconds.
 const STRAY_PART_AGE: Duration = Duration::from_secs(10 * 60);
 
 /// A part file name no other copy uses: this process's id and a count.
@@ -75,29 +96,58 @@ fn part_name() -> String {
     format!("{PART_PREFIX}{}-{}{PART_SUFFIX}", process::id(), COUNT.fetch_add(1, Ordering::Relaxed))
 }
 
-/// Removes the part files that copies which never finished left in `documents/`. Only regular files of that name and
-/// age go: a link is left alone, and so is the part file of a copy under way.
-fn clear_stray_parts(documents: &Path) {
-    let Ok(entries) = fs::read_dir(documents) else { return };
+/// The process id a part file's name carries.
+fn part_pid(name: &str) -> Option<u32> {
+    name.strip_prefix(PART_PREFIX)?.strip_suffix(PART_SUFFIX)?.split_once('-')?.0.parse().ok()
+}
+
+/// Removes the part files that copies which never finished left in a subfolder of `documents/`, since `/setup` reads
+/// every file there. One of this process goes at once, as its copies run one after another and none runs now. So does
+/// one of a Jobdesk that no longer runs: one whose `<pid>` folder in `claims` no running Jobdesk holds locked. One of
+/// another running Jobdesk goes only once it is `STRAY_PART_AGE` old. Only regular files of that name go, never a link.
+fn clear_stray_parts(folder: &Path, claims: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if !name.starts_with(PART_PREFIX) || !name.ends_with(PART_SUFFIX) {
             continue;
         }
         let Ok(meta) = fs::symlink_metadata(entry.path()) else { continue };
-        let old = meta.modified().ok().and_then(|at| SystemTime::now().duration_since(at).ok()).is_some_and(|age| age > STRAY_PART_AGE);
-        if meta.is_file() && old {
+        if !meta.is_file() {
+            continue;
+        }
+        let stray = match part_pid(&name) {
+            Some(pid) if pid != process::id() && own_folder::in_use(&claims.join(pid.to_string())) => {
+                meta.modified().ok().and_then(|at| SystemTime::now().duration_since(at).ok()).is_some_and(|age| age > STRAY_PART_AGE)
+            }
+            _ => true,
+        };
+        if stray {
             let _ = fs::remove_file(entry.path());
         }
     }
 }
 
-/// Gives the copy in `part` its name, `name` or the first free numbered one, never over a file.
-fn place(part: &Path, documents: &Path, canonical: &Path, name: &str) -> Result<String, CopyFailure> {
+/// Gives the copy in `part` its name, `name` or the first free numbered one, never over a file. `link` makes the name
+/// a hard link to the part file. Once it fails for any reason but a taken name, as on a disk without hard links, every
+/// name is tried with `place_without_link` instead.
+fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: fn(&Path, &Path) -> io::Result<()>) -> Result<String, CopyFailure> {
+    let mut linking = true;
     for number in 1..=MAX_NUMBER {
         let candidate = if number == 1 { name.to_owned() } else { numbered(name, number) };
         let target = documents.join(&candidate);
-        match fs::hard_link(part, &target) {
+        let placed = if linking {
+            match link(part, &target) {
+                Err(error) if error.kind() != ErrorKind::AlreadyExists => {
+                    linking = false;
+                    place_without_link(part, &target)
+                }
+                linked => linked,
+            }
+        } else {
+            place_without_link(part, &target)
+        };
+        match placed {
             Ok(()) if stays_in(&target, canonical) => return Ok(candidate),
             Ok(()) => {
                 let _ = fs::remove_file(&target);
@@ -108,6 +158,42 @@ fn place(part: &Path, documents: &Path, canonical: &Path, name: &str) -> Result<
         }
     }
     Err(CopyFailure::NoFreeName)
+}
+
+/// Puts the part file's bytes under `target` without a hard link, failing with `AlreadyExists` when the name is taken.
+/// On macOS a rename that refuses a taken name moves the part file there. Where that cannot be done, a new file of
+/// that name, which also refuses a taken one, gets the part file's bytes, on disk before it returns.
+fn place_without_link(part: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    match rename_exclusive(part, target) {
+        Err(error) if error.kind() != ErrorKind::AlreadyExists => {}
+        renamed => return renamed,
+    }
+    copy_to_new(part, target)
+}
+
+/// Renames `from` to `to` in one step, with `renamex_np` and `RENAME_EXCL`, which fails when `to` exists, a link
+/// included.
+#[cfg(target_os = "macos")]
+fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    // SAFETY: both are valid NUL-terminated paths that live until the call returns.
+    let done = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if done == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+/// Copies the bytes of `from` into a new file `to`, which must not exist. A copy that fails is removed.
+fn copy_to_new(from: &Path, to: &Path) -> io::Result<()> {
+    let mut out = OpenOptions::new().write(true).create_new(true).open(to)?;
+    let copied = File::open(from).and_then(|mut part| io::copy(&mut part, &mut out)).and_then(|_| out.sync_all());
+    if copied.is_err() {
+        drop(out);
+        let _ = fs::remove_file(to);
+    }
+    copied
 }
 
 /// Whether the file at `path` sits directly in the folder that `canonical` names, links resolved: a best-effort check
@@ -262,28 +348,42 @@ mod tests {
         folder.join(DOCUMENTS).join("cv")
     }
 
+    /// The data folder's `onboarding/` of a test, beside its job search folder or Desktop.
+    fn claims(beside: &Path) -> PathBuf {
+        beside.parent().unwrap().join("data").join("onboarding")
+    }
+
+    fn copier(beside: &Path) -> FileCopier {
+        FileCopier::new(claims(beside))
+    }
+
+    /// A copier on a disk without hard links.
+    fn linkless(beside: &Path) -> FileCopier {
+        FileCopier { link: |_, _| Err(io::Error::from(ErrorKind::Unsupported)), ..copier(beside) }
+    }
+
     use DocumentKind::{Cv, Reference};
 
     #[test]
     fn a_pdf_shows_its_page_count() {
         let (_root, _, desktop) = places();
         fs::write(desktop.join("cv.pdf"), pdf(2)).unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("cv.pdf")), Ok(Some(2)));
+        assert_eq!(copier(&desktop).look(&desktop.join("cv.pdf")), Ok(Some(2)));
         fs::write(desktop.join("odd.pdf"), b"%PDF-1.4\nnothing else").unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("odd.pdf")), Ok(None), "a PDF the renderer cannot count is still taken");
+        assert_eq!(copier(&desktop).look(&desktop.join("odd.pdf")), Ok(None), "a PDF the renderer cannot count is still taken");
     }
 
     #[test]
     fn a_word_file_or_a_file_that_is_no_pdf_is_refused() {
         let (_root, folder, desktop) = places();
         fs::write(desktop.join("letter.docx"), b"PK\x03\x04").unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("letter.docx")), Err(Refusal::Word));
-        assert_eq!(FileCopier.copy(&desktop.join("letter.docx"), &folder, Reference), Err(CopyFailure::Refused(Refusal::Word)));
+        assert_eq!(copier(&desktop).look(&desktop.join("letter.docx")), Err(Refusal::Word));
+        assert_eq!(copier(&folder).copy(&desktop.join("letter.docx"), &folder, Reference), Err(CopyFailure::Refused(Refusal::Word)));
         fs::write(desktop.join("renamed.pdf"), b"PK\x03\x04word/document.xml").unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("renamed.pdf")), Err(Refusal::NotPdf));
+        assert_eq!(copier(&desktop).look(&desktop.join("renamed.pdf")), Err(Refusal::NotPdf));
         fs::create_dir(desktop.join("folder.pdf")).unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("folder.pdf")), Err(Refusal::NotAFile));
-        assert_eq!(FileCopier.look(&desktop.join("gone.pdf")), Err(Refusal::Unreadable));
+        assert_eq!(copier(&desktop).look(&desktop.join("folder.pdf")), Err(Refusal::NotAFile));
+        assert_eq!(copier(&desktop).look(&desktop.join("gone.pdf")), Err(Refusal::Unreadable));
         assert_eq!(names(&folder.join(DOCUMENTS)), Vec::<String>::new(), "nothing was copied");
     }
 
@@ -293,8 +393,8 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
         std::os::unix::fs::symlink(desktop.join("cv.pdf"), desktop.join("link.pdf")).unwrap();
-        assert_eq!(FileCopier.look(&desktop.join("link.pdf")), Err(Refusal::Link));
-        assert_eq!(FileCopier.copy(&desktop.join("link.pdf"), &folder, Cv), Err(CopyFailure::Refused(Refusal::Link)));
+        assert_eq!(copier(&desktop).look(&desktop.join("link.pdf")), Err(Refusal::Link));
+        assert_eq!(copier(&folder).copy(&desktop.join("link.pdf"), &folder, Cv), Err(CopyFailure::Refused(Refusal::Link)));
     }
 
     #[test]
@@ -303,10 +403,10 @@ mod tests {
         fs::create_dir(cv_folder(&folder)).unwrap();
         fs::write(desktop.join("Sam Rivera CV.pdf"), pdf(2)).unwrap();
         fs::write(desktop.join("Tessel.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("Sam Rivera CV.pdf"), &folder, Cv).as_deref(), Ok("Sam Rivera CV.pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("Sam Rivera CV.pdf"), &folder, Cv).as_deref(), Ok("Sam Rivera CV.pdf"));
         assert_eq!(fs::read(cv_folder(&folder).join("Sam Rivera CV.pdf")).unwrap(), pdf(2));
         assert_eq!(fs::read(desktop.join("Sam Rivera CV.pdf")).unwrap(), pdf(2), "copied, never moved");
-        assert_eq!(FileCopier.copy(&desktop.join("Tessel.pdf"), &folder, Reference).as_deref(), Ok("Tessel.pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("Tessel.pdf"), &folder, Reference).as_deref(), Ok("Tessel.pdf"));
         assert_eq!(names(&folder.join(DOCUMENTS).join("references")), ["Tessel.pdf"]);
         assert_eq!(names(&folder.join(DOCUMENTS)), ["cv", "references"]);
         root_holds_only_subfolders(&folder);
@@ -318,9 +418,9 @@ mod tests {
         fs::create_dir(cv_folder(&folder)).unwrap();
         fs::write(cv_folder(&folder).join("cv.pdf"), b"the one already there").unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (3).pdf"));
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Reference).as_deref(), Ok("cv.pdf"), "another subfolder has no clash");
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (3).pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Reference).as_deref(), Ok("cv.pdf"), "another subfolder has no clash");
         assert_eq!(fs::read(cv_folder(&folder).join("cv.pdf")).unwrap(), b"the one already there");
         assert_eq!(names(&cv_folder(&folder)), ["cv (2).pdf", "cv (3).pdf", "cv.pdf"]);
         root_holds_only_subfolders(&folder);
@@ -334,7 +434,7 @@ mod tests {
         fs::create_dir(cv_folder(&folder)).unwrap();
         std::os::unix::fs::symlink(&outside, cv_folder(&folder).join("cv.pdf")).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
         assert!(!outside.exists(), "the dangling link led nowhere");
         root_holds_only_subfolders(&folder);
     }
@@ -344,8 +444,8 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::write(desktop.join("cv\u{202e}fdp.pdf"), pdf(1)).unwrap();
         fs::write(desktop.join(".profile.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv\u{202e}fdp.pdf"), &folder, Cv).as_deref(), Ok("cvfdp.pdf"));
-        assert_eq!(FileCopier.copy(&desktop.join(".profile.pdf"), &folder, Cv).as_deref(), Ok("profile.pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv\u{202e}fdp.pdf"), &folder, Cv).as_deref(), Ok("cvfdp.pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join(".profile.pdf"), &folder, Cv).as_deref(), Ok("profile.pdf"));
         assert_eq!(names(&cv_folder(&folder)), ["cvfdp.pdf", "profile.pdf"]);
         root_holds_only_subfolders(&folder);
     }
@@ -355,7 +455,7 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::remove_dir(folder.join(DOCUMENTS)).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
         assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
         root_holds_only_subfolders(&folder);
     }
@@ -369,11 +469,11 @@ mod tests {
         fs::remove_dir(folder.join(DOCUMENTS)).unwrap();
         std::os::unix::fs::symlink(&elsewhere, folder.join(DOCUMENTS)).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
         assert_eq!(names(&elsewhere), Vec::<String>::new());
         let linked = root.path().join("Linked search");
         std::os::unix::fs::symlink(&folder, &linked).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &linked, Cv), Err(CopyFailure::NoDocumentsFolder), "nor a job search folder that is one");
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &linked, Cv), Err(CopyFailure::NoDocumentsFolder), "nor a job search folder that is one");
     }
 
     #[cfg(unix)]
@@ -384,7 +484,7 @@ mod tests {
         fs::create_dir(&elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, cv_folder(&folder)).unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
         assert_eq!(names(&elsewhere), Vec::<String>::new(), "the link's target stays empty");
     }
 
@@ -393,27 +493,61 @@ mod tests {
         let (_root, folder, desktop) = places();
         fs::write(cv_folder(&folder), b"not a folder").unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv), Err(CopyFailure::NoDocumentsFolder));
         assert_eq!(fs::read(cv_folder(&folder)).unwrap(), b"not a folder");
     }
 
+    fn part(pid: u32, count: u32) -> String {
+        format!("{PART_PREFIX}{pid}-{count}{PART_SUFFIX}")
+    }
+
     #[test]
-    fn a_copy_leaves_no_part_file_and_clears_a_stray_one() {
+    fn a_copy_clears_the_parts_of_stopped_copies_at_once_and_a_live_ones_only_when_old() {
         let (_root, folder, desktop) = places();
         let (cv, references) = (cv_folder(&folder), folder.join(DOCUMENTS).join("references"));
         fs::create_dir(&cv).unwrap();
         fs::create_dir(&references).unwrap();
-        let stray = references.join(format!("{PART_PREFIX}1-0{PART_SUFFIX}"));
-        let under_way = cv.join(format!("{PART_PREFIX}2-0{PART_SUFFIX}"));
-        fs::write(&stray, b"half a PDF").unwrap();
-        fs::write(&under_way, b"a copy under way").unwrap();
-        File::options().write(true).open(&stray).unwrap().set_modified(SystemTime::now() - STRAY_PART_AGE * 2).unwrap();
+        // A pid no running Jobdesk holds, this process's own, and another Jobdesk that still runs.
+        let (gone, live) = (4_000_001, 4_000_002);
+        let _held = own_folder::lock_folder(&claims(&folder).join(live.to_string())).unwrap();
+        let old = |path: &Path| File::options().write(true).open(path).unwrap().set_modified(SystemTime::now() - STRAY_PART_AGE * 2).unwrap();
+        for (at, name) in [(&references, part(gone, 0)), (&cv, part(process::id(), 7)), (&cv, part(live, 0)), (&references, part(live, 1))] {
+            fs::write(at.join(name), b"half a PDF").unwrap();
+        }
+        old(&references.join(part(live, 1)));
+        fs::write(cv.join(".jobdesk-copy-junk.part"), b"no pid").unwrap();
         fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
-        assert_eq!(names(&cv), [format!("{PART_PREFIX}2-0{PART_SUFFIX}"), "cv.pdf".to_owned()], "the fresh part stayed");
-        assert_eq!(names(&references), Vec::<String>::new(), "the stray part in another subfolder went");
+        assert_eq!(copier(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&cv), [part(live, 0), "cv.pdf".to_owned()], "only the fresh part of a live copy stays");
+        assert_eq!(names(&references), Vec::<String>::new(), "a stopped Jobdesk's part went at once, a live one's old part too");
         assert_eq!(fs::read(cv.join("cv.pdf")).unwrap(), pdf(1));
         root_holds_only_subfolders(&folder);
+    }
+
+    #[test]
+    fn a_disk_without_hard_links_still_gets_the_copy_and_never_a_file_written_over() {
+        let (_root, folder, desktop) = places();
+        fs::create_dir(cv_folder(&folder)).unwrap();
+        fs::write(cv_folder(&folder).join("cv.pdf"), b"the one already there").unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(2)).unwrap();
+        assert_eq!(linkless(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (2).pdf"));
+        assert_eq!(linkless(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv (3).pdf"));
+        assert_eq!(fs::read(cv_folder(&folder).join("cv.pdf")).unwrap(), b"the one already there");
+        assert_eq!(fs::read(cv_folder(&folder).join("cv (2).pdf")).unwrap(), pdf(2));
+        assert_eq!(names(&cv_folder(&folder)), ["cv (2).pdf", "cv (3).pdf", "cv.pdf"], "no part file is left");
+        root_holds_only_subfolders(&folder);
+    }
+
+    #[test]
+    fn the_copy_without_a_link_or_a_rename_never_writes_over_a_file() {
+        let (_root, folder, _) = places();
+        let documents = folder.join(DOCUMENTS);
+        fs::write(documents.join("from.part"), b"the bytes").unwrap();
+        fs::write(documents.join("taken.pdf"), b"already there").unwrap();
+        assert_eq!(copy_to_new(&documents.join("from.part"), &documents.join("taken.pdf")).unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(documents.join("taken.pdf")).unwrap(), b"already there");
+        copy_to_new(&documents.join("from.part"), &documents.join("new.pdf")).unwrap();
+        assert_eq!(fs::read(documents.join("new.pdf")).unwrap(), b"the bytes");
     }
 
     #[cfg(unix)]
@@ -436,7 +570,7 @@ mod tests {
         let (_root, folder, _) = places();
         fs::create_dir(cv_folder(&folder)).unwrap();
         fs::write(cv_folder(&folder).join("cv.pdf"), pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&cv_folder(&folder).join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(copier(&folder).copy(&cv_folder(&folder).join("cv.pdf"), &folder, Cv).as_deref(), Ok("cv.pdf"));
         assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
         root_holds_only_subfolders(&folder);
     }
@@ -446,7 +580,7 @@ mod tests {
         let (_root, folder, _) = places();
         let loose = folder.join(DOCUMENTS).join("cv.pdf");
         fs::write(&loose, pdf(1)).unwrap();
-        assert_eq!(FileCopier.copy(&loose, &folder, Cv).as_deref(), Ok("cv.pdf"));
+        assert_eq!(copier(&folder).copy(&loose, &folder, Cv).as_deref(), Ok("cv.pdf"));
         assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"]);
         assert_eq!(fs::read(&loose).unwrap(), pdf(1), "nothing moved");
         assert_eq!(names(&folder.join(DOCUMENTS)), ["cv", "cv.pdf"]);

@@ -40,7 +40,7 @@ pub fn first_run(data: &Path, current: &str, documents: PathBuf, helpers: Helper
 /// that it holds, which stays in `data`. Its documents are copied into the folder's `documents/`, and its `/setup` runs
 /// on the shell's `RunDesk`. `repaint` wakes the window when the worker that reads or copies the documents has news.
 pub fn profile_run(data: &Path, folder: PathBuf, progress: Progress, repaint: Arc<dyn Fn() + Send + Sync>, today: NaiveDate) -> ProfileRun {
-    ProfileRun::new(Arc::new(ProgressFile::new(data)), progress, folder, Arc::new(FileCopier), repaint, today)
+    ProfileRun::new(Arc::new(ProgressFile::new(data)), progress, folder, Arc::new(FileCopier::new(downloads(data))), repaint, today)
 }
 
 /// The Computer step: Python, Bun and LaTeX found and run the way the tool check does, so Python as a task runs

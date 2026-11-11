@@ -580,7 +580,8 @@ pub fn phase_of(run: Option<&Run>, path_a_sent: bool, root: &Path, cv: &CvShelf,
     at_turn_end(run, root, cv, without_pdfs)
 }
 
-/// The phase of a turn that ended cleanly with nothing open.
+/// The phase of a turn that ended cleanly with nothing open. A turn that asks numbered questions or proposes changes is
+/// never the end, whatever else it says.
 fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool) -> ProfilePhase {
     let message = last_message(run).unwrap_or_default();
     let read = read_message(&message);
@@ -588,18 +589,18 @@ fn at_turn_end(run: &Run, root: &Path, cv: &CvShelf, without_pdfs: bool) -> Prof
         return ProfilePhase::Review { message, batch };
     }
     if !without_pdfs
-        && wrote_cv(run, root)
+        && built_cv(run, root)
         && let Some(pdf) = fresh_pdf(run, cv)
     {
         return ProfilePhase::CvCheck { message, pdf };
     }
+    if let Message::Questions(batch) = read {
+        return ProfilePhase::Sheet { message, batch };
+    }
     if setup_complete(run, &message) {
         return ProfilePhase::Done;
     }
-    match read {
-        Message::Questions(batch) => ProfilePhase::Sheet { message, batch },
-        _ => ProfilePhase::FallbackSheet { message },
-    }
+    ProfilePhase::FallbackSheet { message }
 }
 
 /// `text` as plain lower-case text, without hidden characters.
@@ -607,9 +608,15 @@ fn plain(text: &str) -> String {
     visible_chars(text).collect::<String>().to_lowercase()
 }
 
-/// Whether `text` says setup is complete.
+/// Whether `text` says setup is complete, as whole words: "Setup complete!" counts, and "so setup completes" or "setup
+/// completed" do not.
 fn says_complete(text: &str) -> bool {
-    plain(text).contains(SETUP_COMPLETE)
+    let text = plain(text);
+    text.match_indices(SETUP_COMPLETE).any(|(at, _)| {
+        let before = text[..at].chars().next_back().is_some_and(char::is_alphanumeric);
+        let after = text[at + SETUP_COMPLETE.len()..].chars().next().is_some_and(char::is_alphanumeric);
+        !before && !after
+    })
 }
 
 /// Whether `text` names Path A, as a word: "Path A:" counts, and "path about" does not.
@@ -618,16 +625,31 @@ fn names_path_a(text: &str) -> bool {
     text.match_indices(PATH_A).any(|(at, _)| !text[at + PATH_A.len()..].starts_with(char::is_alphanumeric))
 }
 
-/// Whether the turn says setup is complete, or answers the CV check of a turn that said so: the CV check shows before
-/// the end once, and the end follows the user's Looks good.
+/// Whether the turn ends setup: it says setup is complete, or it answers the user's "The CV looks good." after an
+/// earlier turn of the run said so. That earlier turn may have shown the CV check, and a change asked for there keeps
+/// it said. Read from the run's own rows, so it holds after a restore.
 fn setup_complete(run: &Run, message: &str) -> bool {
     if says_complete(message) {
         return true;
     }
     let start = run.current_turn_start();
-    let answered_check =
+    let answers_check =
         start.checked_sub(1).and_then(|at| run.activity.get(at)).is_some_and(|row| matches!(&row.kind, ActivityKind::You(text) if text == CV_LOOKS_GOOD));
-    answered_check && previous_turn_message(run, start - 1).is_some_and(|text| says_complete(&text))
+    answers_check && earlier_turns_said_complete(run, start)
+}
+
+/// Whether a turn before the row at `start` said setup is complete in its last top-level message.
+fn earlier_turns_said_complete(run: &Run, start: usize) -> bool {
+    let mut last: Option<&str> = None;
+    let mut said = false;
+    for activity in &run.activity[..start.min(run.activity.len())] {
+        match &activity.kind {
+            ActivityKind::You(_) => said |= last.take().is_some_and(says_complete),
+            ActivityKind::Claude(text) if !activity.nested => last = Some(text),
+            _ => {}
+        }
+    }
+    said || last.is_some_and(says_complete)
 }
 
 /// Whether Claude's last turn asks for the documents path and Jobdesk has not sent it in this run.
@@ -654,19 +676,15 @@ fn last_message(run: &Run) -> Option<String> {
     })
 }
 
-/// The last top-level message of the turn before the user's message at `you`.
-fn previous_turn_message(run: &Run, you: usize) -> Option<String> {
-    run.activity[..you].iter().rev().take_while(|activity| !matches!(activity.kind, ActivityKind::You(_))).find_map(|activity| match &activity.kind {
-        ActivityKind::Claude(text) if !activity.nested => Some(text.clone()),
-        _ => None,
-    })
-}
-
-/// Whether the current turn wrote under `cv/` or built a PDF there.
-fn wrote_cv(run: &Run, root: &Path) -> bool {
+/// Whether the current turn built a CV PDF: it ran a LaTeX build, or wrote a `.pdf` under `cv/`. Only a build changes
+/// the PDF, and each turn ends once, so a PDF the user answered never shows its check again, before or after a
+/// restore: their answer starts a new turn, and that one shows the check only for a PDF it builds again.
+fn built_cv(run: &Run, root: &Path) -> bool {
     let root = root.to_string_lossy();
     run.activity.iter().skip(run.current_turn_start()).any(|activity| match &activity.kind {
-        ActivityKind::Tool { name, summary, .. } => tool_line(&root, name, summary) == Some(MAKING_CV),
+        ActivityKind::Tool { name, summary, .. } => {
+            tool_line(&root, name, summary) == Some(MAKING_CV) && (name == "Bash" || summary.to_lowercase().ends_with(".pdf"))
+        }
         _ => false,
     })
 }
@@ -1305,6 +1323,88 @@ mod tests {
         f.ends_turn();
         f.poll();
         assert_eq!(f.profile.phase(), &ProfilePhase::Done);
+    }
+
+    #[test]
+    fn setup_complete_is_whole_words() {
+        assert!(says_complete("**Setup complete!** Here's what was generated."));
+        assert!(says_complete("Setup\u{200b} COMPLETE."));
+        assert!(says_complete("setup complete"));
+        for text in
+            ["A few last questions so setup completes properly.", "Once setup completed, run /scrape.", "Setup completion takes a while.", "resetup complete"]
+        {
+            assert!(!says_complete(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn numbered_questions_are_never_done_whatever_they_say() {
+        for message in [
+            "A few last questions so setup completes properly:\n\n1. Which city do you live in?\n2. What salary would you accept?",
+            "Setup complete, almost. Two last checks:\n\n1. Is Lowmere right?\n2. Is the salary right?",
+        ] {
+            let mut f = fixture();
+            f.at(message);
+            assert!(matches!(f.profile.phase(), ProfilePhase::Sheet { .. }), "{message}: {:?}", f.profile.phase());
+        }
+        let mut proposal = fixture();
+        proposal.at(&format!("Setup complete once these are in.\n\n{SIXTEEN}"));
+        assert!(matches!(proposal.profile.phase(), ProfilePhase::Review { .. }));
+    }
+
+    /// At a turn that said setup is complete and built the CV, with its check showing.
+    fn at_complete_with_a_cv(f: &mut Fixture) -> String {
+        let id = f.at(FIVE);
+        f.profile.send_answers(&mut f.desk, &[]).unwrap();
+        f.tool("b", "Bash", "cd cv && lualatex main_example.tex");
+        f.says(COMPLETE);
+        f.ends_turn();
+        f.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(30));
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::CvCheck { .. }));
+        id
+    }
+
+    #[test]
+    fn a_change_asked_at_the_cv_check_keeps_setup_complete_for_the_looks_good_after_it() {
+        let mut f = fixture();
+        at_complete_with_a_cv(&mut f);
+        f.profile.send_text(&mut f.desk, "Put my phone number on the first line.").unwrap();
+        f.tool("w", "Edit", &format!("{ROOT}/cv/main_example.tex"));
+        f.tool("b2", "Bash", "cd cv && lualatex main_example.tex");
+        f.says("I moved the phone number. Have another look.");
+        f.ends_turn();
+        f.cv = cv_with_pdf(now() + chrono::TimeDelta::minutes(40));
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::CvCheck { .. }), "the rebuilt PDF");
+        f.profile.cv_looks_good(&mut f.desk).unwrap();
+        f.says("Glad it reads well.");
+        f.ends_turn();
+        f.poll();
+        assert_eq!(f.profile.phase(), &ProfilePhase::Done);
+    }
+
+    #[test]
+    fn the_cv_check_never_shows_twice_for_the_same_pdf_also_after_a_restore() {
+        let mut f = fixture();
+        let id = at_complete_with_a_cv(&mut f);
+        let unanswered = Restored(read_back(f.desk.run(&id).unwrap()));
+        let mut again = fixture_with(f.record(), Some(&unanswered));
+        again.cv = f.cv.clone();
+        again.poll();
+        assert!(matches!(again.profile.phase(), ProfilePhase::CvCheck { .. }), "a check not answered yet shows again");
+
+        f.profile.send_text(&mut f.desk, "Shorter, please.").unwrap();
+        f.tool("w", "Edit", &format!("{ROOT}/cv/main_example.tex"));
+        f.says("I shortened the summary in the source. Shall I go on?");
+        f.ends_turn();
+        f.poll();
+        assert!(matches!(f.profile.phase(), ProfilePhase::FallbackSheet { .. }), "no build, so the same PDF: no second check");
+        let restored = Restored(read_back(f.desk.run(&id).unwrap()));
+        let mut after = fixture_with(f.record(), Some(&restored));
+        after.cv = f.cv.clone();
+        after.poll();
+        assert!(matches!(after.profile.phase(), ProfilePhase::FallbackSheet { .. }), "nor after a restore");
     }
 
     #[test]

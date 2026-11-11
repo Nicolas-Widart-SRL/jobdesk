@@ -76,3 +76,4 @@ PR 71 tests/ai_job_search_release.rs: a skill in the folder of a needed command 
 PR 71 tests/ai_job_search_release.rs: in front matter that does not parse, a double-quoted `name:` value with an escape, such as `"add\x2dtemplate"`, was kept literally, so the skill matched no command while YAML decodes it to the command's name. Class: check and use disagree.
 PR 70 ARCHITECTURE.md: doubled verb after "so do" in a merged sentence. Class: docs grammar after merge.
 PR 70 src/onboarding/infrastructure/document_copy.rs: recovery cleanup walked sibling folders without the link check the write path had. Class: path checks on every folder an operation touches.
+PR 74 README.md: shortened API key bullet dropped Test connection and the key's onward route to the API endpoint. Class: docs-overstated-guarantee.

@@ -978,7 +978,7 @@ fn lay_out(message: &str, batch: &Batch) -> Laid {
     // A bold line alone, as its own paragraph, heads the items under it as a group's title. The rest stays Markdown.
     let flush = |prose: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
         let mut kept: Vec<&str> = Vec::new();
-        let mut keep = |kept: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
+        let keep = |kept: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
             let text = kept.join("\n").trim().to_owned();
             if !text.is_empty() {
                 parts.push(LaidPart::Prose(text));

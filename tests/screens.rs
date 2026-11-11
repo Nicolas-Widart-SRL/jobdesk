@@ -7298,6 +7298,46 @@ mod first_run {
         render_first_run(Script { record: Some(record), ..Script::default() }, Theme::Light, "onboarding_resume_light", &[], "Continue setup");
     }
 
+    /// The Folder and Computer steps done, with a draft kept: the welcome back offers Finish my profile.
+    #[test]
+    fn onboarding_resume_profile_light() {
+        let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("onboarding_resume_profile_light/home/Documents/Job search");
+        let draft = jobdesk::onboarding::application::Draft { run: "r1".into(), turn: 3, answers: vec![(1, "Design Lead".into())], text: String::new() };
+        let record = Progress {
+            folder: Some(folder),
+            done: BTreeSet::from([Step::Folder, Step::Computer]),
+            stopped: Some(today()),
+            run: Some("r1".into()),
+            draft: Some(draft),
+            ..Progress::default()
+        };
+        render_first_run(Script { record: Some(record), ..Script::default() }, Theme::Light, "onboarding_resume_profile_light", &[], "Finish my profile");
+    }
+
+    /// With a data folder, Continue after the Computer step opens the folder and the Profile chapter over it, and the
+    /// window grows to the app's size once.
+    #[test]
+    fn continue_after_the_computer_step_enters_the_profile_chapter() {
+        use egui::ViewportCommand::InnerSize;
+        let (shell, home) = first_run_shell("continue_enters_profile", Script::default());
+        let data = home.join("data");
+        fs::create_dir_all(&data).unwrap();
+        let (mut harness, shell) = shared_first_window(shell.with_data_folder(data));
+        for step in TO_INSTALL {
+            click(&mut harness, step);
+        }
+        until(&mut harness, |harness| harness.query_by_label("Continue").is_some_and(|node| !node.accesskit_node().is_disabled()), "Continue turning on");
+        harness.get_by_label("Continue").click();
+        let sent = sent_over(&mut harness, 12);
+        until_shown(&mut harness, "Tell Jobdesk about you");
+        let grown = sent.iter().filter(|command| matches!(command, InnerSize(_))).count();
+        assert_eq!(grown, 1, "one grow: {sent:?}");
+        assert_eq!(harness.ctx.content_rect().size(), egui::vec2(1280.0, 820.0));
+        assert!(shell.borrow().in_profile_setup());
+        assert!(shell.borrow_mut().first_run_mut().is_none(), "the Folder and Computer steps are behind");
+        assert!(harness.query_by_label("New task").is_none(), "no menu in the chapter");
+    }
+
     #[test]
     fn onboarding_place_light() {
         render_first_run(Script::default(), Theme::Light, "onboarding_place_light", &["Start setup"], "Save here");
@@ -7402,7 +7442,7 @@ mod first_run {
     }
 
     #[test]
-    fn continue_without_pdfs_leads_on_to_today_in_the_folder() {
+    fn continue_without_pdfs_with_no_data_folder_opens_today_in_the_folder() {
         let script = Script { here: vec![Helper::Python, Helper::Bun], fails: BTreeMap::from([(Helper::Latex, SetupFailure::Offline)]), ..Script::default() };
         let (mut shell, home) = first_run_shell("continue_without_pdfs_leads_on", script);
         let mut harness = first_window_on(&mut shell);
@@ -7677,6 +7717,8 @@ mod profile_chapter {
         calls: SharedCalls,
         root: PathBuf,
         desktop: PathBuf,
+        /// The fictional data folder that holds the progress record.
+        data: PathBuf,
         opened: Rc<RefCell<Vec<String>>>,
     }
 
@@ -7721,7 +7763,78 @@ mod profile_chapter {
                     });
                     seen.borrow_mut().extend(urls);
                 });
-        Scene { shell, harness, sink, calls, root, desktop, opened }
+        Scene { shell, harness, sink, calls, root, desktop, data, opened }
+    }
+
+    /// What eframe keeps between launches, in memory.
+    #[derive(Default)]
+    struct Kept(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for Kept {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    impl Scene {
+        /// The folder the shell would open on the next launch, as eframe saves it.
+        fn remembered(&self) -> Option<String> {
+            let mut kept = Kept::default();
+            eframe::App::save(&mut *self.shell.borrow_mut(), &mut kept);
+            kept.0.get("workspace").cloned()
+        }
+
+        /// The progress record as it stands in the data folder.
+        fn record(&self) -> Option<String> {
+            fs::read_to_string(self.data.join("onboarding.json")).ok()
+        }
+    }
+
+    /// The record stays through the chapter and goes when the recap opens. The setup folder is remembered only from then.
+    #[test]
+    fn the_recap_clears_the_record_and_the_folder_is_remembered_from_then() {
+        let mut scene = scene("recap_clears_record", Theme::Light, false);
+        assert_eq!(scene.remembered(), None, "not while the profile is not built");
+        scene.past_five();
+        assert!(scene.record().is_some(), "the record stays while setup goes on");
+        assert_eq!(scene.remembered(), None);
+        scene.says(COMPLETE);
+        scene.until_shown("Your job search is ready");
+        assert_eq!(scene.record(), None, "the recap clears it");
+        assert_eq!(scene.remembered(), Some(scene.root.display().to_string()));
+    }
+
+    /// Another folder opened during setup leaves the chapter, and that folder is remembered.
+    #[test]
+    fn another_folder_opened_during_setup_is_remembered() {
+        let scene = scene("other_folder_during_setup", Theme::Light, false);
+        let theirs = scene.root.parent().unwrap().join("Their search");
+        sample_workspace(&theirs);
+        let ctx = scene.harness.ctx.clone();
+        scene.shell.borrow_mut().choose_folder_from(&ctx, theirs.clone());
+        assert!(!scene.shell.borrow().in_profile_setup(), "the chapter is left");
+        assert_eq!(scene.remembered(), Some(theirs.display().to_string()));
+    }
+
+    /// A draft that waits for its next write is written as the window closes.
+    #[test]
+    fn closing_the_window_writes_a_waiting_draft() {
+        let mut scene = scene("exit_writes_draft", Theme::Light, false);
+        scene.at(FIVE);
+        scene.until_shown("Claude has 5 questions");
+        scene.type_into(0, "Design Lead");
+        scene.type_into(1, "The whole studio");
+        assert!(scene.shell.borrow_mut().profile_setup_mut().unwrap().is_unsaved(), "the second answer waits for its write");
+        assert!(!scene.record().unwrap_or_default().contains("The whole studio"));
+        eframe::App::on_exit(&mut *scene.shell.borrow_mut());
+        assert!(scene.record().unwrap_or_default().contains("The whole studio"), "written as the window closed");
     }
 
     impl Scene {

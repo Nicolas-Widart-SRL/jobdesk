@@ -408,6 +408,12 @@ impl Shell {
         Self { profile_setup: Some(setup), setup_pending: true, screen: Screen::InTray, ..self }
     }
 
+    /// Keeps the shell's own files, and first-run setup's Profile chapter, in `data`, as a launch does, for tests that
+    /// give a fictional data folder.
+    pub fn with_data_folder(self, data: PathBuf) -> Self {
+        Self { data: Some(data), ..self }
+    }
+
     /// The Profile chapter's run while it shows, for tests that act on it as its screens would.
     pub fn profile_setup_mut(&mut self) -> Option<&mut ProfileRun> {
         self.profile_setup.as_mut().map(|setup| &mut setup.run)
@@ -687,6 +693,8 @@ impl Shell {
                 // its folder, starts again once it has opened.
                 self.leave_first_run();
                 self.leave_profile_setup();
+                // A folder the user opened is remembered. Setup marks its own folder again once it has opened.
+                self.setup_pending = false;
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }

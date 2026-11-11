@@ -11,5 +11,5 @@ pub use folder::{Contents, FOLDER_NAME, Place, suggested_folder};
 #[cfg(target_os = "macos")]
 pub use helpers::OWN_FOLDER;
 pub use helpers::{Arch, Artifact, HELPERS, Helper, HelperInstaller, HelperProbe, InstallPhase, Layout, Outcome};
-pub use progress::{Draft, Progress, ProgressStore, Step};
+pub use progress::{Draft, Progress, ProgressStore, Saved, Step};
 pub use replies::{CV_LOOKS_GOOD, LitBy, PATH_A_REPLY, PICK_UP_REPLY, PROGRESS_LINES, ProgressLine, joined_reply, review_reply, tool_line};

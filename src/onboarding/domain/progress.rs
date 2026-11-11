@@ -76,11 +76,20 @@ impl fmt::Debug for Draft {
     }
 }
 
+/// What a save wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Saved {
+    /// The whole record, the draft included.
+    Whole,
+    /// Everything but the draft, which would have made the record too long to read back.
+    WithoutDraft,
+}
+
 /// Where the progress record is kept.
 pub trait ProgressStore: Send + Sync {
     /// `None` when no setup has started, or the last one got past the Computer step.
     fn load(&self) -> Result<Option<Progress>, LoadError>;
-    fn save(&self, progress: &Progress) -> Result<(), LoadError>;
+    fn save(&self, progress: &Progress) -> Result<Saved, LoadError>;
     /// Forgets the record, once setup is finished.
     fn clear(&self) -> Result<(), LoadError>;
 }

@@ -2,7 +2,10 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use hayro::hayro_syntax::Pdf;
 
@@ -29,27 +32,85 @@ impl DocumentCopier for FileCopier {
         Ok(page_count(bytes))
     }
 
+    /// The bytes go to a hidden part file in `documents/` first, on disk before the copy takes its name, so a crash
+    /// never leaves a cut PDF under a real name. The name is then linked to the part file, which fails on any name
+    /// already there, a link included, so nothing is written over. Part files a copy left more than
+    /// `STRAY_PART_AGE` ago are removed first.
     fn copy(&self, source: &Path, folder: &Path) -> Result<String, CopyFailure> {
         let name = shown_name(source);
         by_name(&name).map_err(CopyFailure::Refused)?;
         let mut file = open_regular(source).map_err(CopyFailure::Refused)?;
         let documents = documents_folder(folder)?;
-        if let Some(kept) = already_inside(source, &documents) {
+        let canonical = fs::canonicalize(&documents).map_err(|_| CopyFailure::NoDocumentsFolder)?;
+        if let Some(kept) = already_inside(source, &canonical) {
             return Ok(kept);
         }
-        let name = copy_name(&name);
-        for number in 1..=MAX_NUMBER {
-            let candidate = if number == 1 { name.clone() } else { numbered(&name, number) };
-            let target = documents.join(&candidate);
-            // Fails on any name already there, a link included, and never follows one.
-            match OpenOptions::new().write(true).create_new(true).open(&target) {
-                Ok(out) => return write_copy(&mut file, out, &target).map(|()| candidate),
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-                Err(_) => return Err(CopyFailure::Failed),
-            }
+        clear_stray_parts(&documents);
+        let part = documents.join(part_name());
+        let out = OpenOptions::new().write(true).create_new(true).open(&part).map_err(|_| CopyFailure::Failed)?;
+        if !stays_in(&part, &canonical) {
+            let _ = fs::remove_file(&part);
+            return Err(CopyFailure::NoDocumentsFolder);
         }
-        Err(CopyFailure::NoFreeName)
+        write_copy(&mut file, out, &part)?;
+        let placed = place(&part, &documents, &canonical, &copy_name(&name));
+        let _ = fs::remove_file(&part);
+        placed
     }
+}
+
+/// What a part file's name starts and ends with.
+const PART_PREFIX: &str = ".jobdesk-copy-";
+const PART_SUFFIX: &str = ".part";
+
+/// A part file older than this belongs to a copy that never finished: a copy takes seconds.
+const STRAY_PART_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// A part file name no other copy uses: this process's id and a count.
+fn part_name() -> String {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    format!("{PART_PREFIX}{}-{}{PART_SUFFIX}", process::id(), COUNT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Removes the part files that copies which never finished left in `documents/`. Only regular files of that name and
+/// age go: a link is left alone, and so is the part file of a copy under way.
+fn clear_stray_parts(documents: &Path) {
+    let Ok(entries) = fs::read_dir(documents) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(PART_PREFIX) || !name.ends_with(PART_SUFFIX) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else { continue };
+        let old = meta.modified().ok().and_then(|at| SystemTime::now().duration_since(at).ok()).is_some_and(|age| age > STRAY_PART_AGE);
+        if meta.is_file() && old {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Gives the copy in `part` its name, `name` or the first free numbered one, never over a file.
+fn place(part: &Path, documents: &Path, canonical: &Path, name: &str) -> Result<String, CopyFailure> {
+    for number in 1..=MAX_NUMBER {
+        let candidate = if number == 1 { name.to_owned() } else { numbered(name, number) };
+        let target = documents.join(&candidate);
+        match fs::hard_link(part, &target) {
+            Ok(()) if stays_in(&target, canonical) => return Ok(candidate),
+            Ok(()) => {
+                let _ = fs::remove_file(&target);
+                return Err(CopyFailure::NoDocumentsFolder);
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(CopyFailure::Failed),
+        }
+    }
+    Err(CopyFailure::NoFreeName)
+}
+
+/// Whether the file at `path` sits directly in the folder that `canonical` names, links resolved: a best-effort check
+/// that `documents/` was not swapped for a link while the copy ran.
+fn stays_in(path: &Path, canonical: &Path) -> bool {
+    fs::canonicalize(path).is_ok_and(|resolved| resolved.parent() == Some(canonical))
 }
 
 /// Opens `path` for reading only when it is a regular file and not a link, and checks that the handle reads the very
@@ -112,14 +173,15 @@ fn documents_folder(folder: &Path) -> Result<PathBuf, CopyFailure> {
     }
 }
 
-/// The name of a file the user added from `documents/` itself, which needs no copy.
-fn already_inside(source: &Path, documents: &Path) -> Option<String> {
-    let (source, documents) = (fs::canonicalize(source).ok()?, fs::canonicalize(documents).ok()?);
-    (source.parent() == Some(documents.as_path())).then(|| source.file_name().map(|name| name.to_string_lossy().into_owned())).flatten()
+/// The name of a file the user added from `documents/` itself, whose links-resolved path is `canonical`, which needs no
+/// copy.
+fn already_inside(source: &Path, canonical: &Path) -> Option<String> {
+    let source = fs::canonicalize(source).ok()?;
+    (source.parent() == Some(canonical)).then(|| source.file_name().map(|name| name.to_string_lossy().into_owned())).flatten()
 }
 
-/// Copies what `file` reads into the new `out`, on disk before it returns. A copy that fails or grows past the limit is
-/// removed, so no half file stays.
+/// Copies what `file` reads into the new part file `out`, on disk before it returns. A part file that fails or grows past
+/// the limit is removed.
 fn write_copy(file: &mut File, mut out: File, target: &Path) -> Result<(), CopyFailure> {
     let written = io::copy(&mut file.take(MAX_DOCUMENT + 1), &mut out).and_then(|copied| out.flush().and_then(|()| out.sync_all()).map(|()| copied));
     drop(out);
@@ -279,6 +341,36 @@ mod tests {
         let linked = root.path().join("Linked search");
         std::os::unix::fs::symlink(&folder, &linked).unwrap();
         assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &linked), Err(CopyFailure::NoDocumentsFolder), "nor a job search folder that is one");
+    }
+
+    #[test]
+    fn a_copy_leaves_no_part_file_and_clears_a_stray_one() {
+        let (_root, folder, desktop) = places();
+        let documents = folder.join(DOCUMENTS);
+        let stray = documents.join(format!("{PART_PREFIX}1-0{PART_SUFFIX}"));
+        let under_way = documents.join(format!("{PART_PREFIX}2-0{PART_SUFFIX}"));
+        fs::write(&stray, b"half a PDF").unwrap();
+        fs::write(&under_way, b"a copy under way").unwrap();
+        File::options().write(true).open(&stray).unwrap().set_modified(SystemTime::now() - STRAY_PART_AGE * 2).unwrap();
+        fs::write(desktop.join("cv.pdf"), pdf(1)).unwrap();
+        assert_eq!(FileCopier.copy(&desktop.join("cv.pdf"), &folder).as_deref(), Ok("cv.pdf"));
+        assert_eq!(names(&documents), [format!("{PART_PREFIX}2-0{PART_SUFFIX}"), "cv.pdf".to_owned()], "the stray part went, the fresh one stayed");
+        assert_eq!(fs::read(documents.join("cv.pdf")).unwrap(), pdf(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_reached_through_a_link_does_not_stay_in_documents() {
+        let (root, folder, _) = places();
+        let documents = folder.join(DOCUMENTS);
+        let canonical = fs::canonicalize(&documents).unwrap();
+        fs::write(documents.join("cv.pdf"), b"x").unwrap();
+        assert!(stays_in(&documents.join("cv.pdf"), &canonical));
+        let elsewhere = root.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        fs::write(elsewhere.join("cv.pdf"), b"x").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, folder.join("swapped")).unwrap();
+        assert!(!stays_in(&folder.join("swapped").join("cv.pdf"), &canonical));
     }
 
     #[test]

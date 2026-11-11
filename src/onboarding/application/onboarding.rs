@@ -487,9 +487,9 @@ mod tests {
         fn load(&self) -> Result<Option<Progress>, LoadError> {
             Ok(self.0.lock().unwrap().clone())
         }
-        fn save(&self, progress: &Progress) -> Result<(), LoadError> {
+        fn save(&self, progress: &Progress) -> Result<crate::onboarding::domain::Saved, LoadError> {
             *self.0.lock().unwrap() = Some(progress.clone());
-            Ok(())
+            Ok(crate::onboarding::domain::Saved::Whole)
         }
         fn clear(&self) -> Result<(), LoadError> {
             *self.0.lock().unwrap() = None;
@@ -950,7 +950,7 @@ mod tests {
         fn load(&self) -> Result<Option<Progress>, LoadError> {
             Ok(None)
         }
-        fn save(&self, _: &Progress) -> Result<(), LoadError> {
+        fn save(&self, _: &Progress) -> Result<crate::onboarding::domain::Saved, LoadError> {
             Err(LoadError::new("onboarding.json", "read-only disk"))
         }
         fn clear(&self) -> Result<(), LoadError> {

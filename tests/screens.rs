@@ -7017,7 +7017,7 @@ mod first_run {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use jobdesk::onboarding::application::{
-        Contents, Failure as SetupFailure, Helper, HelperInstaller, HelperProbe, HelperSetup, InstallPhase, Onboarding, Phase, Progress, ProgressStore,
+        Contents, Failure as SetupFailure, Helper, HelperInstaller, HelperProbe, HelperSetup, InstallPhase, Onboarding, Phase, Progress, ProgressStore, Saved,
         SourceFetcher, Step, Unpacker,
     };
     use jobdesk::shared_kernel::LoadError;
@@ -7043,9 +7043,9 @@ mod first_run {
         fn load(&self) -> Result<Option<Progress>, LoadError> {
             Ok(self.0.lock().unwrap().clone())
         }
-        fn save(&self, progress: &Progress) -> Result<(), LoadError> {
+        fn save(&self, progress: &Progress) -> Result<Saved, LoadError> {
             *self.0.lock().unwrap() = Some(progress.clone());
-            Ok(())
+            Ok(Saved::Whole)
         }
         fn clear(&self) -> Result<(), LoadError> {
             *self.0.lock().unwrap() = None;

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::onboarding::domain::{Draft, Progress, ProgressStore, Step};
+use crate::onboarding::domain::{Draft, Progress, ProgressStore, Saved, Step};
 use crate::shared_kernel::LoadError;
 use crate::shared_kernel::dates::parse_iso_date;
 
@@ -98,16 +98,19 @@ impl ProgressStore for ProgressFile {
     }
 
     /// A draft so long that the record would pass the size it is read back at is left out of the file, and stays only
-    /// in memory: a record that no longer reads would lose every step done.
-    fn save(&self, progress: &Progress) -> Result<(), LoadError> {
+    /// in memory, and the save says so: a record that no longer reads would lose every step done.
+    fn save(&self, progress: &Progress) -> Result<Saved, LoadError> {
         let text = |record: &Record| serde_json::to_string_pretty(record).map_err(|error| LoadError::new(FILE, error));
         let mut record = record_from(progress);
         let mut written = text(&record)?;
+        let mut saved = Saved::Whole;
         if written.len() as u64 > MAX_SIZE {
             record.draft = Value::Null;
             written = text(&record)?;
+            saved = Saved::WithoutDraft;
         }
-        self.replace(&written).map_err(|error| LoadError::new(FILE, error))
+        self.replace(&written).map_err(|error| LoadError::new(FILE, error))?;
+        Ok(saved)
     }
 
     fn clear(&self) -> Result<(), LoadError> {
@@ -279,8 +282,10 @@ mod tests {
         let file = ProgressFile::new(data.path());
         let long = Draft { run: "r1".into(), turn: 2, answers: vec![(1, "a".repeat(MAX_SIZE as usize))], text: String::new() };
         let progress = Progress { run: Some("r1".into()), draft: Some(long), ..progress() };
-        file.save(&progress).unwrap();
-        assert_eq!(file.load().unwrap(), Some(Progress { draft: None, ..progress }), "every step done still reads");
+        assert_eq!(file.save(&progress).unwrap(), Saved::WithoutDraft, "the save says so");
+        assert_eq!(file.load().unwrap(), Some(Progress { draft: None, ..progress.clone() }), "every step done still reads");
+        let short = Progress { draft: Some(Draft { answers: vec![(1, "a".into())], ..progress.draft.clone().unwrap() }), ..progress };
+        assert_eq!(file.save(&short).unwrap(), Saved::Whole);
     }
 
     #[test]

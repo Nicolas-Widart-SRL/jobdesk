@@ -134,6 +134,8 @@ pub struct Queue {
     pub undo: Option<UndoOffer>,
     pub marks: Vec<Mark>,
     pub unranked: usize,
+    /// A run works, so the search or the scoring Today would suggest may be under way, and it suggests neither.
+    pub busy: bool,
     pub today: NaiveDate,
     /// How far ahead Coming up looks, and dates rank as deadlines.
     pub horizon: ComingUp,
@@ -213,7 +215,7 @@ impl Queue {
     }
 
     /// `missing` names the sources that could not be read, as they should read at the start of a sentence. `profile`
-    /// says whether the folder holds a profile with a topic written, so the first-search offer may call it ready.
+    /// says whether every profile topic is filled, so the first-search offer may call the profile ready.
     pub fn today_subtitle(&self, missing: &[&str], profile: bool) -> String {
         match self.first_steps(missing) {
             FirstSteps::NoJobs if profile => return "Your profile is ready. Find your first jobs, and Today deals them to you.".to_owned(),
@@ -508,14 +510,15 @@ impl InTray {
             .map(|decision| Cleared { name: decision.name.clone(), label: decision.label() })
             .collect();
         // While a run works, the search or the scoring Today would suggest may be under way, so it suggests neither.
+        let busy = sources.runs.iter().any(|run| run.is_busy());
         let board = match sources.board.first_search() {
-            _ if sources.runs.iter().any(|run| run.is_busy()) => FirstSteps::Past,
+            _ if busy => FirstSteps::Past,
             _ if sources.board.is_empty() => FirstSteps::NoJobs,
             Some(found) => FirstSteps::Unscored(found),
             None => FirstSteps::Past,
         };
         let unranked = sources.board.count(Lane::New);
-        Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked, today, horizon, board }
+        Queue { cards, set_aside, cleared, undo: self.undo_offer(today), marks, unranked, busy, today, horizon, board }
     }
 
     /// Puts this card on top and keeps it there until it is decided.

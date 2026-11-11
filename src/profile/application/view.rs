@@ -190,6 +190,24 @@ pub struct TopicCounts {
     pub any_found: bool,
 }
 
+impl TopicCounts {
+    /// The folder holds a profile and every topic of it could be read.
+    fn readable(&self) -> bool {
+        self.any_found && self.hidden == 0
+    }
+
+    /// Every topic is filled. Only then is the profile ready, and the Your profile slip gone for that reason.
+    pub fn is_full(&self) -> bool {
+        self.readable() && self.filled >= self.total
+    }
+
+    /// `filled` of `total`, while the profile is readable and not full: what the Your profile slip counts. A topic that
+    /// could not be read may be filled, and a folder with no profile has nothing to count, so neither shows one.
+    pub fn to_fill(&self) -> Option<(usize, usize)> {
+        (self.readable() && !self.is_full()).then_some((self.filled, self.total))
+    }
+}
+
 pub fn topic_counts(view: &ProfileView) -> TopicCounts {
     let hidden = view.topics.iter().filter(|topic| topic.fill == Fill::Hidden).count();
     let filled = view.topics.iter().filter(|topic| topic.fill == Fill::Filled).count();
@@ -218,6 +236,22 @@ pub fn home_country(view: &ProfileView) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slip counts a profile that is readable and not full, and only a full one is ready, so the two never disagree.
+    #[test]
+    fn only_a_full_readable_profile_is_ready_and_the_slip_counts_the_rest() {
+        let counts = |filled, hidden, any_found| TopicCounts { filled, total: 11, hidden, any_found };
+        assert!(counts(11, 0, true).is_full());
+        assert_eq!(counts(11, 0, true).to_fill(), None);
+        for partial in [counts(0, 0, true), counts(1, 0, true), counts(10, 0, true)] {
+            assert!(!partial.is_full(), "{partial:?}");
+            assert_eq!(partial.to_fill(), Some((partial.filled, 11)));
+        }
+        for unknown in [counts(10, 1, true), counts(0, 0, false)] {
+            assert!(!unknown.is_full(), "{unknown:?}");
+            assert_eq!(unknown.to_fill(), None, "{unknown:?}");
+        }
+    }
 
     const CANDIDATE: &str = "# Candidate Profile\n\n## Identity\nName: Ada Quill\n\n## Professional Experience\nIntro line.\n\n### Lead Engineer - Calder Freight (2021 – present)\nShipped a thing.\n\n### [JOB_TITLE] - [COMPANY] ([START] - [END])\n- [ACHIEVEMENT]\n\n## Education\n[DEGREE] at [SCHOOL]\n\n## Technical Skills\nRust\n";
     const CLAUDE_MD: &str =

@@ -245,17 +245,10 @@ pub struct Shell {
     folder_update: FolderUpdate,
     /// Whether the folder update's details are open over the desk.
     notice_screen: NoticeScreen,
-    /// The run the launcher started from Today's first-search note, in memory only, until it finds its jobs or leaves
-    /// the desk. Jobs opens at that end only while it is open in Tasks.
-    first_search: Option<FirstSearchRun>,
-}
-
-/// The first search from Today, followed until a turn ends with its jobs found. A stop, a failure or a session ended
-/// while Claude asked keeps it: the user can resume the same run in Tasks, and that run's end still counts.
-struct FirstSearchRun {
-    id: String,
-    /// Whether Claude last ended its turn waiting on the user, so a session ended since found nothing.
-    asked: bool,
+    /// The id of the run the launcher started from Today's first-search note, in memory only, until it ends with its
+    /// jobs on the board or leaves the desk. Jobs opens at that end only while it is open in Tasks. A stop, a failure,
+    /// or an end with no job found keeps it: the user can resume the same run in Tasks, and that run's end still counts.
+    first_search: Option<String>,
 }
 
 /// The Profile chapter of first-run setup, and its recap once the run is done.
@@ -1429,28 +1422,24 @@ impl Shell {
 
     /// Once the first search from Today finds its jobs, Jobs opens, but only while that run is open in Tasks, so the
     /// screen never moves under a user who went elsewhere. Otherwise Today offers the scoring once the jobs are read.
-    /// A run that waits on the user has not ended. A search that failed, was stopped, or whose session the user ended
-    /// while Claude asked opens nothing and stays followed: resumed in Tasks, the same run's end opens Jobs.
+    /// A run that waits on the user has not ended. The search starts only from Today's empty board, so once its turn
+    /// got its result and nothing waits on the user, jobs on the board are the ones it found. That holds however the
+    /// frames fell, and once the process is gone too: a question Claude closed with, or a session the user ended there,
+    /// counts by what the search saved. A search that failed, was stopped, or saved nothing opens nothing and stays
+    /// followed: resumed in Tasks, the same run's end opens Jobs.
     fn follow_first_search(&mut self) {
-        let Some(search) = &mut self.first_search else { return };
-        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(&search.id)) else {
+        let Some(id) = &self.first_search else { return };
+        let Some(run) = self.desk.as_ref().and_then(|desk| desk.run(id)) else {
             self.first_search = None;
             return;
         };
-        if run.is_busy() {
-            search.asked = false;
-            return;
-        }
-        if wants_reply(run) {
-            search.asked = true;
-            return;
-        }
-        // Only a turn that got its result and ended well found the jobs, and a session ended while Claude asked did not.
-        let found = !search.asked && run.has_turn_result() && matches!(run.status, RunStatus::AwaitingReply | RunStatus::Closed);
+        // The snapshot read after the end may still be on its way: until it shows the jobs, the search stays followed.
+        let ended = !run.is_busy() && !wants_reply(run) && run.has_turn_result();
+        let found = ended && matches!(run.status, RunStatus::AwaitingReply | RunStatus::Closed) && !self.snapshot.board.is_empty();
         if !found {
             return;
         }
-        let open = self.screen == Screen::Runs && !self.settings_open && self.run_screen.selected() == Some(search.id.as_str());
+        let open = self.screen == Screen::Runs && !self.settings_open && self.run_screen.selected() == Some(id.as_str());
         if open {
             self.jobs.open_new();
             self.screen = Screen::Jobs;
@@ -1820,13 +1809,11 @@ impl Shell {
                     (false, true) => Some("Application dates are missing until the file is fixed."),
                     (false, false) => None,
                 };
-                // The slip stays until every topic is filled. A topic that could not be read may be, so it hides the slip.
+                // The slip stays until every topic is filled, and only then is the profile ready, so the two never disagree.
+                // A topic that could not be read may be filled, so it hides the slip and claims nothing.
                 let topics = profile::application::topic_counts(&snapshot.profile);
-                let partial = topics.any_found && topics.hidden == 0 && topics.filled < topics.total;
-                let profile = partial.then_some((topics.filled, topics.total));
-                // A folder with no profile file, or only its blanks, holds no profile the first-search offer may call ready.
-                let profile_written = topics.any_found && topics.filled > 0;
-                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts, profile, profile_written };
+                let (profile, profile_full) = (topics.to_fill(), topics.is_full());
+                let context = TodayContext { missing: &missing, missing_dates, alerts: &alerts, profile, profile_full };
                 if let Some(request) = self.tray.as_mut().and_then(|tray| intray::ui::show(ui, &mut self.today, tray, queue, &context, keys)) {
                     self.follow(ui.ctx(), request);
                 }
@@ -1971,7 +1958,7 @@ impl Shell {
                     match self.launcher.show(ui, desk, &rules) {
                         Some(LauncherRequest::Started(id)) => {
                             if noted == Some(LaunchNote::FirstSearch) {
-                                self.first_search = Some(FirstSearchRun { id: id.clone(), asked: false });
+                                self.first_search = Some(id.clone());
                             }
                             self.run_screen.select(id);
                             self.screen = Screen::Runs;

@@ -94,8 +94,9 @@ pub struct TodayContext<'a> {
     pub alerts: &'a dyn Fn(&mut Ui),
     /// How many profile topics are filled, of how many, while the profile is not full. Today shows a slip for it.
     pub profile: Option<(usize, usize)>,
-    /// Whether the folder holds a profile with a topic written, so the first-search offer may call it ready.
-    pub profile_written: bool,
+    /// Whether every profile topic is filled, so the first-search offer may call the profile ready. The slip is gone
+    /// then, and only then for that reason.
+    pub profile_full: bool,
 }
 
 /// Keys never fire while a text field has focus. Y does nothing on a card with no default.
@@ -180,7 +181,7 @@ pub fn show(ui: &mut Ui, screen: &mut TodayScreen, tray: &mut InTray, queue: &Qu
 fn head(ui: &mut Ui, queue: &Queue, context: &TodayContext) {
     let tally = queue.tally();
     let stamp = |ui: &mut Ui| dated_stamp(ui, queue.today, tally.total, tally.done);
-    let subtitle = queue.today_subtitle(context.missing, context.profile_written);
+    let subtitle = queue.today_subtitle(context.missing, context.profile_full);
     stamped_head(ui, stamp, &queue.today_headline(context.missing), &subtitle);
 }
 
@@ -541,6 +542,7 @@ fn actions(ui: &mut Ui, card: &Card, command_open: &mut Option<String>, pressed:
 }
 
 /// Nothing is left to decide, so the panel offers new work. Both buttons only open the launcher: the user starts the run there.
+/// While a task runs, that task may be the search or the scoring, so the panel offers neither.
 fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
     let height = ui.available_height();
     paper(ui, false, |ui| {
@@ -551,13 +553,15 @@ fn clear(ui: &mut Ui, queue: &Queue, pressed: &mut Option<Pressed>) {
             ui.label(rich(ui, "Want more to look at?", Type::SLIP_TITLE, Ink::Text));
             let intro = "Jobdesk can search your job sites for new ads and score them against your profile. Each opens as a task, and you start it there.";
             ui.label(rich(ui, intro, Type::BODY, Ink::Muted));
-            ui.horizontal(|ui| {
-                primary_command_action(ui, "Find new jobs", "/scrape");
-                if queue.unranked > 0 {
-                    let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
-                    command_action(ui, &format!("Score {jobs}"), "/rank");
-                }
-            });
+            if !queue.busy {
+                ui.horizontal(|ui| {
+                    primary_command_action(ui, "Find new jobs", "/scrape");
+                    if queue.unranked > 0 {
+                        let jobs = if queue.unranked == 1 { "1 new job".to_owned() } else { format!("{} new jobs", queue.unranked) };
+                        command_action(ui, &format!("Score {jobs}"), "/rank");
+                    }
+                });
+            }
             if let Some(returning) = queue.returning() {
                 let n = returning.count;
                 let (cards, verb, bring) = if n == 1 { ("card", "comes", "Bring it back now") } else { ("cards", "come", "Bring them back now") };

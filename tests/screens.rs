@@ -1417,9 +1417,11 @@ fn the_launcher_shortcut_works_while_typing() {
 fn the_tabs_use_plain_names() {
     let mut harness = tray_harness(probed(shell(Screen::InTray, "plain_tabs"), FixedTools));
     settle(&mut harness);
-    // Today's Your profile slip names Jobs and Profile too, so a tab's name is only looked for, not counted.
+    // Only tabs count, since Today's Your profile slip names Jobs and Profile too. A tab's label may add its status
+    // after a comma, as in "Tasks, 1 need you", so each is read up to there.
+    let tabs: Vec<String> = harness.get_all_by_role(egui::accesskit::Role::Tab).map(|tab| tab.accesskit_node().label().unwrap_or_default()).collect();
     for name in ["Today", "Jobs", "Applications", "Insights", "Tasks", "Profile", "Portals", "Setup"] {
-        assert!(harness.query_all_by_label_contains(name).count() > 0, "{name}");
+        assert!(tabs.iter().any(|tab| tab.split(',').next() == Some(name)), "{name} in {tabs:?}");
     }
     assert!(harness.query_by_label_contains("In-tray").is_none());
 }
@@ -2216,6 +2218,29 @@ fn find_new_jobs_opens_the_launcher_and_starts_nothing() {
     assert!(started.lock().unwrap().is_none(), "no run starts");
 }
 
+/// While a task runs, the search or the scoring may be under way, so the end panel offers neither.
+#[test]
+fn the_end_panel_offers_no_search_or_scoring_while_a_task_runs() {
+    let mut shell = shell(Screen::InTray, "tray_end_panel_busy");
+    *shell.desk_slot() = Some(desk_on(ScriptedGateway(SharedSink::default())));
+    let mut harness = tray_harness(shell);
+    for _ in 0..TRAY_CARDS {
+        press(&mut harness, Key::L);
+    }
+    assert!(is_shown(&harness, "Score 2 new jobs…"), "the sample board holds two unscored jobs");
+    harness.get_by_label("Find new jobs…").click();
+    harness.run_steps(3);
+    harness.get_by_label("Run").click();
+    harness.run_steps(3);
+    harness.get_by_label("Today").click();
+    harness.run_steps(3);
+
+    assert!(is_shown(&harness, "Want more to look at?"));
+    assert!(!is_shown(&harness, "Find new jobs…"), "the search may be under way");
+    assert!(!is_shown(&harness, "Score 2 new jobs…"), "the scoring may be under way");
+    assert!(is_shown(&harness, &format!("{TRAY_CARDS} cards set aside with Later come back tomorrow. ")), "Bring them back still shows");
+}
+
 /// The saved jobs of a folder no search has run in yet.
 const NO_JOBS: &str = "{\"seen\":{}}";
 
@@ -2423,6 +2448,78 @@ fn a_first_search_ended_while_claude_asks_opens_nothing() {
     resume_and_find(&mut harness, &shell, &sink, &root);
 }
 
+/// Claude closes its turn with a question and the process ends before any frame shows it: the search found nothing,
+/// so Jobs stays closed. Answered later in the same run, its end opens Jobs.
+#[test]
+fn a_first_search_that_asks_as_its_process_ends_opens_nothing() {
+    let (mut harness, shell, sink, root) = start_first_search("first_search_asked_and_gone");
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "7c41e0d2-9a3b".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: "Which city should I search in?".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.02, duration_ms: 9_000 },
+            AgentEvent::ProcessExited { failure: None },
+        ],
+    );
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a search that asked found nothing");
+
+    resume_and_find(&mut harness, &shell, &sink, &root);
+}
+
+/// Claude asks, the user answers, and the resumed search finds its jobs before any frame sees it work: Jobs opens.
+#[test]
+fn a_first_search_resumed_and_done_between_two_frames_opens_jobs() {
+    let (mut harness, shell, sink, root) = start_first_search("first_search_resumed_unseen");
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "7c41e0d2-9a3b".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: "Which city should I search in?".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.02, duration_ms: 9_000 },
+        ],
+    );
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a run that waits on the user has not ended");
+
+    let id = first_run_id(&shell);
+    shell.borrow_mut().desk_slot().as_mut().unwrap().reply(&id, "Search Brussels, then go on.").unwrap();
+    first_search_ends(&sink);
+    fs::write(root.join("job_scraper/seen_jobs.json"), FIRST_FOUND).unwrap();
+    let feed = shell.borrow_mut().snapshot_feed();
+    feed.send(first_search_snapshot(&root)).unwrap();
+    harness.run_steps(3);
+    assert!(is_shown(&harness, JOBS_SUBTITLE), "the resumed search found its jobs");
+    assert!(is_shown(&harness, "New  7"));
+}
+
+/// The search saves its jobs, then asks whether to score them, and the user ends the session there: the jobs were
+/// found, so Jobs opens.
+#[test]
+fn a_first_search_that_found_jobs_then_asked_opens_jobs_when_its_session_ends() {
+    let (mut harness, shell, sink, root) = start_first_search("first_search_found_then_asked");
+    emit_all(
+        &sink,
+        [
+            AgentEvent::SessionStarted { session_id: "7c41e0d2-9a3b".into(), model: "claude-opus-5-5".into(), api_key_source: "none".into() },
+            AgentEvent::AssistantText { text: "Found 7 new jobs on 2 sites. Want me to score them now?".into(), nested: false },
+            AgentEvent::TurnEnded { failed: false, message: None, cost_usd: 0.31, duration_ms: 290_000 },
+        ],
+    );
+    fs::write(root.join("job_scraper/seen_jobs.json"), FIRST_FOUND).unwrap();
+    let feed = shell.borrow_mut().snapshot_feed();
+    feed.send(first_search_snapshot(&root)).unwrap();
+    harness.run_steps(3);
+    assert!(!is_shown(&harness, JOBS_SUBTITLE), "a run that waits on the user has not ended");
+
+    let id = first_run_id(&shell);
+    shell.borrow_mut().desk_slot().as_mut().unwrap().close(&id);
+    harness.run_steps(3);
+    assert!(is_shown(&harness, JOBS_SUBTITLE), "the search found its jobs before it asked");
+    assert!(is_shown(&harness, "New  7"));
+}
+
 /// A first search that failed or was stopped opens nothing. Resumed in the same run, its end opens Jobs.
 #[test]
 fn a_failed_or_stopped_first_search_opens_nothing_until_its_resume_ends() {
@@ -2466,28 +2563,41 @@ fn opening_another_folder_drops_the_first_search_note() {
     assert!(!is_shown(&harness, FIRST_SEARCH_NOTE), "the note named the last folder's offer");
 }
 
-/// The first-search offer says the profile is ready only when the folder holds a profile with a topic written.
+/// The profile files of a folder, from its root.
+const PROFILE_FILES: [&str; 7] = [
+    ".claude/skills/job-application-assistant/01-candidate-profile.md",
+    ".claude/skills/job-application-assistant/02-behavioral-profile.md",
+    ".claude/skills/job-application-assistant/04-job-evaluation.md",
+    ".claude/skills/job-application-assistant/05-cv-templates.md",
+    ".claude/skills/job-application-assistant/07-interview-prep.md",
+    "CLAUDE.md",
+    ".claude/skills/job-scraper/search-queries.md",
+];
+
+/// The first-search offer says the profile is ready only when it is full, as the Your profile slip, gone then, says
+/// too. No profile, one with only its blanks, and one partly filled are not ready.
 #[test]
 fn the_first_search_offer_claims_no_profile_that_is_not_there() {
-    let root = first_search_root("first_search_no_profile", NO_JOBS);
-    for file in [
-        ".claude/skills/job-application-assistant/01-candidate-profile.md",
-        ".claude/skills/job-application-assistant/02-behavioral-profile.md",
-        ".claude/skills/job-application-assistant/04-job-evaluation.md",
-        ".claude/skills/job-application-assistant/05-cv-templates.md",
-        ".claude/skills/job-application-assistant/07-interview-prep.md",
-        "CLAUDE.md",
-        ".claude/skills/job-scraper/search-queries.md",
-    ] {
-        let _ = fs::remove_file(root.join(file));
+    let none = first_search_root("first_search_no_profile", NO_JOBS);
+    for file in PROFILE_FILES {
+        let _ = fs::remove_file(none.join(file));
     }
-    let harness = tray_harness(Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), first_search_snapshot(&root)));
-    assert!(is_shown(&harness, "Nothing to decide yet"));
-    assert!(harness.query_by_label_contains("Your profile is ready.").is_none(), "no profile was found");
-    assert!(is_shown(&harness, "Find your first jobs, and Today deals them to you."));
+    let blanks = first_search_root("first_search_blank_profile", NO_JOBS);
+    for file in PROFILE_FILES {
+        let _ = fs::remove_file(blanks.join(file));
+    }
+    fs::write(blanks.join(PROFILE_FILES[0]), "# Candidate Profile\n\n## Identity\n- **Name:** [FULL_NAME]\n").unwrap();
+    let partly = first_search_root("first_search_partial_profile", NO_JOBS);
 
-    let ready = tray_harness(first_search_shell(Screen::InTray, "first_search_profile_ready", NO_JOBS));
-    assert!(is_shown(&ready, "Your profile is ready. Find your first jobs, and Today deals them to you."));
+    for (root, why, slip) in [(none, "no profile was found", None), (blanks, "only blanks", Some("0 of 11")), (partly, "partly filled", Some("7 of 11"))] {
+        let harness = tray_harness(Shell::with_snapshot(Screen::InTray, jobdesk::workspace::open(&root).unwrap(), first_search_snapshot(&root)));
+        assert!(is_shown(&harness, "Nothing to decide yet"), "{why}");
+        assert!(harness.query_by_label_contains("Your profile is ready.").is_none(), "{why}");
+        assert!(is_shown(&harness, "Find your first jobs, and Today deals them to you."), "{why}");
+        if let Some(count) = slip {
+            assert!(harness.query_all_by_label_contains(count).count() > 0, "{why}: the slip counts {count}");
+        }
+    }
 }
 
 /// Score N new jobs… on Jobs only opens the launcher on `/rank`.

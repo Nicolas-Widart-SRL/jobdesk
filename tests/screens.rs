@@ -7823,6 +7823,27 @@ mod profile_chapter {
         assert_eq!(scene.remembered(), Some(theirs.display().to_string()));
     }
 
+    /// The setup folder opened again from Settings stays pending: it is not remembered, so the next open still offers
+    /// Finish my profile, and its record stays.
+    #[test]
+    fn the_setup_folder_opened_again_stays_pending() {
+        let mut scene = scene("setup_folder_again", Theme::Light, false);
+        scene.at(FIVE);
+        scene.until_shown("Claude has 5 questions");
+        scene.click("Stop setup");
+        assert!(!scene.shell.borrow().in_profile_setup(), "Stop setup opens the app as Finish later does");
+        let ctx = scene.harness.ctx.clone();
+        let root = scene.root.clone();
+        scene.shell.borrow_mut().choose_folder_from(&ctx, root);
+        assert_eq!(scene.remembered(), None, "the setup folder is not remembered");
+        assert!(scene.record().is_some(), "and its record stays");
+        // Another folder after it is remembered, so the opens above did happen.
+        let theirs = scene.root.parent().unwrap().join("Their search");
+        sample_workspace(&theirs);
+        scene.shell.borrow_mut().choose_folder_from(&ctx, theirs.clone());
+        assert_eq!(scene.remembered(), Some(theirs.display().to_string()));
+    }
+
     /// A draft that waits for its next write is written as the window closes.
     #[test]
     fn closing_the_window_writes_a_waiting_draft() {

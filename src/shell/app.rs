@@ -228,9 +228,9 @@ pub struct Shell {
     window: Option<WindowSize>,
     /// First-run setup's Profile chapter, then its recap, over the folder it opened, in the window grown to the app's.
     profile_setup: Option<ProfileSetup>,
-    /// The folder opened for first-run setup, whose profile is not built yet. It is not remembered, so the next open
-    /// shows the welcome back and its Finish my profile.
-    setup_pending: bool,
+    /// The folder opened for first-run setup, whose profile is not built yet. While it is open it is not remembered, so
+    /// the next open shows the welcome back and its Finish my profile.
+    setup_pending: Option<PathBuf>,
 }
 
 /// The Profile chapter of first-run setup, and its recap once the run is done.
@@ -344,7 +344,7 @@ impl Shell {
             // The window opens at the app's own size, so nothing is asked of it until first-run setup shows.
             window: Some(WindowSize::App),
             profile_setup: None,
-            setup_pending: false,
+            setup_pending: None,
         }
     }
 
@@ -405,7 +405,8 @@ impl Shell {
     /// once the Computer step is done, for tests and snapshots. `without_pdfs` says the user went on without LaTeX.
     pub fn with_profile_setup(self, run: ProfileRun, without_pdfs: bool, shown: &str) -> Self {
         let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown: shown.to_owned(), recap: None };
-        Self { profile_setup: Some(setup), setup_pending: true, screen: Screen::InTray, ..self }
+        let pending = Some(setup.run.folder().to_owned());
+        Self { profile_setup: Some(setup), setup_pending: pending, screen: Screen::InTray, ..self }
     }
 
     /// Keeps the shell's own files, and first-run setup's Profile chapter, in `data`, as a launch does, for tests that
@@ -693,8 +694,12 @@ impl Shell {
                 // its folder, starts again once it has opened.
                 self.leave_first_run();
                 self.leave_profile_setup();
-                // A folder the user opened is remembered. Setup marks its own folder again once it has opened.
-                self.setup_pending = false;
+                // Another folder the user opened is remembered. The setup folder opened again stays pending, so the next
+                // open still offers Finish my profile.
+                let opened = self.workspace.as_ref().map(|workspace| workspace.path().to_owned());
+                if !self.setup_pending.as_deref().zip(opened.as_deref()).is_some_and(|(setup, opened)| same_folder(setup, opened)) {
+                    self.setup_pending = None;
+                }
             }
             None => self.folder_error = Some(format!("{} is not an ai-job-search checkout.", path.display())),
         }
@@ -869,9 +874,10 @@ impl Shell {
             self.leave_first_run();
             if let (Some(_), Some(data)) = (&self.workspace, &self.data) {
                 let repaint = ctx.clone();
+                let pending = Some(folder.clone());
                 let run = crate::onboarding::profile_run(data, folder, progress, Arc::new(move || repaint.request_repaint()), self.snapshot.today);
                 let setup = ProfileSetup { run, screen: ProfileChapter::default(), without_pdfs, shown, recap: None };
-                (self.profile_setup, self.setup_pending) = (Some(setup), true);
+                (self.profile_setup, self.setup_pending) = (Some(setup), pending);
             }
         }
     }
@@ -902,7 +908,7 @@ impl Shell {
             // The recap opens: the record goes, and the folder is remembered from now on.
             setup.run.clear_record();
             setup.without_pdfs |= no_latex;
-            self.setup_pending = false;
+            self.setup_pending = None;
             (self.screen, self.launcher_from) = (Screen::InTray, Screen::InTray);
         }
     }
@@ -2182,7 +2188,7 @@ impl eframe::App for Shell {
 
     /// A folder whose first-run profile is not built yet is not remembered, so the next open offers to finish it.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(workspace) = self.workspace.as_ref().filter(|_| !self.setup_pending) {
+        if let Some(workspace) = self.workspace.as_ref().filter(|_| self.setup_pending.is_none()) {
             storage.set_string(WORKSPACE_KEY, workspace.path().display().to_string());
         }
     }
@@ -2209,6 +2215,11 @@ fn requested_workspace() -> Option<PathBuf> {
 /// Takes `OsString`s, so a path that is not Unicode arrives whole.
 fn requested_workspace_from(mut args: impl Iterator<Item = OsString>, env: Option<OsString>) -> Option<PathBuf> {
     args.find(|arg| arg == "--workspace").and_then(|_| args.next()).or(env).map(PathBuf::from)
+}
+
+/// Whether two paths name the same folder: equal, or equal once links and `..` are resolved on disk.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b)
 }
 
 /// The data folder `JOBDESK_DATA_DIR` names, if it names one. Only an absolute path counts: an empty or relative one

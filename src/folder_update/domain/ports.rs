@@ -61,7 +61,9 @@ pub trait FolderUpdater: Send + Sync {
     fn open(&self, folder: &Path);
     /// Rolls back an update of `folder` that stopped midway. `None` when none did.
     fn recover(&self, folder: &Path) -> Result<Option<Reverted>, UpdateError>;
-    /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`.
+    /// Updates `folder` from `update.base` to `update.new`, after the new zip matches `update.new.sha256`. Once it holds
+    /// the folder alone it reads the base and Undo's note again, and changes nothing when they moved since the gate read
+    /// them: `Superseded`, `Undone` or `Busy`.
     fn update(&self, folder: &Path, update: &Update) -> Result<Report, UpdateError>;
     /// Whether the last update of `folder` can be undone. It only reads.
     fn can_undo(&self, folder: &Path) -> bool;

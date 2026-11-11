@@ -66,6 +66,8 @@ pub fn update_with(folder: &Path, update: &Update, hook: &mut dyn FnMut(Moment) 
     if exists(&jobdesk.join(JOURNAL)) {
         return Err(UpdateError::Interrupted);
     }
+    // The gate read the base and the note before the download, and another Jobdesk may have changed either since.
+    gate_holds(folder, &jobdesk, update)?;
     let plan = plan(folder, update)?;
     let changes = changes(folder, &plan, update)?;
     let staging = Staging::start(folder)?;
@@ -211,6 +213,31 @@ fn set_aside(jobdesk: &Path) -> Result<(), UpdateError> {
     remove(&jobdesk.join(STOPPED)).map_err(|_| UpdateError::Disk)?;
     fs::rename(jobdesk.join(JOURNAL), jobdesk.join(STOPPED)).map_err(|_| UpdateError::Disk)?;
     sync_dir(jobdesk).map_err(|_| UpdateError::Disk)
+}
+
+/// Whether what the gate read of `folder` still holds, once the update holds it alone: the base's record in `jobdesk`
+/// names the release the gate read, and no Undo has noted this very release since. `Superseded` when the base is now
+/// this release or a newer one, `Busy` when it moved anywhere else or does not read, and `Undone` when the note now
+/// names this release, version and hash alike.
+fn gate_holds(folder: &Path, jobdesk: &Path, update: &Update) -> Result<(), UpdateError> {
+    let seen = InstalledSource { version: update.base_version.to_owned(), sha256: update.base.sha256.to_owned() };
+    let new = numbers(update.version);
+    match installed_source::read_record(&jobdesk.join(installed_source::RECORD)) {
+        Some(base) if base == seen => {}
+        Some(base) if new.is_some() && numbers(&base.version) >= new => return Err(UpdateError::Superseded),
+        _ => return Err(UpdateError::Busy),
+    }
+    let undone = |note: InstalledSource| new.is_some() && numbers(&note.version) == new && note.sha256 == update.new.sha256;
+    if skipped(folder).is_some_and(undone) { Err(UpdateError::Undone) } else { Ok(()) }
+}
+
+/// The three numbers of a plain version, such as `1.8.0`, which compare as versions do. `None` for any other.
+fn numbers(version: &str) -> Option<[u32; 3]> {
+    if !installed_source::plain_version(version) {
+        return None;
+    }
+    let mut parts = version.split('.').map(|part| part.parse().ok());
+    Some([parts.next()??, parts.next()??, parts.next()??])
 }
 
 /// The folder's `.jobdesk`, when it is a real folder and not a link.
@@ -569,6 +596,7 @@ mod tests {
         folder: PathBuf,
         base: Vec<u8>,
         base_sha256: String,
+        base_version: &'static str,
         new: Vec<u8>,
         new_sha256: String,
         version: &'static str,
@@ -589,7 +617,7 @@ mod tests {
             installed_source::write_into(&folder, &InstalledSource { version: OLD.to_owned(), sha256: base_sha256.clone() }, &base).unwrap();
             let new = release(NEW, new);
             let new_sha256 = sha256_hex(&new);
-            Self { _temp: temp, folder, base, base_sha256, new, new_sha256, version: NEW }
+            Self { _temp: temp, folder, base, base_sha256, base_version: OLD, new, new_sha256, version: NEW }
         }
 
         /// The fixture with the user's own changes: a filled-in profile, a widened setting, a conflicting edit, two
@@ -610,6 +638,7 @@ mod tests {
         fn update(&self) -> Update<'_> {
             Update {
                 base: Release { zip: &self.base, sha256: &self.base_sha256 },
+                base_version: self.base_version,
                 new: Release { zip: &self.new, sha256: &self.new_sha256 },
                 version: self.version,
             }
@@ -623,6 +652,12 @@ mod tests {
         fn next(&mut self, version: &'static str, files: &[(&str, &str)]) {
             self.base = std::mem::take(&mut self.new);
             self.base_sha256 = std::mem::take(&mut self.new_sha256);
+            self.base_version = self.version;
+            self.instead(version, files);
+        }
+
+        /// Keeps the folder's base, and makes `files` of `version` the next release.
+        fn instead(&mut self, version: &'static str, files: &[(&str, &str)]) {
             self.new = release(version, files);
             self.new_sha256 = sha256_hex(&self.new);
             self.version = version;
@@ -944,6 +979,8 @@ mod tests {
         fixture.run().unwrap();
         undo(&fixture.folder).unwrap();
         assert!(skipped(&fixture.folder).is_some());
+        assert_eq!(fixture.run(), Err(UpdateError::Undone), "the release undone is not applied again");
+        fixture.instead("1.8.1", NEW_FILES);
         fixture.run().unwrap();
         assert_eq!(skipped(&fixture.folder), None, "the next update's backup takes the note's place");
         fixture.next("1.9.0", NEW_FILES);
@@ -1197,6 +1234,39 @@ mod tests {
         assert_eq!(tree(&fixture.folder), before);
         drop(other);
         assert!(undo(&fixture.folder).is_ok(), "once it has closed the folder");
+    }
+
+    /// The gate reads the base and the skip note before the download, and another Jobdesk may change either before
+    /// this one holds the folder alone: the update reads both again then, and changes nothing when they moved.
+    #[test]
+    fn an_update_whose_base_moved_since_the_gate_changes_nothing() {
+        // Another Jobdesk brought the folder to this very release meanwhile.
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        let before = tree(&fixture.folder);
+        assert_eq!(fixture.run(), Err(UpdateError::Superseded));
+        assert_eq!(tree(&fixture.folder), before, "the last update's backup stays");
+
+        // Another Jobdesk set the folder to some other release meanwhile.
+        let fixture = Fixture::edited();
+        let other = release("1.7.4", BASE);
+        let record = installed_source::record(&InstalledSource { version: "1.7.4".to_owned(), sha256: sha256_hex(&other) }).unwrap();
+        fs::write(fixture.jobdesk().join(installed_source::ZIP), &other).unwrap();
+        fs::write(fixture.jobdesk().join(installed_source::RECORD), record).unwrap();
+        let before = tree(&fixture.folder);
+        assert_eq!(fixture.run(), Err(UpdateError::Busy));
+        assert_eq!(tree(&fixture.folder), before);
+    }
+
+    #[test]
+    fn an_update_the_user_undid_since_the_gate_changes_nothing() {
+        // Another Jobdesk applied this release and the user undid it there, while this one downloaded it.
+        let fixture = Fixture::edited();
+        fixture.run().unwrap();
+        undo(&fixture.folder).unwrap();
+        let before = tree(&fixture.folder);
+        assert_eq!(fixture.run(), Err(UpdateError::Undone));
+        assert_eq!(tree(&fixture.folder), before, "the skipped release is not applied again");
     }
 
     #[test]

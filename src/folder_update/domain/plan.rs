@@ -11,11 +11,14 @@ pub struct Release<'a> {
     pub sha256: &'a str,
 }
 
-/// What an update starts from: the release the folder was set up from or last updated to, the new release, whose
-/// SHA-256 is the signed one, and the new release's version, such as `1.8.0`.
+/// What an update starts from: the release the folder was set up from or last updated to, as the gate read it, the new
+/// release, whose SHA-256 is the signed one, and the new release's version, such as `1.8.0`. The update reads the
+/// folder's base again once it holds the folder alone, and changes nothing unless it is still the one the gate read.
 #[derive(Debug, Clone, Copy)]
 pub struct Update<'a> {
     pub base: Release<'a>,
+    /// The base's version, as the gate read it with `base`.
+    pub base_version: &'a str,
     pub new: Release<'a>,
     pub version: &'a str,
 }
@@ -125,8 +128,13 @@ pub enum UpdateError {
     BadRelease(ZipFailure),
     /// The version is not three whole numbers, so the folder's new base would never read back. Nothing was changed.
     BadVersion,
-    /// Another Jobdesk is updating, undoing or rolling back this folder now.
+    /// Another Jobdesk has this folder open, or is updating, undoing or rolling it back now, or it changed the folder's
+    /// base since the gate read it. Nothing was changed.
     Busy,
+    /// Since the gate read it, the folder's base became this release or a newer one. Nothing was changed.
+    Superseded,
+    /// Since the gate read the note, the user undid this very release. Nothing was changed.
+    Undone,
     /// An update stopped midway, and its rollback has not run yet.
     Interrupted,
     /// The record of an update that stopped midway does not read, so it cannot be rolled back.

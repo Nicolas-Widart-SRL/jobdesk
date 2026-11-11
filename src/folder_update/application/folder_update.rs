@@ -492,9 +492,13 @@ fn run(ports: &Ports, folder: &Path, feed: &LatestFeed, current: Option<Version>
     };
     phase(Phase::Updating);
     let version = pin.version.to_string();
-    let update = Update { base: Release { zip: &base_zip, sha256: &source.sha256 }, new: Release { zip: &zip, sha256: &pin.sha256 }, version: &version };
+    // What the gate read of the base goes with it, so the update changes nothing when another Jobdesk moved it since.
+    let base = Release { zip: &base_zip, sha256: &source.sha256 };
+    let update = Update { base, base_version: &source.version, new: Release { zip: &zip, sha256: &pin.sha256 }, version: &version };
     match ports.updater.update(folder, &update) {
         Ok(report) => Outcome::Updated(report),
+        Err(UpdateError::Superseded) => Outcome::UpToDate,
+        Err(UpdateError::Undone) => Outcome::Skipped,
         Err(UpdateError::NoBase) => Outcome::NoBase,
         Err(UpdateError::BadBase(_)) => Outcome::BadBase,
         Err(error) => Outcome::Failed(failure_of(error)),
@@ -555,6 +559,8 @@ fn failure_of(error: UpdateError) -> Failure {
         // Another Jobdesk holds the folder, the rollback of a stopped update is due, which the next open runs first,
         // or a file changed while it ran: each time, nothing changed, and the next open tries again.
         UpdateError::Busy | UpdateError::Interrupted | UpdateError::Changed => Failure::Busy,
+        // Only an update ends so, and `run` takes each for the gate it stands for.
+        UpdateError::Superseded | UpdateError::Undone => Failure::Busy,
         UpdateError::Kept(files) => Failure::Kept(files),
         UpdateError::Unnoted => Failure::Unnoted,
         // Only the rollback reads a journal, and it sets aside one that does not read without rolling anything back.
@@ -672,6 +678,7 @@ mod tests {
         fn update(&self, folder: &Path, update: &Update) -> Result<Report, UpdateError> {
             assert_eq!(folder, Path::new(FOLDER));
             assert_eq!((update.base.zip, update.new.zip), (&b"base zip"[..], &b"new zip"[..]), "the kept base and the download");
+            assert_eq!(update.base_version, "1.7.5", "the base as the gate read it, for the update to read again");
             self.note(format!("update {} {} {}", update.version, update.base.sha256, update.new.sha256));
             assert!(!self.panics, "a fictional panic in the update");
             self.update.clone()
@@ -873,6 +880,9 @@ mod tests {
             (UpdateError::NothingToUndo, Outcome::Failed(Failure::Disk)),
             (UpdateError::NoBase, Outcome::NoBase),
             (UpdateError::BadBase(ZipFailure::BadArchive), Outcome::BadBase),
+            // Another Jobdesk moved the base, or the user undid this release there, during the download.
+            (UpdateError::Superseded, Outcome::UpToDate),
+            (UpdateError::Undone, Outcome::Skipped),
         ] {
             assert_eq!(pass(Fake { update: Err(error.clone()), ..Fake::ready() }, &feed()).0, outcome, "{error:?}");
         }

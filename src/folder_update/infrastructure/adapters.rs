@@ -178,16 +178,19 @@ mod tests {
         assert!(!DiskFolder::default().exists(&folder.path().join("gone")));
     }
 
-    /// An update whose zips do not read, so one that holds the folder alone fails on the base, past the lock.
-    fn broken() -> Update<'static> {
+    /// An update from the base `set_up` keeps, whose zips do not read, so one that holds the folder alone fails on the
+    /// base, past the lock. `sha256` is the base's.
+    fn broken(sha256: &str) -> Update<'_> {
         use crate::folder_update::domain::Release;
-        Update { base: Release { zip: b"", sha256: "" }, new: Release { zip: b"", sha256: "" }, version: "1.8.0" }
+        Update { base: Release { zip: b"fictional zip", sha256 }, base_version: "1.7.5", new: Release { zip: b"", sha256: "" }, version: "1.8.0" }
     }
 
     /// Two Jobdesks with one folder open, each its own `DiskFolder` and so its own handle of the lock file.
     #[test]
     fn a_folder_another_jobdesk_has_open_is_busy_and_its_own_hold_never_is() {
         let folder = set_up();
+        let sha256 = sha256_hex(b"fictional zip");
+        let broken = || broken(&sha256);
         let (first, second) = (DiskFolder::default(), DiskFolder::default());
         first.open(folder.path());
         assert_eq!(first.recover(folder.path()), Ok(None), "its own hold never keeps it out");

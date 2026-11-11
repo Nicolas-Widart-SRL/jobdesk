@@ -1,3 +1,11 @@
+/// The folder of the checkout that holds the template guides.
+pub const ASSISTANT: &str = ".claude/skills/job-application-assistant";
+/// The template guides in `ASSISTANT`, for the CV and the cover letter. Each says a custom template is active when it
+/// holds `ACTIVE_TEMPLATE`, the start of the block `/add-template` writes into it.
+pub const CV_TEMPLATES: &str = "05-cv-templates.md";
+pub const LETTER_TEMPLATES: &str = "06-cover-letter-templates.md";
+pub const ACTIVE_TEMPLATE: &str = "BEGIN ACTIVE-TEMPLATE";
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TemplateState {
     pub custom_cv: bool,

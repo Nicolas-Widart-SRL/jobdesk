@@ -11,3 +11,5 @@ pub use crate::portals::domain::{
     add_portal_line, list_url, parse_codeowners, site_lines_for, term_as_sent,
 };
 pub use crate::portals::domain::{ChangeError, PortalStore};
+/// Where the portals are read from, for the check that an `ai-job-search` release ships its built-in ones.
+pub use crate::portals::domain::{MANIFEST, SKILLS};

@@ -1,3 +1,7 @@
+/// The folder of the checkout that holds a folder for each portal, and the manifest each portal folder holds.
+pub const SKILLS: &str = ".agents/skills";
+pub const MANIFEST: &str = "SKILL.md";
+
 /// The portals that ship with `ai-job-search`, by folder, with the country each one searches.
 pub const BUILT_IN: [(&str, &str); 6] = [
     ("linkedin-search", "Worldwide"),

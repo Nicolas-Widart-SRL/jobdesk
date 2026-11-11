@@ -2,10 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::shared_kernel::file_text::without_bom;
-use crate::workspace::domain::{SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
-
-const ASSISTANT: &str = ".claude/skills/job-application-assistant";
-const ACTIVE_TEMPLATE: &str = "BEGIN ACTIVE-TEMPLATE";
+use crate::workspace::domain::{ACTIVE_TEMPLATE, ASSISTANT, CV_TEMPLATES, LETTER_TEMPLATES, SyncState, TemplateState, WorkspaceInspector, WorkspaceStatus};
 
 pub struct CheckoutInspector {
     root: PathBuf,
@@ -30,7 +27,7 @@ impl CheckoutInspector {
             })
             .collect();
         registered.sort();
-        TemplateState { custom_cv: custom("05-cv-templates.md"), custom_letter: custom("06-cover-letter-templates.md"), registered }
+        TemplateState { custom_cv: custom(CV_TEMPLATES), custom_letter: custom(LETTER_TEMPLATES), registered }
     }
 
     fn sync(&self) -> SyncState {

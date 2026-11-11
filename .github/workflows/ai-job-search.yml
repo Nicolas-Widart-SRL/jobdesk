@@ -1,0 +1,111 @@
+# Checks that an ai-job-search release has what Jobdesk relies on before it joins assets/update/ai-job-search.json:
+# the commands the launcher starts, the files the readers read, within the limits first-run setup holds every release to.
+# It starts no `claude` and costs nothing. A pull request that changes the list checks each release it adds, and its
+# hash against the list. Run it by hand on a version to check a release before `scripts/ai-job-search.sh add`.
+# The maintainer still tests the release with Jobdesk and signs it off on the pull request.
+name: ai-job-search release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The ai-job-search release to check, such as 1.7.5'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - 'assets/update/ai-job-search.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-job-search-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The versions to check, as a JSON array: the input on a run by hand, or the releases a pull request adds to the list.
+  versions:
+    name: Find the releases to check
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.find.outputs.versions }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # A pull request checks out its merge commit, whose first parent is the base it merges into.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Find the releases
+        id: find
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          list=assets/update/ai-job-search.json
+          if [[ $EVENT == workflow_dispatch ]]; then
+            version=${INPUT#v}
+            if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$INPUT' is not a version like 1.7.5."
+              exit 1
+            fi
+            versions=$(jq -cn --arg v "$version" '[$v]')
+          else
+            base=$(git show "HEAD^1:$list" 2>/dev/null || echo '[]')
+            # A pair the base lacks: a new release, or a known one with another hash.
+            versions=$(jq -c --argjson base "$base" '[.[] | select(. as $entry | any($base[]; . == $entry) | not) | .version] | unique' "$list")
+            if ! jq -e 'all(.[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<<"$versions" >/dev/null; then
+              echo "::error::The list holds a version that is not like 1.7.5: $versions"
+              exit 1
+            fi
+          fi
+          echo "Releases to check: $versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Check ai-job-search ${{ matrix.version }}
+    needs: versions
+    if: needs.versions.outputs.versions != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.versions.outputs.versions) }}
+    defaults:
+      run:
+        # bash -eo pipefail: a failing command in a pipe fails the step.
+        shell: bash
+    steps:
+      # The test comes from the pull request, so it gets no token in the Git config.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - name: Download the release
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          dir=$(mktemp -d "$RUNNER_TEMP/release.XXXXXX")
+          scripts/ai-job-search.sh download "v$VERSION" "$dir/source.zip"
+          echo "JOBDESK_CANDIDATE_ZIP=$dir/source.zip" >> "$GITHUB_ENV"
+      # The ignored test is the only one this runs. A filter that matched nothing would pass with 0 tests, so the
+      # step asks for the one pass.
+      - name: Check what the release holds
+        env:
+          JOBDESK_CANDIDATE_VERSION: ${{ matrix.version }}
+        run: |
+          log="$RUNNER_TEMP/check.log"
+          cargo test --locked --test ai_job_search_release -- --ignored 2>&1 | tee "$log"
+          if ! grep -Eq '^test result: ok\. 1 passed;' "$log"; then
+            echo "::error::The release check did not report 1 passed."
+            exit 1
+          fi

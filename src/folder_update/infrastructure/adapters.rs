@@ -167,6 +167,8 @@ impl FolderUpdater for DiskFolder {
 /// largest release setup takes. Its bytes are read and the part file deleted at once.
 impl ZipFetcher for HttpsFetcher {
     fn fetch(&self, url: &str, name: &str, progress: &mut dyn FnMut(u64)) -> Result<Vec<u8>, DownloadFailure> {
+        // Setup's cleanup in another Jobdesk may have deleted this one's folder since the last download.
+        self.reclaim().map_err(|_| DownloadFailure::Disk)?;
         let part = self.fetch_at_most(url, name, MAX_ZIP, &|| false, progress)?;
         let bytes = fs::read(&part).map_err(|_| DownloadFailure::Disk);
         let _ = fs::remove_file(&part);
@@ -366,6 +368,21 @@ mod tests {
         let own = data.path().join("downloads").join(std::process::id().to_string());
         let left: Vec<_> = fs::read_dir(own).unwrap().flatten().map(|entry| entry.file_name()).filter(|name| name != ".lock").collect();
         assert!(left.is_empty(), "{left:?}");
+    }
+
+    /// Setup's cleanup in another Jobdesk can delete this one's download folder in the moment before it is locked.
+    /// The next download makes and locks it again, so one deletion never fails every later download.
+    #[test]
+    fn a_download_folder_deleted_since_the_last_download_is_made_again() {
+        let data = tempfile::tempdir().unwrap();
+        let fetcher = HttpsFetcher::new(Arc::new(Serves(b"zip".to_vec())), data.path().join("downloads"));
+        ZipFetcher::fetch(&fetcher, URL, "update-ai-job-search-v1.8.0.zip", &mut |_| {}).unwrap();
+        let own = data.path().join("downloads").join(std::process::id().to_string());
+        fs::remove_dir_all(&own).unwrap();
+        let zip = ZipFetcher::fetch(&fetcher, URL, "update-ai-job-search-v1.8.0.zip", &mut |_| {});
+        assert_eq!(zip.as_deref(), Ok(&b"zip"[..]));
+        let other = fs::File::open(own.join(".lock")).unwrap();
+        assert!(other.try_lock().is_err(), "the folder is this Jobdesk's again, locked");
     }
 
     #[test]

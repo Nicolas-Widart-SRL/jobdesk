@@ -26,6 +26,22 @@ pub fn claim(dir: &Path) -> io::Result<PathBuf> {
     Ok(own)
 }
 
+/// `claim`, but a folder this process claimed whose lock file has gone since is made and locked again. Another Jobdesk's
+/// cleanup can delete the folder in the moment between its making and its lock, and `claim` would keep giving back the
+/// deleted path.
+pub fn reclaim(dir: &Path) -> io::Result<PathBuf> {
+    let own = dir.join(process::id().to_string());
+    let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
+    if fs::symlink_metadata(own.join(LOCK)).is_ok_and(|meta| meta.is_file()) && claimed.iter().any(|(folder, _)| *folder == own) {
+        return Ok(own);
+    }
+    // The old lock, on a file that has gone, keeps nothing out.
+    claimed.retain(|(folder, _)| *folder != own);
+    let lock = lock_folder(&own)?;
+    claimed.push((own.clone(), lock));
+    Ok(own)
+}
+
 /// Makes `folder` and locks it for as long as the returned file stays open.
 pub fn lock_folder(folder: &Path) -> io::Result<File> {
     private_dir(folder)?;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::shared_kernel::https::{Fetch, HttpsFailure, Transport, read_failure};
-use crate::shared_kernel::own_folder::{claim, clear_unclaimed, new_private_file};
+use crate::shared_kernel::own_folder::{claim, clear_unclaimed, new_private_file, reclaim};
 
 /// Progress is reported at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
@@ -59,6 +59,12 @@ impl HttpsFetcher {
                 Err(failure)
             }
         }
+    }
+
+    /// Makes and locks this Jobdesk's own folder of `dir` again if it has gone since it was claimed, so the next
+    /// `fetch_at_most` writes into it: see `own_folder::reclaim`.
+    pub fn reclaim(&self) -> io::Result<()> {
+        reclaim(&self.dir).map(|_| ())
     }
 
     /// Removes the part files a Jobdesk that no longer runs left. Links are removed, never followed.

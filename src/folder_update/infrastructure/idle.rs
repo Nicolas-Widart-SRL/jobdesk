@@ -33,8 +33,6 @@ impl ZipFetcher for IdleFolder {
     fn fetch(&self, _url: &str, _name: &str, _progress: &mut dyn FnMut(u64)) -> Result<Vec<u8>, DownloadFailure> {
         Err(DownloadFailure::Offline)
     }
-
-    fn clear_leftovers(&self) {}
 }
 
 impl FolderUpdater for IdleFolder {

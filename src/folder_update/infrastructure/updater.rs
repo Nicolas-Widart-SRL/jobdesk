@@ -1088,7 +1088,6 @@ mod tests {
                 held.1 += 1;
                 Ok(held.0.clone())
             }
-            fn clear_leftovers(&self) {}
         }
 
         let mut fixture = Fixture::edited();

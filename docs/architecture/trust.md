@@ -152,7 +152,7 @@ On macOS, the `onboarding` feature makes the job search folder, fills it with th
 - Each save goes through a new temporary file, renamed over the record, so a crash or a power loss leaves the previous record whole.
 - The download's worker records the version once the feed pins it, and the folder as made once the release has taken the folder's place, before the window hears. When setup opens on a record that lacks the folder made, but whose folder is an `ai-job-search` folder with a `.jobdesk/` that reads whole for the recorded version, the folder counts as made. A record that cannot be written costs only that resume: setup goes on with what it holds in memory, and says nothing more.
 - The record is removed when the Computer step ends.
-- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. Each launch with a data folder also deletes such downloads, as the folder update starts, since its own download waits there too. It removes links and never follows them.
+- Downloads wait in `onboarding/<pid>/` of the data folder. When setup opens, it deletes the downloads, staging folders and `-old` folders that a Jobdesk which no longer runs left. The folder update's download waits there too, and is deleted once read, so only one cut off by a quit is left for setup to clear. It removes links and never follows them.
 
 ### Accepted residuals
 

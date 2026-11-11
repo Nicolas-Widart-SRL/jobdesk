@@ -45,10 +45,9 @@ pub trait BaseReader: Send + Sync {
 pub trait ZipFetcher: Send + Sync {
     /// Downloads `url` over https, as setup does, into a part file named after `name` in this Jobdesk's own folder of
     /// the data folder, and gives its bytes. More than the largest release setup downloads is `TooLarge`. The part file
-    /// is deleted whatever the end. It blocks: call it on a worker. `progress` hears the bytes received.
+    /// is deleted whatever the end, but for a Jobdesk that stops midway, whose part file stays until setup next opens. It
+    /// blocks: call it on a worker. `progress` hears the bytes received.
     fn fetch(&self, url: &str, name: &str, progress: &mut dyn FnMut(u64)) -> Result<Vec<u8>, DownloadFailure>;
-    /// Removes the part files a Jobdesk that no longer runs left. Links are removed, never followed.
-    fn clear_leftovers(&self);
 }
 
 /// Updates, recovers and undoes a folder on the disk. `recover`, `update` and `undo` write the folder: none may run while

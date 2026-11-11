@@ -105,10 +105,6 @@ impl ZipFetcher for HttpsFetcher {
         let _ = fs::remove_file(&part);
         bytes
     }
-
-    fn clear_leftovers(&self) {
-        HttpsFetcher::clear_leftovers(self);
-    }
 }
 
 #[cfg(test)]

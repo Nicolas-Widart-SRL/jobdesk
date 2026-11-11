@@ -17,7 +17,8 @@ use crate::shared_kernel::download::HttpsFetcher;
 use crate::shared_kernel::https::HttpsTransport;
 
 /// Folder updates over the disk and GitHub. `data` is the app's data folder: the release downloads into this Jobdesk's
-/// own folder of its `onboarding/`, as setup's does, and is deleted once read. `current` is the version this Jobdesk
+/// own folder of its `onboarding/`, as setup's does, and is deleted once read. Only setup clears what a Jobdesk that
+/// stopped midway left there. `current` is the version this Jobdesk
 /// runs, and `repaint` wakes the window when the worker has news. Nothing here starts `claude` or writes a run log.
 ///
 /// No update, undo or rollback may run while a task or a Claude session is open: see `FolderUpdate`.
@@ -32,4 +33,20 @@ pub fn folder_update(data: &Path, current: &str, repaint: Arc<dyn Fn() + Send + 
 pub fn idle_folder_update(current: &str) -> FolderUpdate {
     let idle = Arc::new(IdleFolder);
     FolderUpdate::new(idle.clone(), idle.clone(), idle.clone(), idle, current, Arc::new(|| {}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A launch leaves `onboarding/` alone: another Jobdesk may be making its own folder there at that very moment,
+    /// before it has locked it. Setup clears what a Jobdesk that no longer runs left, as it opens.
+    #[test]
+    fn a_launch_clears_no_download_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let starting = data.path().join("onboarding").join("4000000");
+        std::fs::create_dir_all(&starting).unwrap();
+        let _ = folder_update(data.path(), "0.2.0", Arc::new(|| {}));
+        assert!(starting.is_dir(), "a folder not locked yet stays");
+    }
 }

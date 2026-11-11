@@ -192,8 +192,8 @@ pub struct FolderUpdate {
 
 impl FolderUpdate {
     /// `current` is the version this Jobdesk runs, as `CARGO_PKG_VERSION` gives it, and `repaint` wakes the window when
-    /// the worker has news. It removes the part files a download that stopped midway left. It writes no job search
-    /// folder, so it may run while a task is open.
+    /// the worker has news. It writes nothing, so it may run while a task is open. It leaves the downloads folder alone,
+    /// where another Jobdesk may be making its own folder at that moment: setup clears what a stopped one left.
     pub fn new(
         probe: Arc<dyn FolderProbe>,
         base: Arc<dyn BaseReader>,
@@ -202,7 +202,6 @@ impl FolderUpdate {
         current: &str,
         repaint: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
-        fetcher.clear_leftovers();
         let (sender, events) = mpsc::channel();
         Self {
             ports: Ports { probe, base, fetcher, updater },
@@ -687,9 +686,6 @@ mod tests {
             progress(7);
             self.fetch.clone()
         }
-        fn clear_leftovers(&self) {
-            self.note("clear".into());
-        }
     }
 
     impl FolderUpdater for Fake {
@@ -931,7 +927,7 @@ mod tests {
     fn an_update_runs_on_a_worker_and_ends_updated_with_its_report() {
         let fake = Arc::new(Fake::ready());
         let mut desk = desk(&fake, "0.2.0");
-        assert_eq!(fake.asked(), ["clear"], "leftover part files go at once");
+        assert!(fake.asked().is_empty(), "nothing is asked of the folder or the network until a start");
         assert_eq!((desk.stage(), desk.can_undo()), (&Stage::Idle, false));
         desk.start(PathBuf::from(FOLDER), &feed(), true);
         assert!(desk.is_working());
@@ -968,7 +964,7 @@ mod tests {
         assert!(!desk.recover(PathBuf::from(FOLDER), false), "the caller hears of the refusal");
         assert!(!desk.is_working());
         assert_eq!(desk.stage(), &Stage::Undid(UndoOutcome::Failed(Failure::Busy)), "a refused rollback leaves the stage as it was");
-        assert_eq!(fake.asked(), ["clear"], "no rollback, gate, download, update or undo");
+        assert!(fake.asked().is_empty(), "no rollback, gate, download, update or undo");
     }
 
     /// At an open no update was tried, so a rollback refused while a task is open shows no failure in place of what
@@ -1008,12 +1004,12 @@ mod tests {
         let mut desk = desk(&fake, "0.2.0");
         let feed = feed();
         follow(&mut desk, Some((1, &feed)), true);
-        assert_eq!(fake.asked(), ["clear"], "no folder is open, so nothing runs");
+        assert!(fake.asked().is_empty(), "no folder is open, so nothing runs");
 
         desk.opened(PathBuf::from(FOLDER));
-        assert_eq!(fake.asked(), ["clear", "open /Users/sam/Job search"], "the open holds the folder at once");
+        assert_eq!(fake.asked(), ["open /Users/sam/Job search"], "the open holds the folder at once");
         follow(&mut desk, Some((1, &feed)), false);
-        assert_eq!(fake.asked(), ["clear", "open /Users/sam/Job search"], "nothing runs while a task or a session is open");
+        assert_eq!(fake.asked(), ["open /Users/sam/Job search"], "nothing runs while a task or a session is open");
         follow(&mut desk, None, true);
         assert_eq!((rollbacks(&fake), passes(&fake)), (1, 0), "the rollback runs at the open, with no feed");
         follow(&mut desk, None, true);
@@ -1290,7 +1286,7 @@ mod tests {
         };
         let fake = Arc::new(Fake { recover: Ok(Some(rolled_back.clone())), ..Fake::ready() });
         assert_eq!(recovering(&fake).stage(), &Stage::Ended(Outcome::Recovered(rolled_back)));
-        assert_eq!(fake.asked(), ["clear", "recover", "exists", "git", "base", "can undo"], "a look at the folder for About, no download, no update");
+        assert_eq!(fake.asked(), ["recover", "exists", "git", "base", "can undo"], "a look at the folder for About, no download, no update");
 
         let opened = recovering(&Arc::new(Fake::ready()));
         assert_eq!(opened.stage(), &Stage::Idle, "no update had stopped, so there is nothing to say");
@@ -1323,7 +1319,7 @@ mod tests {
         settle(&mut desk);
         assert_eq!(desk.stage(), &Stage::Undid(UndoOutcome::Undone(Reverted { reverted: vec!["CLAUDE.md".into()], kept: Vec::new() })));
         assert!(!desk.can_undo(), "as the worker found it after the undo");
-        assert_eq!(fake.asked(), ["clear", "undo", "can undo"]);
+        assert_eq!(fake.asked(), ["undo", "can undo"]);
     }
 
     #[test]

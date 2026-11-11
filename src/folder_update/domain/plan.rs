@@ -33,8 +33,8 @@ pub enum SkipReason {
     RemovedFolder,
     /// The file needs a copy beside it, and the version gives it no name.
     BadVersion,
-    /// A folder stands where the file goes, a file where a folder above it goes, or another file of a release where its
-    /// side copy goes.
+    /// A folder stands where the file goes, a file where a folder above it goes, or a folder, another file of a release
+    /// or a file with other bytes where its side copy goes.
     InTheWay,
 }
 
@@ -50,7 +50,8 @@ pub struct Skipped {
 pub struct Side {
     /// Relative to the folder, with `/` separators.
     pub path: String,
-    /// What is at that name now, from an earlier update or the user. `None` when nothing is.
+    /// What is at that name now: the copy's own bytes, as an earlier update or the user left them. `None` when nothing
+    /// is. A file there with other bytes is never overwritten: the file is skipped instead.
     pub existing: Option<Vec<u8>>,
     /// The mode the copy gets: the new release's for upstream's copy, the user's file's for theirs.
     pub mode: u32,

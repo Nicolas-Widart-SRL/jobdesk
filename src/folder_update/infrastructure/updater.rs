@@ -1177,14 +1177,34 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_side_copy_that_differs_is_backed_up_not_lost() {
+    fn an_existing_side_copy_that_differs_skips_the_file() {
+        // The user's notes in an older copy: the next update's backup would replace the only other copy of them.
         let fixture = Fixture::edited();
         fixture.write("docs/guide.md.update-1.8.0", "An older copy, with my notes.\n");
-        fixture.run().unwrap();
-        assert_eq!(fixture.read("docs/guide.md.update-1.8.0").as_deref(), Some(GUIDE_NEW));
-        assert_eq!(backed_up(&fixture, "docs/guide.md.update-1.8.0"), "An older copy, with my notes.\n");
-        undo(&fixture.folder).unwrap();
-        assert_eq!(fixture.read("docs/guide.md.update-1.8.0").as_deref(), Some("An older copy, with my notes.\n"));
+        let report = fixture.run().unwrap();
+        assert_eq!(fixture.read("docs/guide.md.update-1.8.0").as_deref(), Some("An older copy, with my notes.\n"), "never overwritten");
+        assert_eq!(fixture.read("docs/guide.md").as_deref(), Some(GUIDE_OURS));
+        assert!(report.conflicts.is_empty(), "{report:?}");
+        assert!(report.skipped.contains(&Skipped { path: "docs/guide.md".to_owned(), reason: SkipReason::InTheWay }), "{report:?}");
+
+        // A copy that already holds the new version stays as it is, and the conflict is reported as usual.
+        let fixture = Fixture::edited();
+        fixture.write("docs/guide.md.update-1.8.0", GUIDE_NEW);
+        let report = fixture.run().unwrap();
+        assert_eq!(report.conflicts, [SideCopy { path: "docs/guide.md".to_owned(), side: "docs/guide.md.update-1.8.0".to_owned() }]);
+    }
+
+    /// A safety file whose `.yours-` name is taken by a file with other bytes keeps the user's file in place, so its
+    /// safety update is listed as left alone and never shown as applied.
+    #[test]
+    fn a_safety_file_whose_copy_name_is_taken_is_skipped_whole() {
+        let fixture = Fixture::edited();
+        fixture.write(".claude/settings.json.yours-1.8.0", "Notes on my settings.\n");
+        let report = fixture.run().unwrap();
+        assert_eq!(fixture.read(".claude/settings.json").as_deref(), Some(SETTINGS_OURS), "the user's file stays");
+        assert_eq!(fixture.read(".claude/settings.json.yours-1.8.0").as_deref(), Some("Notes on my settings.\n"));
+        assert!(report.upstream_wins.is_empty(), "{report:?}");
+        assert!(report.skipped.contains(&Skipped { path: ".claude/settings.json".to_owned(), reason: SkipReason::InTheWay }), "{report:?}");
     }
 
     #[test]

@@ -202,6 +202,7 @@ Your changes come first:
 - The two safety files, `.claude/settings.json` and `tools/security_guards.py`, hold the rules that guard what Claude may do. When you and the update changed the same lines, the new version takes the file's place, and yours is saved beside it as `<file>.yours-<version>`. A safety file you deleted comes back when the update changed it.
 - A file you deleted stays deleted, and a file you changed stays when the update removes it.
 - Jobdesk never writes through a link. A file that is a link or sits under one, a file with a folder in its way, and a new file in a folder you removed are left alone.
+- Jobdesk never overwrites a file of yours with a copy it saves. When `CLAUDE.md.update-1.8.0`, say, already holds something else, such as your notes, `CLAUDE.md` is left alone. A safety file whose `<file>.yours-<version>` name is taken keeps yours, so its update does not apply.
 
 The status bar tells you how it goes, to the left of Jobdesk's own update or of Settings. A check that finds nothing to do says nothing. One state shows at a time:
 

@@ -60,11 +60,11 @@ pub fn plan(folder: &Path, update: &Update) -> Result<Plan, UpdateError> {
                 plan.skipped.push(skip(SkipReason::RemovedFolder));
                 continue;
             }
-            Action::Conflict { .. } | Action::UpstreamWins { .. } => {
+            Action::Conflict { theirs: copy } | Action::UpstreamWins { ours: copy, .. } => {
                 let upstream_wins = matches!(action, Action::UpstreamWins { .. });
                 // Upstream's copy takes the release's mode, and the user's keeps its own.
                 let mode = if upstream_wins { ours_mode } else { theirs.map_or(0o644, |(_, mode)| *mode) };
-                match side_of(folder, path, update.version, upstream_wins, mode, &paths)? {
+                match side_of(folder, path, update.version, upstream_wins, (copy, mode), &paths)? {
                     Ok((side, _)) => Some(side),
                     Err(reason) => {
                         plan.skipped.push(skip(reason));
@@ -169,7 +169,7 @@ fn renamed_in_case(
     if decide(path, Some(base), Some(&ours), Some(theirs), true) == Action::Keep {
         return Ok(Ok(None));
     }
-    let (side, folders) = match side_of(folder, path, version, false, *mode, paths)? {
+    let (side, folders) = match side_of(folder, path, version, false, (theirs, *mode), paths)? {
         Ok(found) => found,
         Err(reason) => return Ok(Err(reason)),
     };
@@ -177,14 +177,16 @@ fn renamed_in_case(
     Ok(Ok(Some(Step { path: path.to_owned(), action, ours: Some(ours), mode: *mode, side: Some(side), folders })))
 }
 
-/// The copy saved beside `path` in a conflict, with `mode`, and the folders above it that are missing, outermost first.
-/// No name for the version, a name a release also uses, a link, or a folder in its place is a reason to skip the file.
+/// The copy saved beside `path` in a conflict, of `copy`'s bytes with its mode, and the folders above it that are
+/// missing, outermost first. No name for the version, a name a release also uses, a link, a folder in its place, or a
+/// file there with other bytes is a reason to skip the file: a file at that name is never overwritten, since it may
+/// hold the user's own notes, and the backup of the update after next would replace the only other copy of them.
 fn side_of(
     folder: &Path,
     path: &str,
     version: &str,
     upstream_wins: bool,
-    mode: u32,
+    (copy, mode): (&[u8], u32),
     paths: &BTreeSet<&String>,
 ) -> Result<Result<(Side, Vec<String>), SkipReason>, UpdateError> {
     let Some(name) = side_name(path, version, upstream_wins) else { return Ok(Err(SkipReason::BadVersion)) };
@@ -193,10 +195,10 @@ fn side_of(
     }
     let seen = look(folder, &name).map_err(|_| UpdateError::Disk)?;
     let existing = match seen.found {
-        Found::File(bytes, _) => Some(bytes),
+        Found::File(bytes, _) if bytes == copy => Some(bytes),
+        Found::File(..) | Found::Other => return Ok(Err(SkipReason::InTheWay)),
         Found::Missing => None,
         Found::Link => return Ok(Err(SkipReason::Link)),
-        Found::Other => return Ok(Err(SkipReason::InTheWay)),
     };
     Ok(Ok((Side { path: name, existing, mode }, seen.missing)))
 }

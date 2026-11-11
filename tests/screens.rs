@@ -8115,6 +8115,71 @@ mod profile_chapter {
         assert_eq!(scene.sent(), [PATH_A_REPLY], "nothing is sent");
     }
 
+    /// A permission prompt that can be remembered offers Allow for this run, as Tasks does, and that answers it.
+    #[test]
+    fn a_permission_that_can_be_remembered_offers_allow_for_this_run() {
+        let mut scene = scene("setup_permission_remember", Theme::Light, false);
+        scene.shell.borrow_mut().desk_slot().as_mut().unwrap().set_asks_permission(true);
+        scene.past_five();
+        scene.emit([AgentEvent::PromptRaised(Prompt {
+            request_id: "p1".into(),
+            kind: PromptKind::Permission { tool: "Write".into(), detail: "CLAUDE.md".into(), can_remember: true },
+            input_json: "{}".into(),
+            suggestions_json: Some("[]".into()),
+        })]);
+        scene.until_shown("Claude asks to use a tool");
+        assert!(scene.shown("Allow once") && scene.shown("Deny"));
+        scene.click("Allow for this run");
+        scene.until("the prompt answered", |scene| !scene.shown("Claude asks to use a tool"));
+    }
+
+    /// A question with several answers says so, and never asks to pick one.
+    #[test]
+    fn a_question_with_several_answers_says_to_pick_the_ones_that_fit() {
+        let mut scene = scene("setup_multi_select", Theme::Light, false);
+        scene.past_five();
+        let option = |label: &str| QuestionOption { label: label.into(), description: String::new() };
+        scene.emit([AgentEvent::PromptRaised(Prompt {
+            request_id: "q2".into(),
+            kind: PromptKind::Questions(vec![Question {
+                text: "Which job sites do you use?".into(),
+                header: "Sites".into(),
+                options: vec![option("LinkedIn"), option("Freehire")],
+                multi_select: true,
+            }]),
+            input_json: "{}".into(),
+            suggestions_json: None,
+        })]);
+        scene.until_shown("Which job sites do you use?");
+        assert!(scene.shown("Pick the answers that fit"));
+        assert!(scene.shown("Pick as many as fit."));
+        assert!(!scene.shown("Pick one"), "several answers are allowed");
+    }
+
+    /// Every block of Claude's message shows on the sheet, the review and the CV check, and Show all Claude wrote is on each.
+    #[test]
+    fn claudes_lead_and_closing_words_show_with_the_items() {
+        let mut scene = scene("setup_blocks_show", Theme::Light, false);
+        scene.at(&format!("{FIVE}\nTake your time with these."));
+        scene.until_shown("Claude has 5 questions");
+        assert!(scene.shown("I read all three documents"), "the lead");
+        assert!(scene.shown("Take your time with these."), "the closing words");
+        assert!(scene.shown("Show all Claude wrote"));
+
+        let mut review = self::scene("setup_blocks_review", Theme::Light, false);
+        review.at(SIXTEEN);
+        review.until_shown("16 of 16 changes");
+        assert!(review.shown("I have what I need."), "the lead");
+        assert!(review.shown("Reply yes to apply all, or list the numbers to skip."), "the closing words");
+        review.click("Show all Claude wrote");
+        review.until_shown("All Claude wrote");
+
+        let mut check = self::scene("setup_blocks_cv", Theme::Light, false);
+        cv_check(&mut check);
+        assert!(check.shown("Your CV is built."), "Claude's message shows with the pages");
+        assert!(check.shown("Show all Claude wrote"));
+    }
+
     /// A link in Claude's message shows its words, and a click on them opens nothing.
     #[test]
     fn a_link_in_claudes_message_never_opens() {

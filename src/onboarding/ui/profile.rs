@@ -13,7 +13,7 @@ use egui::{ColorImage, Key, Modifiers, OpenUrl, TextureFilter, TextureHandle, Te
 use egui_commonmark::CommonMarkCache;
 
 use crate::onboarding::application::{
-    Batch, CV_LOOKS_GOOD, Decision, DocumentKind, Draft, LineState, PageState, PageStore, PdfDocument, ProfilePhase, ProfileRun, PromptKind,
+    Batch, CV_LOOKS_GOOD, DRAFT_SAVE_EVERY, Decision, DocumentKind, Draft, LineState, PageState, PageStore, PdfDocument, ProfilePhase, ProfileRun, PromptKind,
     Question as AskedQuestion, Quiet, Run, RunDesk, RunStatus, StartRefusal, StartRules, WorkLine, elapsed_text, quiet, review_reply,
 };
 use crate::onboarding::ui::{STEPS, get_help};
@@ -21,9 +21,10 @@ use crate::shared_kernel::visible_text::visible_chars;
 use crate::ui_kit::tokens::{DOC_MEASURE, ITEM_GAP};
 use crate::ui_kit::{
     AddedFile, AnswersSlip, Change, DropForm, Ink, KnotState, LineEnd, NOT_SAVED, PageSet, ProposalPart, Question, SetupLine, SheetPart, SubItem, SweepForm,
-    Tone, Type, WizardStep, alert_slip, answers_slip, button, choice_card, claude_wrote_popover, command_chord, copyable, cv_check, cv_slip, desk_label,
-    drop_zone, enabled_when, file_list, link, paper, path_label, primary_button, primary_shortcut_button, prompt_box_tone, question_fallback, question_sheet,
-    reply_slip, review_changes, review_slip, setup_line, side_slip, slip_text, solid_tag, split_card, text_field, wide_card,
+    Tone, Type, WizardStep, alert_slip, answers_slip, button, choice_card, claude_markdown, claude_wrote_popover, command_chord, copyable, cv_check, cv_slip,
+    danger_button, desk_label, drop_zone, enabled_when, file_list, link, paper, path_label, primary_button, primary_shortcut_button, prompt_box_tone,
+    question_fallback, question_sheet, reply_slip, review_changes, review_slip, setting_check, setup_line, side_slip, slip_text, solid_tag, split_card,
+    text_field, wide_card,
 };
 
 /// The user guide's part on the documents to add, with how to save a LinkedIn profile as a PDF.
@@ -37,6 +38,7 @@ const DROP_SENTENCE: &str = "Your CV, and any of these: a LinkedIn profile saved
 const DROP_MORE: &str = "Drop more here: diplomas, reference letters.";
 const ADD_CV_FIRST: &str = "Add at least your CV first.";
 const STOP_SETUP: &str = "Stop setup";
+const SHOW_ALL: &str = "Show all Claude wrote";
 const ASK_FOR_CHANGE: &str = "Ask for a change";
 const CHANGE_SOMETHING: &str = "Change something";
 /// How long a change the user asks for may be, in characters.
@@ -94,10 +96,18 @@ pub struct ProfileChapter {
     textures: Option<((PathBuf, u64), Vec<TextureHandle>)>,
 }
 
-/// Claude's message as the screens take it apart: its lead, then each group's title and items.
+/// Claude's message as the screens take it apart: each block in order, and its numbered items.
 struct Laid {
-    lead: Option<String>,
-    groups: Vec<(Option<String>, Vec<LaidItem>)>,
+    parts: Vec<LaidPart>,
+    items: Vec<LaidItem>,
+}
+
+/// A block of Claude's message: its own Markdown, a bold line alone as plain text, or the item at an index of
+/// `Laid::items`.
+enum LaidPart {
+    Prose(String),
+    Group(String),
+    Item(usize),
 }
 
 struct LaidItem {
@@ -142,6 +152,10 @@ impl ProfileChapter {
         match message {
             Some(message) => claude_wrote_popover(ui.ctx(), &mut self.show_all, &mut self.cache, message),
             None => self.show_all = false,
+        }
+        // A draft that waits for its next write gets a frame of its own, so the last words save without more typing.
+        if run.is_unsaved() {
+            ui.ctx().request_repaint_after(DRAFT_SAVE_EVERY);
         }
         asked
     }
@@ -274,23 +288,20 @@ impl ProfileChapter {
                 numbers.iter().map(|number| draft.answers.iter().find(|(at, _)| at == number).map(|(_, text)| text.clone()).unwrap_or_default()).collect();
         }
         let laid = lay_out(message, batch);
-        let subs: Vec<Vec<SubItem>> = laid
-            .groups
+        let subs: Vec<Vec<SubItem>> =
+            laid.items.iter().map(|item| item.subs.iter().map(|(letter, text)| SubItem { letter: *letter, text }).collect()).collect();
+        let parts: Vec<SheetPart> = laid
+            .parts
             .iter()
-            .flat_map(|(_, items)| items)
-            .map(|item| item.subs.iter().map(|(letter, text)| SubItem { letter: *letter, text }).collect())
+            .map(|part| match part {
+                LaidPart::Prose(text) => SheetPart::Prose(text),
+                LaidPart::Group(title) => SheetPart::Group(title),
+                LaidPart::Item(at) => {
+                    let item = &laid.items[*at];
+                    SheetPart::Question(Question { number: item.number, text: &item.text, sub_items: &subs[*at], optional: item.optional })
+                }
+            })
             .collect();
-        let mut parts: Vec<SheetPart> = laid.lead.as_deref().map(SheetPart::Prose).into_iter().collect();
-        let mut at = 0;
-        for (title, items) in &laid.groups {
-            if let Some(title) = title {
-                parts.push(SheetPart::Group(title));
-            }
-            for item in items {
-                parts.push(SheetPart::Question(Question { number: item.number, text: &item.text, sub_items: &subs[at], optional: item.optional }));
-                at += 1;
-            }
-        }
         let count = numbers.len();
         let short = count <= 3;
         let rounds = run.so_far(cx.desk).rounds.len();
@@ -313,6 +324,9 @@ impl ProfileChapter {
             |ui| {
                 let answered: Vec<bool> = answers.borrow().iter().map(|answer| !answer.trim().is_empty()).collect();
                 show_all = answers_slip(ui, &AnswersSlip { answered: &answered, saved_at: saved_at.as_deref(), short, unsaved });
+                if short {
+                    show_all |= show_all_slip(ui);
+                }
             },
             |ui| {
                 send.set(send.get() | primary_shortcut_button(ui, "Send answers", &command_chord("Enter")).clicked());
@@ -329,7 +343,7 @@ impl ProfileChapter {
             let replies: Vec<(u32, &str)> = numbers.iter().copied().zip(self.answers.iter().map(String::as_str)).collect();
             self.refusal = run.send_answers(cx.desk, &replies).err().map(|refusal| refusal.line().to_owned());
         }
-        finish_later.get().then_some(ChapterRequest::FinishLater)
+        stop_setup(run, cx, finish_later.get())
     }
 
     /// Claude's message beside one large field, when it asks nothing Jobdesk can count. Once a turn said setup is
@@ -354,6 +368,7 @@ impl ProfileChapter {
         let help = format!("Claude asked in its own words this time, so your answer is one reply. Answer in any order; short answers are fine.\n{draft}");
         let why = self.why(run, cx.desk);
         let (send, finish_later, finish, changed) = (Cell::new(send_keys), Cell::new(false), Cell::new(false), Cell::new(false));
+        let show_all = Cell::new(false);
         let text = &mut self.text;
         let cache = &mut self.cache;
         wide_card(
@@ -366,9 +381,11 @@ impl ProfileChapter {
                 if complete {
                     finish.set(link(ui, "Finish setup").clicked());
                 }
+                show_all.set(link(ui, SHOW_ALL).clicked());
             },
             &why,
         );
+        self.show_all |= show_all.get();
         if changed.get() {
             self.record(run, cx, &[]);
         }
@@ -377,7 +394,7 @@ impl ProfileChapter {
         } else if send.get() {
             self.refusal = run.send_text(cx.desk, &self.text).err().map(|refusal| refusal.line().to_owned());
         }
-        finish_later.get().then_some(ChapterRequest::FinishLater)
+        stop_setup(run, cx, finish_later.get())
     }
 
     /// Claude's proposed changes, a checkbox each, then the reply the ticks build.
@@ -385,13 +402,15 @@ impl ProfileChapter {
         self.pending = None;
         let numbers = batch.numbers();
         let laid = lay_out(message, batch);
-        let mut parts: Vec<ProposalPart> = laid.lead.as_deref().map(ProposalPart::Prose).into_iter().collect();
-        for (title, items) in &laid.groups {
-            if let Some(title) = title {
-                parts.push(ProposalPart::Group(title));
-            }
-            parts.extend(items.iter().map(|item| ProposalPart::Change(Change { number: item.number, text: &item.text })));
-        }
+        let parts: Vec<ProposalPart> = laid
+            .parts
+            .iter()
+            .map(|part| match part {
+                LaidPart::Prose(text) => ProposalPart::Prose(text),
+                LaidPart::Group(title) => ProposalPart::Group(title),
+                LaidPart::Item(at) => ProposalPart::Change(Change { number: laid.items[*at].number, text: &laid.items[*at].text }),
+            })
+            .collect();
         if self.ticks.len() != numbers.len() {
             self.ticks = vec![true; numbers.len()];
         }
@@ -404,6 +423,7 @@ impl ProfileChapter {
             _ => elapsed(run.run(cx.desk), cx.desk),
         };
         let (apply, change, send, cancel, changed) = (Cell::new(false), Cell::new(false), Cell::new(false), Cell::new(false), Cell::new(false));
+        let show_all = Cell::new(false);
         let ticks = &mut self.ticks;
         let text = &mut self.text;
         let cache = &mut self.cache;
@@ -427,6 +447,7 @@ impl ProfileChapter {
             |ui| {
                 review_slip(ui, &ticked, reply.as_deref().unwrap_or("Nothing to apply."));
                 side_slip(ui, "", "", |ui| slip_text(ui, "", "Something to fix? Change something opens a field. Say what to change in your own words."));
+                show_all.set(show_all_slip(ui));
             },
             |ui| {
                 if changing {
@@ -439,6 +460,7 @@ impl ProfileChapter {
             },
             &why,
         );
+        self.show_all |= show_all.get();
         self.change_presses(run, cx, changed.get(), change.get(), cancel.get(), send.get());
         if apply.get() {
             let ticked: Vec<(u32, bool)> = numbers.iter().copied().zip(self.ticks.iter().copied()).collect();
@@ -467,7 +489,6 @@ impl ProfileChapter {
 
     /// The CV's pages, Looks good and Ask for a change.
     fn cv(&mut self, ui: &mut Ui, run: &mut ProfileRun, cx: &mut Chapter, message: &str, pdf: &PdfDocument) -> Option<ChapterRequest> {
-        let _ = message;
         self.pending = None;
         let shown = self.pages(ui, pdf, cx.pages.as_deref_mut());
         let file = pdf.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -483,10 +504,18 @@ impl ProfileChapter {
             (Cell::new(false), Cell::new(false), Cell::new(false), Cell::new(false), Cell::new(false), Cell::new(false));
         let textures = self.textures.as_ref().map_or(&[][..], |(_, textures)| textures.as_slice());
         let text = &mut self.text;
+        let cache = &mut self.cache;
+        let show_all = Cell::new(false);
         split_card(
             ui,
             &WizardStep { steps: &STEPS, at: AT, title: "Check your CV", lead: "Claude made it from your profile. Have a look before setup finishes." },
             |ui| {
+                // What Claude said with the CV, as it renders everywhere in the chapter.
+                ui.scope(|ui| {
+                    ui.set_max_width(DOC_MEASURE);
+                    claude_markdown(ui, cache, message);
+                });
+                ui.add_space(ITEM_GAP);
                 if changing {
                     desk_label(ui, "What should Claude change on your CV? Say it in your own words.", Type::NOTE, Ink::Muted);
                     let width = ui.available_width().min(DOC_MEASURE);
@@ -507,6 +536,7 @@ impl ProfileChapter {
                     slip_text(ui, "", "Spotted something? Ask for a change opens a field. Say it in your own words, such as \"Put the design system first\".")
                 });
                 reply_slip(ui, "Looks good sends Claude this reply:", CV_LOOKS_GOOD);
+                show_all.set(show_all_slip(ui));
             },
             |ui| {
                 if changing {
@@ -519,6 +549,7 @@ impl ProfileChapter {
             },
             &why,
         );
+        self.show_all |= show_all.get();
         self.change_presses(run, cx, changed.get(), change.get(), cancel.get(), send.get());
         if good.get() {
             self.refusal = run.cv_looks_good(cx.desk).err().map(|refusal| refusal.line().to_owned());
@@ -567,9 +598,11 @@ impl ProfileChapter {
                 let picks = &mut self.picks;
                 let complete = picks.iter().all(|picked| !picked.is_empty());
                 let answers = answers_of(questions, picks);
+                let several = questions.iter().any(|question| question.multi_select);
+                let lead = if several { "Pick the answers that fit, then send them." } else { "Pick one, then send your answer." };
                 split_card(
                     ui,
-                    &WizardStep { steps: &STEPS, at: AT, title: "Claude has a question", lead: "Pick one, then send your answer." },
+                    &WizardStep { steps: &STEPS, at: AT, title: "Claude has a question", lead },
                     |ui| questions_card(ui, questions, picks),
                     |ui| {
                         side_slip(ui, "", "", |ui| {
@@ -587,15 +620,15 @@ impl ProfileChapter {
                     &why,
                 );
             }
-            PromptKind::Permission { tool, detail, .. } => {
+            PromptKind::Permission { tool, detail, can_remember } => {
+                let lead = if *can_remember {
+                    "Settings › Permissions asks before each tool. Allow it once, for the rest of this run, or deny it."
+                } else {
+                    "Settings › Permissions asks before each tool. Allow it once, or deny it."
+                };
                 split_card(
                     ui,
-                    &WizardStep {
-                        steps: &STEPS,
-                        at: AT,
-                        title: "Claude asks to use a tool",
-                        lead: "Settings › Permissions asks before each tool. Allow it once, or deny it.",
-                    },
+                    &WizardStep { steps: &STEPS, at: AT, title: "Claude asks to use a tool", lead },
                     |ui| permission_card(ui, tool, detail),
                     |ui| {
                         side_slip(ui, "", "", |ui| {
@@ -603,10 +636,14 @@ impl ProfileChapter {
                         });
                     },
                     |ui| {
+                        // As Tasks offers them.
                         if primary_button(ui, "Allow once").clicked() {
                             decided.set(Some(Decision::Allow { remember: false }));
                         }
-                        if button(ui, "Deny").clicked() {
+                        if *can_remember && button(ui, "Allow for this run").clicked() {
+                            decided.set(Some(Decision::Allow { remember: true }));
+                        }
+                        if danger_button(ui, "Deny").clicked() {
                             decided.set(Some(Decision::Deny));
                         }
                     },
@@ -785,18 +822,34 @@ fn work_paper(ui: &mut Ui, lines: &[WorkLine], files: usize, live: Option<&Live>
 
 /// The questions of a prompt, each with its choices as pickable cards, in the stamp ink.
 fn questions_card(ui: &mut Ui, questions: &[AskedQuestion], picks: &mut [BTreeSet<usize>]) {
+    let several = questions.iter().any(|question| question.multi_select);
     prompt_box_tone(ui, Tone::Turn, |ui| {
         ui.horizontal(|ui| {
             solid_tag(ui, "Claude asks", Tone::Turn);
-            desk_label(ui, "Pick one, or decline.", Type::NOTE, Ink::Muted);
+            let how = if several { "Pick the answers that fit, or decline." } else { "Pick one, or decline." };
+            desk_label(ui, how, Type::NOTE, Ink::Muted);
         });
         for (index, question) in questions.iter().enumerate() {
             ui.add_space(ITEM_GAP);
             copyable(ui, |ui| desk_label(ui, plain(&question.text), Type::SLIP_TITLE, Ink::Text));
+            if question.multi_select {
+                desk_label(ui, "Pick as many as fit.", Type::NOTE, Ink::Muted);
+            }
             let Some(picked) = picks.get_mut(index) else { continue };
             for (at, option) in question.options.iter().enumerate() {
                 let on = picked.contains(&at);
-                let card = ui.push_id(("setup_choice", index, at), |ui| choice_card(ui, on, &plain(&option.label), None, &plain(&option.description))).inner;
+                let (label, description) = (plain(&option.label), plain(&option.description));
+                // Several answers are checkboxes, as Tasks shows them, and one answer a radio card.
+                let card = ui
+                    .push_id(("setup_choice", index, at), |ui| {
+                        if question.multi_select {
+                            let mut ticked = on;
+                            setting_check(ui, &mut ticked, &label, &description, "")
+                        } else {
+                            choice_card(ui, on, &label, None, &description)
+                        }
+                    })
+                    .inner;
                 if card.clicked() {
                     if question.multi_select {
                         if !picked.remove(&at) {
@@ -830,10 +883,26 @@ fn permission_card(ui: &mut Ui, tool: &str, detail: &str) {
     prompt_box_tone(ui, Tone::Turn, |ui| {
         ui.horizontal(|ui| {
             solid_tag(ui, "Claude asks", Tone::Turn);
-            desk_label(ui, format!("Claude wants to use {}.", plain(tool)), Type::STRONG, Ink::Text);
+            desk_label(ui, format!("Claude wants to use {}", plain(tool)), Type::STRONG, Ink::Text);
         });
+        desk_label(ui, "Not on the allow list in .claude/settings.json.", Type::NOTE, Ink::Muted);
         copyable(ui, |ui| desk_label(ui, plain(detail), Type::MONO, Ink::Text));
     });
+}
+
+/// Show all Claude wrote, on a slip of its own. Gives whether it was clicked.
+fn show_all_slip(ui: &mut Ui) -> bool {
+    side_slip(ui, "", "", |ui| link(ui, SHOW_ALL).clicked())
+}
+
+/// Stop setup on a sheet where Claude waits: the run's process ends, the draft stays, and the app opens as Finish
+/// later opens it. Pick up, or the next reply, resumes the same session.
+fn stop_setup(run: &mut ProfileRun, cx: &mut Chapter, pressed: bool) -> Option<ChapterRequest> {
+    if !pressed {
+        return None;
+    }
+    run.stop(cx.desk);
+    Some(ChapterRequest::FinishLater)
 }
 
 /// The run's Elapsed, as Tasks counts it, or nothing before the run.
@@ -886,39 +955,94 @@ fn ordinal(round: usize) -> &'static str {
     }
 }
 
-/// Claude's message taken apart for a sheet or a review: the lead before its first title or item, each group's title,
-/// and each item's words with its lettered sub-items apart. Hidden characters are gone from the lead and the titles.
+/// Claude's message taken apart for a sheet or a review: every block of it in order, its headings, its lead, the prose
+/// between groups and its closing words as Markdown, with each numbered item in place of its own lines. An item's words
+/// keep its lettered sub-items apart. An item the message's lines do not show where the batch found it goes last, so
+/// none is ever left out.
 fn lay_out(message: &str, batch: &Batch) -> Laid {
-    let lead: Vec<&str> = message
-        .lines()
-        .take_while(|line| {
-            let line = line.trim_start();
-            !(line.starts_with('#') || is_bold_line(line) || numbered(line))
+    let items: Vec<LaidItem> = batch
+        .items()
+        .map(|item| {
+            let (mut words, mut subs) = (Vec::new(), Vec::new());
+            for line in item.body.lines() {
+                match lettered(line) {
+                    Some(sub) if !words.is_empty() => subs.push(sub),
+                    _ => words.push(line.trim()),
+                }
+            }
+            LaidItem { number: item.number, text: words.join(" ").trim().to_owned(), subs, optional: item.optional }
         })
         .collect();
-    let lead = plain(lead.join("\n").trim());
-    let groups = batch
-        .groups
-        .iter()
-        .map(|group| {
-            let items = group
-                .items
-                .iter()
-                .map(|item| {
-                    let (mut words, mut subs) = (Vec::new(), Vec::new());
-                    for line in item.body.lines() {
-                        match lettered(line) {
-                            Some(sub) if !words.is_empty() => subs.push(sub),
-                            _ => words.push(line.trim()),
-                        }
-                    }
-                    LaidItem { number: item.number, text: words.join(" ").trim().to_owned(), subs, optional: item.optional }
-                })
-                .collect();
-            (group.title.as_deref().map(plain), items)
-        })
-        .collect();
-    Laid { lead: (!lead.is_empty()).then_some(lead), groups }
+    let lines: Vec<&str> = message.lines().collect();
+    let (mut parts, mut prose, mut next, mut at) = (Vec::new(), Vec::new(), 0, 0);
+    // A bold line alone, as its own paragraph, heads the items under it as a group's title. The rest stays Markdown.
+    let flush = |prose: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
+        let mut kept: Vec<&str> = Vec::new();
+        let mut keep = |kept: &mut Vec<&str>, parts: &mut Vec<LaidPart>| {
+            let text = kept.join("\n").trim().to_owned();
+            if !text.is_empty() {
+                parts.push(LaidPart::Prose(text));
+            }
+            kept.clear();
+        };
+        let text = prose.join("\n");
+        for paragraph in text.split("\n\n") {
+            let alone = paragraph.trim();
+            if !alone.contains('\n') && is_bold_line(alone) {
+                keep(&mut kept, parts);
+                parts.push(LaidPart::Group(plain(alone.trim_matches('*').trim())));
+            } else {
+                kept.push(paragraph);
+                kept.push("");
+            }
+        }
+        keep(&mut kept, parts);
+        prose.clear();
+    };
+    while at < lines.len() {
+        if next < items.len() && starts_item(lines[at], items[next].number) {
+            flush(&mut prose, &mut parts);
+            parts.push(LaidPart::Item(next));
+            next += 1;
+            at += 1;
+            // The item's lines run on through its indented and lettered lines, and a line that carries its paragraph on.
+            let mut after_blank = false;
+            while at < lines.len() {
+                let line = lines[at];
+                if next < items.len() && starts_item(line, items[next].number) {
+                    break;
+                }
+                if line.trim().is_empty() {
+                    after_blank = true;
+                } else if line.starts_with([' ', '\t']) || lettered(line).is_some() || (!after_blank && !starts_block(line)) {
+                    after_blank = false;
+                } else {
+                    break;
+                }
+                at += 1;
+            }
+            continue;
+        }
+        prose.push(lines[at]);
+        at += 1;
+    }
+    flush(&mut prose, &mut parts);
+    parts.extend((next..items.len()).map(LaidPart::Item));
+    Laid { parts, items }
+}
+
+/// Whether `line` starts the numbered item `number`, indented less than a code block.
+fn starts_item(line: &str, number: u32) -> bool {
+    let trimmed = line.trim_start();
+    let indent = line.len() - trimmed.len();
+    let mark = number.to_string();
+    indent < 4 && trimmed.strip_prefix(&mark).is_some_and(|rest| rest.starts_with(['.', ')']))
+}
+
+/// Whether `line` starts a block of its own: a heading, a bold line or a numbered item.
+fn starts_block(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with('#') || is_bold_line(line) || numbered(line)
 }
 
 /// Whether `line` is bold and nothing else, as Claude heads a group.
@@ -952,20 +1076,57 @@ mod tests {
     const THIRTEEN: &str = include_str!("../../../tests/fixtures/setup/thirteen_questions.md");
     const SIXTEEN: &str = include_str!("../../../tests/fixtures/setup/sixteen_changes.md");
 
+    /// The prose blocks of `laid`, in order.
+    fn prose(laid: &Laid) -> Vec<&str> {
+        laid.parts
+            .iter()
+            .filter_map(|part| match part {
+                LaidPart::Prose(text) | LaidPart::Group(text) => Some(text.as_str()),
+                LaidPart::Item(_) => None,
+            })
+            .collect()
+    }
+
+    /// The items of `laid`, in the order they show.
+    fn order(laid: &Laid) -> Vec<u32> {
+        laid.parts
+            .iter()
+            .filter_map(|part| match part {
+                LaidPart::Item(at) => Some(laid.items[*at].number),
+                LaidPart::Prose(_) | LaidPart::Group(_) => None,
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_batch_lays_out_its_lead_titles_items_and_sub_items() {
+    fn every_block_of_a_batch_shows_in_order_with_the_items_in_place() {
         let Message::Questions(batch) = read_message(THIRTEEN) else { panic!("questions") };
         let laid = lay_out(THIRTEEN, &batch);
-        assert!(laid.lead.as_deref().is_some_and(|lead| lead.starts_with("Thank you.")));
-        assert_eq!(laid.groups.len(), 5);
-        assert_eq!(laid.groups[0].0.as_deref(), Some("About the roles you want"));
-        let second = &laid.groups[0].1[1];
+        let blocks = prose(&laid);
+        assert!(blocks[0].starts_with("Thank you."), "the lead");
+        assert_eq!(blocks[1], "About the roles you want");
+        assert!(matches!(&laid.parts[1], LaidPart::Group(title) if title == "About the roles you want"), "a bold line alone is a group's title");
+        assert_eq!(blocks.len(), 6, "the lead and each group's title: {blocks:?}");
+        assert_eq!(order(&laid), (1..=13).collect::<Vec<_>>());
+        let second = &laid.items[1];
         assert_eq!(second.text, "Which of these fit you best?");
         assert_eq!(second.subs, [('a', "Individual contributor with deep craft".to_owned()), ('b', "Lead of a small team".to_owned())]);
+
         let Message::Proposal(proposal) = read_message(SIXTEEN) else { panic!("proposal") };
         let laid = lay_out(SIXTEEN, &proposal);
-        assert_eq!(laid.lead.as_deref(), Some("I have what I need. Here is what I will write. Nothing changes until you say so."));
-        assert_eq!(laid.groups.iter().map(|(_, items)| items.len()).sum::<usize>(), 16);
+        let blocks = prose(&laid);
+        assert_eq!(blocks[0], "I have what I need. Here is what I will write. Nothing changes until you say so.\n\n## CLAUDE.md", "the lead and the heading");
+        assert_eq!(*blocks.last().unwrap(), "Reply yes to apply all, or list the numbers to skip.", "the closing words");
+        assert_eq!(order(&laid).len(), 16);
+    }
+
+    #[test]
+    fn a_paragraph_after_a_heading_and_between_groups_stays() {
+        let message = "## Your profile\n\nA few things to settle first.\n\n1. Which city?\n2. Which salary?\n\nNow about the documents.\n\n3. Which language?\n\nTake your time.";
+        let Message::Questions(batch) = read_message(message) else { panic!("questions") };
+        let laid = lay_out(message, &batch);
+        assert_eq!(prose(&laid), ["## Your profile\n\nA few things to settle first.", "Now about the documents.", "Take your time."]);
+        assert!(matches!(laid.parts[1], LaidPart::Item(0)) && matches!(laid.parts[4], LaidPart::Item(2)));
     }
 
     #[test]

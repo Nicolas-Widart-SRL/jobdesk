@@ -536,7 +536,11 @@ pub mod tests {
         assert_eq!(versions(&newest_first(vec![pin("1.3.0"), pin("1.4.0")])), ["1.4.0", "1.3.0"], "fewer are all kept");
         assert_eq!(newest_first(Vec::new()), Vec::new());
         let signed_pair = with_fields(Some(serde_json::json!([good_130()])), Some(good_140()));
-        assert_eq!(parse_pins(&signed_pair, &fixture_key()), fixture_pins(), "parse_pins goes through the same cut");
+        assert_eq!(
+            parse_pins(&signed_pair, &fixture_key()),
+            fixture_pins(),
+            "parse_pins gives its pins newest first, the old field's 1.4.0 above the list's 1.3.0"
+        );
     }
 
     #[test]

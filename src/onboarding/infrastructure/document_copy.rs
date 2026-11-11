@@ -23,13 +23,19 @@ pub struct FileCopier {
     /// file of a live copy from one a stopped Jobdesk left.
     claims: PathBuf,
     /// How a copy takes its name: a hard link, which a test can make fail as a disk without hard links does.
-    link: fn(&Path, &Path) -> io::Result<()>,
+    link: Naming,
+    /// How a copy takes its name where the link fails: a rename that refuses a taken name, which a test can make fail.
+    rename: Naming,
 }
+
+/// Gives the part file at the first path the second path as its name, in one step, failing with `AlreadyExists` when
+/// the name is taken.
+type Naming = fn(&Path, &Path) -> io::Result<()>;
 
 impl FileCopier {
     /// `claims` is the data folder's `onboarding/`.
     pub fn new(claims: PathBuf) -> Self {
-        Self { claims, link: |part, target| fs::hard_link(part, target) }
+        Self { claims, link: |part, target| fs::hard_link(part, target), rename: rename_exclusive }
     }
 }
 
@@ -51,9 +57,9 @@ impl DocumentCopier for FileCopier {
     /// The bytes go to a hidden part file in the kind's subfolder first, on disk before the copy takes its name, so a
     /// crash never leaves a cut PDF under a real name. The name is then linked to the part file, which fails on any name
     /// already there, a link included, so nothing is written over. On a disk without hard links the part file is
-    /// renamed onto the name instead, or copied into a new file of that name, neither of which writes over a file.
-    /// Part files a stopped copy left are removed first, as `clear_stray_parts` says. Nothing is written in the
-    /// `documents/` root.
+    /// renamed onto the name instead, on macOS with a rename that refuses a taken name. A disk that can do neither
+    /// refuses the copy, since no other way gives the name in one step without writing over a file. Part files a
+    /// stopped copy left are removed first, as `clear_stray_parts` says. Nothing is written in the `documents/` root.
     fn copy(&self, source: &Path, folder: &Path, kind: DocumentKind) -> Result<String, CopyFailure> {
         let name = shown_name(source);
         by_name(&name).map_err(CopyFailure::Refused)?;
@@ -76,7 +82,7 @@ impl DocumentCopier for FileCopier {
             return Err(CopyFailure::NoDocumentsFolder);
         }
         write_copy(&mut file, out, &part)?;
-        let placed = place(&part, &documents, &canonical, &copy_name(&name), self.link);
+        let placed = place(&part, &documents, &canonical, &copy_name(&name), self.link, self.rename);
         let _ = fs::remove_file(&part);
         placed
     }
@@ -128,10 +134,11 @@ fn clear_stray_parts(folder: &Path, claims: &Path) {
     }
 }
 
-/// Gives the copy in `part` its name, `name` or the first free numbered one, never over a file. `link` makes the name
-/// a hard link to the part file. Once it fails for any reason but a taken name, as on a disk without hard links, every
-/// name is tried with `place_without_link` instead.
-fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: fn(&Path, &Path) -> io::Result<()>) -> Result<String, CopyFailure> {
+/// Gives the copy in `part` its name, `name` or the first free numbered one, in one step and never over a file. `link`
+/// makes the name a hard link to the part file. Once it fails for any reason but a taken name, as on a disk without
+/// hard links, every name is tried with `rename` instead. When that fails too for any reason but a taken name, the
+/// disk is refused: a file the bytes were copied into would sit under its real name while it fills.
+fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: Naming, rename: Naming) -> Result<String, CopyFailure> {
     let mut linking = true;
     for number in 1..=MAX_NUMBER {
         let candidate = if number == 1 { name.to_owned() } else { numbered(name, number) };
@@ -140,12 +147,12 @@ fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: fn(&
             match link(part, &target) {
                 Err(error) if error.kind() != ErrorKind::AlreadyExists => {
                     linking = false;
-                    place_without_link(part, &target)
+                    rename(part, &target)
                 }
                 linked => linked,
             }
         } else {
-            place_without_link(part, &target)
+            rename(part, &target)
         };
         match placed {
             Ok(()) if stays_in(&target, canonical) => return Ok(candidate),
@@ -154,22 +161,11 @@ fn place(part: &Path, documents: &Path, canonical: &Path, name: &str, link: fn(&
                 return Err(CopyFailure::NoDocumentsFolder);
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(_) if !linking => return Err(CopyFailure::UnsafeDisk),
             Err(_) => return Err(CopyFailure::Failed),
         }
     }
     Err(CopyFailure::NoFreeName)
-}
-
-/// Puts the part file's bytes under `target` without a hard link, failing with `AlreadyExists` when the name is taken.
-/// On macOS a rename that refuses a taken name moves the part file there. Where that cannot be done, a new file of
-/// that name, which also refuses a taken one, gets the part file's bytes, on disk before it returns.
-fn place_without_link(part: &Path, target: &Path) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    match rename_exclusive(part, target) {
-        Err(error) if error.kind() != ErrorKind::AlreadyExists => {}
-        renamed => return renamed,
-    }
-    copy_to_new(part, target)
 }
 
 /// Renames `from` to `to` in one step, with `renamex_np` and `RENAME_EXCL`, which fails when `to` exists, a link
@@ -185,15 +181,10 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     if done == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
-/// Copies the bytes of `from` into a new file `to`, which must not exist. A copy that fails is removed.
-fn copy_to_new(from: &Path, to: &Path) -> io::Result<()> {
-    let mut out = OpenOptions::new().write(true).create_new(true).open(to)?;
-    let copied = File::open(from).and_then(|mut part| io::copy(&mut part, &mut out)).and_then(|_| out.sync_all());
-    if copied.is_err() {
-        drop(out);
-        let _ = fs::remove_file(to);
-    }
-    copied
+/// Elsewhere no rename that refuses a taken name is at hand, so a disk without hard links is refused.
+#[cfg(not(target_os = "macos"))]
+fn rename_exclusive(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::Error::from(ErrorKind::Unsupported))
 }
 
 /// Whether the file at `path` sits directly in the folder that `canonical` names, links resolved: a best-effort check
@@ -524,6 +515,7 @@ mod tests {
         root_holds_only_subfolders(&folder);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_disk_without_hard_links_still_gets_the_copy_and_never_a_file_written_over() {
         let (_root, folder, desktop) = places();
@@ -538,16 +530,51 @@ mod tests {
         root_holds_only_subfolders(&folder);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn the_copy_without_a_link_or_a_rename_never_writes_over_a_file() {
+    fn the_rename_without_a_link_never_writes_over_a_file() {
         let (_root, folder, _) = places();
         let documents = folder.join(DOCUMENTS);
         fs::write(documents.join("from.part"), b"the bytes").unwrap();
         fs::write(documents.join("taken.pdf"), b"already there").unwrap();
-        assert_eq!(copy_to_new(&documents.join("from.part"), &documents.join("taken.pdf")).unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(rename_exclusive(&documents.join("from.part"), &documents.join("taken.pdf")).unwrap_err().kind(), ErrorKind::AlreadyExists);
         assert_eq!(fs::read(documents.join("taken.pdf")).unwrap(), b"already there");
-        copy_to_new(&documents.join("from.part"), &documents.join("new.pdf")).unwrap();
+        rename_exclusive(&documents.join("from.part"), &documents.join("new.pdf")).unwrap();
         assert_eq!(fs::read(documents.join("new.pdf")).unwrap(), b"the bytes");
+        assert!(!documents.join("from.part").exists(), "moved in one step");
+    }
+
+    /// A copier on a disk that has neither hard links nor a rename that refuses a taken name.
+    fn unsafe_disk(beside: &Path) -> FileCopier {
+        FileCopier { rename: |_, _| Err(io::Error::from(ErrorKind::Unsupported)), ..linkless(beside) }
+    }
+
+    /// Whatever way the copy gets its name, a file under a real name is whole or was there before: never a copy cut
+    /// short. A disk that can take the name in no single step refuses the copy and keeps no part file.
+    #[test]
+    fn no_fallback_ever_leaves_a_named_file_shorter_than_the_source() {
+        let renames = cfg!(target_os = "macos");
+        let ways: [(&str, fn(&Path) -> FileCopier, bool); 3] = [("link", copier, true), ("rename", linkless, renames), ("neither", unsafe_disk, false)];
+        for (way, make, places_it) in ways {
+            let (_root, folder, desktop) = places();
+            fs::create_dir(cv_folder(&folder)).unwrap();
+            fs::write(cv_folder(&folder).join("cv.pdf"), b"the one already there").unwrap();
+            fs::write(desktop.join("cv.pdf"), pdf(2)).unwrap();
+            let copied = make(&folder).copy(&desktop.join("cv.pdf"), &folder, Cv);
+            for name in names(&cv_folder(&folder)) {
+                assert!(!name.starts_with(PART_PREFIX), "{way}: no part file is left");
+                let bytes = fs::read(cv_folder(&folder).join(&name)).unwrap();
+                let expected = if name == "cv.pdf" { b"the one already there".to_vec() } else { pdf(2) };
+                assert_eq!(bytes, expected, "{way}: {name}");
+            }
+            if places_it {
+                assert_eq!(copied.as_deref(), Ok("cv (2).pdf"), "{way}");
+            } else {
+                assert_eq!(copied, Err(CopyFailure::UnsafeDisk), "{way}");
+                assert_eq!(names(&cv_folder(&folder)), ["cv.pdf"], "{way}: nothing new");
+            }
+        }
+        assert_eq!(CopyFailure::UnsafeDisk.line(), "This disk cannot take the copy safely. Choose a job search folder on your Mac's own disk.");
     }
 
     #[cfg(unix)]

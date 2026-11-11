@@ -55,6 +55,9 @@ pub enum CopyFailure {
     NoFreeName,
     /// Reading or writing failed partway. Nothing is left behind.
     Failed,
+    /// The disk can give the copy its name in no single step that refuses a taken one: no hard link, no such rename.
+    /// Nothing is left behind.
+    UnsafeDisk,
 }
 
 impl CopyFailure {
@@ -64,6 +67,7 @@ impl CopyFailure {
             Self::NoDocumentsFolder => "Your job search folder has no documents folder Jobdesk can copy into.",
             Self::NoFreeName => "Your documents folder already holds too many files of this name.",
             Self::Failed => "The copy did not finish. Nothing was saved.",
+            Self::UnsafeDisk => "This disk cannot take the copy safely. Choose a job search folder on your Mac's own disk.",
         }
     }
 }

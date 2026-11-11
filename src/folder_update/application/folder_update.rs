@@ -132,6 +132,9 @@ enum Event {
     Phase(Phase),
     /// What the rollback at an open found of the folder.
     Looked(Look),
+    /// The version of the folder's base as the worker read it, at the open's look or once a pass or an undo ended.
+    /// `None` when the folder keeps no base, or one that does not read.
+    Base(Option<Version>),
     /// The stage it ended at, and whether the last update can be undone now.
     Ended(Stage, bool),
 }
@@ -210,6 +213,9 @@ pub struct FolderUpdate {
     updatable: bool,
     /// A pass has asked the gate for the open folder, so a check has already done what it can.
     checked: bool,
+    /// The version of the open folder's base, as the worker last read it: at the open's look, and again once each
+    /// update pass or undo ended. `None` until then, and when the folder keeps no base or one that does not read.
+    base: Option<Version>,
 }
 
 impl FolderUpdate {
@@ -248,6 +254,7 @@ impl FolderUpdate {
             quiet: None,
             updatable: false,
             checked: false,
+            base: None,
         }
     }
 
@@ -282,7 +289,7 @@ impl FolderUpdate {
         (self.recover_due, self.rollback_waits) = (true, None);
         (self.told, self.undo_offered, self.undoable, self.quiet) = (None, false, false, None);
         self.offer_outlives_tasks = false;
-        (self.updatable, self.checked) = (false, false);
+        (self.updatable, self.checked, self.base) = (false, false, None);
     }
 
     /// Call it every frame. It takes the worker's news, then, while no worker runs and `runs_idle` holds, starts the
@@ -372,6 +379,14 @@ impl FolderUpdate {
     pub fn about_line(&self, auto_check: bool) -> Option<&'static str> {
         let held_back = self.folder.as_ref().is_some_and(|folder| self.held_back.contains(folder));
         self.quiet().or_else(|| (!auto_check && self.updatable && !self.checked && !held_back).then_some(notice::CHECK_HINT))
+    }
+
+    /// The line Settings › About shows when the open folder's files come from a release that `feed`, the answer of the
+    /// last check that read it, no longer lists as compatible. Nothing when no check has read the feed, when its signed
+    /// list is empty, or when the folder's base was not read or does not read: nothing can be said then.
+    pub fn support_line(&self, feed: Option<&LatestFeed>) -> Option<&'static str> {
+        let (base, feed) = (self.base?, feed?);
+        (feed.supports(base) == Some(false)).then_some(notice::UNSUPPORTED)
     }
 
     /// Undoes the update the notice offers Undo for, of the open folder, as `undo` does. Ignored when none is offered.
@@ -471,6 +486,7 @@ impl FolderUpdate {
         self.working_on = Some(folder.clone());
         self.spawn(Phase::Checking, Stage::Ended(Outcome::Failed(Failure::Disk)), move |ports, tell| {
             let outcome = run(ports, &folder, &feed, current, &mut |phase| tell(Event::Phase(phase)));
+            tell(Event::Base(base_version(ports, &folder)));
             (Stage::Ended(outcome), ports.updater.can_undo(&folder))
         });
     }
@@ -493,9 +509,11 @@ impl FolderUpdate {
             // that changes nothing finds.
             let unfinished = || ports.updater.undo_unfinished(&folder).then_some(Outcome::UndoUnfinished);
             let stage = recover_stopped(ports, &folder).or_else(unfinished).map_or(Stage::Idle, Stage::Ended);
-            if let Some(look) = look_at(ports, &folder) {
+            let (look, base) = look_at(ports, &folder);
+            if let Some(look) = look {
                 tell(Event::Looked(look));
             }
+            tell(Event::Base(base));
             (stage, ports.updater.can_undo(&folder))
         });
         true
@@ -513,8 +531,9 @@ impl FolderUpdate {
             self.refuse(Stage::Undid(UndoOutcome::Failed(Failure::Busy)));
             return;
         }
-        self.spawn(Phase::Undoing, Stage::Undid(UndoOutcome::Failed(Failure::Disk)), move |ports, _tell| {
+        self.spawn(Phase::Undoing, Stage::Undid(UndoOutcome::Failed(Failure::Disk)), move |ports, tell| {
             let outcome = undo(ports, &folder);
+            tell(Event::Base(base_version(ports, &folder)));
             (Stage::Undid(outcome), ports.updater.can_undo(&folder))
         });
     }
@@ -526,6 +545,7 @@ impl FolderUpdate {
                 Event::Phase(phase) => self.stage = Stage::Working(phase),
                 Event::Looked(Look::Quiet(quiet)) => (self.quiet, self.updatable) = (Some(quiet), false),
                 Event::Looked(Look::Updatable) => (self.quiet, self.updatable) = (None, true),
+                Event::Base(base) => self.base = base,
                 Event::Ended(stage, undoable) => {
                     let folder = self.working_on.take();
                     // A rollback another Jobdesk kept out ran nothing, so it holds nothing back. One that waits for
@@ -642,20 +662,36 @@ fn recover_stopped(ports: &Ports, folder: &Path) -> Option<Outcome> {
 }
 
 /// What the gate would find of `folder` before it asks the feed: why Jobdesk leaves it as it is, or that a check would
-/// update it. `None` when it is not there. It reads only the folder.
-fn look_at(ports: &Ports, folder: &Path) -> Option<Look> {
+/// update it, and the version of its base, for About to say whether the feed still lists it. A folder under git has its
+/// base read too, since its files may still be the ones setup unpacked. `(None, None)` when it is not there. It reads
+/// only the folder.
+fn look_at(ports: &Ports, folder: &Path) -> (Option<Look>, Option<Version>) {
     if !ports.probe.exists(folder) {
-        return None;
+        return (None, None);
     }
-    if ports.probe.has_git(folder) {
-        return Some(Look::Quiet(Quiet::GitFolder));
-    }
-    Some(match ports.base.read(folder) {
+    let git = ports.probe.has_git(folder);
+    let base = ports.base.read(folder);
+    let version = base_of(&base);
+    let look = match base {
+        _ if git => Look::Quiet(Quiet::GitFolder),
         Base::Missing => Look::Quiet(Quiet::NoBase),
-        Base::Bad => Look::Quiet(Quiet::BadBase),
-        Base::Found { source, .. } if Version::parse(&source.version).is_none() => Look::Quiet(Quiet::BadBase),
-        Base::Found { .. } => Look::Updatable,
-    })
+        Base::Found { .. } if version.is_some() => Look::Updatable,
+        Base::Bad | Base::Found { .. } => Look::Quiet(Quiet::BadBase),
+    };
+    (Some(look), version)
+}
+
+/// The version of `folder`'s base, as the worker reads it once a pass or an undo ended. `None` when it keeps none, or
+/// one that does not read.
+fn base_version(ports: &Ports, folder: &Path) -> Option<Version> {
+    base_of(&ports.base.read(folder))
+}
+
+fn base_of(base: &Base) -> Option<Version> {
+    match base {
+        Base::Found { source, .. } => Version::parse(&source.version),
+        Base::Missing | Base::Bad => None,
+    }
 }
 
 fn undo(ports: &Ports, folder: &Path) -> UndoOutcome {
@@ -717,6 +753,12 @@ mod tests {
         exists: bool,
         git: bool,
         base: Base,
+        /// The base an update or an undo that succeeded wrote, which every later read finds in place of `base`.
+        moved: Mutex<Option<Base>>,
+        /// The base an update that succeeds writes, if it moves the one the fake reads.
+        after_update: Option<Base>,
+        /// The base an undo that succeeds puts back, if it moves the one the fake reads.
+        after_undo: Option<Base>,
         /// What Undo noted it undid.
         skipped: Option<InstalledSource>,
         recover: Result<Option<Reverted>, UpdateError>,
@@ -744,7 +786,10 @@ mod tests {
                 log: Mutex::default(),
                 exists: true,
                 git: false,
-                base: Base::Found { source: InstalledSource { version: "1.7.5".into(), sha256: BASE_SHA.into() }, zip: b"base zip".to_vec() },
+                base: based_on("1.7.5"),
+                moved: Mutex::default(),
+                after_update: None,
+                after_undo: None,
                 skipped: None,
                 recover: Ok(None),
                 fetch: Ok(b"new zip".to_vec()),
@@ -787,7 +832,7 @@ mod tests {
     impl BaseReader for Fake {
         fn read(&self, _folder: &Path) -> Base {
             self.note("base".into());
-            self.base.clone()
+            self.moved.lock().unwrap().clone().unwrap_or_else(|| self.base.clone())
         }
         fn skipped(&self, _folder: &Path) -> Option<InstalledSource> {
             self.skipped.clone()
@@ -827,9 +872,14 @@ mod tests {
         fn update(&self, folder: &Path, update: &Update) -> Result<Report, UpdateError> {
             assert_eq!(folder, Path::new(FOLDER));
             assert_eq!((update.base.zip, update.new.zip), (&b"base zip"[..], &b"new zip"[..]), "the kept base and the download");
-            assert_eq!(update.base_version, "1.7.5", "the base as the gate read it, for the update to read again");
+            if let Base::Found { source, .. } = &self.base {
+                assert_eq!(update.base_version, source.version, "the base as the gate read it, for the update to read again");
+            }
             self.note(format!("update {} {} {}", update.version, update.base.sha256, update.new.sha256));
             assert!(!self.panics, "a fictional panic in the update");
+            if let (Ok(_), Some(after)) = (&self.update, &self.after_update) {
+                *self.moved.lock().unwrap() = Some(after.clone());
+            }
             self.update.clone()
         }
         fn can_undo(&self, _folder: &Path) -> bool {
@@ -842,8 +892,16 @@ mod tests {
         fn undo(&self, _folder: &Path) -> Result<Reverted, UpdateError> {
             self.note("undo".into());
             assert!(!self.panics, "a fictional panic in the undo");
+            if let (Ok(_), Some(after)) = (&self.undo, &self.after_undo) {
+                *self.moved.lock().unwrap() = Some(after.clone());
+            }
             self.undo.clone()
         }
+    }
+
+    /// A base that reads, of `version`.
+    fn based_on(version: &str) -> Base {
+        Base::Found { source: InstalledSource { version: version.into(), sha256: BASE_SHA.into() }, zip: b"base zip".to_vec() }
     }
 
     fn report() -> Report {
@@ -1523,6 +1581,64 @@ mod tests {
         assert_eq!(stuck.about_line(false), None);
     }
 
+    /// The feed of a check that names 0.2.0 as the latest Jobdesk and lists `listed` as compatible, newest first.
+    fn listing(listed: &[&str]) -> LatestFeed {
+        LatestFeed::for_tests_with(version("0.2.0"), listed.iter().copied().map(pin).collect())
+    }
+
+    /// `fake`'s folder opened, and the look of its rollback done.
+    fn looked(fake: Fake) -> FolderUpdate {
+        let mut opened = desk(&Arc::new(fake), "0.2.0");
+        opened.opened(PathBuf::from(FOLDER));
+        follow(&mut opened, None, true);
+        opened
+    }
+
+    /// About says the folder's files come from a release Jobdesk no longer supports only when the folder's base reads
+    /// and a check read a signed list that leaves it out. Under git too, since its files may still be setup's.
+    #[test]
+    fn about_says_when_the_folders_version_is_no_longer_supported() {
+        let dropped = listing(&["1.4.0"]);
+        assert_eq!(desk(&Arc::new(Fake::ready()), "0.2.0").support_line(Some(&dropped)), None, "no folder is open");
+
+        let old = looked(Fake { base: based_on("1.3.0"), ..Fake::ready() });
+        assert_eq!(old.support_line(Some(&dropped)), Some(notice::UNSUPPORTED));
+        assert_eq!(old.support_line(None), None, "no check has read the feed");
+        assert_eq!(old.support_line(Some(&listing(&[]))), None, "a feed with no verified release says nothing");
+        let under_git = looked(Fake { base: based_on("1.3.0"), git: true, ..Fake::ready() });
+        assert_eq!(under_git.support_line(Some(&dropped)), Some(notice::UNSUPPORTED));
+
+        let listed = looked(Fake { base: based_on("1.4.0"), ..Fake::ready() });
+        assert_eq!(listed.support_line(Some(&listing(&["1.4.0", "1.3.0"]))), None);
+        let older_listed = looked(Fake { base: based_on("1.3.0"), ..Fake::ready() });
+        assert_eq!(older_listed.support_line(Some(&listing(&["1.4.0", "1.3.0"]))), None, "an older release still listed");
+
+        for base in [Base::Missing, Base::Bad, based_on("1.3")] {
+            let unread = looked(Fake { base: base.clone(), ..Fake::ready() });
+            assert_eq!(unread.support_line(Some(&dropped)), None, "{base:?}");
+        }
+    }
+
+    /// The base is read again once each pass and each undo ended, so the line goes with an update to a listed release
+    /// and comes back with its Undo. Another folder starts with nothing to say until its own look.
+    #[test]
+    fn the_support_line_follows_the_base_through_an_update_and_its_undo() {
+        let fake = Fake { base: based_on("1.3.0"), after_update: Some(based_on("1.4.0")), after_undo: Some(based_on("1.3.0")), ..Fake::ready() };
+        let feed = listing(&["1.4.0"]);
+        let mut opened = looked(fake);
+        assert_eq!(opened.support_line(Some(&feed)), Some(notice::UNSUPPORTED));
+        follow(&mut opened, Some((1, &feed)), true);
+        assert_eq!(opened.stage(), &Stage::Ended(Outcome::Updated(report())));
+        assert_eq!(opened.support_line(Some(&feed)), None, "the folder is at 1.4.0 now");
+        opened.undo_update(true);
+        settle(&mut opened);
+        assert!(matches!(opened.stage(), Stage::Undid(UndoOutcome::Undone(_))), "{:?}", opened.stage());
+        assert_eq!(opened.support_line(Some(&feed)), Some(notice::UNSUPPORTED), "Undo took it back to 1.3.0");
+
+        opened.opened(PathBuf::from("/Users/sam/Other search"));
+        assert_eq!(opened.support_line(Some(&feed)), None, "About speaks of the open folder only");
+    }
+
     #[test]
     fn a_working_stage_shown_for_a_preview_keeps_working() {
         let fake = Arc::new(Fake::ready());
@@ -1577,7 +1693,7 @@ mod tests {
         settle(&mut desk);
         assert_eq!(desk.stage(), &Stage::Undid(UndoOutcome::Undone(Reverted { reverted: vec!["CLAUDE.md".into()], kept: Vec::new() })));
         assert!(!desk.can_undo(), "as the worker found it after the undo");
-        assert_eq!(fake.asked(), ["undo", "can undo"]);
+        assert_eq!(fake.asked(), ["undo", "base", "can undo"], "the base is read again for About");
     }
 
     #[test]

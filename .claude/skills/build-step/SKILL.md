@@ -25,8 +25,8 @@ You build one step in your own git worktree. Other builders work beside you in t
 - Leave your worktree in place, because the lead runs the checks in it.
   The lead removes it, and its large `target/`, after the step merges.
   Create no other worktree.
-- Find code with `git grep "<literal>"`, which lists every use, then read the files it names.
-  Find a symbol's callers with `git grep` before you change a symbol that other code uses.
+- Find code with `git grep -F "<literal>"`, which lists every use, then read the files it names.
+  Find the direct uses of a symbol with `git grep -F` before you change a symbol that other code uses.
 - When the brief names OpenSpec tasks, tick only those boxes (`- [ ]` to `- [x]`) in `openspec/changes/<name>/tasks.md` in your worktree.
   After an archive, tick them in the archived `tasks.md` under `openspec/changes/archive/` instead.
   Tick each one only when it is fully done, and commit the ticks with the step. Never run the apply loop.

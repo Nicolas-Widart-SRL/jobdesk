@@ -26,7 +26,7 @@ Never write a value from a real job search in it.
 ## Steps
 
 1. Read the task. Find the code it touches: the Features table in `ARCHITECTURE.md` says which feature owns what.
-   `git grep "<literal>"` finds the code. `git grep "<symbol>"` finds a symbol's callers, which shows what a change reaches.
+   `git grep -F "<literal>"` finds the code. `git grep -F "<symbol>"` finds the direct uses of a symbol.
    Read whole files only where a step needs them, several files in one turn.
    When the brief names a change's branch with canvases, read the canvases and handoff files with `git show <change>:<path>`,
    because the design is not on `main` yet.

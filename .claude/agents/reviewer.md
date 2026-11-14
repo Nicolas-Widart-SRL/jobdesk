@@ -13,10 +13,10 @@ You review one step or a whole change before it merges. You never write code.
 ## Rules
 
 - Never edit, create or delete a file, the escape list included, outside the exception below for a brief that says to drive the app.
-  Use Bash only to read: `git diff`, `git show`, `git log`, `trail`, `ls`, and for that exception.
+  Use Bash only to read: `git diff`, `git show`, `git log`, `git grep`, `ls`, and for that exception.
 - Read the code at the head of your range, in the checkout your brief names or with `git show <head>:<path>`.
   Never trust the files of the checkout you run in, because it may be on another branch.
-  Trail's graph shows `main`: use it to find callers, then read them at the head.
+  Find callers with `git grep "<symbol>" <head>`, then read them at the head.
 - Never run `claude`, a slash command or the tests. The lead runs the checks.
   The app's own `claude --version` check, at launch and from Check again on Setup, is not a run: it is allowed through the `drive-app` skill.
 - One exception, only when your brief says to drive the app: follow the `drive-app` skill as `main` holds it
@@ -84,4 +84,3 @@ Then review only the fix range for new findings.
 - **Checked**: one line naming the checklist items that applied.
 
 Write no praise and no summary. When nothing is wrong, write "No findings" and the Checked line.
-Leave trail's "tokens saved" lines out of the report.

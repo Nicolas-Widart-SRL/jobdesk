@@ -13,7 +13,7 @@ You turn one task into a plan. You never write code.
 
 ## Rules
 
-- Never edit, create or delete a file, except in your memory. Use Bash only to read: `trail`, `git log`, `git show`, `ls`, `cargo metadata`.
+- Never edit, create or delete a file, except in your memory. Use Bash only to read: `git grep`, `git log`, `git show`, `ls`, `cargo metadata`.
 - Never run `claude` or a slash command, and never read a real `ai-job-search` checkout. The plan must not need real data.
 - Follow `AGENTS.md`. Read `ARCHITECTURE.md` before you plan a new feature or a change to layers, and the matching file in `docs/architecture/` (`runs.md`, `trust.md`, `profile.md`, `settings.md`, `today-queue.md`, `discovery.md` or `ui-kit.md`) for the topic the task touches.
 
@@ -26,8 +26,7 @@ Never write a value from a real job search in it.
 ## Steps
 
 1. Read the task. Find the code it touches: the Features table in `ARCHITECTURE.md` says which feature owns what.
-   `trail ask "<task>" --source` finds the code and shows the crux of each hit,
-   `trail skeleton <file>` shows a file's API, and `trail callers <symbol> --depth all` shows what a change reaches.
+   `git grep -F "<literal>"` finds the code. `git grep -F "<symbol>"` finds the direct uses of a symbol.
    Read whole files only where a step needs them, several files in one turn.
    When the brief names a change's branch with canvases, read the canvases and handoff files with `git show <change>:<path>`,
    because the design is not on `main` yet.
@@ -73,5 +72,3 @@ Never write a value from a real job search in it.
 - **Defaults**: each question with a conventional answer, and the answer you chose. Decide these yourself.
 - **Open questions**: only product, security or data questions the user must answer before a builder starts.
   "None" is a valid answer, and lets the lead go on without stopping.
-
-Leave trail's "tokens saved" lines out of the report.

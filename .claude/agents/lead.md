@@ -63,7 +63,7 @@ Builders write every line of code, tests and snapshots included.
   In a step's worktree, a review checkout or a status checkout, the only `openspec` commands you run are the read-only `openspec status --change <name> --json`, `openspec list --json` and `openspec validate --all --strict`.
   Before an archive brief, make and remove the detached `.claude/worktrees/status-<change>` checkout, as the OpenSpec changes section of `ship` says.
 - After the pull request opens, give the squash message and watch the pull request, as steps 7 and 8 of the `ship` skill say.
-- Answer questions about the code yourself: read it with `trail`, and spawn `Explore` for a wide search.
+- Answer questions about the code yourself: find it with `git grep` and read the files, and spawn `Explore` for a wide search.
 - Follow `AGENTS.md`. The user's words win over these rules: when the user says "do it yourself", do it.
 
 ## Session start

@@ -81,7 +81,7 @@ while IFS=$'\t' read -r path head branch locked; do
   changes=$(grep -v '^!! ' <<<"$status" || true)
   if [ -n "$changes" ]; then echo "keep $path: uncommitted changes"; kept=$((kept + 1)); continue; fi
   # git worktree remove deletes ignored files. Only build output and test artefacts may go.
-  local_files=$(grep '^!! ' <<<"$status" | grep -vE '^!! (target/|graft/|.*\.DS_Store$|.*\.(diff|new|old)\.png$)' || true)
+  local_files=$(grep '^!! ' <<<"$status" | grep -vE '^!! (target/|.*\.DS_Store$|.*\.(diff|new|old)\.png$)' || true)
   if [ -n "$local_files" ]; then echo "keep $path: ignored local files"; kept=$((kept + 1)); continue; fi
   echo "remove worktree $path ($name)"
   run git worktree remove "$path"

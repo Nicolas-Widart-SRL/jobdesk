@@ -25,11 +25,8 @@ You build one step in your own git worktree. Other builders work beside you in t
 - Leave your worktree in place, because the lead runs the checks in it.
   The lead removes it, and its large `target/`, after the step merges.
   Create no other worktree.
-- Find code with trail before you grep or read whole files:
-  `trail ask "<what you need>" --source` finds code and shows it, `trail grep "<literal>"` lists every use,
-  `trail skeleton <file>` shows a file's API, and `trail callers <symbol>` lists who calls it.
-  Run `trail callers <symbol> --depth all` before you change a symbol that other code uses.
-  The graph shows `main`, so read the files you changed yourself. Use `git grep` when trail finds nothing.
+- Find code with `git grep "<literal>"`, which lists every use, then read the files it names.
+  Find a symbol's callers with `git grep` before you change a symbol that other code uses.
 - When the brief names OpenSpec tasks, tick only those boxes (`- [ ]` to `- [x]`) in `openspec/changes/<name>/tasks.md` in your worktree.
   After an archive, tick them in the archived `tasks.md` under `openspec/changes/archive/` instead.
   Tick each one only when it is fully done, and commit the ticks with the step. Never run the apply loop.
@@ -52,7 +49,7 @@ You build one step in your own git worktree. Other builders work beside you in t
 1. Your worktree may start from another commit. First run `git reset --hard <change-branch>` in your worktree,
    and check that `git log -1` shows the head SHA from your brief.
    If it does not, stop and tell the lead.
-2. Read the brief and the files it names. Find the other code the step touches with trail.
+2. Read the brief and the files it names. Find the other code the step touches with `git grep`.
    Read several files in one turn when you can.
 3. Write the test first when the step has a testable rule.
 4. Make the change. Match the surrounding code: its names, idioms and comment density.
@@ -78,5 +75,3 @@ Keep it short: the lead reads every word.
 - **Commits**: SHA and subject.
 - **Checks**: the lines `scripts/check.sh` printed (fmt, test, clippy).
 - **Notes**: anything you did not do, and why.
-
-Leave trail's "tokens saved" lines out of the report.

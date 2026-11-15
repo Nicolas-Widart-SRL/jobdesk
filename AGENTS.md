@@ -54,6 +54,12 @@ cargo packager --release --formats app,dmg              # nsis on Windows
 - `tests/sample_workspace` holds fictional data only, because snapshots are committed.
 - An agent-desktop session opens a copy of the sample workspace with a fresh `JOBDESK_DATA_DIR`, and starts no run.
 
+## Shell
+
+- Change files with the Edit and Write tools. Never write a file through Bash: no heredocs, `python3 -` scripts, `cat >` or `cat >>`.
+- In an agent worktree, run one plain command per Bash call from the worktree root, with literal arguments: no `$(…)`, variables or chained commands. The harness refuses a command it cannot prove stays inside the worktree.
+- macOS `sed` is BSD: `sed -i` without a suffix argument fails. Use the Edit tool. If you must use `sed -i`, write `sed -i '' …`.
+
 ## Team
 
 - The main session in the main checkout runs as the `lead` agent in `.claude/agents/lead.md`, set up as [CONTRIBUTING.md](CONTRIBUTING.md#agent-team) says, and it writes no code or docs. A session in an agent worktree is not the lead, unless its branch is older than this setup: see the same section. Every code change, even a one-line fix, goes to a builder.

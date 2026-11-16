@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/jobdesk-social.png" alt="Jobdesk: your job search, one decision at a time. A desktop app for the ai-job-search commands." width="830">
+  <img src="assets/brand/jobdesk-social.png" alt="Jobdesk: Find jobs that fit your terms. Claude drafts the application when you say go." width="830">
 </p>
 
 <h1 align="center">Jobdesk</h1>

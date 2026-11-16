@@ -9,7 +9,8 @@
 <x-dc>
 <helmet>
 <style>
-/* GitHub social preview and README hero, 1280x640. Postmark, light, on its own opaque grid paper.
+/* GitHub social preview and README hero, 1280x640: the landing page's headline, no line under it.
+   Postmark, light, on its own opaque grid paper.
    Tokens from src/ui_kit/palette.rs (LIGHT) only. Fictional data from tests/snapshots/intray_light.png.
    Fonts are the app's own files, so the render needs no network. */
 @font-face { font-family: "Zilla Slab"; font-weight: 600; src: url("../assets/fonts/ZillaSlab-SemiBold.ttf") format("truetype"); }
@@ -31,9 +32,9 @@ body { margin: 0; }
 /* Left: the words, on the grid. Large type only, so nothing small crosses a grid line. */
 .so .brand { position: absolute; left: 80px; top: 60px; display: flex; align-items: center; gap: 16px; font: 600 40px/1 var(--slab); }
 .so .brand svg { display: block; width: 60px; height: 60px; }
+/* The landing page's headline, in two sizes: the promise big, the step after it smaller, both in the slab. */
 .so .hl { position: absolute; left: 76px; top: 160px; font: 600 78px/1 var(--slab); letter-spacing: -0.012em; }
-.so .what { position: absolute; left: 80px; top: 424px; font: 500 25px/1.4 var(--sans); color: var(--muted); }
-.so .what b { font-weight: 600; color: var(--text); }
+.so .hl .then { display: block; margin: 28px 0 0 3px; font-size: 44px; line-height: 1.12; letter-spacing: -0.006em; color: var(--muted); }
 .so .facts { position: absolute; left: 80px; top: 560px; display: flex; gap: 8px; }
 .so .facts span { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border-radius: 4px; background: var(--panel); font: 500 18px/1 var(--sans); color: var(--text); }
 
@@ -79,11 +80,9 @@ body { margin: 0; }
     Jobdesk
   </div>
 
-  <h1 class="hl">Your job search,<br>one decision<br>at a time.</h1>
+  <h1 class="hl">Find jobs that<br>fit your terms. <span class="then">Claude drafts the application<br>when you say go.</span></h1>
 
-  <p class="what">A desktop app for the <b>ai-job-search</b> commands.<br>Nothing runs until you start it.</p>
-
-  <div class="facts"><span>macOS</span><span>Windows</span><span>Built in Rust</span><span>Uses your Claude Code</span></div>
+  <div class="facts"><span>Free</span><span>Mac</span><span>Windows</span><span>Uses your Claude Code</span></div>
 
   <div class="desk" aria-hidden="true">
     <section class="slip">

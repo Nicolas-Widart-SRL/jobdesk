@@ -391,7 +391,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       <div class="words">
         <h1 id="hero-title">Find jobs that fit your terms. Claude drafts the application when you say go.</h1>
         <p class="sub">Pick the job. See the command. Press Run.</p>
-        <p class="lede">Each new job is scored against your terms, such as contract, day rate, commute and language. <b>Before Claude drafts an application, you see the exact command it will run, and nothing starts until you press Run.</b></p>
+        <p class="lede">Score the jobs you find against your terms, such as contract, day rate, commute and language. <b>Before Claude drafts an application, you see the exact command it will run, and nothing starts until you press Run.</b></p>
         <p class="about">Jobdesk is the desktop app for <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> users: a GUI over its slash commands, run through your own Claude Code.</p>
         <div class="go">
           <div class="dl" id="hero-dl">
@@ -408,11 +408,11 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
               win.parentNode.insertBefore(win, mac);
             })();
           </script>
-          <p class="fine">Free and open source under the MIT License. The macOS app is signed and notarized by Apple. Intel Macs and Linux are not supported yet.</p>
+          <p class="fine">Free and open source under the MIT License. The macOS app is signed with a Developer ID and notarized by Apple. Intel Macs and Linux are not supported.</p>
           <p class="fine"><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">View the source</a> · <a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk">Star on GitHub</a></p>
         </div>
         <p class="keyline"><svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="6" cy="9" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.6 9h7M14 9v3M16.6 9v2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Run tasks on your own Anthropic API key, kept only in your system keychain, or on Claude Code’s own sign-in. <a href="#key">How the key is kept</a></span></p>
-        <p class="fine req">On an Apple silicon Mac, you need only Claude Code, installed and signed in: Jobdesk sets up the folder, ai‑job‑search and its tools. On 64-bit Windows, or with a folder you already have, you also need an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout, and an API key can replace Claude Code’s sign-in. <a class="link" href="#setup">Setup steps</a></p>
+        <p class="fine req">On an Apple silicon Mac, you need only Claude Code, installed and signed in: Jobdesk sets up the folder, ai‑job‑search and its tools. On 64-bit Windows, or with a folder you already have, you also need an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout, and an API key can replace Claude Code’s sign-in. <a class="link" href="#setup">Mac setup steps</a></p>
       </div>
       <figure class="desk deepzone">
         <div class="pair">
@@ -579,7 +579,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       <div><dt>One at a time</dt><dd>Only one run works at a time, because two commands could overwrite each other's files.</dd></div>
       <div><dt>Sign-in</dt><dd>Tasks use your API key or Claude Code’s own sign-in. Jobdesk keeps no password and offers no login of its own.</dd></div>
       <div><dt>Tool permissions</dt><dd>Allowed without asking by default, and listed in the activity once they run, so a posting written to trick Claude could get a command run before you see it. Settings › Permissions turns prompts on.</dd></div>
-      <div><dt>What it writes</dt><dd>Slash commands write your checkout. Jobdesk itself writes only the Profile block you save, a portal's on or off switch, and a portal you remove, which it moves to the Trash (the Recycle Bin on Windows).</dd></div>
+      <div><dt>What it writes</dt><dd>Slash commands write your checkout. Jobdesk itself writes it only in first-run setup (a new or empty folder, then your documents), a Profile save, a portal's On/Off switch or Remove (to the Trash, or the Recycle Bin on Windows), and the folder update.</dd></div>
       <div><dt>Your data</dt><dd>Run logs and your decisions stay in the app's data folder, readable only by your user.</dd></div>
       <div><dt>Updates</dt><dd>Jobdesk asks GitHub for its latest release, sending only its version. Turn this off in Settings › About.</dd></div>
       <div><dt>Community portals</dt><dd>Browse community reads the community portal list from GitHub, sending only Jobdesk's version, and keeps a copy in the data folder. It is not a task.</dd></div>
@@ -625,7 +625,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <div class="faq-list">
       <details>
         <summary>What does it cost?</summary>
-        <p>Jobdesk is free. Tasks run on Claude Code’s sign-in or on your own Anthropic API key, which bills its Claude Console account. Each task has a Spend at most in the launcher. Settings › Usage statistics shows what your tasks spent, as Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p>
+        <p>Jobdesk is free. Tasks run on Claude Code’s sign-in or on your own Anthropic API key, which bills its Claude Console account. Each task has a Spend at most. Building your profile during setup is a task too, capped by the Spend at most in Settings › Run defaults, which suggests $25 for it. Settings › Usage statistics shows what your tasks spent, as Claude Code’s estimate at API list price: on a Claude plan, it is not your bill. Set a monthly cap in Settings.</p>
       </details>
       <details>
         <summary>Does my Claude plan work?</summary>
@@ -641,7 +641,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       </details>
       <details>
         <summary>Which computers does it run on?</summary>
-        <p>An Apple silicon Mac, or 64-bit Windows. Intel Macs and Linux are not supported yet.</p>
+        <p>An Apple silicon Mac, or 64-bit Windows. Intel Macs and Linux are not supported.</p>
       </details>
     </div>
   </section>
@@ -666,7 +666,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       </div>
     </div>
     <p class="need">On a Mac, you need only <b>Claude Code</b>, installed and signed in: Jobdesk sets up the folder, ai‑job‑search and its tools.</p>
-    <p class="need">On Windows, or with a folder you already have, you also need an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout, and an <b>Anthropic API key</b> can replace Claude Code’s sign-in. Intel Macs and Linux are not supported yet.</p>
+    <p class="need">On Windows, or with a folder you already have, you also need an <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a> checkout, and an <b>Anthropic API key</b> can replace Claude Code’s sign-in. Intel Macs and Linux are not supported.</p>
     <ul class="more">
       <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases">All releases</a></li>
       <li><a class="link" href="https://github.com/Nicolas-Widart-SRL/jobdesk/blob/main/docs/guide.md">User guide</a></li>

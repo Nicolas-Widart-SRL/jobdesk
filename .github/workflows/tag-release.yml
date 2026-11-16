@@ -616,8 +616,13 @@ jobs:
           git push origin "refs/tags/$TAG"
 
       # A re-run after this step failed finds the release, and uploads the installers and latest.json again.
+      # Each installer also goes up under a name with no version, because the landing page links to it through
+      # releases/latest/download/<name>, which works only for a name every release shares. The copies are plain
+      # downloads: latest.json, written above, names only the versioned, signed update files.
       - name: Create the GitHub release
         run: |
+          cp "dist/Jobdesk-$TAG-macos-arm64.dmg" dist/Jobdesk-macos-arm64.dmg
+          cp "dist/Jobdesk-$TAG-windows-x64-setup.exe" dist/Jobdesk-windows-x64-setup.exe
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else

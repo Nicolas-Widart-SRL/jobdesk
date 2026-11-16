@@ -112,6 +112,9 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .fine { color: var(--muted); font-size: 14.5px; line-height: 1.5; }
 .fine a { color: var(--text); }
 .fine .link { white-space: nowrap; }
+/* The phone line shows only on a small touch screen, where neither installer can run. */
+.fine.phone { display: none; }
+@media (pointer: coarse) and (max-width: 700px) { .fine.phone { display: block; } }
 
 /* The launcher's form panel, drawn from the app's tokens at the app's own size (src/runs/ui/launcher.rs):
    the command in Courier Prime over a hairline, its summary, its field, Model and Spend at most, Claude will run, Run. */
@@ -398,6 +401,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
               win.parentNode.insertBefore(win, mac);
             })();
           </script>
+          <p class="fine phone">On a phone? Open this page on your Mac or PC to download.</p>
           <p class="fine facts"><span>Free app</span> · <span>Mac with an Apple chip, or 64-bit Windows</span> · <span>Needs <a class="link" href="https://code.claude.com/docs/en/overview">Claude Code</a>, not the Claude chat app</span> · <a class="link" href="#faq-cost">What Claude costs</a> · <a class="link" href="#setup">Setup for Mac and Windows</a></p>
         </div>
       </div>
@@ -500,7 +504,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <div class="wrap">
       <div class="sec-head">
         <h2 id="how-title">Your tasks, your Claude, your call.</h2>
-        <p>Every task goes through your own Claude Code, on its sign-in or your Anthropic API key. On a Mac, Jobdesk sets up the ai‑job‑search folder for you. On Windows, you choose a folder with ai‑job‑search in it.</p>
+        <p>Every task goes through your own Claude Code, on its sign-in or your Anthropic API key. On a Mac, Jobdesk sets up the ai‑job‑search folder for you. On Windows, Jobdesk does not set anything up: get ai‑job‑search ready first, then choose its folder.</p>
       </div>
       <ol class="steps wait" id="steps">
         <li class="step">
@@ -529,7 +533,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="wrap sec setup" id="setup" aria-labelledby="setup-title">
     <div class="sec-head">
       <h2 id="setup-title">Set up on a Mac, from scratch.</h2>
-      <p>The first time Jobdesk opens on a Mac, it sets up your job search in a small window. You need only Anthropic’s Claude Code (not the Claude chat app), installed and signed in.</p>
+      <p>The first time Jobdesk opens on a Mac, it sets up your job search in a small window. You need only Anthropic’s Claude Code (not the Claude chat app), installed and signed in. For Windows, see below.</p>
     </div>
     <ol class="steps">
       <li class="step">
@@ -583,11 +587,11 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <div class="faq-list">
       <details id="faq-cost">
         <summary>What does it cost?</summary>
-        <p>Jobdesk is free. Claude’s work is paid to Anthropic: <a class="credit" href="https://code.claude.com/docs/en/overview">Claude Code</a> needs a Claude subscription or an Anthropic Console account. Tasks run on Claude Code’s sign-in or on your own Anthropic API key, which bills your Claude Console account (Anthropic’s pay-as-you-go account). Each task has a Spend at most. Building your profile during setup is a task too: Settings › Run defaults suggests a Spend at most of $25 for it, a limit, not a fee. On a Claude plan, the usage estimate is not your bill: Settings › Usage statistics shows what your tasks spent as Claude Code’s estimate at Anthropic’s standard prices. Set a monthly cap in Settings.</p>
+        <p>Jobdesk is free. Claude’s work is paid to Anthropic: <a class="credit" href="https://code.claude.com/docs/en/overview">Claude Code</a> needs a Claude subscription or an Anthropic Console account. On a Claude plan, tasks count toward your plan’s usage limits. With an API key, they bill your Console account per use. Tasks run on Claude Code’s sign-in or on your own Anthropic API key, which bills your Claude Console account (Anthropic’s pay-as-you-go account). Each task has a Spend at most. Building your profile during setup is a task too: Settings › Run defaults suggests a Spend at most of $25 for it, a limit, not a fee. On a Claude plan, the usage estimate is not your bill: Settings › Usage statistics shows what your tasks spent as Claude Code’s estimate at Anthropic’s standard prices. Set a monthly cap in Settings.</p>
       </details>
       <details>
         <summary>Does my Claude plan work?</summary>
-        <p>Yes. Tasks run through your installed Claude Code, on its own sign-in by default: if Claude Code is signed in with your Claude plan, tasks use that plan. Jobdesk keeps no password and offers no login of its own. On Windows, or with a folder you already have, an API key can replace Claude Code’s sign-in, and tasks then bill your Claude Console account.</p>
+        <p>Yes, if your plan includes <a class="credit" href="https://code.claude.com/docs/en/overview">Claude Code</a>. The free Claude plan does not. Tasks run through your installed Claude Code, on its own sign-in by default: if Claude Code is signed in with your Claude plan, tasks use that plan. Jobdesk keeps no password and offers no login of its own. On Windows, or with a folder you already have, an API key can replace Claude Code’s sign-in, and tasks then bill your Claude Console account.</p>
       </details>
       <details>
         <summary>Do I need to know ai‑job‑search?</summary>

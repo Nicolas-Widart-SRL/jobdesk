@@ -21,7 +21,6 @@ This folder holds HTML canvases of the current look: Postmark on a gridded desk,
 | `Onboarding.html` | `?state=welcome\|resume\|place\|notempty\|download\|offline\|mismatch\|checking\|installing\|toolfail\|docs\|dropped\|reading\|sheet\|sheet-fallback\|review\|review-skip\|working\|followup\|cvcheck\|choice\|stopped\|recap\|recap-nopdf&theme=light\|dark` | 27 `Onboarding-*.png`: welcome, resume, Folder and Computer at 720x560, the Profile chapter and the recap at 1280x820 | [onboarding](handoff/onboarding.md) |
 | `FirstSearch.html` | `?state=today\|launcher\|jobs&theme=light\|dark` | 3 `FirstSearch-*.png` | [onboarding](handoff/onboarding.md) |
 | `Social.html` | none | `Social.png`, at 1280x640 | [social-preview](handoff/social-preview.md) |
-| `Social-A.html`, `Social-B.html` | none | `Social-A.png` and `Social-B.png`, at 1280x640: the two open plain-language options | [social-preview](handoff/social-preview.md) |
 | `landing/Landing.html` | `?theme=light\|dark&motion=off`; phone through `landing/phone.html?theme=light&motion=off&h=1760&top=80` | 5 `landing/Landing-*.png`: `-hero` and `-hero-dark` at 1440x900, `-hero-1024` at 1024x900, `-phone` at 390x1760 and `-full` at 1440x5848 | [landing](handoff/landing.md) |
 
 ## Handoff files

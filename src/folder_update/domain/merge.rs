@@ -3,12 +3,17 @@
 //! time: a change on one side only is taken, the same change on both is kept, and changes to different lines merge.
 //! Where both sides changed the same lines, the user's file stays and upstream's goes beside it, except for the files
 //! that guard what Claude may do, where upstream's goes in place and the user's goes beside it. A file the user deleted
-//! stays deleted, except one of those files when upstream changed it: then upstream's copy comes back.
+//! stays deleted, except one of those files when upstream changed it: then upstream's copy comes back. A portal file
+//! the new release no longer has stays, even one the user never changed.
 
 use std::borrow::Cow;
 
 /// The files whose upstream copy wins a conflict, because they hold the rules that guard what Claude may do.
 pub const SECURITY_FILES: [&str; 2] = [".claude/settings.json", "tools/security_guards.py"];
+
+/// The folder of the user's portals. Since ai-job-search 2.0.0 moved the portals it shipped to the community list, a
+/// release may drop a portal the user still uses, so a file in it that the new release no longer has always stays.
+pub const PORTALS: &str = ".agents/skills/";
 
 /// What the update does with one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +44,10 @@ pub fn decide(path: &str, base: Option<&[u8]>, ours: Option<&[u8]>, theirs: Opti
     let (base, theirs) = (base.map(|base| with_crlf(base, crlf)), theirs.map(|theirs| with_crlf(theirs, crlf)));
     let (base, theirs) = (base.as_deref(), theirs.as_deref());
     if ours == theirs {
+        return Action::Keep;
+    }
+    // A portal the new release dropped stays, even one the user never changed: the user may still search with it.
+    if theirs.is_none() && path.starts_with(PORTALS) {
         return Action::Keep;
     }
     match (base, ours, theirs) {
@@ -198,6 +207,18 @@ mod tests {
     fn rule_6_a_file_the_user_changed_stays_when_upstream_removed_it() {
         assert_eq!(decide_text(PATH, Some("a\n"), Some("b\n"), None), Action::Keep);
         assert_eq!(decide_text("tools/security_guards.py", Some("a\n"), Some("b\n"), None), Action::Keep, "a security file too");
+    }
+
+    #[test]
+    fn a_portal_file_upstream_removed_stays() {
+        for path in [".agents/skills/linkedin-search/SKILL.md", ".agents/skills/linkedin-search/cli/src/cli.ts"] {
+            assert_eq!(decide_text(path, Some("a\n"), Some("a\n"), None), Action::Keep, "{path}");
+            assert_eq!(decide_text(path, Some("a\n"), Some("a\r\n"), None), Action::Keep, "{path}: in CRLF");
+            assert_eq!(decide_text(path, Some("a\n"), Some("a\n"), Some("b\n")), write("b\n"), "{path}: upstream changed it");
+        }
+        for path in [".agents/skillset/a.md", ".agents/SKILL.md", "docs/.agents/skills/a/SKILL.md", ".agents/skills"] {
+            assert_eq!(decide_text(path, Some("a\n"), Some("a\n"), None), Action::Delete, "{path}: not in the portals folder");
+        }
     }
 
     #[test]

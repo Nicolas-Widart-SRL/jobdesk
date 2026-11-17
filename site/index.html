@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jobdesk: a desktop app for your AI job search</title>
-<meta name="description" content="A free desktop app. Claude finds jobs that fit your terms and drafts your application. Nothing starts until you press Run.">
+<meta name="description" content="A free desktop app. Claude finds jobs that fit your terms and drafts your application. You choose each task before it starts.">
 <link rel="canonical" href="https://nicolas-widart-srl.github.io/jobdesk/">
 <link rel="icon" href="jobdesk-icon-small.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://nicolas-widart-srl.github.io/jobdesk/">
 <meta property="og:title" content="Jobdesk: a desktop app for your AI job search">
-<meta property="og:description" content="A free desktop app. Claude finds jobs that fit your terms and drafts your application. Nothing starts until you press Run.">
+<meta property="og:description" content="A free desktop app. Claude finds jobs that fit your terms and drafts your application. You choose each task before it starts.">
 <meta property="og:image" content="https://nicolas-widart-srl.github.io/jobdesk/jobdesk-social.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
@@ -25,7 +25,7 @@
   })();
 </script>
 <style>
-/* The Jobdesk landing page, served as is by GitHub Pages. The approved design is mockups/landing/Landing.html.
+/* The Jobdesk landing page, served as is by GitHub Pages. It began as mockups/landing/Landing.html and has since diverged from that canvas (sections removed, a setup gallery added).
    Colours are the tokens in src/ui_kit/palette.rs, named as there. The deep field is the dark palette's desk:
    dark sheet and dark grid under the light theme, dark field under the dark theme. Type is the app's own bundled files. */
 @font-face { font-family: "Zilla Slab"; font-weight: 600; font-display: swap; src: url("fonts/ZillaSlab-SemiBold.ttf") format("truetype"); }
@@ -236,9 +236,10 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 .slab code { display: block; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .files { list-style: none; display: grid; gap: 4px; font: 600 14.5px/1.4 var(--sans); }
 
-/* Setup: four screens of first-run setup, in order, two to a row. The two of each row share one size, so each row lines up.
-   The screens are light ones only, on a card that follows the theme. */
+/* Setup: four screens of first-run setup, in order. The two small ones (720 x 560) share the first row. Each large one
+   (1280 x 820) has a row of its own, so it shows near its own size. The screens are light ones only, on a card that follows the theme. */
 .shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 56px; list-style: none; }
+.shots .wide { grid-column: 1 / -1; }
 .shots figure { height: 100%; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 4px; background: var(--card); overflow: hidden; }
 .shots img { width: 100%; height: auto; border-bottom: 1px solid var(--line); }
 .shots figcaption { display: flex; align-items: center; gap: 12px; padding: 16px 20px; font-weight: 600; }
@@ -349,8 +350,8 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="hero" id="top" aria-labelledby="hero-title">
     <div class="wrap split">
       <div class="words">
-        <h1 id="hero-title">Find jobs that fit. Apply when you say go.</h1>
-        <p class="lede">A free desktop app. Claude finds jobs, scores them against your terms and drafts your CV and cover letter. Nothing starts until you press Run.</p>
+        <h1 id="hero-title">Find jobs that fit. Claude drafts, you send.</h1>
+        <p class="lede">A free desktop app. Claude finds jobs, scores them against your terms and drafts your CV and cover letter. You choose each task before it starts.</p>
         <div class="go">
           <div class="dl" id="hero-dl">
             <a class="btn pri" id="dl-mac" href="https://github.com/Nicolas-Widart-SRL/jobdesk/releases/latest/download/Jobdesk-macos-arm64.dmg">Download for Mac</a>
@@ -420,7 +421,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
   <section class="wrap sec" id="features" aria-labelledby="features-title">
     <div class="sec-head">
       <h2 id="features-title">Your whole job search, on one desk.</h2>
-      <p>Jobdesk gives screens to <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a>, free job search tasks for <a class="credit" href="https://code.claude.com/docs/en/overview">Claude Code</a>. Your files stay in a folder on your computer.</p>
+      <p>Jobdesk gives screens to <a class="credit" href="https://github.com/ai-job-search-dev/ai-job-search">ai‑job‑search</a>, free job search tasks for <a class="credit" href="https://code.claude.com/docs/en/overview">Claude Code</a>. Your job search folder stays on your computer.</p>
     </div>
     <div class="cells">
       <article class="cell c7">
@@ -438,7 +439,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         </div>
       </article>
       <article class="cell c12 full">
-        <div class="txt"><h3>Tasks that tell you whose turn it is</h3><p>Follow each task step by step. Answer Claude in one click.</p></div>
+        <div class="txt"><h3>Tasks that tell you whose turn it is</h3><p>Follow each task step by step. Answer Claude, often in one click.</p></div>
         <div class="crop"><!-- run_turn_*.png, 60,218 1810x300, scaled to 1600 wide -->
           <img class="th-l" src="img/turn-light.webp" width="1600" height="266" alt="A task drafting an application, waiting for you: Claude asks whether to draft the CV and cover letter, with Go ahead with the draft and Stop here." loading="lazy">
           <img class="th-d" src="img/turn-dark.webp" width="1600" height="266" alt="A task drafting an application in the dark theme, waiting for your answer." loading="lazy">
@@ -456,7 +457,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
         <article class="cell"><div class="txt"><h3>Profile</h3><p>What Claude knows about you. Edit it in place.</p></div></article>
       </div>
       <article class="cell c12 full">
-        <div class="txt"><h3>What your tasks cost</h3><p>What each task cost, from Claude Code’s estimate. Set a monthly cap.</p></div>
+        <div class="txt"><h3>What your tasks cost</h3><p>Claude Code’s estimate of each task’s cost. On a Claude plan, it is not your bill. Set a monthly cap.</p></div>
         <div class="crop"><!-- settings_usage_*.png, 527,196 1300x276 -->
           <img class="th-l" src="img/usage-light.webp" width="1300" height="276" alt="Usage statistics for a fictional October: spent, tokens, cache hits and tasks, and the cost per application sent." loading="lazy">
           <img class="th-d" src="img/usage-dark.webp" width="1300" height="276" alt="Usage statistics in the dark theme." loading="lazy">
@@ -496,7 +497,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
 
   <section class="wrap sec" id="onboarding" aria-labelledby="onboarding-title">
     <div class="sec-head">
-      <h2 id="onboarding-title">From download to first search.</h2>
+      <h2 id="onboarding-title">Set up in four steps.</h2>
       <p>Jobdesk makes your folder and installs the tools. Claude builds your profile from your CV.</p>
     </div>
     <ol class="shots">
@@ -506,13 +507,13 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       </figure></li>
       <li><figure>
         <img src="img/onboarding-installing.webp" width="720" height="560" alt="Setup, Get this computer ready: Python already here, Bun installed, LaTeX installing, about 8 minutes left." loading="lazy">
-        <figcaption><span class="n" aria-hidden="true">2</span>Jobdesk installs the tools it needs.</figcaption>
+        <figcaption><span class="n" aria-hidden="true">2</span>Jobdesk installs any missing tools.</figcaption>
       </figure></li>
-      <li><figure>
+      <li class="wide"><figure>
         <img src="img/onboarding-docs.webp" width="1280" height="820" alt="Setup, Tell Jobdesk about you: drop your CV and other documents here, then Read my documents." loading="lazy">
         <figcaption><span class="n" aria-hidden="true">3</span>Add your CV. Claude builds your profile.</figcaption>
       </figure></li>
-      <li><figure>
+      <li class="wide"><figure>
         <img src="img/onboarding-recap.webp" width="1280" height="820" alt="Your job search is ready: folder saved, computer ready, profile written, CV made and job sites chosen, with Open Jobdesk." loading="lazy">
         <figcaption><span class="n" aria-hidden="true">4</span>Your job search is ready.</figcaption>
       </figure></li>
@@ -527,7 +528,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
     <div class="faq-list">
       <details id="faq-cost">
         <summary>What does it cost?</summary>
-        <p>Jobdesk is free. Claude’s work runs on your Claude plan. Each task has a spending limit, and you can set a monthly cap.</p>
+        <p>Jobdesk is free. Claude’s work is billed by Anthropic, through Claude Code. Each task has a spending limit, and you can set a monthly cap.</p>
       </details>
       <details>
         <summary>Does my Claude plan work?</summary>
@@ -539,7 +540,7 @@ code, .cmd { font-family: var(--typed); font-weight: 700; }
       </details>
       <details>
         <summary>I already use ai‑job‑search. What does Jobdesk add?</summary>
-        <p>Screens over its slash commands, run unchanged in your own Claude Code. You see the exact command before you press Run. On first launch, choose your folder.</p>
+        <p>Screens over its slash commands, run unchanged in your own Claude Code. New task shows the exact command before you press Run. On first launch, choose your folder.</p>
       </details>
       <details>
         <summary>Does Jobdesk send applications for me?</summary>

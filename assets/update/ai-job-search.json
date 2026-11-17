@@ -1,5 +1,9 @@
 [
   {
+    "version": "2.0.0",
+    "sha256": "8f22f6e5b5cded4a655cc7adfbba2e9ecfb1b88d76d0d5d3c42b7ad992137755"
+  },
+  {
     "version": "1.7.5",
     "sha256": "bace5a2a8d003fa5bd35b65b98c9d0202e4d719ce64ba8449d7a3c3351d89ff0"
   }

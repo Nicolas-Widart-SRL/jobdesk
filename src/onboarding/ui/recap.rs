@@ -148,7 +148,7 @@ fn lines(ui: &mut Ui, facts: &Recap, asked: &mut Option<RecapRequest>) {
     }
     let names: Vec<String> = facts.sites.iter().map(|site| plain(site)).collect();
     if names.is_empty() {
-        line(ui, "5", KnotState::Ahead, "No job site is on yet", Under::Text("Portals lists the ones you can switch on."), End::Nothing, false);
+        line(ui, "5", KnotState::Ahead, "No job site is on yet", Under::Text("Install one from Portals › Browse community."), End::Nothing, false);
     } else {
         let listed = english_list(&names);
         let under = match &facts.country {

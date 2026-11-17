@@ -72,7 +72,7 @@ Setup also stops partway when it reaches its Spend at most, or when Jobdesk quit
 
 No setup screen shows what it costs. Building the profile uses the Spend at most of Settings › Run defaults, which suggests $25 for it. When setup stops at that limit, Pick up where it stopped may spend that much again. The launcher still shows Model and Spend at most for every task it opens, and Settings › Usage statistics keeps what setup spent.
 
-When Claude says setup is complete, a recap shows what is ready: your folder, this computer, how many profile topics are filled, your CV and the job sites chosen. Its last line says how long Claude worked on your profile, from the task's Elapsed. If Claude said setup is complete in an earlier turn and then asked something more, the sheet offers Finish setup: answer Claude, or press it to open the recap. Setup never ends there on its own.
+When Claude says setup is complete, a recap shows what is ready: your folder, this computer, how many profile topics are filled, your CV and the job sites chosen. With no job site on, it points you to Portals › Browse community to install one. Its last line says how long Claude worked on your profile, from the task's Elapsed. If Claude said setup is complete in an earlier turn and then asked something more, the sheet offers Finish setup: answer Claude, or press it to open the recap. Setup never ends there on its own.
 
 For a job site that is not listed, Add a job site you use… opens the launcher on `/add-portal`, which asks for the site's address. Nothing runs until you press Run there. Open Jobdesk opens Today with your new folder. After Continue without PDFs, the recap says PDFs come once LaTeX is installed, and Setup stays in the menu until then.
 
@@ -169,7 +169,7 @@ The list sits beside the picked portal's detail. The first portal is picked the 
 
 The switch writes at once: Off sets the `enabled:` line in the portal's `SKILL.md` to `false`, adding one when there is none, and On sets it back to `true`, so `/scrape` skips or searches that portal from the next task on. It writes the way a profile save does, and the same kind of leftover copy can sit beside the file. A portal whose `SKILL.md` has no settings block at its top cannot be switched off, and the detail says so. While a task runs, every switch and action waits and says why on hover, because one task works at a time and `/scrape` reads the same files.
 
-With no portal installed, the screen says so and offers Browse community and Add a portal, which open those tabs. When `.agents/skills`, or a portal's `SKILL.md` in it, cannot be read, the alert says why and the portals are hidden, never called none or counted short. Browse community and Add a portal still work.
+With no portal installed, the screen says so and offers Browse community and Add a portal, which open those tabs. A folder set up from ai-job-search 2.0.0 starts that way, since that release ships no portal. The first portal you install shows here, and so do later changes to its files. When `.agents/skills`, or a portal's `SKILL.md` in it, cannot be read, the alert says why and the portals are hidden, never called none or counted short. Browse community and Add a portal still work.
 
 ### A portal's detail
 
@@ -238,9 +238,10 @@ Your changes come first:
 - When you and the update changed the same lines, or the file is not text, yours stays, and the new version is saved beside it as `<file>.update-<version>`, such as `CLAUDE.md.update-1.8.0`. Compare the two and keep what you want.
 - The two safety files, `.claude/settings.json` and `tools/security_guards.py`, hold the rules that guard what Claude may do. When you and the update changed the same lines, the new version takes the file's place, and yours is saved beside it as `<file>.yours-<version>`. A safety file you deleted comes back when the update changed it.
 - A file you deleted stays deleted, and a file you changed stays when the update removes it.
-- A portal under `.agents/skills` stays when the update no longer has it, even one you never changed, so an update never takes away a job site you use.
 - Jobdesk never writes through a link. A file that is a link or sits under one, a file with a folder in its way, and a new file in a folder you removed are left alone.
 - Jobdesk never overwrites a file of yours with a copy it saves. When `CLAUDE.md.update-1.8.0`, say, already holds something else, such as your notes, `CLAUDE.md` is left alone. A safety file whose `<file>.yours-<version>` name is taken keeps yours, so its update does not apply.
+
+A portal file under `.agents/skills` that the update no longer has stays, even one you never changed.
 
 The status bar tells you how it goes, to the left of Jobdesk's own update or of Settings. A check that finds nothing to do says nothing. One state shows at a time:
 

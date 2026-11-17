@@ -8915,6 +8915,21 @@ mod profile_chapter {
         scene.snapshot("onboarding_recap_nopdf_light");
     }
 
+    /// A folder set up from a release that ships no portal, such as ai-job-search 2.0.0, has no `.agents` at all: the
+    /// recap says no job site is on and points to the community list.
+    #[test]
+    fn with_no_portal_the_recap_points_to_the_community_list() {
+        let mut scene = scene("recap_no_portal", Theme::Light, false);
+        fs::remove_dir_all(scene.root.join(".agents")).unwrap();
+        let feed = scene.shell.borrow_mut().snapshot_feed();
+        feed.send(Snapshot { usage_read: true, ..Snapshot::load(&scene.root, today()) }).unwrap();
+        complete(&mut scene);
+        scene.until_shown("Your job search is ready");
+        assert!(scene.shown("No job site is on yet"));
+        assert!(scene.shown("Install one from Portals › Browse community."));
+        assert!(!scene.shown("Job sites chosen"));
+    }
+
     /// Send joins the fields into one numbered reply, in Claude's order, with Skipped for each empty one.
     #[test]
     fn send_answers_sends_exactly_the_joined_reply() {
@@ -9449,10 +9464,11 @@ fn setup_sums_up_the_portals_and_opens_them() {
     assert!(is_shown(&harness, PORTALS_SUBTITLE));
 }
 
-/// With no portal installed, Setup says so and keeps Open Portals, and the screen offers to add one.
+/// With no portal installed, Setup says so and keeps Open Portals, and the screen offers to add one. The folder has no
+/// `.agents` at all, as one set up from a release that ships no portal, such as ai-job-search 2.0.0.
 #[test]
 fn no_portal_installed_says_so() {
-    let remove_all = |root: &Path| fs::remove_dir_all(root.join(".agents/skills")).unwrap();
+    let remove_all = |root: &Path| fs::remove_dir_all(root.join(".agents")).unwrap();
     let mut setup = portals_shell_with("portals_none_setup", remove_all);
     setup = probed(setup, FixedTools);
     let mut harness = tray_harness(setup);

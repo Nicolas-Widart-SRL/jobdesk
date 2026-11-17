@@ -59,9 +59,13 @@ pub fn spawn(root: WorkspaceRoot, mut usage: Option<Box<dyn UsageLogs>>, repaint
     let reload = Reload::new(changed.clone());
     let asked = Arc::clone(&reload.asked);
     thread::spawn(move || {
-        let _watcher = ChangeWatcher::start(root.path(), changed);
+        let mut watcher = ChangeWatcher::start(root.path(), changed).ok();
         let mut logs_read = false;
         loop {
+            // A folder made since the last read, such as the first portal's, is watched before this read.
+            if let Some(watcher) = watcher.as_mut() {
+                watcher.watch_new();
+            }
             // Taken before the logs are read, so a snapshot never claims an ask made while it was read.
             let usage_asked = asked.load(Ordering::SeqCst);
             let today = Local::now().date_naive();
@@ -131,6 +135,28 @@ mod tests {
         fs::write(dir.path().join("job_search_tracker.csv"), "date,company,role,status\n2026-10-01,Acme,Lead,applied\n").unwrap();
 
         assert_eq!(updates.recv_timeout(timeout).unwrap().pipeline.open_count(), 1);
+    }
+
+    /// A folder with no `.agents`, as one set up from a release that ships no portal: the first portal installed in it
+    /// reaches the UI, and so does a later write inside the new folder.
+    #[test]
+    fn the_first_portal_in_a_folder_without_agents_reaches_the_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        fs::write(dir.path().join(".claude/commands/apply.md"), "").unwrap();
+        let (updates, _) = spawn(workspace::open(dir.path()).unwrap(), None, || {});
+        let timeout = Duration::from_secs(10);
+        assert!(updates.recv_timeout(timeout).unwrap().portals.portals.is_empty());
+
+        // The folder alone comes first, so the read it brings finds no portal yet.
+        fs::create_dir_all(dir.path().join(".agents/skills/alder-search")).unwrap();
+        assert!(updates.recv_timeout(timeout).unwrap().portals.portals.is_empty());
+        fs::write(dir.path().join(".agents/skills/alder-search/SKILL.md"), "# Alder Search Skill\n").unwrap();
+
+        let installed = std::iter::from_fn(|| updates.recv_timeout(timeout).ok())
+            .take(3)
+            .find(|snapshot| snapshot.portals.portals.iter().any(|portal| portal.name == "Alder"));
+        assert!(installed.is_some(), "the portal written inside the new folder reaches the UI");
     }
 
     #[test]

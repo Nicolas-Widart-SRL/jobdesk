@@ -1,6 +1,6 @@
 use egui::{Align, Layout, Rect, Ui, UiBuilder, pos2};
 
-use crate::portals::application::{CHECK_ALL_LINE, ChangeError, Origin, PortalView, PortalsView};
+use crate::portals::application::{CHECK_ALL_LINE, ChangeError, PortalView, PortalsView};
 use crate::portals::ui::add::{AddForm, add};
 use crate::portals::ui::browse::{BrowseAsk, BrowseContext, browse};
 use crate::portals::ui::detail::{Detail, DetailAsk, detail, loading_detail};
@@ -14,8 +14,6 @@ use crate::ui_kit::{
 pub const BUSY: &str = "A task is running. Turn portals on or off once it ends.";
 /// Why every switch and every action waits while Jobdesk updates the job search folder, or undoes its update.
 pub const FOLDER_UPDATING: &str = "Jobdesk is updating your job search folder. Turn portals on or off once it ends.";
-/// What a built-in portal shows in place of Remove….
-pub(super) const BUILT_IN: &str = "Built-in portals stay installed. Turn one off to skip it.";
 /// Where Remove moves a portal's folder, in the system's own words.
 pub(super) const TRASH: &str = if cfg!(target_os = "macos") { "the Trash" } else { "the Recycle Bin" };
 /// The head's subtitle, before the count.
@@ -60,7 +58,7 @@ pub enum PortalsRequest {
     /// Turn the portal in `folder` on or off.
     Switch { folder: String, on: bool },
     /// Move the portal in `folder` to the Trash, once the user answered Remove….
-    Remove { folder: String, origin: Origin },
+    Remove { folder: String },
 }
 
 impl PortalsScreen {
@@ -82,7 +80,7 @@ impl PortalsScreen {
     pub fn settle(&mut self, request: &PortalsRequest, result: Result<(), ChangeError>, wait: Option<&'static str>) {
         let (folder, removing) = match request {
             PortalsRequest::Switch { folder, .. } => (folder, false),
-            PortalsRequest::Remove { folder, .. } => (folder, true),
+            PortalsRequest::Remove { folder } => (folder, true),
         };
         self.failure = result.err().map(|error| (folder.clone(), failure_words(&error, removing, wait)));
     }
@@ -92,7 +90,6 @@ impl PortalsScreen {
 fn failure_words(error: &ChangeError, removing: bool, wait: Option<&'static str>) -> String {
     match error {
         ChangeError::Busy => wait.unwrap_or(BUSY).to_owned(),
-        ChangeError::BuiltIn => BUILT_IN.to_owned(),
         ChangeError::NoFrontmatter => {
             "Jobdesk could not turn this portal off: its SKILL.md has no settings block at the top to hold the switch. Nothing was changed.".to_owned()
         }
@@ -213,7 +210,7 @@ fn list_and_detail(ui: &mut Ui, screen: &mut PortalsScreen, view: &PortalsView, 
         // A flipped row is picked too, so its detail shows what became of it.
         (Some((folder, on)), _) => (Some(PortalsRequest::Switch { folder: folder.clone(), on }), Some(folder)),
         (None, Some(DetailAsk::Switch(on))) => (Some(PortalsRequest::Switch { folder: portal.folder.clone(), on }), listed.pick),
-        (None, Some(DetailAsk::Remove)) => (Some(PortalsRequest::Remove { folder: portal.folder.clone(), origin: portal.origin }), listed.pick),
+        (None, Some(DetailAsk::Remove)) => (Some(PortalsRequest::Remove { folder: portal.folder.clone() }), listed.pick),
         (None, None) => (None, listed.pick),
     };
     if let Some(folder) = picked.filter(|folder| *folder != portal.folder) {
@@ -264,7 +261,7 @@ fn columns<A, B>(ui: &mut Ui, side: impl FnOnce(&mut Ui) -> A, main: impl FnOnce
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portals::application::Quotes;
+    use crate::portals::application::{Origin, Quotes};
     use crate::shared_kernel::LoadError;
 
     fn portal(folder: &str, on: bool) -> PortalView {
@@ -331,7 +328,7 @@ mod tests {
     #[test]
     fn a_failure_is_kept_for_its_portal_until_the_next_change() {
         let mut screen = PortalsScreen::default();
-        let remove = PortalsRequest::Remove { folder: "north-search".into(), origin: Origin::MadeByYou };
+        let remove = PortalsRequest::Remove { folder: "north-search".into() };
         screen.settle(&remove, Err(ChangeError::Failed(LoadError::new(".agents/skills/north-search", "in use"))), None);
         let (folder, words) = screen.failure.clone().unwrap();
         assert_eq!(folder, "north-search");

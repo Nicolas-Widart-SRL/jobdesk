@@ -151,7 +151,7 @@ mod tests {
         let names: Vec<&str> = view.portals.iter().map(|portal| portal.name.as_str()).collect();
         assert_eq!(names, ["alder", "LinkedIn", "Northfield"]);
         let linkedin = &view.portals[1];
-        assert_eq!((linkedin.origin, linkedin.country.as_deref()), (Origin::BuiltIn, Some("Worldwide")));
+        assert_eq!((linkedin.origin, linkedin.country.as_deref()), (Origin::Community, Some("Worldwide")));
         assert_eq!(linkedin.badges, [Badge::PersonalUse]);
         assert_eq!(linkedin.jobs, Some((2, NaiveDate::from_ymd_opt(2026, 10, 30))));
         let northfield = &view.portals[2];

@@ -1998,7 +1998,7 @@ impl Shell {
         let busy = wait.is_some();
         let result = match &request {
             PortalsRequest::Switch { folder, on } => changes.switch(folder, *on, busy),
-            PortalsRequest::Remove { folder, origin } => changes.remove(folder, *origin, busy),
+            PortalsRequest::Remove { folder } => changes.remove(folder, busy),
         };
         self.portals_screen.settle(&request, result, wait);
         self.read_back_portals();

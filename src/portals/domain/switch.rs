@@ -18,8 +18,6 @@ pub enum Edit {
 pub enum ChangeError {
     /// A run works, so nothing was read or written. A run may read or write the portal folders.
     Busy,
-    /// A portal that ships with `ai-job-search` is only switched off, never removed.
-    BuiltIn,
     /// The `SKILL.md` has no frontmatter, so it cannot hold an `enabled: false` line. Nothing was written.
     NoFrontmatter,
     /// The folder or its `SKILL.md` was refused, or could not be read, written or moved.

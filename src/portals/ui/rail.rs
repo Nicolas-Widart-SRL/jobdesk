@@ -84,7 +84,6 @@ pub(super) fn quiet<R>(ui: &mut Ui, on: bool, add: impl FnOnce(&mut Ui) -> R) ->
 /// The source tag's word.
 pub(super) fn origin_word(origin: Origin) -> &'static str {
     match origin {
-        Origin::BuiltIn => "Built-in",
         Origin::Community => "Community",
         Origin::MadeByYou => "Made by you",
     }

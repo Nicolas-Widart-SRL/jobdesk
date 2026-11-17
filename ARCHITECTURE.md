@@ -11,7 +11,7 @@ The checkout stays the source of truth, and slash commands write it. Jobdesk wri
 Two more changes come from the Portals screen, and neither happens while a run works:
 
 - a portal's switch writes the `enabled:` line in its `SKILL.md` frontmatter, the same way a profile save writes;
-- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash (the Recycle Bin on Windows). It never deletes one, and a built-in portal has no Remove.
+- Remove…, once the user answers its ask, moves a portal's folder under `.agents/skills` to the system Trash (the Recycle Bin on Windows). It never deletes one.
 
 Everything else Jobdesk writes stays in its data folder, with five exceptions:
 
@@ -93,7 +93,7 @@ function. `tests/architecture.rs` enforces the remaining rules, including that `
 
 A worker thread rebuilds an immutable `Snapshot` and sends it to the UI thread. It rebuilds:
 
-- when watched files change;
+- when watched files change. A watched folder the checkout lacks at first, such as `.agents/skills` in a folder with no portal yet, is watched from the first rebuild after it appears. Until then the nearest folder above it inside the checkout is watched alone, such as `.agents`, so each folder made on the way down raises a rebuild. A link on that way is not followed, so a folder under one waits for the next event on a watched path, the end of a run or the hourly refresh;
 - every hour;
 - at local midnight, so the app's today changes at midnight, not up to an hour later.
 

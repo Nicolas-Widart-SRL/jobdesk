@@ -8915,6 +8915,21 @@ mod profile_chapter {
         scene.snapshot("onboarding_recap_nopdf_light");
     }
 
+    /// A folder set up from a release that ships no portal, such as ai-job-search 2.0.0, has no `.agents` at all: the
+    /// recap says no job site is on and points to Portals.
+    #[test]
+    fn with_no_portal_on_the_recap_points_to_portals() {
+        let mut scene = scene("recap_no_portal", Theme::Light, false);
+        fs::remove_dir_all(scene.root.join(".agents")).unwrap();
+        let feed = scene.shell.borrow_mut().snapshot_feed();
+        feed.send(Snapshot { usage_read: true, ..Snapshot::load(&scene.root, today()) }).unwrap();
+        complete(&mut scene);
+        scene.until_shown("Your job search is ready");
+        assert!(scene.shown("No job site is on yet"));
+        assert!(scene.shown("Switch one on or install one in Portals."));
+        assert!(!scene.shown("Job sites chosen"));
+    }
+
     /// Send joins the fields into one numbered reply, in Claude's order, with Skipped for each empty one.
     #[test]
     fn send_answers_sends_exactly_the_joined_reply() {
@@ -9207,7 +9222,6 @@ mod profile_chapter {
 
 const PORTALS_SUBTITLE: &str = "The job boards Claude searches when you find new jobs. 4 of 6 on.";
 const PORTALS_BUSY: &str = "A task is running. Turn portals on or off once it ends.";
-const BUILT_IN_STAYS: &str = "Built-in portals stay installed. Turn one off to skip it.";
 
 /// Where `shell(Screen::Portals, name)` copied the sample folder.
 fn copied_root(name: &str) -> std::path::PathBuf {
@@ -9342,20 +9356,18 @@ fn remove_asks_first_and_keep_it_writes_nothing() {
     assert!(!is_shown(&harness, "Remove Northfield Jobs?"));
 }
 
-/// A built-in portal is only switched off: it has no Remove…, and says why.
+/// A portal `ai-job-search` shipped before 2.0.0 reads Community and is removed like any other.
 #[test]
-fn a_built_in_portal_has_no_remove() {
-    let (shell, calls) = faked_portals("portals_built_in");
+fn a_portal_ai_job_search_shipped_can_be_removed() {
+    let (shell, calls) = faked_portals("portals_former_bundled");
     let mut harness = tray_harness(shell);
-    for spoken in ["Freehire, Worldwide", "LinkedIn, Worldwide", "Jobnet, Denmark"] {
-        pick_portal(&mut harness, spoken);
-        assert!(harness.query_by_label("Remove…").is_none(), "{spoken} has no Remove…");
-        assert!(is_shown(&harness, BUILT_IN_STAYS), "{spoken} says why");
-    }
-    pick_portal(&mut harness, "Sample Freelance Board");
-    assert!(harness.query_by_label("Remove…").is_some());
-    assert!(!is_shown(&harness, BUILT_IN_STAYS));
-    assert!(calls.lock().unwrap().is_empty());
+    pick_portal(&mut harness, "LinkedIn, Worldwide");
+    assert!(harness.query_all_by_label("Community").count() > 0);
+    harness.get_by_label("Remove…").click();
+    harness.run_steps(3);
+    harness.get_by_label("Remove").click();
+    harness.run_steps(3);
+    assert_eq!(*calls.lock().unwrap(), ["trash linkedin-search"]);
 }
 
 /// While a run works, every switch and action waits and says why, and a click writes nothing. The rows still pick.
@@ -9452,10 +9464,11 @@ fn setup_sums_up_the_portals_and_opens_them() {
     assert!(is_shown(&harness, PORTALS_SUBTITLE));
 }
 
-/// With no portal installed, Setup says so and keeps Open Portals, and the screen offers to add one.
+/// With no portal installed, Setup says so and keeps Open Portals, and the screen offers to add one. The folder has no
+/// `.agents` at all, as one set up from a release that ships no portal, such as ai-job-search 2.0.0.
 #[test]
 fn no_portal_installed_says_so() {
-    let remove_all = |root: &Path| fs::remove_dir_all(root.join(".agents/skills")).unwrap();
+    let remove_all = |root: &Path| fs::remove_dir_all(root.join(".agents")).unwrap();
     let mut setup = portals_shell_with("portals_none_setup", remove_all);
     setup = probed(setup, FixedTools);
     let mut harness = tray_harness(setup);
@@ -9573,7 +9586,6 @@ fn a_snapshot_read_before_a_switch_keeps_the_switch() {
 /// writes nothing.
 #[test]
 fn a_change_asked_for_while_a_run_works_writes_nothing() {
-    use jobdesk::portals::application::Origin;
     use jobdesk::portals::ui::PortalsRequest;
 
     let (mut shell, calls) = faked_portals("portals_busy_request");
@@ -9581,7 +9593,7 @@ fn a_change_asked_for_while_a_run_works_writes_nothing() {
     let (mut harness, shell) = shared_harness(shell);
     pick_portal(&mut harness, "Northfield Jobs");
     shell.borrow_mut().change_portals(PortalsRequest::Switch { folder: "northfield-search".into(), on: false });
-    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into(), origin: Origin::MadeByYou });
+    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into() });
     harness.run_steps(3);
     assert!(calls.lock().unwrap().is_empty(), "nothing is written while a run works");
     assert!(harness.query_all_by_label(PORTALS_BUSY).count() > 0, "the detail says why");
@@ -9591,14 +9603,13 @@ fn a_change_asked_for_while_a_run_works_writes_nothing() {
 /// why in the update's words.
 #[test]
 fn a_change_asked_for_while_the_folder_updates_writes_nothing() {
-    use jobdesk::portals::application::Origin;
     use jobdesk::portals::ui::{FOLDER_UPDATING, PortalsRequest};
 
     let (shell, calls) = faked_portals("portals_folder_update");
     let (mut harness, shell) = shared_harness(shell.with_folder_update(working_folder_update()));
     pick_portal(&mut harness, "Northfield Jobs");
     shell.borrow_mut().change_portals(PortalsRequest::Switch { folder: "northfield-search".into(), on: false });
-    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into(), origin: Origin::MadeByYou });
+    shell.borrow_mut().change_portals(PortalsRequest::Remove { folder: "northfield-search".into() });
     harness.run_steps(3);
     assert!(calls.lock().unwrap().is_empty(), "nothing is written while the folder updates");
     assert!(harness.query_all_by_label(FOLDER_UPDATING).count() > 0, "the detail says why");
@@ -9668,13 +9679,14 @@ const INSTALL_PROMPT: &str = "Copy https://github.com/ai-job-search-dev/communit
 const NO_LIST: &str = "The community list could not be read";
 const READING_LIST: &str = "Reading the list from GitHub…";
 
-/// A portal the community list holds reads Community, with the list's country. Without the list it reads Made by you.
+/// A portal the community list holds reads Community, with the list's country. Without the list it reads Made by you,
+/// and only the portals `ai-job-search` shipped before 2.0.0 read Community.
 #[test]
 fn a_portal_from_the_community_list_reads_community() {
     let mut harness = tray_harness(shell(Screen::Portals, "portals_community_tag_none"));
     pick_portal(&mut harness, "Sample Freelance Board");
     assert!(harness.query_all_by_label("Made by you").count() > 0);
-    assert!(harness.query_by_label("Community").is_none());
+    assert!(harness.query_all_by_label("Community").count() > 0, "the portals ai-job-search shipped read Community without the list");
 
     let mut harness = tray_harness(browse_shell("portals_community_tag", Some(community_list(minutes_ago(12))), vec![]));
     pick_portal(&mut harness, "Sample Freelance Board, Belgium");

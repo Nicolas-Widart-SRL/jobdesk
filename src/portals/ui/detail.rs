@@ -1,8 +1,8 @@
 use egui::{Align, Frame, Label, Layout, Margin, Ui, vec2};
 
-use crate::portals::application::{Origin, Phrase, PortalView, Priority, Quotes, SEARCH_TERMS_LINE, SearchPlan, site_lines_for, term_as_sent};
+use crate::portals::application::{Phrase, PortalView, Priority, Quotes, SEARCH_TERMS_LINE, SearchPlan, site_lines_for, term_as_sent};
 use crate::portals::ui::rail::{badge_word, day, origin_word, portal_switch};
-use crate::portals::ui::screen::{BUILT_IN, TRASH};
+use crate::portals::ui::screen::TRASH;
 use crate::ui_kit::tokens::{ITEM_GAP, ROW_ITEM_GAP, SKELETON_LINE, Type};
 use crate::ui_kit::{
     Confirm, Ink, Tone, alert, code_box, confirm_popover, desk_label, divider, enabled_when, headed_paper, hidden_note, lead_line, muted, path_label, rich,
@@ -131,7 +131,7 @@ fn facts(ui: &mut Ui, portal: &PortalView) {
 }
 
 /// Check this portal… for a folder name safe on a command line, Change search terms…, and Remove…, which asks first.
-/// A built-in portal has no Remove…, only its switch. Returns true on the frame the user answers Remove.
+/// Every portal has Remove…, wherever it came from. Returns true on the frame the user answers Remove.
 fn actions(ui: &mut Ui, shown: &Detail, confirm: &mut Option<bool>) -> bool {
     let portal = shown.portal;
     let (busy, why) = (shown.wait.is_some(), shown.wait.unwrap_or_default());
@@ -141,11 +141,6 @@ fn actions(ui: &mut Ui, shown: &Detail, confirm: &mut Option<bool>) -> bool {
             enabled_when(ui, !busy, why, |ui| small_command_action(ui, "Check this portal…", &line));
         }
         enabled_when(ui, !busy, why, |ui| small_command_action(ui, "Change search terms…", SEARCH_TERMS_LINE));
-        if portal.origin == Origin::BuiltIn {
-            ui.add_space(ITEM_GAP);
-            desk_label(ui, BUILT_IN, Type::NOTE, Ink::Muted);
-            return false;
-        }
         let remove = enabled_when(ui, !busy, why, |ui| small_danger_button(ui, "Remove…"));
         if remove.clicked() {
             *confirm = Some(true);
@@ -338,6 +333,7 @@ pub(super) fn loading_detail(ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portals::application::Origin;
 
     fn portal(jobs: Option<(usize, Option<chrono::NaiveDate>)>) -> PortalView {
         PortalView {

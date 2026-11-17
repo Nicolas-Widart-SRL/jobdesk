@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use jobdesk::onboarding::application::{DocumentKind, PATH_A, PROPOSAL_WORDS, SETUP, SETUP_COMPLETE};
-use jobdesk::portals::application::{BUILT_IN, MANIFEST, SKILLS};
+use jobdesk::portals::application::MANIFEST;
 use jobdesk::profile::application::ProfileFile;
 use jobdesk::runs::application::CATALOG;
 use jobdesk::shared_kernel::file_text::without_bom;
@@ -167,9 +167,6 @@ fn needs() -> Vec<Need> {
     for guide in [CV_TEMPLATES, LETTER_TEMPLATES] {
         let why = "Setup reads it for a custom template, so a stock one must not say a custom template is active";
         needs.push(Need { place: Place::File(format!("{ASSISTANT}/{guide}")), texts: vec![(Text::Exact(ACTIVE_TEMPLATE, false), why)], why });
-    }
-    for (folder, _) in BUILT_IN {
-        needs.push(Need::file(format!("{SKILLS}/{folder}/{MANIFEST}"), "Portals lists it as built in"));
     }
     needs
 }

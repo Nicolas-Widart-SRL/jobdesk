@@ -26,7 +26,7 @@ impl PortalWriter {
     /// The portal folder named `folder` in `.agents/skills`, checked before any write: one plain name that is not a dot
     /// folder, spelled exactly as `.agents/skills` lists it, a `.agents/skills` that resolves inside the root, and a real
     /// folder holding a regular `SKILL.md`, neither one a link. The exact spelling matters on a disk that ignores case:
-    /// there `LinkedIn-Search` would reach the built-in `linkedin-search`, which only that exact name is known as.
+    /// there `LinkedIn-Search` would reach `linkedin-search`, a different name from the one the user picked.
     ///
     /// The check runs once, before the write, as a profile save's does: a folder swapped for a link between the two is
     /// not caught, because the standard library has no folder-relative open that would close that gap.
@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(manifest(dir.path(), ".hidden-search"), NORTHFIELD);
     }
 
-    /// On a disk that ignores case another spelling would reach the folder, and the built-in check knows only the exact
+    /// On a disk that ignores case another spelling would reach the folder, and Jobdesk knows each portal by its exact
     /// name, so a name `.agents/skills` does not list exactly is refused, on any disk.
     #[test]
     fn a_name_in_another_case_is_refused() {

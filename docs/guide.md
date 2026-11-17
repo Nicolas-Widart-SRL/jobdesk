@@ -72,7 +72,7 @@ Setup also stops partway when it reaches its Spend at most, or when Jobdesk quit
 
 No setup screen shows what it costs. Building the profile uses the Spend at most of Settings › Run defaults, which suggests $25 for it. When setup stops at that limit, Pick up where it stopped may spend that much again. The launcher still shows Model and Spend at most for every task it opens, and Settings › Usage statistics keeps what setup spent.
 
-When Claude says setup is complete, a recap shows what is ready: your folder, this computer, how many profile topics are filled, your CV and the job sites chosen. Its last line says how long Claude worked on your profile, from the task's Elapsed. If Claude said setup is complete in an earlier turn and then asked something more, the sheet offers Finish setup: answer Claude, or press it to open the recap. Setup never ends there on its own.
+When Claude says setup is complete, a recap shows what is ready: your folder, this computer, how many profile topics are filled, your CV and the job sites chosen. With no job site on, it points you to Portals, to switch one on or install one. Its last line says how long Claude worked on your profile, from the task's Elapsed. If Claude said setup is complete in an earlier turn and then asked something more, the sheet offers Finish setup: answer Claude, or press it to open the recap. Setup never ends there on its own.
 
 For a job site that is not listed, Add a job site you use… opens the launcher on `/add-portal`, which asks for the site's address. Nothing runs until you press Run there. Open Jobdesk opens Today with your new folder. After Continue without PDFs, the recap says PDFs come once LaTeX is installed, and Setup stays in the menu until then.
 
@@ -165,17 +165,17 @@ Portals shows the job boards Claude searches when you find new jobs, each one a 
 
 ### Your portals
 
-The list sits beside the picked portal's detail. The first portal is picked the first time you open the screen, and the portal you pick stays picked when you come back to it. Each row shows the board's name and country with its switch, one sentence on what it searches, the jobs it found and the day of the last new one, and its tags. Built-in portals ship with ai-job-search, Community ones come from the community list, and Made by you covers any other, such as one built with `/add-portal`. Needs API key and Personal use only say what the portal's own file says. On portals come first, under "Claude searches these", then Off ones, quieter, under "Claude skips these". A row whose switch you flip keeps its place, so nothing moves under the pointer, and joins its new group the next time the screen opens.
+The list sits beside the picked portal's detail. The first portal is picked the first time you open the screen, and the portal you pick stays picked when you come back to it. Each row shows the board's name and country with its switch, one sentence on what it searches, the jobs it found and the day of the last new one, and its tags. Community ones come from the community list, the boards ai-job-search shipped before 2.0 included, and Made by you covers any other, such as one built with `/add-portal`. Needs API key and Personal use only say what the portal's own file says. On portals come first, under "Claude searches these", then Off ones, quieter, under "Claude skips these". A row whose switch you flip keeps its place, so nothing moves under the pointer, and joins its new group the next time the screen opens.
 
 The switch writes at once: Off sets the `enabled:` line in the portal's `SKILL.md` to `false`, adding one when there is none, and On sets it back to `true`, so `/scrape` skips or searches that portal from the next task on. It writes the way a profile save does, and the same kind of leftover copy can sit beside the file. A portal whose `SKILL.md` has no settings block at its top cannot be switched off, and the detail says so. While a task runs, every switch and action waits and says why on hover, because one task works at a time and `/scrape` reads the same files.
 
-With no portal installed, the screen says so and offers Browse community and Add a portal, which open those tabs. When `.agents/skills`, or a portal's `SKILL.md` in it, cannot be read, the alert says why and the portals are hidden, never called none or counted short. Browse community and Add a portal still work.
+With no portal installed, the screen says so and offers Browse community and Add a portal, which open those tabs. A folder set up from ai-job-search 2.0.0 starts that way, since that release ships no portal. The first portal you install shows here, and so do later changes to its files. When `.agents/skills`, or a portal's `SKILL.md` in it, cannot be read, the alert says why and the portals are hidden, never called none or counted short. Browse community and Add a portal still work.
 
 ### A portal's detail
 
 The head shows the name, the switch, the country and sentence, the jobs found, the last new job and the tags. Check this portal… opens `/scrape health` on that portal, and Change search terms… opens `/setup --section search`, the same task as Update with Claude… on Profile's Job search topic, because every portal shares one set of terms. A portal whose folder name holds anything but letters, digits, `_`, `.` and `-` has no Check this portal…: type the command in the launcher.
 
-Remove… asks first, with Keep it as the default and Esc keeping it too. Remove moves the portal's folder to the Trash (the Recycle Bin on Windows), never deletes it, and the jobs it found stay in Jobs. To use it again, put the folder back. Built-in portals have no Remove, only Off.
+Remove… asks first, with Keep it as the default and Esc keeping it too. Remove moves the portal's folder to the Trash (the Recycle Bin on Windows), never deletes it, and the jobs it found stay in Jobs. To use it again, put the folder back.
 
 How it searches says in plain words whether the portal keeps a term of several words together, from its own `Query syntax:` line, and that each term is its own search. Searches it will run lists your shared search terms by priority, each as this portal receives it: in quotes for a portal that honours them, bare for one that ignores them, with a term that still holds a setup placeholder marked To fill. A priority with no plain terms says Claude takes its terms from its Google lines. If it fails shows the `site:` lines from your search terms that name this portal's site, which Claude searches Google with instead. The footnote names the portal's folder and the search file.
 
@@ -240,6 +240,8 @@ Your changes come first:
 - A file you deleted stays deleted, and a file you changed stays when the update removes it.
 - Jobdesk never writes through a link. A file that is a link or sits under one, a file with a folder in its way, and a new file in a folder you removed are left alone.
 - Jobdesk never overwrites a file of yours with a copy it saves. When `CLAUDE.md.update-1.8.0`, say, already holds something else, such as your notes, `CLAUDE.md` is left alone. A safety file whose `<file>.yours-<version>` name is taken keeps yours, so its update does not apply.
+
+A portal file under `.agents/skills` that the new ai-job-search release no longer has stays, even one you never changed.
 
 The status bar tells you how it goes, to the left of Jobdesk's own update or of Settings. A check that finds nothing to do says nothing. One state shows at a time:
 

@@ -1029,6 +1029,46 @@ mod tests {
         assert_eq!(undo(&fixture.folder), Err(UpdateError::NothingToUndo));
     }
 
+    const PORTAL_FILES: &[(&str, &str)] =
+        &[(".agents/skills/linkedin-search/SKILL.md", "---\nenabled: true\n---\n"), (".agents/skills/linkedin-search/cli/src/cli.ts", "run();\n")];
+
+    /// A portal the new release no longer has stays, even one the user never changed: the update neither deletes it,
+    /// backs it up nor lists it, so Undo has nothing of it to put back.
+    #[test]
+    fn a_portal_the_release_drops_stays_out_of_the_backup_and_undo() {
+        let fixture = Fixture::new(&[BASE, PORTAL_FILES].concat(), NEW_FILES);
+        let before = without_backup(tree(&fixture.folder));
+        let report = fixture.run().unwrap();
+        assert_eq!(report.deleted, strings(&[".claude/commands/old.md"]));
+        for (path, text) in PORTAL_FILES {
+            assert_eq!(fixture.read(path).as_deref(), Some(*text), "{path}");
+        }
+        let record = journal::read(&fixture.jobdesk().join(BACKUP).join(RECORD)).unwrap().unwrap();
+        assert!(record.ops.iter().all(|op| !op.path.starts_with(".agents/")), "{:?}", record.ops);
+        assert!(record.folders.iter().all(|folder| !folder.starts_with(".agents")), "{:?}", record.folders);
+        let reverted = undo(&fixture.folder).unwrap();
+        assert!(reverted.reverted.iter().chain(&reverted.kept).all(|path| !path.starts_with(".agents/")), "{reverted:?}");
+        assert_eq!(without_backup(tree(&fixture.folder)), before);
+    }
+
+    /// Once a release has dropped a portal, the folder's base no longer holds it, so a later update leaves it alone.
+    #[test]
+    fn a_portal_the_release_dropped_stays_through_the_next_update() {
+        let mut fixture = Fixture::new(&[BASE, PORTAL_FILES].concat(), NEW_FILES);
+        let first = fixture.run().unwrap();
+        fixture.next("1.9.0", NEW_FILES);
+        let second = fixture.run().unwrap();
+        for (path, text) in PORTAL_FILES {
+            assert_eq!(fixture.read(path).as_deref(), Some(*text), "{path}");
+        }
+        for report in [first, second] {
+            let mut listed: Vec<String> = [report.updated, report.added, report.deleted, report.restored].concat();
+            listed.extend(report.conflicts.into_iter().chain(report.upstream_wins).flat_map(|copy| [copy.path, copy.side]));
+            listed.extend(report.skipped.into_iter().map(|skipped| skipped.path));
+            assert!(listed.iter().all(|path| !path.starts_with(".agents/")), "{listed:?}");
+        }
+    }
+
     /// Undo notes the release it undid, so it is not applied again, and the next update that lands takes the note away.
     #[test]
     fn undo_notes_the_release_it_undid_until_the_next_update() {

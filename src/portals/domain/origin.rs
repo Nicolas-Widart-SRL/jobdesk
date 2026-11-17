@@ -23,8 +23,8 @@ pub enum Origin {
 }
 
 /// Where the portal in `folder` came from, and its country when Jobdesk knows it. `community` holds the community
-/// list's folders, each with its country. The list is read only when Browse community opens, so a portal
-/// `ai-job-search` shipped before 2.0.0 reads as Community without it.
+/// list's folders, each with its country. A portal `ai-job-search` shipped before 2.0.0 reads as Community even when
+/// no community list has been read or saved yet, or the list does not name its folder.
 pub fn origin(folder: &str, community: &[(String, String)]) -> (Origin, Option<String>) {
     if let Some((_, country)) = community.iter().find(|(name, _)| name == folder) {
         return (Origin::Community, Some(country.clone()));

@@ -8916,9 +8916,9 @@ mod profile_chapter {
     }
 
     /// A folder set up from a release that ships no portal, such as ai-job-search 2.0.0, has no `.agents` at all: the
-    /// recap says no job site is on and points to the community list.
+    /// recap says no job site is on and points to Portals.
     #[test]
-    fn with_no_portal_the_recap_points_to_the_community_list() {
+    fn with_no_portal_on_the_recap_points_to_portals() {
         let mut scene = scene("recap_no_portal", Theme::Light, false);
         fs::remove_dir_all(scene.root.join(".agents")).unwrap();
         let feed = scene.shell.borrow_mut().snapshot_feed();
@@ -8926,7 +8926,7 @@ mod profile_chapter {
         complete(&mut scene);
         scene.until_shown("Your job search is ready");
         assert!(scene.shown("No job site is on yet"));
-        assert!(scene.shown("Install one from Portals › Browse community."));
+        assert!(scene.shown("Switch one on or install one in Portals."));
         assert!(!scene.shown("Job sites chosen"));
     }
 

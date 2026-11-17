@@ -91,8 +91,8 @@ impl PortalsView {
     }
 }
 
-/// `installed` holds each portal's folder and manifest. `board` is `None` when the saved jobs could not be read. No
-/// portal reads Community until `set_community` names the community list.
+/// `installed` holds each portal's folder and manifest. `board` is `None` when the saved jobs could not be read. Only
+/// the portals `ai-job-search` shipped before 2.0.0 read Community until `set_community` names the community list.
 pub fn portals_view(installed: Result<Vec<(String, Manifest)>, LoadError>, plan: Result<SearchPlan, LoadError>, board: Option<&JobBoard>) -> PortalsView {
     let (installed_read, plan_read) = (installed.is_ok(), plan.is_ok());
     let mut portals: Vec<PortalView> = installed.unwrap_or_default().into_iter().map(|(folder, manifest)| portal_view(folder, manifest, board)).collect();

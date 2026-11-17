@@ -159,6 +159,27 @@ mod tests {
         assert!(installed.is_some(), "the portal written inside the new folder reaches the UI");
     }
 
+    /// A folder with `.agents` but no `.agents/skills`: the root watch does not see inside `.agents`, so the first portal
+    /// installed there reaches the UI only through the watch on `.agents` itself.
+    #[test]
+    fn the_first_portal_in_an_agents_folder_without_skills_reaches_the_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".claude/commands")).unwrap();
+        fs::write(dir.path().join(".claude/commands/apply.md"), "").unwrap();
+        fs::create_dir_all(dir.path().join(".agents")).unwrap();
+        let (updates, _) = spawn(workspace::open(dir.path()).unwrap(), None, || {});
+        let timeout = Duration::from_secs(10);
+        assert!(updates.recv_timeout(timeout).unwrap().portals.portals.is_empty());
+
+        fs::create_dir_all(dir.path().join(".agents/skills/alder-search")).unwrap();
+        fs::write(dir.path().join(".agents/skills/alder-search/SKILL.md"), "# Alder Search Skill\n").unwrap();
+
+        let installed = std::iter::from_fn(|| updates.recv_timeout(timeout).ok())
+            .take(3)
+            .find(|snapshot| snapshot.portals.portals.iter().any(|portal| portal.name == "Alder"));
+        assert!(installed.is_some(), "the portal installed under the existing .agents reaches the UI");
+    }
+
     #[test]
     fn a_finished_run_reaches_the_usage_after_a_nudge() {
         let checkout = tempfile::tempdir().unwrap();

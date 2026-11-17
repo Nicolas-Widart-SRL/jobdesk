@@ -93,7 +93,7 @@ function. `tests/architecture.rs` enforces the remaining rules, including that `
 
 A worker thread rebuilds an immutable `Snapshot` and sends it to the UI thread. It rebuilds:
 
-- when watched files change. A watched folder the checkout lacks at first, such as `.agents/skills` in a folder with no portal yet, is watched from the first rebuild after it appears, which may wait for the next event on a watched path, the end of a run or the hourly refresh;
+- when watched files change. A watched folder the checkout lacks at first, such as `.agents/skills` in a folder with no portal yet, is watched from the first rebuild after it appears. Until then the nearest folder above it inside the checkout is watched alone, such as `.agents`, so each folder made on the way down raises a rebuild. A link on that way is not followed, so a folder under one waits for the next event on a watched path, the end of a run or the hourly refresh;
 - every hour;
 - at local midnight, so the app's today changes at midnight, not up to an hour later.
 
